@@ -53,6 +53,8 @@ import {
   projectMessageEntries,
   retainedProjectMessageRecord,
   managerCleanupTarget,
+  terminalFailureEvidence,
+  terminalFailureProviderSource,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -440,6 +442,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     "continuation",
     "chief-tree",
     "manager-recovery",
+    "terminal-failure",
   ])
     assert.equal(parseSmokeArgs([scenario]).scenario, scenario);
   assert.deepEqual(
@@ -957,6 +960,35 @@ test("chief-tree startup prompt creates one ordinary Lead branch for harness con
 
 test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
+});
+
+test("terminal-failure smoke uses a real provider error and verifies one actionable report", () => {
+  const source = terminalFailureProviderSource(
+    "/tmp/attempts.jsonl",
+    "/tmp/settled.jsonl",
+  );
+  assert.match(source, /registerProvider\("smoke-terminal-failure"/);
+  assert.match(source, /type: "text_delta"/);
+  assert.match(source, /type: "error", reason: "error"/);
+  assert.match(source, /agent_settled/);
+  assert.doesNotMatch(source, /trigger|toolCall/);
+  const entries = [
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-project_message",
+      content: "Lead model execution failed before completion.",
+      details: { branch: "branch", fromSessionId: "session", id: "failure" },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  assert.deepEqual(terminalFailureEvidence(entries, "branch", "session"), {
+    executionFailures: 1,
+    logicalReports: 1,
+    actionable: true,
+    successHandoff: false,
+    toolCalls: 0,
+  });
 });
 
 test("manager-recovery uses nonblocking messages only when information cannot wait for the automatic result", () => {

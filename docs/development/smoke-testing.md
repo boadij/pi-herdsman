@@ -36,6 +36,7 @@ npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
 npm run smoke -- manager-recovery
+npm run smoke -- terminal-failure
 ```
 
 `npm run smoke` runs the default `core` scenario. The harness creates a
@@ -60,6 +61,17 @@ generations), `chief-tree` (current Chief/session_tree behavior), and
 pause/resume with an intact checkout, Manager turnover with a pending project
 message, verified missing-worktree retirement without recreating the assignment,
 and refusal to resume retired work).
+`terminal-failure` creates an isolated Manager project and exactly assigned
+Lead, selects a disposable custom provider only for that Lead, and exhausts
+Pi's bounded native retry after partial assistant output followed by a
+controlled retryable error. It verifies real final error settlement, one
+actionable project failure report, and preservation of the exact Lead,
+assignment worktree, and session without success handoff or tool replay. The
+provider, project definition, retry settings, and evidence files remain within
+the smoke isolation. The Manager continues using the configured smoke model;
+the harness still requires its normal live-model credential preflight. This
+scenario is a single acceptance invocation and is never automatically retried.
+
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not

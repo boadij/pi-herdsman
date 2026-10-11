@@ -2687,3 +2687,49 @@ test("project assignment uses durable project transport, not Manager message fra
     branch: record.branch,
   });
 });
+
+test("pending project assignment refresh replaces the record delivered from the inbox", async () => {
+  const runtime = supervisionRuntime(socket());
+  const session = id();
+  const stale = message({
+    kind: "project_assignment",
+    fromSessionId: "former-manager",
+    toSessionId: session,
+    leadSessionId: session,
+    branch: "feat/bootstrap",
+    text: "stale instruction",
+  });
+  const refreshed = {
+    ...stale,
+    createdAt: stale.createdAt + 1,
+    text: "refreshed instruction",
+  };
+
+  writeChiefMessage(stale, runtime);
+  const path = writeChiefMessage(refreshed, runtime);
+  assert.deepEqual(readChiefMessage(path), refreshed);
+
+  const delivered: any[] = [];
+  let receipt = false;
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: session,
+      isAuthorized: (candidate) =>
+        candidate.id === refreshed.id &&
+        candidate.createdAt === refreshed.createdAt &&
+        candidate.text === refreshed.text,
+      isDelivered: () => receipt,
+      sendMessage: (payload) => {
+        delivered.push(payload);
+        receipt = true;
+      },
+    }),
+    1,
+  );
+  assert.equal(delivered.length, 1);
+  assert.equal(
+    delivered[0].content,
+    `Project assignment for branch ${refreshed.branch}:\n\n${refreshed.text}`,
+  );
+});

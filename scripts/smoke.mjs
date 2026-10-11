@@ -27,6 +27,7 @@ const scenarioNames = [
   "continuation",
   "chief-tree",
   "manager-recovery",
+  "terminal-failure",
 ];
 const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
@@ -1796,6 +1797,373 @@ export function managerRecoveryFreshPrompt(branch) {
   return `Use delegate_project exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_project returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
+export function terminalFailureProviderSource(attemptsPath, settledPath) {
+  for (const path of [attemptsPath, settledPath])
+    assert.ok(typeof path === "string" && isAbsolute(path));
+  return `import { appendFileSync } from "node:fs";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
+const attemptsPath = ${JSON.stringify(attemptsPath)};
+const settledPath = ${JSON.stringify(settledPath)};
+export default function (pi) {
+  pi.registerProvider("smoke-terminal-failure", {
+    api: "smoke-terminal-failure-api",
+    baseUrl: "http://127.0.0.1/unused",
+    apiKey: "smoke-only",
+    models: [{ id: "terminal-failure", name: "Terminal Failure Smoke", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 128 }],
+    streamSimple(model) {
+      const stream = createAssistantMessageEventStream();
+      const output = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "error", timestamp: Date.now() };
+      appendFileSync(attemptsPath, JSON.stringify({ type: "request", at: Date.now() }) + "\\n");
+      stream.push({ type: "start", partial: output });
+      output.content.push({ type: "text", text: "CONTROLLED_PARTIAL_RESPONSE", index: 0 });
+      stream.push({ type: "text_start", contentIndex: 0, partial: output });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: "CONTROLLED_PARTIAL_RESPONSE", partial: output });
+      stream.push({ type: "text_end", contentIndex: 0, content: "CONTROLLED_PARTIAL_RESPONSE", partial: output });
+      output.errorMessage = "503 Service Unavailable (controlled smoke failure)";
+      stream.push({ type: "error", reason: "error", error: output });
+      stream.end();
+      return stream;
+    },
+  });
+  pi.on("agent_settled", (event, ctx) => appendFileSync(settledPath, JSON.stringify({ sessionId: ctx.sessionManager.getSessionId(), aborted: event.aborted }) + "\\n"));
+}`;
+}
+
+export function terminalFailureEvidence(contents, branch, sessionId) {
+  const entries = sessionEntries(contents);
+  const reports = projectMessageEntries(contents, branch, sessionId);
+  const failures = reports.filter((entry) =>
+    /Lead model execution failed|Lead execution settled without verified completion/.test(
+      String(entry.content),
+    ),
+  );
+  const success = reports.some((entry) =>
+    /Project complete|execution completed successfully/i.test(
+      String(entry.content),
+    ),
+  );
+  return {
+    executionFailures: failures.length,
+    logicalReports: reports.length,
+    actionable:
+      failures.length === 1 &&
+      /inspect|unresolved|failed/i.test(String(failures[0].content)),
+    successHandoff: success,
+    toolCalls: entries.flatMap((entry) =>
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content.filter((part) => part.type === "toolCall")
+        : [],
+    ).length,
+  };
+}
+
+async function runTerminalFailureSmoke(ctx) {
+  const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
+  const task =
+    "Do not call tools or perform work. Wait for your first model response.";
+  const providerPath = join(
+    ctx.paths.piAgent,
+    "extensions",
+    "terminal-failure-provider.mjs",
+  );
+  const attemptsPath = join(ctx.paths.root, "terminal-failure-attempts.jsonl");
+  const settledPath = join(ctx.paths.root, "terminal-failure-settled.jsonl");
+  await writeFile(
+    providerPath,
+    terminalFailureProviderSource(attemptsPath, settledPath),
+    { flag: "wx" },
+  );
+  const definitionDir = join(ctx.rootCwd, ".pi", "agents");
+  await mkdir(definitionDir, { recursive: true });
+  await writeFile(
+    join(definitionDir, "managed-lead.md"),
+    `---\nname: managed-lead\nmodel: smoke-terminal-failure/terminal-failure\nextensions: [${JSON.stringify(providerPath)}]\n---\n`,
+  );
+  await writeFile(
+    join(ctx.paths.piAgent, "settings.json"),
+    JSON.stringify(
+      {
+        retry: {
+          enabled: true,
+          maxRetries: 1,
+          baseDelayMs: 1,
+          maxAgentDelayMs: 1,
+          provider: { maxRetries: 0 },
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  await run("git", ["add", ".pi/agents/managed-lead.md"], { cwd: ctx.rootCwd });
+  await run(
+    "git",
+    [
+      "-c",
+      "user.name=Herdsman Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "Configure isolated terminal failure Lead",
+    ],
+    { cwd: ctx.rootCwd },
+  );
+  ctx.owned.managerBranch = branch;
+  ctx.owned.managerWorktreeRetirementRequested = true;
+  ctx.terminalFailure = {
+    branch,
+    model: "smoke-terminal-failure/terminal-failure",
+    providerPath,
+  };
+  ctx.managerRecovery = { branch };
+  const root = async () => rootSessionSnapshot(ctx);
+  const agents = async () =>
+    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  const prompt = `Use delegate_project exactly once. Set branch to exactly ${branch}, task to exactly ${JSON.stringify(task)}, and omit base and files. After it returns, wait for the Lead's report. Do not create or resume other work.`;
+  markStage(ctx, "terminal-failure-manager-start");
+  await waitForEvidence(
+    ctx,
+    "terminal-failure-root-session",
+    async () => {
+      const rootAgent = (await agents()).find(
+        (agent) =>
+          agent.pane_id === ctx.rootPaneId &&
+          typeof agent.agent_session?.value === "string",
+      );
+      return {
+        done: !!rootAgent,
+        value: rootAgent,
+        progress: { rootSessionFound: !!rootAgent },
+      };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Manager mode active.",
+    "--timeout",
+    "15000",
+  ]);
+  markStage(ctx, "terminal-failure-delegation");
+  await nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
+  const result = await waitForEvidence(
+    ctx,
+    "terminal-failure-assignment",
+    async () => {
+      const session = await root();
+      const delegated = session
+        ? staffDelegateResults(session.contents).filter(
+            (item) => item.branch === branch,
+          )
+        : [];
+      let child;
+      if (delegated.length === 1)
+        for (const agent of await agents())
+          if ((await agentSessionId(ctx, agent)) === delegated[0].session) {
+            child = agent;
+            break;
+          }
+      return {
+        done: !!child,
+        value: { delegated: delegated[0], child },
+        progress: { delegationCount: delegated.length },
+        evidence: session ? summarizeSession(session.contents) : null,
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  const assigned = result.delegated;
+  const child = result.child;
+  assert.equal(assigned.ok, true);
+  assert.equal(assigned.branch, branch);
+  assert.ok(child?.pane_id);
+  const sessionId = assigned.session;
+  const paneId = child.pane_id;
+  const worktrees = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  const exactWorktree = (worktrees.worktrees ?? []).filter(
+    (item) => item.branch === branch,
+  );
+  assert.equal(exactWorktree.length, 1);
+  const paneCwd = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
+    (pane) => pane.pane_id === paneId,
+  )?.cwd;
+  const worktreePath =
+    exactWorktree[0].path ?? exactWorktree[0].worktree_path ?? paneCwd;
+  assert.ok(
+    typeof worktreePath === "string" && isAbsolute(worktreePath),
+    "exact assigned Lead pane must identify its worktree path",
+  );
+  ctx.owned.managerWorktreePath = worktreePath;
+  ctx.owned.managerWorktreeRetirementRequested = false;
+  ctx.owned.managerWorkspaceId = assigned.workspace_id;
+  ctx.managerRecovery = { branch, worktreePath };
+  assert.equal(resolve(paneCwd), resolve(worktreePath));
+  const sessionSnapshot = () => exactIsolatedSession(ctx, sessionId);
+  markStage(ctx, "terminal-failure-settlement-and-report");
+  await waitForEvidence(
+    ctx,
+    "terminal-failure-report",
+    async () => {
+      const leadSession = await sessionSnapshot();
+      const manager = await root();
+      const requests = await readFile(attemptsPath, "utf8").catch(() => "");
+      const settled = await readFile(settledPath, "utf8").catch(() => "");
+      const reports = manager
+        ? terminalFailureEvidence(manager.contents, branch, sessionId)
+        : null;
+      const settledRows = settled
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.sessionId === sessionId);
+      const requestCount = requests.split(/\r?\n/).filter(Boolean).length;
+      const finalError =
+        leadSession &&
+        sessionEntries(leadSession.contents).some(
+          (entry) =>
+            entry.message?.role === "assistant" &&
+            entry.message.stopReason === "error",
+        );
+      const partialObserved =
+        leadSession &&
+        leadSession.contents.includes("CONTROLLED_PARTIAL_RESPONSE");
+      const leadToolCalls = leadSession
+        ? sessionEntries(leadSession.contents).flatMap((entry) =>
+            entry.message?.role === "assistant" &&
+            Array.isArray(entry.message.content)
+              ? entry.message.content.filter((part) => part.type === "toolCall")
+              : [],
+          ).length
+        : -1;
+      const done = !!(
+        reports?.executionFailures === 1 &&
+        reports.logicalReports === 1 &&
+        reports.actionable &&
+        !reports.successHandoff &&
+        settledRows.length === 1 &&
+        settledRows[0].aborted === false &&
+        requestCount === 2 &&
+        finalError &&
+        partialObserved &&
+        leadToolCalls === 0
+      );
+      return {
+        done,
+        value: {
+          reports,
+          settledRows,
+          requestCount,
+          finalError,
+          partialObserved,
+          leadToolCalls,
+        },
+        progress: {
+          requestCount,
+          reportCount: reports?.executionFailures ?? 0,
+          logicalReports: reports?.logicalReports ?? 0,
+          actionable: !!reports?.actionable,
+          settledCount: settledRows.length,
+          finalError: !!finalError,
+          partialObserved: !!partialObserved,
+          leadToolCalls,
+        },
+        evidence: leadSession ? summarizeSession(leadSession.contents) : null,
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  const managerSession = await root();
+  const report = terminalFailureEvidence(
+    managerSession.contents,
+    branch,
+    sessionId,
+  );
+  assert.equal(report.executionFailures, 1);
+  assert.equal(report.logicalReports, 1);
+  assert.equal(report.actionable, true);
+  assert.equal(report.successHandoff, false);
+  assert.equal(
+    report.toolCalls,
+    1,
+    "Manager should make only the requested delegate_project call",
+  );
+  const preservedLead = [];
+  for (const agent of await agents())
+    if ((await agentSessionId(ctx, agent)) === sessionId)
+      preservedLead.push(agent);
+  assert.ok(
+    preservedLead.length <= 1,
+    "assignment must not have a second live Lead writer",
+  );
+  const session = await exactIsolatedSession(ctx, sessionId);
+  assert.ok(
+    session,
+    "the exact assigned Pi session must remain persisted after failure",
+  );
+  const topology = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  const repoKey = topology.source?.repo_key;
+  assert.ok(typeof repoKey === "string" && repoKey.length > 0);
+  const assignmentPath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "supervision-v2",
+    createHash("sha256")
+      .update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName))
+      .digest("hex"),
+    "assignments",
+    createHash("sha256").update(repoKey).digest("hex"),
+    `${createHash("sha256").update(branch).digest("hex")}.json`,
+  );
+  const assignment = JSON.parse(await readFile(assignmentPath, "utf8"));
+  assert.equal(assignment.id, sessionId);
+  assert.equal(assignment.branch, branch);
+  assert.equal(
+    resolve(
+      (await nestedCommand(ctx, ["pane", "list"])).panes.find(
+        (pane) => pane.pane_id === paneId,
+      ).cwd,
+    ),
+    resolve(worktreePath),
+  );
+  assert.equal(
+    (
+      await nestedCommand(ctx, [
+        "worktree",
+        "list",
+        "--workspace",
+        ctx.rootWorkspaceId,
+      ])
+    ).worktrees.filter((item) => item.branch === branch).length,
+    1,
+  );
+  ctx.terminalFailure = {
+    ...ctx.terminalFailure,
+    sessionId,
+    paneId,
+    worktreePath,
+    reportCount: report.executionFailures,
+  };
+}
+
 export function managerRecoveryResumePrompt(branch) {
   return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
@@ -1890,6 +2258,8 @@ export function initialPromptForScenario(scenario, ctx) {
       return "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.";
     case "manager-recovery":
       return undefined;
+    case "terminal-failure":
+      return undefined;
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -1906,6 +2276,8 @@ export async function runScenario(ctx, scenario) {
       return runChiefTreeSmoke(ctx);
     case "manager-recovery":
       return runManagerRecoverySmoke(ctx);
+    case "terminal-failure":
+      return runTerminalFailureSmoke(ctx);
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -3742,6 +4114,7 @@ async function collectDiagnostics(ctx, owned, failure) {
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
   diagnostics.chiefTreeProbe = ctx.chiefTreeProbeDiagnostics ?? null;
   diagnostics.managerRecovery = ctx.managerRecovery ?? null;
+  diagnostics.terminalFailure = ctx.terminalFailure ?? null;
   diagnostics.continuationSession = ctx.continuationSessionEvidence ?? null;
   diagnostics.failure = failure?.smoke ?? null;
   diagnostics.stage = ctx.stage ?? null;
@@ -3900,7 +4273,10 @@ async function cleanup(paths, owned, ctx) {
   if (owned.managerBranch) {
     let managerWorktreeSafe = true;
     try {
-      assert.equal(owned.managerBranch, ctx.managerRecovery.branch);
+      assert.equal(
+        owned.managerBranch,
+        ctx.managerRecovery?.branch ?? ctx.terminalFailure?.branch,
+      );
       const listed = await cleanupHerdr(
         ["worktree", "list", "--workspace", ctx.rootWorkspaceId],
         {
@@ -3910,8 +4286,16 @@ async function cleanup(paths, owned, ctx) {
       if (!Array.isArray(listed.worktrees))
         throw new Error("Herdr worktree topology is unavailable");
       const worktrees = listed.worktrees;
+      const cleanupTopology = worktrees.map((item) =>
+        owned.managerBranch === item.branch &&
+        typeof item.path !== "string" &&
+        typeof item.worktree_path !== "string" &&
+        typeof owned.managerWorktreePath === "string"
+          ? { ...item, path: owned.managerWorktreePath }
+          : item,
+      );
       const target = managerCleanupTarget(
-        worktrees,
+        cleanupTopology,
         owned.managerBranch,
         owned.managerWorktreePath,
         owned.managerWorktreeRetirementRequested === true,
@@ -3933,7 +4317,10 @@ async function cleanup(paths, owned, ctx) {
     }
     if (managerWorktreeSafe) {
       try {
-        assert.equal(owned.managerBranch, ctx.managerRecovery.branch);
+        assert.equal(
+          owned.managerBranch,
+          ctx.managerRecovery?.branch ?? ctx.terminalFailure?.branch,
+        );
         await deleteBranchIfPresent(
           owned.managerBranch,
           cleanupRun,
@@ -4067,10 +4454,10 @@ async function main() {
   let failure;
   try {
     ctx.rootCwd =
-      scenario === "manager-recovery"
+      scenario === "manager-recovery" || scenario === "terminal-failure"
         ? await prepareManagerRepository(paths)
         : repoRoot;
-    if (scenario === "manager-recovery") {
+    if (scenario === "manager-recovery" || scenario === "terminal-failure") {
       ctx.primaryCheckoutPath = ctx.rootCwd;
     }
     ctx.authMechanism = await preparePi(paths, model);
@@ -4121,6 +4508,8 @@ async function main() {
       );
     if (scenario === "manager-recovery")
       console.log(`manager-recovery: ${JSON.stringify(ctx.managerRecovery)}`);
+    if (scenario === "terminal-failure")
+      console.log(`terminal-failure: ${JSON.stringify(ctx.terminalFailure)}`);
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = error;

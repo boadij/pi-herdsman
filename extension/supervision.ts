@@ -475,15 +475,17 @@ function writeChiefMessageUnlocked(
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   const path = chiefMessagePath(runtime, record.toSessionId, record.id);
-  try {
-    statSync(path);
-    const existing = readChiefMessage(path);
-    if (!isDeepStrictEqual(existing, record))
-      throw new Error(
-        "Chief message ID already exists with a different payload",
-      );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  if (record.kind !== "project_assignment") {
+    try {
+      statSync(path);
+      const existing = readChiefMessage(path);
+      if (!isDeepStrictEqual(existing, record))
+        throw new Error(
+          "Chief message ID already exists with a different payload",
+        );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
   const content = `${JSON.stringify(record)}\n`;
