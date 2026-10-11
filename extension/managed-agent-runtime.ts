@@ -378,6 +378,14 @@ export function createManagedAgentExecutionState() {
     assignment: undefined as ManagedAgentState | undefined,
     initialized: false,
     latest: "",
+    observation: undefined as
+      | {
+          requestId: string;
+          outcome?: "completed" | "aborted" | "error";
+          responseEntryId?: string;
+          responseText?: string;
+        }
+      | undefined,
     pendingResult: undefined as ResultRecord | undefined,
     pendingStateTransition: false,
     pendingInterruptReplacement: undefined as string | undefined,
@@ -1334,7 +1342,7 @@ export function registerManagedAgentResultCapture(
   pi.on("message_end", (event: any, ctx: ExtensionContext) => {
     const state = options.state();
     if (!state?.activeRequestId || options.pendingResult()) return;
-    const message = event.message ?? event;
+    const message = event.message;
     if (message?.role !== "assistant") return;
     if (
       options.delegationEnabled &&
@@ -1361,9 +1369,35 @@ export function registerManagedAgentActivityHandlers(
     ): void;
   },
 ): void {
-  pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("agent_start", () => {
+    const requestId = execution.assignment?.activeRequestId;
+    execution.observation = requestId ? { requestId } : undefined;
+  });
+  pi.on("agent_before_settle", (event: any) => {
+    const observation = execution.observation;
+    if (
+      observation &&
+      observation.requestId === execution.assignment?.activeRequestId
+    )
+      observation.outcome = event.outcome;
+  });
+  pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
     options.touchActivity();
-    if (!execution.assignment?.activeRequestId) return;
+    const state = execution.assignment;
+    if (!state?.activeRequestId) return;
+    if (event?.message?.role === "assistant") {
+      const observation =
+        execution.observation ??
+        (execution.observation = { requestId: state.activeRequestId });
+      if (observation.requestId === state.activeRequestId) {
+        observation.outcome = event.outcome;
+        observation.responseEntryId = event.messageEntryId;
+        observation.responseText = contentText(
+          event.message.content,
+          "",
+        ).trim();
+      }
+    }
     const usage = ctx.getContextUsage();
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
@@ -1475,6 +1509,7 @@ export function registerManagedAgentSettlementHandlers(
       writeAgentState(mailbox, nextState);
       execution.assignment = nextState;
       execution.agentStartedAt = undefined;
+      execution.observation = undefined;
       const model = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : undefined;
@@ -1524,7 +1559,18 @@ export function registerManagedAgentSettlementHandlers(
       )
     )
       return;
-    const completed = !aborted && Boolean(execution.latest);
+    const observation = execution.observation;
+    const outcome =
+      observation?.requestId === state.activeRequestId
+        ? observation.outcome
+        : undefined;
+    const responseText =
+      observation?.requestId === state.activeRequestId &&
+      observation.outcome === "completed" &&
+      observation.responseEntryId
+        ? (observation.responseText?.trim() ?? "")
+        : "";
+    const completed = !aborted && outcome === "completed" && !!responseText;
     const result: ResultRecord = {
       version: 5,
       runId: state.runId,
@@ -1535,13 +1581,19 @@ export function registerManagedAgentSettlementHandlers(
       paneId: state.paneId,
       status: completed ? "completed" : "failed",
       ...(completed
-        ? { text: execution.latest }
+        ? { text: responseText }
         : {
             error: {
-              code: aborted ? "aborted" : "empty_result",
+              code: aborted
+                ? "aborted"
+                : outcome === "error"
+                  ? "execution_error"
+                  : "empty_result",
               message: aborted
                 ? "Agent execution was cancelled"
-                : "Agent produced no assistant text",
+                : outcome === "error"
+                  ? "Agent model execution failed"
+                  : "Agent produced no assistant text",
             },
           }),
       contextUsage: ctx.getContextUsage(),
@@ -2226,6 +2278,7 @@ export function registerManagedAgentRuntime(
       metadataPublisher.report(state, ctx, patch),
     setLatest: (value) => {
       execution.latest = value;
+      if (!value) execution.observation = undefined;
     },
     startAgent: () => (execution.agentStartedAt = Date.now()),
   });
@@ -2240,6 +2293,7 @@ export function registerManagedAgentRuntime(
       )(state, entries),
     setLatest: (value) => {
       execution.latest = value;
+      if (!value) execution.observation = undefined;
     },
   });
   registerManagedAgentActivityHandlers(pi, execution, {

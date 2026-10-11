@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
   isProcessLockClaim,
@@ -474,6 +475,16 @@ function writeChiefMessageUnlocked(
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   const path = chiefMessagePath(runtime, record.toSessionId, record.id);
+  try {
+    statSync(path);
+    const existing = readChiefMessage(path);
+    if (!isDeepStrictEqual(existing, record))
+      throw new Error(
+        "Chief message ID already exists with a different payload",
+      );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
   const content = `${JSON.stringify(record)}\n`;
   let fd: number | undefined;
@@ -1916,6 +1927,7 @@ export type ProjectMessage = Readonly<{
   branch: string;
   fromSessionId: string;
   text: string;
+  kind?: "execution_failure";
   resultBindings?: ResultBinding[];
   createdAt: number;
 }>;
@@ -1941,6 +1953,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
         "branch",
         "fromSessionId",
         "text",
+        "kind",
         "createdAt",
         "resultBindings",
       ].includes(key),
@@ -1962,6 +1975,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
     validSession(r.fromSessionId) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.kind === undefined || r.kind === "execution_failure") &&
     (r.resultBindings === undefined ||
       (Array.isArray(r.resultBindings) &&
         r.resultBindings.every(isResultBinding))) &&
@@ -2000,9 +2014,30 @@ export function writeProjectMessage(
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
-    renameSync(temporary, path);
-    chmodSync(path, 0o600);
-    fsyncDirectory(directory);
+    let existing: unknown;
+    try {
+      if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
+        throw new Error("large");
+      existing = JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        throw new Error(`Unable to verify existing project message ${path}`, {
+          cause: error,
+        });
+    }
+    if (existing !== undefined) {
+      if (
+        !validProjectMessage(existing) ||
+        JSON.stringify(existing) !== JSON.stringify(record)
+      )
+        throw new Error(
+          "Project message identity conflicts with durable payload",
+        );
+    } else {
+      renameSync(temporary, path);
+      chmodSync(path, 0o600);
+      fsyncDirectory(directory);
+    }
   } finally {
     if (fd !== undefined) closeSync(fd);
     try {

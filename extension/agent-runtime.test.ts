@@ -76,6 +76,22 @@ const { updateConfig } = await import("./config.ts");
 const { statusBreadcrumb, visibleAgentSnapshots } =
   await import("./agent-controller.ts");
 
+function emitAgentTurn(
+  agent: ReturnType<typeof fakePi>,
+  context: ReturnType<typeof fakeContext>,
+  message: { role: string; content: unknown },
+  outcome: "completed" | "aborted" | "error" = "completed",
+) {
+  agent.events.get("turn_end")![0](
+    {
+      message,
+      outcome,
+      messageEntryId: randomUUID(),
+    },
+    context,
+  );
+}
+
 test("Lead visibility follows only uniquely proven workspace-scoped ancestry", () => {
   const state = (
     label: string,
@@ -552,6 +568,10 @@ test("managed interrupt continues the same assignment after abort settlement", a
       },
       context,
     );
+    emitAgentTurn(agent, context, {
+      role: "assistant",
+      content: "completed after interrupt",
+    });
     await agent.events.get("agent_settled")![0]({ aborted: false }, context);
     assert.equal(readResult(mailbox, assignmentRequestId)?.status, "completed");
     assert.equal(
@@ -860,6 +880,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   assert.ok(agent.events.has("input"));
   assert.ok(agent.events.has("message_end"));
   assert.ok(agent.events.has("agent_settled"));
+  assert.ok(agent.events.has("agent_before_settle"));
 
   const context = fakeContext();
   const promptEvent: any = {
@@ -949,6 +970,18 @@ test("registered agent writes state, handles input, and settles one result", asy
     },
     context,
   );
+  emitAgentTurn(agent, context, {
+    role: "assistant",
+    content: [
+      { type: "text", text: "done" },
+      { type: "image", data: "ignored" },
+      { type: "toolCall", name: "ask_owner" },
+    ],
+  });
+  agent.events.get("agent_before_settle")![0](
+    { outcome: "completed" },
+    context,
+  );
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   const result = readResult(mailbox, request.requestId);
@@ -956,6 +989,103 @@ test("registered agent writes state, handles input, and settles one result", asy
   assert.equal(result?.text, "done");
   assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
   assert.equal(readAgentState(mailbox)?.lastActivityAt, undefined);
+});
+
+test("terminal Pi execution error discards partial text as an execution failure", async () => {
+  const mailbox = setAgentEnvironment("execution-error-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  agent.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const state = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 5,
+    runId: state.runId,
+    requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "do the work",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  const failedMessage = {
+    role: "assistant",
+    content: "partial output before provider failure",
+  };
+  agent.events.get("message_end")![0]({ message: failedMessage }, context);
+  emitAgentTurn(agent, context, failedMessage, "error");
+  agent.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+  const result = readResult(mailbox, request.requestId);
+  assert.equal(result?.status, "failed");
+  assert.deepEqual(result?.error, {
+    code: "execution_error",
+    message: "Agent model execution failed",
+  });
+  assert.equal(result?.text, undefined);
+  assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("a completed retry supersedes an earlier Pi error candidate", async () => {
+  const mailbox = setAgentEnvironment("retry-outcome-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  agent.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const state = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 5,
+    runId: state.runId,
+    requestId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "retry the work",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  emitAgentTurn(
+    agent,
+    context,
+    {
+      role: "assistant",
+      content: "partial failed attempt",
+    },
+    "error",
+  );
+  agent.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+  const finalMessage = { role: "assistant", content: "recovered result" };
+  agent.events.get("message_end")![0]({ message: finalMessage }, context);
+  emitAgentTurn(agent, context, finalMessage, "completed");
+  agent.events.get("agent_before_settle")![0](
+    { outcome: "completed" },
+    context,
+  );
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+  assert.equal(readResult(mailbox, request.requestId)?.status, "completed");
+  assert.equal(
+    readResult(mailbox, request.requestId)?.text,
+    "recovered result",
+  );
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
 });
 
 test("aborted settlement fails an assignment despite meaningful assistant text", async () => {
@@ -1046,6 +1176,7 @@ test("result persistence waits for the assignment lock", async (t) => {
     { message: { role: "assistant", content: "done" } },
     context,
   );
+  emitAgentTurn(agent, context, { role: "assistant", content: "done" });
   const release = claimProcessLock(assignmentLockPathForTest(mailbox));
   try {
     await agent.events.get("agent_settled")![0]({ aborted: false }, context);
@@ -1089,6 +1220,7 @@ test("assignment-lock contention does not consume result write attempts", async 
     { message: { role: "assistant", content: "done" } },
     context,
   );
+  emitAgentTurn(agent, context, { role: "assistant", content: "done" });
   let release: (() => void) | undefined = claimProcessLock(
     assignmentLockPathForTest(mailbox),
   );
@@ -1538,6 +1670,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     { message: { role: "assistant", content: "ALPHA" } },
     context,
   );
+  emitAgentTurn(agent, context, { role: "assistant", content: "ALPHA" });
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(readResult(mailbox, assignment.requestId)?.text, "ALPHA");
   realFs.rmSync(askFile, { force: true });
@@ -2662,6 +2795,10 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { message: { role: "assistant", content: "completed" } },
     context,
   );
+  emitAgentTurn(agent, context, {
+    role: "assistant",
+    content: "completed",
+  });
   await t.waitFor(
     () =>
       assert.equal(
@@ -2674,6 +2811,10 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   const callsBeforeSettlement = agent.calls.length;
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
+  agent.events.get("agent_before_settle")![0](
+    { outcome: "completed" },
+    context,
+  );
   agent.events.get("agent_settled")![0]({ aborted: false }, context);
   await t.waitFor(
     () =>

@@ -83,6 +83,37 @@ marks retry as unsafe and exact-owner cleanup as safe. It may also produce
 direct-owner `result_error` attention; use its stored recovery details and
 `nextAction` rather than inventing a separate persistence recovery.
 
+## Model execution failed
+
+A terminal model execution failure is not a completed assignment. Managed Agents
+report a failed result (`execution_error`) to their exact direct owner; partial
+assistant text is not a successful result. A completed execution with no result
+text is reported separately as `empty_result`. Cancellation remains distinct
+from execution failure. These results do not by themselves close the assignment
+or release its ownership; inspect the exact assignment, child work, and durable
+result before deciding what to do next.
+
+Assigned Lead failures are reported to the Manager through the existing project
+message path. A failure received while the Manager is absent remains a project
+message; when the exact current Manager returns idle, an unreceived execution
+failure is actionable and can trigger a turn. Historical ordinary reports do
+not trigger turns, and received messages are not replayed. A Lead with no
+project assignment, or a Manager, reports to a currently verified Chief when
+available. Chief's own Pi execution errors remain visible in its Pi session.
+
+Failure reporting does not retry the model run, replay tools, stop child Agents,
+or complete project work. Continue only the same exact authorized session or
+assignment after inspecting whether prior tools or external actions may have
+taken effect. Use the existing authorized coordination path to ask a live,
+idle Lead to continue; use `resume_project` for a deliberately stopped assigned
+Lead. Do not start a second process or blindly repeat an operation. Cancellation
+does not automatically resume.
+
+Reports to Chief require current exact Chief authority. When no Chief can be
+verified, the failure remains inspectable in the originating Pi session; there
+is no durable future-Chief role inbox. Conflicting or missing identity evidence
+fails closed rather than selecting a likely recipient or session.
+
 ## Agent is `unknown`
 
 `unknown` means the system cannot prove a safe control state from current exact

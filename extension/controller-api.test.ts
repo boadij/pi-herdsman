@@ -578,14 +578,26 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     const turnStart = Date.now();
     for (const handler of pi.events.get("agent_start") ?? [])
       await handler(undefined, ctx);
+    const continuationResponse = {
+      role: "assistant",
+      timestamp: turnStart + 1,
+      content: [{ type: "text", text: "Manual continuation result." }],
+    };
     branchEntries.push({
       type: "message",
-      message: {
-        role: "assistant",
-        timestamp: turnStart + 1,
-        content: [{ type: "text", text: "Manual continuation result." }],
-      },
+      message: continuationResponse,
     });
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler(
+        {
+          outcome: "completed",
+          message: continuationResponse,
+          messageEntryId: "manual-continuation-response",
+        },
+        ctx,
+      );
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "completed" }, ctx);
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: false }, ctx);
     await t.waitFor(() =>

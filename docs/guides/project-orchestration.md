@@ -117,11 +117,35 @@ references may also be passed through. If the Manager needs an artifact for
 review or onward delegation, the Lead explicitly transfers it through
 `message_supervisor.files`.
 
-Only a Lead turn confirmed as not aborted contributes a completed response.
-Cancellation is reported as a factual, nonterminal project message without
-including partial assistant output. A restored unfinished herd run has no
-verified prior summary, so it uses a generic settlement handoff unless a later
-Lead response settles successfully.
+Only a Lead turn with a verified current Pi `completed` outcome contributes a
+successful response; text alone does not prove completion. On a model execution
+failure, Herdsman publishes a factual, nonterminal execution-failure report,
+including partial response text only as explicitly incomplete context. A failed
+Lead run does not stop its Agents, integrate their work, or complete the project
+assignment. Child completion later does not turn that failure into a successful
+handoff. A restored unfinished herd run has no verified prior summary and is
+reported as unresolved unless a later Lead execution completes successfully.
+Cancellation is reported separately as a factual, nonterminal message without
+partial assistant output.
+
+An assigned Lead reports an execution failure to its Manager through the
+durable project-message path. If the Manager is absent, the report remains
+pending; when the exact current Manager returns idle, an unreceived failure
+backlog message can trigger one follow-up turn. Historical ordinary reports
+remain non-triggering, and a receipt in that Manager session prevents
+redelivery. A Manager or an unassigned Lead reports failures to a currently
+verified Chief. Chief's own Pi execution failure is exposed in its session. If
+no Chief is verifiable, local Pi session evidence is retained; there is no
+durable future-Chief inbox.
+
+Treat execution failure and unresolved project work as separate facts. Do not
+retry the model run or replay tool calls automatically. Before continuing the
+same assigned session, inspect its transcript and any external effects because
+a failed execution may have partially acted. Send an authorized message to the
+exact live, idle Lead to continue; resume a deliberately stopped Lead with
+`resume_project` on its branch. Do not create a second writer or treat
+cancellation as a request to resume. Missing or conflicting runtime identity
+fails closed; verify current assignment and supervisor authority before acting.
 Managers should treat routine results as informational and act when useful
 coordination is needed.
 

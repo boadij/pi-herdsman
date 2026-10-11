@@ -1772,6 +1772,19 @@ test("lead herd runs start once and stay open through intermediate settlement", 
       (entry: any) => entry.customType === "pi-herdsman-herd-run",
     ) as any[];
   const emit = async (name: string) => {
+    if (name === "agent_settled") {
+      for (const handler of pi.events.get("turn_end") ?? [])
+        await handler(
+          {
+            outcome: "completed",
+            message: { role: "assistant", content: [] },
+            messageEntryId: "test-response",
+          },
+          context,
+        );
+      for (const handler of pi.events.get("agent_before_settle") ?? [])
+        await handler({ outcome: "completed" }, context);
+    }
     for (const handler of pi.events.get(name) ?? [])
       await handler(
         name === "agent_settled" ? { aborted: false } : undefined,
@@ -1957,7 +1970,8 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
       assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1),
     );
     const [handoff] = listProjectMessages(runtime, "repo-key", branch);
-    assert.equal(handoff.text, "Herd run settled.");
+    assert.match(handoff.text, /outcome was not preserved across restoration/);
+    assert.match(handoff.text, /work remains unresolved/);
     assert.doesNotMatch(handoff.text, /UNVERIFIED_RESTORED_SUMMARY/);
     assert.equal(
       listProjectAssignments(runtime, "repo-key").some(
@@ -1992,7 +2006,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     assert.equal(second.details.ok, true, JSON.stringify(second.details));
     assert.equal(
       herdEntries().filter((entry) => entry.data?.phase === "started").length,
-      2,
+      3,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -2011,6 +2025,7 @@ test("aborted Lead settlement waits for active child work before finishing the h
   let childActive = true;
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
+    activeRole: () => "lead",
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
     listAgentStates: () =>
@@ -2020,6 +2035,7 @@ test("aborted Lead settlement waits for active child work before finishing the h
     currentWorktreeScope: async () => undefined,
     projectAssignmentForScope: () => undefined,
     publishProjectMessage: async () => undefined,
+    publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
     queueLeadPresentation: () => {},
     appendDurableError: () => {},
@@ -2047,6 +2063,139 @@ test("aborted Lead settlement waits for active child work before finishing the h
     1,
     "settling child work should allow the herd to finish",
   );
+});
+
+test("failed active Lead reports before child completion and does not hand off success", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  let childActive = true;
+  const reports: string[] = [];
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () =>
+      childActive
+        ? [{ state: { ownerSessionId: LEAD_SESSION_ID } } as any]
+        : [],
+    currentWorktreeScope: async () => ({}) as any,
+    projectAssignmentForScope: () => ({}) as any,
+    publishProjectMessage: async (_ctx, _assignment, message) => {
+      reports.push(message);
+      return undefined;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.agentStarted();
+  herd.begin(context);
+  herd.turnEnd({
+    outcome: "error",
+    message: { role: "assistant", content: "partial output" },
+    messageEntryId: "failed-response",
+  });
+  herd.beforeSettle({ outcome: "error" });
+  await herd.agentSettled(context, false);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /failed before completion/);
+  assert.match(reports[0], /partial output/);
+  assert.equal(
+    pi.entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "finished",
+    ),
+    false,
+    "child ownership keeps the herd active",
+  );
+  childActive = false;
+  await herd.maybeFinish(context);
+  assert.equal(
+    reports.length,
+    1,
+    "late child completion must not create success handoff",
+  );
+});
+
+test("unassigned Lead and Manager failure reports replay the exact Chief payload", async (t) => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const roles: string[] = [];
+  for (const role of ["lead", "manager"] as const) {
+    const pi = fakePi();
+    const context = fakeContext(pi.entries);
+    context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+    context.isIdle = () => true;
+    const published = new Map<string, { message: string; createdAt: number }>();
+    let writes = 0;
+    const herd = createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => role,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () => [],
+      currentWorktreeScope: async () => ({}) as any,
+      projectAssignmentForScope: () => undefined,
+      publishProjectMessage: async () => {
+        throw new Error("unassigned work must not use project handoff");
+      },
+      publishChiefFailure: async (
+        _ctx,
+        message,
+        reportId,
+        targetRole,
+        createdAt,
+      ) => {
+        writes++;
+        assert.match(message, /failed before completion/);
+        assert.ok(reportId);
+        assert.ok(Number.isFinite(createdAt));
+        assert.equal(
+          pi.entries.find(
+            (entry: any) =>
+              entry.customType === "pi-herdsman-herd-run" &&
+              entry.data?.phase === "report_pending" &&
+              entry.data?.reportId === reportId,
+          )?.data?.createdAt,
+          createdAt,
+          "publication timestamp must be persisted before the Chief write",
+        );
+        const prior = published.get(reportId);
+        if (prior) assert.deepEqual(prior, { message, createdAt });
+        else published.set(reportId, { message, createdAt });
+        roles.push(targetRole);
+        return true;
+      },
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+    herd.agentStarted();
+    herd.turnEnd({
+      outcome: "error",
+      message: { role: "assistant", content: "partial" },
+      messageEntryId: "failed-response",
+    });
+    herd.beforeSettle({ outcome: "error" });
+    await herd.agentSettled(context, false);
+    const reportId = pi.entries.find(
+      (entry: any) => entry.data?.phase === "report_pending",
+    )?.data?.reportId;
+    for (let i = pi.entries.length - 1; i >= 0; i--) {
+      if ((pi.entries[i] as any).data?.phase === "report_sent")
+        pi.entries.splice(i, 1);
+    }
+    herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+    herd.finishIfIdle(context);
+    await t.waitFor(() => assert.equal(writes, 2));
+    assert.equal(published.size, 1);
+    assert.ok(reportId);
+  }
+  assert.deepEqual(roles, ["lead", "lead", "manager", "manager"]);
 });
 
 test("assigned project herd settlement publishes one nonterminal current-run handoff", async (t) => {
@@ -2117,6 +2266,34 @@ test("assigned project herd settlement publishes one nonterminal current-run han
       (entry: any) => entry.customType === "pi-herdsman-herd-run",
     ) as any[];
   const emit = async (name: string, event?: unknown) => {
+    if (name === "agent_settled" && !(event as any)?.aborted) {
+      const latest = [...branchEntries]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.type === "message" && entry.message?.role === "assistant",
+        )?.message;
+      for (const handler of pi.events.get("turn_end") ?? [])
+        await handler(
+          latest
+            ? {
+                outcome: (event as any)?.outcome ?? "completed",
+                message: latest,
+                messageEntryId: "test-response",
+              }
+            : {
+                outcome: (event as any)?.outcome ?? "completed",
+                message: { role: "assistant", content: [] },
+                messageEntryId: "test-response",
+              },
+          context,
+        );
+      for (const handler of pi.events.get("agent_before_settle") ?? [])
+        await handler(
+          { outcome: (event as any)?.outcome ?? "completed" },
+          context,
+        );
+    }
     for (const handler of pi.events.get(name) ?? [])
       await handler(
         name === "agent_settled" ? (event ?? { aborted: false }) : event,
@@ -2182,7 +2359,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
         message: {
           role: "assistant",
           timestamp: startedAt + 2,
-          content: [{ type: "toolCall", name: "list_agents" }],
+          content: [{ type: "text", text: "CURRENT_ROUND_SUMMARY" }],
         },
       },
     );
@@ -2260,6 +2437,34 @@ test("each direct managed Lead turn returns its response", async () => {
     context.sessionManager.getBranch as () => any[]
   )();
   const emit = async (name: string, event?: unknown) => {
+    if (name === "agent_settled" && !(event as any)?.aborted) {
+      const latest = [...branchEntries]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.type === "message" && entry.message?.role === "assistant",
+        )?.message;
+      for (const handler of pi.events.get("turn_end") ?? [])
+        await handler(
+          latest
+            ? {
+                outcome: (event as any)?.outcome ?? "completed",
+                message: latest,
+                messageEntryId: "test-response",
+              }
+            : {
+                outcome: (event as any)?.outcome ?? "completed",
+                message: { role: "assistant", content: [] },
+                messageEntryId: "test-response",
+              },
+          context,
+        );
+      for (const handler of pi.events.get("agent_before_settle") ?? [])
+        await handler(
+          { outcome: (event as any)?.outcome ?? "completed" },
+          context,
+        );
+    }
     for (const handler of pi.events.get(name) ?? [])
       await handler(
         name === "agent_settled" ? (event ?? { aborted: false }) : event,
@@ -2357,6 +2562,25 @@ test("each direct managed Lead turn returns its response", async () => {
       ),
       true,
     );
+
+    await emit("agent_start");
+    branchEntries.push({
+      type: "message",
+      message: { role: "assistant", content: [] },
+    });
+    await emit("agent_settled", { aborted: false, outcome: "error" });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 4);
+    assert.match(
+      listProjectMessages(runtime, "repo-key", branch)[3].text,
+      /^Lead model execution failed before completion\./,
+    );
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").some(
+        (assignment) => assignment.id === LEAD_SESSION_ID,
+      ),
+      true,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     removeProjectAssignment(runtime, "repo-key", branch);
@@ -2426,6 +2650,19 @@ test("automatic project handoff cannot recreate messages under assignment resolu
       );
   };
   const emit = async (name: string) => {
+    if (name === "agent_settled") {
+      for (const handler of pi.events.get("turn_end") ?? [])
+        await handler(
+          {
+            outcome: "completed",
+            message: { role: "assistant", content: [] },
+            messageEntryId: "test-response",
+          },
+          context,
+        );
+      for (const handler of pi.events.get("agent_before_settle") ?? [])
+        await handler({ outcome: "completed" }, context);
+    }
     for (const handler of pi.events.get(name) ?? [])
       await handler(
         name === "agent_settled" ? { aborted: false } : undefined,
@@ -2562,6 +2799,7 @@ test("recovery cleanup finishes an idle restored herd without settlement", async
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
+    await new Promise((resolve) => setTimeout(resolve, 25));
     const finished = herdEntries().filter(
       (entry) => entry.data?.phase === "finished",
     );
@@ -3224,6 +3462,18 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       { message: { role: "assistant", content: "ALPHA" } },
       childResultContext,
     );
+    await childAgent.events.get("turn_end")![0](
+      {
+        outcome: "completed",
+        message: { role: "assistant", content: "ALPHA" },
+        messageEntryId: "child-response",
+      },
+      childResultContext,
+    );
+    await childAgent.events.get("agent_before_settle")![0](
+      { outcome: "completed" },
+      childResultContext,
+    );
     await childAgent.events.get("agent_settled")![0](
       { aborted: false },
       childResultContext,
@@ -3258,6 +3508,18 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       await handler(undefined, parentResultContext);
     parentAgent.events.get("message_end")![0](
       { message: { role: "assistant", content: "Parent completed." } },
+      parentResultContext,
+    );
+    await parentAgent.events.get("turn_end")![0](
+      {
+        outcome: "completed",
+        message: { role: "assistant", content: "Parent completed." },
+        messageEntryId: "parent-response",
+      },
+      parentResultContext,
+    );
+    await parentAgent.events.get("agent_before_settle")![0](
+      { outcome: "completed" },
       parentResultContext,
     );
     await parentAgent.events.get("agent_settled")![0](

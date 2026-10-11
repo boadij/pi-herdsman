@@ -26,6 +26,7 @@ import {
   leadSupervisorState as resolveLeadSupervisorState,
   projectTaskSummary,
   listProjectAssignments,
+  listProjectMessages,
   staffToolName,
   supervisorStateMessage,
   verifyManagerCoordinationAuthority,
@@ -407,6 +408,7 @@ type LeadCommandBaseHost = Omit<
 >;
 
 type LeadHerdRunHost = {
+  activeRole(): "lead" | "manager" | "chief";
   pi: ExtensionAPI;
   entryName: string;
   hasPendingStarts(): boolean;
@@ -424,7 +426,16 @@ type LeadHerdRunHost = {
     message: string,
     files?: readonly string[],
     operation?: string,
+    reportId?: string,
+    kind?: ProjectMessage["kind"],
   ): Promise<ProjectMessage | undefined>;
+  publishChiefFailure(
+    ctx: ExtensionContext,
+    message: string,
+    reportId: string,
+    role: "lead" | "manager",
+    createdAt: number,
+  ): Promise<boolean>;
   requestStatusRefresh(): void;
   queueLeadPresentation(ctx: ExtensionContext, name: string): void;
   appendDurableError(
@@ -1297,7 +1308,10 @@ export function createLeadAgentEventRuntime(host: {
   definitionRoster():
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   consumeChiefStartPreflight(ctx: ExtensionContext): void;
-  herdRun: Pick<LeadHerdRunRuntime, "agentStarted" | "agentSettled">;
+  herdRun: Pick<
+    LeadHerdRunRuntime,
+    "agentStarted" | "agentSettled" | "turnEnd" | "beforeSettle"
+  >;
   controller: Pick<
     LeadController,
     "settleAsks" | "sessionSignal" | "settleResults"
@@ -1355,7 +1369,7 @@ export function createLeadAgentEventRuntime(host: {
     async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
       host.leadInboxRuntime.agentSettled();
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
-      host.herdRun.agentSettled(ctx, aborted);
+      await host.herdRun.agentSettled(ctx, aborted);
       await host.controller
         .settleResults(ctx, host.controller.sessionSignal())
         .catch(() => {});
@@ -3162,6 +3176,7 @@ export function registerLeadRuntime(
   herdRunRuntime = createLeadHerdRunRuntime({
     pi,
     entryName: options.herdRunEntryName,
+    activeRole: () => activeLeadRole(options.leadRuntime),
     hasPendingStarts: () => controller.hasPendingStarts(),
     listAgentStates: () => controller.listAgentStates(),
     currentWorktreeScope: (ctx: ExtensionContext) =>
@@ -3172,6 +3187,16 @@ export function registerLeadRuntime(
     publishProjectMessage: (
       ...args: Parameters<typeof roleTransitions.publishProjectMessage>
     ) => roleTransitions.publishProjectMessage(...args),
+    publishChiefFailure: async (ctx, message, reportId, role, createdAt) => {
+      await coordinationRuntime.queueChiefRecord(
+        role === "manager" ? "manager_message" : "lead_message",
+        message,
+        ctx,
+        reportId,
+        createdAt,
+      );
+      return true;
+    },
     requestStatusRefresh: () => statusRuntime.requestRefresh(),
     queueLeadPresentation: options.queueLeadPresentation,
     appendDurableError: options.herdRunServices.appendDurableError,
@@ -3588,6 +3613,9 @@ export function registerLeadRuntime(
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentStart(ctx),
   );
+  pi.on("agent_before_settle", (event: any) =>
+    herdRunRuntime!.beforeSettle(event),
+  );
   pi.on("agent_settled", (event: { aborted: boolean }, ctx: ExtensionContext) =>
     agentEvents.agentSettled(ctx, event.aborted),
   );
@@ -3602,9 +3630,10 @@ export function registerLeadRuntime(
     if (!options.hasPane()) return;
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
-  pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) =>
-    options.queueLeadPresentation(ctx),
-  );
+  pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
+    herdRunRuntime!.turnEnd(event);
+    options.queueLeadPresentation(ctx);
+  });
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
     options.queueLeadPresentation(ctx),
   );
@@ -4922,37 +4951,53 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
 
 export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   let leadAgentStartedAt: number | undefined;
+  let leadReportId: string | undefined;
   let herdRunStartedAt: number | undefined;
+  let herdReportId: string | undefined;
   let leadSettled = true;
-  let lastSettledRun: { aborted: boolean; summary?: string } | undefined;
-  const latestMeaningfulAssistantResponse = (
-    ctx: ExtensionContext,
-    startedAt: number,
-  ): string | undefined => {
-    const entries = ctx.sessionManager.getBranch();
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i] as any;
-      if (entry.type !== "message" || entry.message.role !== "assistant")
-        continue;
-      if ((entry.message.timestamp ?? 0) < startedAt) continue;
-      const text = contentText(entry.message.content, "").trim();
-      if (text) return text;
-    }
-  };
+  let observation:
+    | { outcome?: string; responseEntryId?: string; responseText?: string }
+    | undefined;
+  let lastSettledRun:
+    { aborted: boolean; outcome?: string; summary?: string } | undefined;
   const publishProjectHandoff = async (
     ctx: ExtensionContext,
     message: string,
-  ): Promise<void> => {
+    reportId = herdReportId,
+    kind?: ProjectMessage["kind"],
+    createdAt = Date.now(),
+  ): Promise<boolean> => {
+    const role = host.activeRole();
+    if (kind === "execution_failure" && !reportId) return false;
+    if (kind === "execution_failure" && role === "manager")
+      return host.publishChiefFailure(
+        ctx,
+        message,
+        reportId,
+        "manager",
+        createdAt,
+      );
     const scope = await host.currentWorktreeScope(ctx);
-    if (!scope) return;
+    if (!scope) return false;
     const assignment = host.projectAssignmentForScope(
       scope,
       ctx.sessionManager.getSessionId(),
     );
-    if (!assignment) return;
-    await host.publishProjectMessage(ctx, assignment, message, [], "herd_run");
+    if (!assignment)
+      return kind === "execution_failure" && role === "lead"
+        ? host.publishChiefFailure(ctx, message, reportId!, "lead", createdAt)
+        : false;
+    return !!(await host.publishProjectMessage(
+      ctx,
+      assignment,
+      message,
+      [],
+      "herd_run",
+      reportId,
+      kind,
+    ));
   };
-  const maybeFinish = (ctx: ExtensionContext): void => {
+  const maybeFinish = async (ctx: ExtensionContext): Promise<void> => {
     if (herdRunStartedAt === undefined || !leadSettled) return;
     const sessionId = ctx.sessionManager.getSessionId();
     if (
@@ -4968,25 +5013,63 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     const startedAt = herdRunStartedAt;
     const completedAt = Date.now();
     try {
+      const outcome = lastSettledRun;
+      // Failed/cancelled herd runs are reported at settlement, before children
+      // finish. A successful summary is the only completion handoff here.
+      if (outcome?.outcome === "completed" && outcome.summary) {
+        const message = `Herd run settled.\n\n${outcome.summary}`;
+        host.pi.appendEntry(host.entryName, {
+          phase: "report_pending",
+          sessionId,
+          startedAt,
+          reportId: herdReportId,
+          message,
+        });
+        if (await publishProjectHandoff(ctx, message, herdReportId))
+          host.pi.appendEntry(host.entryName, {
+            phase: "report_sent",
+            sessionId,
+            startedAt,
+            reportId: herdReportId,
+          });
+      } else if (!outcome) {
+        const message =
+          "Lead execution outcome was not preserved across restoration; work remains unresolved.";
+        host.pi.appendEntry(host.entryName, {
+          phase: "report_pending",
+          sessionId,
+          startedAt,
+          reportId: herdReportId,
+          message,
+          kind: "execution_failure",
+        });
+        if (
+          await publishProjectHandoff(
+            ctx,
+            message,
+            herdReportId,
+            "execution_failure",
+          )
+        )
+          host.pi.appendEntry(host.entryName, {
+            phase: "report_sent",
+            sessionId,
+            startedAt,
+            reportId: herdReportId,
+          });
+      }
       host.pi.appendEntry(host.entryName, {
         phase: "finished",
         sessionId,
         startedAt,
         completedAt,
+        reportId: herdReportId,
       });
+      lastSettledRun = undefined;
       herdRunStartedAt = undefined;
+      herdReportId = undefined;
       host.requestStatusRefresh();
       host.queueLeadPresentation(ctx);
-      const outcome = lastSettledRun;
-      lastSettledRun = undefined;
-      const message = outcome?.aborted
-        ? "Lead execution was cancelled before a completed response."
-        : outcome?.summary
-          ? `Herd run settled.\n\n${outcome.summary}`
-          : "Herd run settled.";
-      void publishProjectHandoff(ctx, message).catch((error) =>
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error),
-      );
     } catch (error) {
       host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
     }
@@ -4995,49 +5078,191 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     if (herdRunStartedAt !== undefined) return;
     const startedAt = leadAgentStartedAt ?? Date.now();
     herdRunStartedAt = startedAt;
+    herdReportId = randomUUID();
     host.queueLeadPresentation(ctx);
     try {
       host.pi.appendEntry(host.entryName, {
         phase: "started",
         sessionId: ctx.sessionManager.getSessionId(),
         startedAt,
+        reportId: herdReportId,
       });
     } catch (error) {
       host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
     }
     host.requestStatusRefresh();
   };
+  const restorePendingReports = async (
+    ctx: ExtensionContext,
+    entries: unknown[],
+  ) => {
+    const pending = new Map<
+      string,
+      {
+        startedAt: number;
+        message: string;
+        kind?: ProjectMessage["kind"];
+        createdAt: number;
+      }
+    >();
+    for (const entry of entries as any[]) {
+      if (entry?.type !== "custom" || entry.customType !== host.entryName)
+        continue;
+      const data = entry.data;
+      if (
+        data?.sessionId !== ctx.sessionManager.getSessionId() ||
+        typeof data.reportId !== "string"
+      )
+        continue;
+      if (data.phase === "report_pending" && typeof data.message === "string") {
+        const previous = pending.get(data.reportId);
+        const createdAt =
+          typeof data.createdAt === "number" && Number.isFinite(data.createdAt)
+            ? data.createdAt
+            : data.startedAt;
+        if (
+          previous &&
+          (previous.message !== data.message ||
+            previous.kind !== data.kind ||
+            previous.createdAt !== createdAt)
+        )
+          throw new Error(
+            "Lead report identity conflicts with durable payload",
+          );
+        pending.set(data.reportId, {
+          startedAt: data.startedAt,
+          message: data.message,
+          kind: data.kind,
+          createdAt,
+        });
+      }
+      if (data.phase === "report_sent") pending.delete(data.reportId);
+    }
+    for (const [reportId, report] of pending) {
+      if (
+        await publishProjectHandoff(
+          ctx,
+          report.message,
+          reportId,
+          report.kind,
+          report.createdAt,
+        )
+      )
+        host.pi.appendEntry(host.entryName, {
+          phase: "report_sent",
+          sessionId: ctx.sessionManager.getSessionId(),
+          startedAt: report.startedAt,
+          reportId,
+        });
+    }
+  };
   return {
     begin,
     maybeFinish,
     agentStarted: () => {
       leadAgentStartedAt = Date.now();
+      leadReportId = randomUUID();
+      observation = {};
       leadSettled = false;
     },
-    agentSettled: (ctx: ExtensionContext, aborted: boolean) => {
+    turnEnd: (event: any) => {
+      if (!observation || event?.message?.role !== "assistant") return;
+      observation = {
+        outcome: event.outcome,
+        responseEntryId: event.messageEntryId,
+        responseText: contentText(event.message.content, "").trim(),
+      };
+    },
+    beforeSettle: (event: any) => {
+      if (observation) observation.outcome = event?.outcome;
+    },
+    agentSettled: async (ctx: ExtensionContext, aborted: boolean) => {
       const turnStartedAt = leadAgentStartedAt;
       leadAgentStartedAt = undefined;
       const herdOwnsHandoff = herdRunStartedAt !== undefined;
-      const summary =
-        !aborted && turnStartedAt !== undefined
-          ? latestMeaningfulAssistantResponse(ctx, turnStartedAt)
-          : undefined;
-      if (herdOwnsHandoff) lastSettledRun = { aborted, summary };
+      const current = observation;
+      observation = undefined;
+      const successful =
+        !aborted &&
+        current?.outcome === "completed" &&
+        current.responseEntryId !== undefined;
+      const summary = successful ? current.responseText : undefined;
+      if (herdOwnsHandoff)
+        lastSettledRun = { aborted, outcome: current?.outcome, summary };
       leadSettled = true;
-      maybeFinish(ctx);
-      if (!herdOwnsHandoff && turnStartedAt !== undefined) {
-        const message = aborted
-          ? "Lead execution was cancelled before a completed response."
-          : summary;
-        if (message)
-          void publishProjectHandoff(ctx, message).catch((error) =>
-            host.appendDurableError(
-              host.pi,
-              ctx,
-              "pi_herdsman_state_error",
-              error,
-            ),
+      if (!successful && !aborted && turnStartedAt !== undefined) {
+        const reportCreatedAt = Date.now();
+        const detail = current?.responseText
+          ? `\n\nPartial response (not completed):\n${current.responseText}`
+          : "";
+        const message = `${current?.outcome === "error" ? "Lead model execution failed before completion." : "Lead execution settled without verified completion."}${detail}`;
+        try {
+          host.pi.appendEntry(host.entryName, {
+            phase: "report_pending",
+            sessionId: ctx.sessionManager.getSessionId(),
+            startedAt: turnStartedAt,
+            reportId: leadReportId,
+            ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
+            message,
+            kind: "execution_failure",
+            createdAt: reportCreatedAt,
+          });
+          const published = await publishProjectHandoff(
+            ctx,
+            message,
+            leadReportId,
+            "execution_failure",
+            reportCreatedAt,
           );
+          if (published)
+            host.pi.appendEntry(host.entryName, {
+              phase: "report_sent",
+              sessionId: ctx.sessionManager.getSessionId(),
+              startedAt: turnStartedAt,
+              reportId: leadReportId,
+            });
+        } catch (error) {
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        }
+      } else if (aborted && turnStartedAt !== undefined) {
+        const reportCreatedAt = Date.now();
+        const message =
+          "Lead execution was cancelled before a completed response.";
+        host.pi.appendEntry(host.entryName, {
+          phase: "report_pending",
+          sessionId: ctx.sessionManager.getSessionId(),
+          startedAt: turnStartedAt,
+          reportId: leadReportId,
+          createdAt: reportCreatedAt,
+          ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
+          message,
+        });
+        if (
+          await publishProjectHandoff(
+            ctx,
+            message,
+            leadReportId,
+            undefined,
+            reportCreatedAt,
+          )
+        )
+          host.pi.appendEntry(host.entryName, {
+            phase: "report_sent",
+            sessionId: ctx.sessionManager.getSessionId(),
+            startedAt: turnStartedAt,
+            reportId: leadReportId,
+          });
+      } else if (!herdOwnsHandoff && successful && summary) {
+        await publishProjectHandoff(ctx, summary, leadReportId);
+      }
+      await maybeFinish(ctx);
+      if (!herdOwnsHandoff && turnStartedAt !== undefined) {
+        leadReportId = undefined;
       }
     },
     restoreSession: (entries: unknown[], sessionId: string) => {
@@ -5047,19 +5272,81 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         sessionId,
         host.entryName,
       );
-      lastSettledRun = undefined;
+      herdReportId = restoreHerdRunReportId(entries, sessionId, host.entryName);
+      if (herdRunStartedAt !== undefined && !herdReportId) {
+        herdReportId = randomUUID();
+        host.pi.appendEntry(host.entryName, {
+          phase: "started",
+          sessionId,
+          startedAt: herdRunStartedAt,
+          reportId: herdReportId,
+        });
+      }
+      const hasReportIntent = (entries as any[]).some(
+        (entry) =>
+          entry?.type === "custom" &&
+          entry.customType === host.entryName &&
+          entry.data?.sessionId === sessionId &&
+          !!herdReportId &&
+          (entry.data?.reportId === herdReportId ||
+            entry.data?.runReportId === herdReportId) &&
+          (entry.data?.phase === "report_pending" ||
+            entry.data?.phase === "report_sent"),
+      );
+      lastSettledRun = hasReportIntent
+        ? { aborted: false, outcome: "reported" }
+        : undefined;
       leadSettled = herdRunStartedAt === undefined;
     },
     finishIfIdle: (ctx: ExtensionContext) => {
-      if (herdRunStartedAt !== undefined && ctx.isIdle()) {
-        leadSettled = true;
-        maybeFinish(ctx);
-      }
+      if (!ctx.isIdle()) return;
+      void (async () => {
+        await restorePendingReports(ctx, ctx.sessionManager.getEntries());
+        if (herdRunStartedAt !== undefined) {
+          leadSettled = true;
+          if (!lastSettledRun) {
+            const reportCreatedAt = Date.now();
+            const message =
+              "Lead execution outcome was not preserved across restoration; work remains unresolved.";
+            host.pi.appendEntry(host.entryName, {
+              phase: "report_pending",
+              sessionId: ctx.sessionManager.getSessionId(),
+              startedAt: herdRunStartedAt,
+              reportId: herdReportId,
+              message,
+              kind: "execution_failure",
+              createdAt: reportCreatedAt,
+            });
+            if (
+              await publishProjectHandoff(
+                ctx,
+                message,
+                herdReportId,
+                "execution_failure",
+                reportCreatedAt,
+              )
+            )
+              host.pi.appendEntry(host.entryName, {
+                phase: "report_sent",
+                sessionId: ctx.sessionManager.getSessionId(),
+                startedAt: herdRunStartedAt,
+                reportId: herdReportId,
+              });
+            lastSettledRun = { aborted: false, outcome: "reported" };
+          }
+          await maybeFinish(ctx);
+        }
+      })().catch((error) =>
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error),
+      );
     },
     startedAt: () => herdRunStartedAt,
     shutdown: () => {
       leadAgentStartedAt = undefined;
       herdRunStartedAt = undefined;
+      herdReportId = undefined;
+      leadReportId = undefined;
+      observation = undefined;
       lastSettledRun = undefined;
       leadSettled = true;
     },
@@ -5104,6 +5391,23 @@ function restoreHerdRunStartedAt(
       active = undefined;
   }
   return active;
+}
+
+function restoreHerdRunReportId(
+  entries: readonly unknown[],
+  sessionId: string,
+  entryName: string,
+): string | undefined {
+  let reportId: string | undefined;
+  for (const entry of entries as any[]) {
+    if (entry?.type !== "custom" || entry.customType !== entryName) continue;
+    const data = entry.data;
+    if (data?.sessionId !== sessionId) continue;
+    if (data.phase === "started" && typeof data.reportId === "string")
+      reportId = data.reportId;
+    if (data.phase === "finished") reportId = undefined;
+  }
+  return reportId;
 }
 
 export function createLeadProjectRuntime(host: LeadProjectHost) {
@@ -7312,6 +7616,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           return 0;
         importResultBindings(pi, ctx, record.resultBindings, "project_message");
         const backlog = record.createdAt < manager.createdAt;
+        const actionableFailure =
+          backlog && record.kind === "execution_failure";
         pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
@@ -7324,7 +7630,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               fromSessionId: record.fromSessionId,
             },
           },
-          backlog
+          backlog && !actionableFailure
             ? { triggerTurn: false }
             : { deliverAs: "followUp", triggerTurn: true },
         );
@@ -8640,6 +8946,8 @@ export function createLeadRoleTransitions(
     message: string,
     files: readonly MessageFileInput[] = [],
     operation = "message_supervisor",
+    reportId?: string,
+    kind?: ProjectMessage["kind"],
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
     const runtime = host.supervisionRuntime();
@@ -8649,7 +8957,7 @@ export function createLeadRoleTransitions(
       assignment.branch,
     );
     if (!current || current.id !== sessionId) return undefined;
-    const id = randomUUID();
+    const id = reportId ?? randomUUID();
     const createdAt = Date.now();
     const prepared = await host.prepareCoordinationInput(
       ctx,
@@ -8665,6 +8973,7 @@ export function createLeadRoleTransitions(
           branch: assignment.branch,
           fromSessionId: sessionId,
           text: candidate,
+          ...(kind ? { kind } : {}),
           ...(resultBindings.length
             ? { resultBindings: [...resultBindings] }
             : {}),
@@ -8678,6 +8987,7 @@ export function createLeadRoleTransitions(
       branch: assignment.branch,
       fromSessionId: sessionId,
       text: prepared.text,
+      ...(kind ? { kind } : {}),
       ...(prepared.resultBindings.length
         ? { resultBindings: prepared.resultBindings }
         : {}),
@@ -8693,6 +9003,24 @@ export function createLeadRoleTransitions(
           assignment.branch,
         );
         if (!latest || latest.id !== sessionId) return undefined;
+        const existing = listProjectMessages(
+          runtime,
+          assignment.repoKey,
+          assignment.branch,
+        ).find((candidate) => candidate.id === id);
+        if (existing) {
+          if (
+            existing.fromSessionId !== sessionId ||
+            existing.text !== record.text ||
+            existing.kind !== record.kind ||
+            JSON.stringify(existing.resultBindings ?? []) !==
+              JSON.stringify(record.resultBindings ?? [])
+          )
+            throw new Error(
+              "Project message identity conflicts with durable payload",
+            );
+          return existing;
+        }
         host.writeProjectMessage(record, runtime);
         return record;
       },

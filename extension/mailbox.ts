@@ -113,7 +113,12 @@ export interface ResultRecord {
   status: "completed" | "failed";
   text?: string;
   error?: {
-    code: "empty_result" | "result_too_large" | "write_failure" | "aborted";
+    code:
+      | "empty_result"
+      | "execution_error"
+      | "result_too_large"
+      | "write_failure"
+      | "aborted";
     message: string;
   };
   contextUsage?: {
@@ -673,6 +678,7 @@ function validate(
       const error = v.error as Record<string, unknown> | undefined;
       const codes = [
         "empty_result",
+        "execution_error",
         "result_too_large",
         "write_failure",
         "aborted",

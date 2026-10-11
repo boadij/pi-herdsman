@@ -269,7 +269,7 @@ test(
 );
 
 test(
-  "replacement retains quarantine after final marker fsync failure",
+  "replay retains quarantine after final marker fsync failure",
   { concurrency: false, skip: process.platform === "win32" },
   () => {
     const runtime = supervisionRuntime(socket());
@@ -287,9 +287,8 @@ test(
     };
     writeChiefMessage(record, runtime);
     const path = chiefMessagePath(runtime, record.toSessionId, record.id);
-    const replacement = { ...record, text: "replacement" };
     quarantineChiefMessage(runtime, record.toSessionId, record.id);
-    // replacement fsync (#1), then fail the final quarantine-marker removal
+    // replay fsync (#1), then fail the final quarantine-marker removal
     // fsync (#2); restoration fsync must succeed afterward.
     failDirectoryFsyncAt = 2;
     directoryFsyncCount = 0;
@@ -297,14 +296,11 @@ test(
     failureDirectory = dirname(path);
     try {
       assert.throws(
-        () => writeChiefMessage(replacement, runtime),
+        () => writeChiefMessage(record, runtime),
         (error) => error === lastDirectoryFsyncError,
       );
       assert.equal(realFs.existsSync(`${path}.quarantine`), true);
-      assert.deepEqual(
-        JSON.parse(realFs.readFileSync(path, "utf8")),
-        replacement,
-      );
+      assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), record);
     } finally {
       failDirectoryFsyncAt = undefined;
       directoryFsyncCount = 0;
