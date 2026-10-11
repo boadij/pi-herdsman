@@ -4966,6 +4966,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     reportId = herdReportId,
     kind?: ProjectMessage["kind"],
     createdAt = Date.now(),
+    target?: "project" | "chief",
   ): Promise<boolean> => {
     const role = host.activeRole();
     if (kind === "execution_failure" && !reportId) return false;
@@ -4977,11 +4978,17 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         "manager",
         createdAt,
       );
+    if (kind === "execution_failure" && role === "lead" && target === "chief")
+      return host.publishChiefFailure(
+        ctx,
+        message,
+        reportId!,
+        "lead",
+        createdAt,
+      );
+    if (target !== "project") return false;
     const assignment = await host.currentProjectAssignment(ctx);
-    if (!assignment)
-      return kind === "execution_failure" && role === "lead"
-        ? host.publishChiefFailure(ctx, message, reportId!, "lead", createdAt)
-        : false;
+    if (!assignment) return false;
     return !!(await host.publishProjectMessage(
       ctx,
       assignment,
@@ -5021,9 +5028,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             ? `Herd run settled.\n\n${outcome.summary}`
             : "Herd run settled without a verified Lead integration summary.";
           let reportMessage = message;
+          let pending: any;
           if (host.isManagedLead()) {
             const entries = ctx.sessionManager.getEntries() as any[];
-            const pending = entries.find(
+            pending = entries.find(
               (entry) =>
                 entry?.type === "custom" &&
                 entry.customType === host.entryName &&
@@ -5039,9 +5047,16 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 startedAt,
                 reportId: herdReportId,
                 message: reportMessage,
+                target: "project",
               });
           }
-          const assignment = await host.currentProjectAssignment(ctx);
+          const assignment = host.isManagedLead()
+            ? pending
+              ? pending.target === "project"
+                ? await host.currentProjectAssignment(ctx)
+                : undefined
+              : await host.currentProjectAssignment(ctx)
+            : undefined;
           if (assignment) {
             if (
               !(await host.publishProjectMessage(
@@ -5088,6 +5103,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                   pending.reportId,
                   pending.kind,
                   pending.createdAt,
+                  pending.target,
                 ))
               )
                 return;
@@ -5117,6 +5133,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             Number.isFinite(pending.createdAt)
               ? pending.createdAt
               : Date.now();
+          const target = pending
+            ? pending.target
+            : host.isManagedLead()
+              ? "project"
+              : "chief";
           if (!pending)
             host.pi.appendEntry(host.entryName, {
               phase: "report_pending",
@@ -5126,6 +5147,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               message,
               kind: "execution_failure",
               createdAt: reportCreatedAt,
+              target,
             });
           if (
             !(await publishProjectHandoff(
@@ -5134,6 +5156,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               herdReportId,
               "execution_failure",
               reportCreatedAt,
+              target,
             ))
           )
             return;
@@ -5194,6 +5217,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         kind?: ProjectMessage["kind"];
         createdAt: number;
         runReportId?: string;
+        target?: "project" | "chief";
       }
     >();
     for (const entry of entries as any[]) {
@@ -5216,7 +5240,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           (previous.message !== data.message ||
             previous.kind !== data.kind ||
             previous.createdAt !== createdAt ||
-            previous.runReportId !== data.runReportId)
+            previous.runReportId !== data.runReportId ||
+            previous.target !== data.target)
         )
           throw new Error(
             "Lead report identity conflicts with durable payload",
@@ -5227,6 +5252,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           kind: data.kind,
           createdAt,
           runReportId: data.runReportId,
+          target:
+            data.target === "project" || data.target === "chief"
+              ? data.target
+              : undefined,
         });
       }
       if (data.phase === "report_sent") pending.delete(data.reportId);
@@ -5239,6 +5268,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           reportId,
           report.kind,
           report.createdAt,
+          report.target,
         )
       )
         host.pi.appendEntry(host.entryName, {
@@ -5292,6 +5322,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           : "";
         const message = `${current?.outcome === "error" ? "Lead model execution failed before completion." : "Lead execution settled without verified completion."}${detail}`;
         try {
+          const target = host.isManagedLead() ? "project" : "chief";
           host.pi.appendEntry(host.entryName, {
             phase: "report_pending",
             sessionId: ctx.sessionManager.getSessionId(),
@@ -5301,6 +5332,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             message,
             kind: "execution_failure",
             createdAt: reportCreatedAt,
+            target,
           });
           const published = await publishProjectHandoff(
             ctx,
@@ -5308,6 +5340,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             leadReportId,
             "execution_failure",
             reportCreatedAt,
+            target,
           );
           if (published)
             host.pi.appendEntry(host.entryName, {
@@ -5338,6 +5371,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             createdAt: reportCreatedAt,
             ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
             message,
+            target: "project",
           });
           if (
             await publishProjectHandoff(
@@ -5346,6 +5380,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               leadReportId,
               undefined,
               reportCreatedAt,
+              "project",
             )
           )
             host.pi.appendEntry(host.entryName, {
@@ -5388,9 +5423,22 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 startedAt: turnStartedAt,
                 reportId: leadReportId,
                 message: summary,
+                target: "project",
               });
           }
-          const assignment = await host.currentProjectAssignment(ctx);
+          const assignment =
+            !host.isManagedLead() ||
+            (ctx.sessionManager.getEntries() as any[]).some(
+              (entry) =>
+                entry?.type === "custom" &&
+                entry.customType === host.entryName &&
+                entry.data?.sessionId === ctx.sessionManager.getSessionId() &&
+                entry.data?.phase === "report_pending" &&
+                entry.data?.reportId === leadReportId &&
+                entry.data?.target !== "project",
+            )
+              ? undefined
+              : await host.currentProjectAssignment(ctx);
           if (assignment) {
             if (
               await host.publishProjectMessage(
@@ -5535,6 +5583,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               Number.isFinite(pending.createdAt)
                 ? pending.createdAt
                 : Date.now();
+            const target = pending
+              ? pending.target
+              : host.isManagedLead()
+                ? "project"
+                : "chief";
             if (!pending)
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
@@ -5544,6 +5597,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 message,
                 kind: "execution_failure",
                 createdAt: reportCreatedAt,
+                target,
               });
             const published = await publishProjectHandoff(
               ctx,
@@ -5551,6 +5605,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               herdReportId,
               "execution_failure",
               reportCreatedAt,
+              target,
             );
             if (published)
               host.pi.appendEntry(host.entryName, {
