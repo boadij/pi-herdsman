@@ -5027,7 +5027,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             : "Herd run settled without a verified Lead integration summary.";
           let reportMessage = message;
           let pending: any;
-          if (host.isManagedLead()) {
+          const managed = host.isManagedLead();
+          if (managed) {
             const entries = ctx.sessionManager.getEntries() as any[];
             pending = entries.find(
               (entry) =>
@@ -5048,13 +5049,14 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 target: "project",
               });
           }
-          const assignment = host.isManagedLead()
+          const assignment = managed
             ? pending
               ? pending.target === "project"
                 ? await host.currentProjectAssignment(ctx)
                 : undefined
               : await host.currentProjectAssignment(ctx)
             : undefined;
+          if (managed && !assignment) return;
           if (assignment) {
             if (
               !(await host.publishProjectMessage(

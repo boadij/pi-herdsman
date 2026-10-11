@@ -2659,6 +2659,87 @@ test("concurrent herd finalization publishes and finishes only once", async () =
   );
 });
 
+test("concurrent idle recovery publishes and finishes only once", async (t) => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  const reportId = randomUUID();
+  const pendingReportId = randomUUID();
+  const startedAt = Date.now();
+  pi.entries.push(
+    ...([
+      { phase: "started", sessionId: LEAD_SESSION_ID, startedAt, reportId },
+      {
+        phase: "report_pending",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId: pendingReportId,
+        runReportId: reportId,
+        message: "Recover this report",
+        kind: "execution_failure",
+        createdAt: startedAt,
+        target: "project",
+      },
+    ].map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data,
+    })) as any[]),
+  );
+  let release!: () => void;
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve) => (release = resolve));
+  const publicationEntered = new Promise<void>(
+    (resolve) => (entered = resolve),
+  );
+  let publications = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentProjectAssignment: async () => ({}) as any,
+    publishProjectMessage: async () => {
+      publications++;
+      entered();
+      await blocked;
+      return true;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+
+  herd.finishIfIdle(context);
+  herd.finishIfIdle(context);
+  await publicationEntered;
+  assert.equal(publications, 1);
+  release();
+  await t.waitFor(() => {
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) =>
+          entry.data?.phase === "report_sent" &&
+          entry.data?.reportId === pendingReportId &&
+          entry.data?.runReportId === reportId,
+      ).length,
+      1,
+    );
+    assert.equal(
+      pi.entries.filter((entry: any) => entry.data?.phase === "finished")
+        .length,
+      1,
+    );
+  });
+  assert.equal(publications, 1);
+});
+
 test("Chief-directed failure stays pending across a new Manager assignment", async (t) => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
@@ -2829,6 +2910,90 @@ test("failed successful-handoff publication keeps herd finalization retryable", 
     1,
   );
   assert.equal(report.data.message, "Herd run settled.\n\ncompleted summary");
+});
+
+test("managed success waits for its exact assignment after persisting the report", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  const assignment = { project: "original assignment" };
+  let authorityAvailable = false;
+  let publications = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentProjectAssignment: async () => {
+      assert.ok(
+        pi.entries.some((entry: any) => entry.data?.phase === "report_pending"),
+        "authority is checked only after the report intent is durable",
+      );
+      return authorityAvailable ? assignment : undefined;
+    },
+    publishProjectMessage: async (
+      _ctx,
+      currentAssignment,
+      message,
+      _files,
+      _kind,
+      reportId,
+    ) => {
+      publications++;
+      assert.equal(currentAssignment, assignment);
+      assert.equal(reportId, report.data.reportId);
+      assert.equal(message, report.data.message);
+      return true;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.agentStarted();
+  herd.begin(context);
+  herd.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "completed summary" },
+    messageEntryId: "completed-response",
+  });
+  herd.beforeSettle({ outcome: "completed" });
+  await herd.agentSettled(context, false);
+
+  const report = pi.entries.find(
+    (entry: any) =>
+      entry.customType === "pi-herdsman-herd-run" &&
+      entry.data?.phase === "report_pending",
+  ) as any;
+  assert.ok(report, "the project report intent is retained");
+  assert.equal(publications, 0);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "report_sent"),
+    false,
+  );
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "finished"),
+    false,
+  );
+
+  authorityAvailable = true;
+  await herd.maybeFinish(context);
+  assert.equal(publications, 1);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === report.data.reportId,
+    ).length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "finished").length,
+    1,
+  );
 });
 
 test("successful unassigned Lead herd finishes without a project handoff", async () => {
