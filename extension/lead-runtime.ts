@@ -3188,12 +3188,16 @@ export function registerLeadRuntime(
       ...args: Parameters<typeof roleTransitions.publishProjectMessage>
     ) => roleTransitions.publishProjectMessage(...args),
     publishChiefFailure: async (ctx, message, reportId, role, createdAt) => {
+      const chief = await roleTransitions.currentChiefAuthority(ctx);
+      if (!chief) return false;
       await coordinationRuntime.queueChiefRecord(
         role === "manager" ? "manager_message" : "lead_message",
         message,
         ctx,
         reportId,
         createdAt,
+        undefined,
+        { piSessionId: chief.piSessionId, leaseId: chief.leaseId },
       );
       return true;
     },
@@ -4970,34 +4974,28 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   ): Promise<boolean> => {
     const role = host.activeRole();
     if (kind === "execution_failure" && !reportId) return false;
-    if (kind === "execution_failure" && role === "manager")
-      return host.publishChiefFailure(
+    if (target === "project") {
+      if (role !== "lead") return false;
+      const assignment = await host.currentProjectAssignment(ctx);
+      if (!assignment) return false;
+      return !!(await host.publishProjectMessage(
         ctx,
+        assignment,
         message,
+        [],
+        "herd_run",
         reportId,
-        "manager",
-        createdAt,
-      );
-    if (kind === "execution_failure" && role === "lead" && target === "chief")
-      return host.publishChiefFailure(
-        ctx,
-        message,
-        reportId!,
-        "lead",
-        createdAt,
-      );
-    if (target !== "project") return false;
-    const assignment = await host.currentProjectAssignment(ctx);
-    if (!assignment) return false;
-    return !!(await host.publishProjectMessage(
-      ctx,
-      assignment,
-      message,
-      [],
-      "herd_run",
-      reportId,
-      kind,
-    ));
+        kind,
+      ));
+    }
+    if (target === "chief") {
+      if (kind !== "execution_failure" || role === "chief") return false;
+      if (role === "lead" && (await host.currentProjectAssignment(ctx)))
+        return false;
+      return host.publishChiefFailure(ctx, message, reportId!, role, createdAt);
+    }
+    // A legacy report without a saved destination cannot be safely rerouted.
+    return false;
   };
   let finishing: Promise<void> | undefined;
   let idleFinishing: Promise<void> | undefined;
@@ -5322,7 +5320,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           : "";
         const message = `${current?.outcome === "error" ? "Lead model execution failed before completion." : "Lead execution settled without verified completion."}${detail}`;
         try {
-          const target = host.isManagedLead() ? "project" : "chief";
+          const target =
+            host.activeRole() === "lead" && host.isManagedLead()
+              ? "project"
+              : "chief";
           host.pi.appendEntry(host.entryName, {
             phase: "report_pending",
             sessionId: ctx.sessionManager.getSessionId(),

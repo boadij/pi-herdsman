@@ -2333,18 +2333,23 @@ test("Lead failure report keeps its assigned-project destination across takeover
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.isIdle = () => true;
   let managed = true;
+  let role: "lead" | "manager" = "lead";
   let assignment: object | undefined = { project: "assigned" };
   let chiefFailures = 0;
+  let projectPublications = 0;
   const createRuntime = () =>
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
-      activeRole: () => "lead",
+      activeRole: () => role,
       isManagedLead: () => managed,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
       listAgentStates: () => [],
       currentProjectAssignment: async () => assignment,
-      publishProjectMessage: async () => false,
+      publishProjectMessage: async () => {
+        projectPublications++;
+        return false;
+      },
       publishChiefFailure: async () => {
         chiefFailures++;
         return true;
@@ -2371,6 +2376,7 @@ test("Lead failure report keeps its assigned-project destination across takeover
 
   // Simulate confirmed /takeover: remove the live assignment.
   assignment = undefined;
+  role = "manager";
   const restored = createRuntime();
   restored.restoreSession(pi.entries, LEAD_SESSION_ID);
   restored.finishIfIdle(context);
@@ -2386,6 +2392,7 @@ test("Lead failure report keeps its assigned-project destination across takeover
     "a removed project assignment must not reroute an old report to Chief",
   );
 
+  role = "manager";
   const legacyReportId = randomUUID();
   pi.entries.push({
     type: "custom",
@@ -2401,10 +2408,16 @@ test("Lead failure report keeps its assigned-project destination across takeover
     },
   } as any);
   const legacyRestore = createRuntime();
+  const projectPublicationsBeforeLegacyRestore = projectPublications;
   legacyRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
   legacyRestore.finishIfIdle(context);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(chiefFailures, 0);
+  assert.equal(
+    projectPublications,
+    projectPublicationsBeforeLegacyRestore,
+    "legacy Manager report must not be published to a project",
+  );
   assert.equal(
     pi.entries.some(
       (entry: any) =>
@@ -2416,6 +2429,7 @@ test("Lead failure report keeps its assigned-project destination across takeover
   );
 
   managed = false;
+  role = "lead";
   restored.agentStarted();
   restored.turnEnd({
     outcome: "error",
@@ -2645,7 +2659,7 @@ test("concurrent herd finalization publishes and finishes only once", async () =
   );
 });
 
-test("concurrent idle recovery replays and finishes only once", async () => {
+test("Chief-directed failure stays pending across a new Manager assignment", async (t) => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
   const context = fakeContext(pi.entries);
@@ -2653,6 +2667,8 @@ test("concurrent idle recovery replays and finishes only once", async () => {
   context.isIdle = () => true;
   const reportId = randomUUID();
   const startedAt = Date.now();
+  let projectPublications = 0;
+  let assignment: object | undefined;
   pi.entries.push(
     ...([
       {
@@ -2678,8 +2694,6 @@ test("concurrent idle recovery replays and finishes only once", async () => {
       data,
     })) as any[]),
   );
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => (release = resolve));
   let publications = 0;
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
@@ -2688,11 +2702,13 @@ test("concurrent idle recovery replays and finishes only once", async () => {
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
     listAgentStates: () => [],
-    currentProjectAssignment: async () => undefined,
-    publishProjectMessage: async () => undefined,
+    currentProjectAssignment: async () => assignment as any,
+    publishProjectMessage: async () => {
+      projectPublications++;
+      return {} as any;
+    },
     publishChiefFailure: async () => {
       publications++;
-      await blocked;
       return true;
     },
     requestStatusRefresh: () => {},
@@ -2700,20 +2716,61 @@ test("concurrent idle recovery replays and finishes only once", async () => {
     appendDurableError: () => {},
   });
   herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+  const pending = pi.entries.find(
+    (entry: any) => entry.data?.phase === "report_pending",
+  ) as any;
+  assignment = { project: "new exact Manager assignment" };
   herd.finishIfIdle(context);
   herd.finishIfIdle(context);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(publications, 1);
-  release();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(publications, 0);
+  assert.equal(projectPublications, 0);
   assert.equal(
     pi.entries.filter((entry: any) => entry.data?.phase === "finished").length,
-    1,
+    0,
+    "the failed report remains recoverable rather than finalizing the run",
   );
   assert.equal(
     pi.entries.filter((entry: any) => entry.data?.phase === "report_sent")
       .length,
+    0,
+    "authority change leaves the saved Chief report pending",
+  );
+  assignment = undefined;
+  const recovered = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentProjectAssignment: async () => assignment as any,
+    publishProjectMessage: async () => {
+      projectPublications++;
+      return {} as any;
+    },
+    publishChiefFailure: async (_ctx, message, id) => {
+      publications++;
+      assert.equal(id, pending.data.reportId);
+      assert.equal(message, pending.data.message);
+      return true;
+    },
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  recovered.restoreSession(pi.entries, LEAD_SESSION_ID);
+  recovered.finishIfIdle(context);
+  await t.waitFor(() => assert.equal(publications, 1));
+  assert.equal(projectPublications, 0);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === pending.data.reportId,
+    ).length,
     1,
+    "the original report is acknowledged once after Chief authority is restored",
   );
 });
 
