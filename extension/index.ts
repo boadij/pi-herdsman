@@ -345,6 +345,7 @@ const MANAGER_TOOLS = [
   "delegate_project",
   "resume_project",
   "stop_lead",
+  "remove_worktree",
 ] as const;
 const LEAD_COORDINATION_TOOLS = [
   ...AGENT_COORDINATION_TOOLS,
@@ -360,7 +361,7 @@ ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CONTRACT = `## Manager role
-You are the verified Manager for this Pi session. Supervise only project Leads established by exact current project assignments; configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion.`;
+You are the verified Manager for this Pi session. Supervise only project Leads established by exact current project assignments; configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
 const STALE_AFTER_MS = 10 * 60_000;
@@ -1057,6 +1058,7 @@ export default function (pi: ExtensionAPI): void {
     "delegate_project",
     "resume_project",
     "stop_lead",
+    "remove_worktree",
   ];
   if (processRole === "managed-agent") {
     leadStatusRuntime = createAgentStatusRuntime();
@@ -1283,6 +1285,7 @@ export default function (pi: ExtensionAPI): void {
       writeChiefMessage,
       herdrSessionSnapshot,
       isPiAgent,
+      listProjectAssignments,
       herdrSessionId,
       messageLimits,
       prepareMessageInput,
@@ -1633,12 +1636,55 @@ export default function (pi: ExtensionAPI): void {
       if (process.env.HERDR_PANE_ID)
         pi.registerCommand("manager", {
           description:
-            "Activate Manager mode, or open its overview when already active",
-          getArgumentCompletions: (prefix: string) =>
-            ["leave"]
-              .filter((value) => value.startsWith(prefix.trim()))
-              .map((value) => ({ value, label: value })),
+            "Activate Manager mode, open its overview, or remove an assigned worktree",
+          getArgumentCompletions: (prefix: string) => {
+            const input = prefix.trimStart();
+            const [command, branchPrefix] = input.split(/\s+/u);
+            if (!command)
+              return ["leave", "remove"].map((value) => ({
+                value,
+                label: value,
+              }));
+            if (command !== "remove")
+              return input.includes(" ")
+                ? null
+                : ["leave", "remove"]
+                    .filter((value) => value.startsWith(command))
+                    .map((value) => ({ value, label: value }));
+            if (input.trim().split(/\s+/u).length > 2) return null;
+            const lease = leadRuntime.managerLease;
+            if (!lease) return [];
+            try {
+              return listProjectAssignments(
+                supervisionRuntime(),
+                lease.descriptor.repoKey,
+              )
+                .map(({ branch }) => branch)
+                .filter((branch) => branch.startsWith(branchPrefix ?? ""))
+                .map((branch) => ({
+                  value: `remove ${branch}`,
+                  label: branch,
+                }));
+            } catch {
+              return [];
+            }
+          },
           handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
+            const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
+            if (args[0] === "remove") {
+              if (args.length !== 2) {
+                ctx.ui.notify("Usage: /manager remove <branch>", "error");
+                return;
+              }
+              const result = await leadRuntimes.projectRuntime!.removeWorktree(
+                args[1]!,
+                ctx,
+              );
+              ctx.ui.notify(
+                result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
+              );
+              return;
+            }
             await leadCommandRuntime.runRoleCommand("manager", rawArgs, ctx);
           },
         });
@@ -1879,6 +1925,33 @@ export default function (pi: ExtensionAPI): void {
             renderCoordinationCall("staff", "resume", a, t, c),
           renderResult: (r: any, o: any, t: any, c: any) =>
             renderCoordinationResult("staff", "resume", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "remove_worktree",
+          label: "remove worktree",
+          description:
+            "Remove an exact assigned project worktree with human confirmation. Preserves its Git branch and Pi conversation; never forces removal.",
+          parameters: staffBranchParameters,
+          promptSnippet: undefined,
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "remove", branch: p.branch },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "remove", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "remove", r, o, t, c),
         });
         pi.registerTool({
           ...staffTool,

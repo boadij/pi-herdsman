@@ -464,6 +464,15 @@ type LeadProjectHost = {
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   writeProjectAssignment: typeof import("./supervision.ts").writeProjectAssignment;
   liveLead(ctx: ExtensionContext, sessionId: string): Promise<HerdrRecord[]>;
+  runHerdr: typeof import("./herdr.ts").runHerdr;
+  listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
+  herdrSessionSnapshot: typeof import("./herdr.ts").herdrSessionSnapshot;
+  herdrSessionId: typeof import("./herdr.ts").herdrSessionId;
+  isPiAgent(agent: HerdrRecord): boolean;
+  scanAgentStates: typeof import("./mailbox.ts").scanAgentStates;
+  readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
+  HERDSMAN_BUILD: RuntimeBuild;
   supervisedSessionFile(
     agent: HerdrRecord,
     sessionId: string,
@@ -5796,6 +5805,411 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ),
     );
   };
+  const inspectRemovalTarget = async (
+    branch: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const manager = await host.currentManager(ctx);
+    const lease = host.managerLease();
+    if (
+      !manager ||
+      !lease ||
+      !host.sameManagerDescriptor(manager, lease.descriptor)
+    )
+      throw new Error("Manager lease is no longer active");
+    const group = await host.worktreeGroupScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      signal,
+    );
+    if (
+      group.repoKey !== manager.repoKey ||
+      group.primaryWorkspaceId !== manager.workspaceId
+    )
+      throw new Error("Manager worktree group is not authoritative");
+    const topology = await host.runHerdr(
+      host.pi,
+      ctx,
+      ["worktree", "list", "--workspace", manager.workspaceId],
+      { signal },
+    );
+    if (
+      topology?.source?.source_workspace_id !== manager.workspaceId ||
+      topology?.source?.repo_key !== manager.repoKey ||
+      typeof topology?.source?.source_checkout_path !== "string" ||
+      !Array.isArray(topology?.worktrees)
+    )
+      throw new Error("Herdr worktree topology is not authoritative");
+    const assignments = host
+      .listProjectAssignments(host.supervisionRuntime(), manager.repoKey)
+      .filter((assignment) => assignment.branch === branch);
+    if (assignments.length !== 1)
+      throw new Error("Branch is not one exact current project assignment");
+    const assignment = assignments[0]!;
+    const current = host.readProjectAssignment(
+      host.supervisionRuntime(),
+      manager.repoKey,
+      branch,
+    );
+    if (
+      !current ||
+      current.id !== assignment.id ||
+      current.repoKey !== manager.repoKey
+    )
+      throw new Error("Project assignment changed during removal");
+    const matches = topology.worktrees.filter(
+      (worktree: any) => worktree?.branch === branch,
+    );
+    if (matches.length !== 1)
+      throw new Error("Branch does not identify exactly one Herdr worktree");
+    const worktree = matches[0];
+    if (
+      typeof worktree.path !== "string" ||
+      !worktree.path ||
+      worktree.is_linked_worktree !== true
+    )
+      throw new Error("Herdr worktree checkout path is unavailable");
+    const checkoutPath = resolve(worktree.path);
+    if (checkoutPath === resolve(topology.source.source_checkout_path))
+      throw new Error("The Manager's primary checkout cannot be removed");
+    const [gitRoot, gitCommonDir, gitInventory] = await Promise.all([
+      host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
+        cwd: checkoutPath,
+        signal,
+        timeout: 10_000,
+      }),
+      host.pi.exec(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { cwd: checkoutPath, signal, timeout: 10_000 },
+      ),
+      host.pi.exec("git", ["worktree", "list", "--porcelain", "-z"], {
+        cwd: topology.source.source_checkout_path,
+        signal,
+        timeout: 10_000,
+      }),
+    ]);
+    let gitWorktrees: ReturnType<typeof parseGitWorktreeInventory>;
+    try {
+      gitWorktrees = parseGitWorktreeInventory(
+        String(gitInventory.stdout ?? ""),
+      );
+      if (
+        gitRoot.code !== 0 ||
+        gitRoot.killed ||
+        gitRoot.stderr?.trim() ||
+        gitCommonDir.code !== 0 ||
+        gitCommonDir.killed ||
+        gitCommonDir.stderr?.trim() ||
+        gitInventory.code !== 0 ||
+        gitInventory.killed ||
+        gitInventory.stderr?.trim() ||
+        realpathSync(String(gitRoot.stdout ?? "").trim()) !==
+          realpathSync(checkoutPath) ||
+        realpathSync(String(gitCommonDir.stdout ?? "").trim()) !==
+          realpathSync(manager.repoKey) ||
+        !gitWorktrees ||
+        gitWorktrees.filter(
+          (entry) =>
+            resolve(entry.path) === checkoutPath && entry.branch === branch,
+        ).length !== 1
+      )
+        throw new Error();
+    } catch {
+      throw new Error(
+        "Git could not verify the exact linked checkout and repository; worktree preserved",
+      );
+    }
+    const git = await host.pi.exec(
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: checkoutPath, signal, timeout: 10_000 },
+    );
+    if (
+      git.code !== 0 ||
+      git.killed ||
+      git.stderr?.trim() ||
+      git.stdout?.trim()
+    )
+      throw new Error(
+        "Checkout is dirty or could not be verified; worktree preserved",
+      );
+    const leads = await host.liveLead(ctx, assignment.id);
+    if (leads.length > 1)
+      throw new Error(
+        "Assigned Lead identity is ambiguous; worktree preserved",
+      );
+    if (leads.length === 1) {
+      const lead = leads[0]!;
+      const state = host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        assignment.id,
+      );
+      host.requireCompatibleBuild(
+        host.HERDSMAN_BUILD,
+        state?.build,
+        "remove_worktree",
+        `Lead ${assignment.id}`,
+      );
+      if (
+        !worktree.open_workspace_id ||
+        lead.workspace_id !== worktree.open_workspace_id ||
+        !state ||
+        (state.role ?? "lead") !== "lead" ||
+        state.piSessionId !== assignment.id
+      )
+        throw new Error(
+          "Assigned Lead placement is ambiguous; worktree preserved",
+        );
+    }
+    return {
+      manager,
+      assignment,
+      worktree,
+      checkoutPath,
+      sourceCheckoutPath: topology.source.source_checkout_path,
+      liveLead: leads[0],
+    };
+  };
+  const assertNoUnrelatedPiExecution = async (
+    target: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    if (!target.worktree.open_workspace_id) return;
+    const inventory = await host.herdrSessionSnapshot(host.pi, ctx, signal);
+    const owned = new Set([target.assignment.id]);
+    const states = host.scanAgentStates().states.map(({ state }) => state);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const state of states) {
+        if (
+          state.workspaceId === target.worktree.open_workspace_id &&
+          owned.has(state.ownerSessionId) &&
+          !owned.has(state.piSessionId)
+        ) {
+          owned.add(state.piSessionId);
+          changed = true;
+        }
+      }
+    }
+    if (
+      inventory.agents.some(
+        (agent) =>
+          agent.workspace_id === target.worktree.open_workspace_id &&
+          host.isPiAgent(agent) &&
+          !owned.has(host.herdrSessionId(agent) ?? ""),
+      )
+    )
+      throw new Error(
+        "Unrelated or ambiguously identified Pi execution occupies the worktree; worktree preserved",
+      );
+  };
+  const removeWorktree = async (
+    branch: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    if (activeRole() !== "manager")
+      throw new Error("Only Managers can remove project worktrees");
+    if (!ctx.hasUI)
+      throw new Error("Worktree removal requires interactive confirmation");
+    const candidate = await inspectRemovalTarget(branch, ctx, signal);
+    await assertNoUnrelatedPiExecution(candidate, ctx, signal);
+    const answer = await ctx.ui.input(
+      `Remove branch ${branch} at ${candidate.checkoutPath} from project ${candidate.manager.repoKey}? ` +
+        "This removes the checkout and associated Herdr workspace; running managed execution may be stopped. " +
+        "The Git branch and Pi conversation remain, and the project assignment is retired after removal. Type remove to confirm.",
+    );
+    if (answer !== "remove")
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Removal of ${branch} cancelled; no changes made.`,
+          },
+        ],
+        details: { ok: false, action: "remove", branch, cancelled: true },
+      };
+    return host.withProjectWorkLock(
+      `${candidate.manager.repoKey}\0${branch}`,
+      async () => {
+        let reopened = false;
+        let leadStopped = false;
+        const removed = await host
+          .withProjectAssignmentLock(
+            candidate.manager.repoKey,
+            branch,
+            async () => {
+              const current = await inspectRemovalTarget(branch, ctx, signal);
+              if (
+                current.assignment.id !== candidate.assignment.id ||
+                current.checkoutPath !== candidate.checkoutPath ||
+                !host.sameManagerDescriptor(current.manager, candidate.manager)
+              )
+                throw new Error(
+                  "Removal target changed during confirmation; worktree preserved",
+                );
+              await assertNoUnrelatedPiExecution(current, ctx, signal);
+              if (current.liveLead) {
+                try {
+                  await stopExecution(
+                    current.assignment.id,
+                    current.liveLead,
+                    ctx,
+                    signal,
+                  );
+                  leadStopped = true;
+                } catch (error) {
+                  throw new Error(
+                    `Managed execution could not be stopped; worktree was preserved: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
+              }
+              const inventory = await host.herdrSessionSnapshot(
+                host.pi,
+                ctx,
+                signal,
+              );
+              const occupants = inventory.agents.filter(
+                (agent) =>
+                  agent.workspace_id === current.worktree.open_workspace_id &&
+                  host.isPiAgent(agent),
+              );
+              if (occupants.length)
+                throw new Error(
+                  `${leadStopped ? "Assigned Lead stopped; " : ""}unrelated or remaining Pi execution occupies the worktree; removal was not attempted`,
+                );
+              let workspaceId = current.worktree.open_workspace_id;
+              if (!workspaceId) {
+                const opened = await host.runHerdr(
+                  host.pi,
+                  ctx,
+                  [
+                    "worktree",
+                    "open",
+                    "--workspace",
+                    current.manager.workspaceId,
+                    "--branch",
+                    branch,
+                    "--no-focus",
+                  ],
+                  { signal },
+                );
+                workspaceId = opened?.workspace?.workspace_id;
+                if (
+                  !workspaceId ||
+                  workspaceId === current.manager.workspaceId ||
+                  opened?.worktree?.branch !== branch ||
+                  resolve(opened?.worktree?.path ?? "") !== current.checkoutPath
+                )
+                  throw new Error(
+                    "Herdr reopened a different or ambiguous worktree; checkout preserved",
+                  );
+                reopened = true;
+              }
+              let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
+              try {
+                final = await inspectRemovalTarget(branch, ctx, signal);
+              } catch (error) {
+                if (!leadStopped) throw error;
+                throw new Error(
+                  `Assigned Lead stopped; checkout was preserved because final verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              }
+              if (
+                final.assignment.id !== current.assignment.id ||
+                final.worktree.open_workspace_id !== workspaceId ||
+                final.checkoutPath !== current.checkoutPath
+              )
+                throw new Error(
+                  "Removal target changed before native removal; worktree preserved",
+                );
+              try {
+                return {
+                  result: await host.runHerdr(
+                    host.pi,
+                    ctx,
+                    ["worktree", "remove", "--workspace", workspaceId],
+                    { signal },
+                  ),
+                };
+              } catch (error) {
+                return {
+                  error: error instanceof Error ? error.message : String(error),
+                  reopened,
+                };
+              }
+            },
+          )
+          .catch((error) => {
+            if (!leadStopped && !reopened) throw error;
+            throw new Error(
+              `${leadStopped ? "Assigned Lead stopped; " : ""}${reopened ? "Herdr workspace reopened; " : ""}worktree removal did not complete: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        let assignmentRetired = false;
+        let retirementError: string | undefined;
+        const checkoutState = gitPathStatus(candidate.checkoutPath);
+        const checkoutRemoved = checkoutState === "absent";
+        try {
+          await host.reconcileProjectAssignments(
+            ctx,
+            candidate.manager.repoKey,
+            candidate.manager.workspaceId,
+            candidate.sourceCheckoutPath,
+            true,
+            branch,
+          );
+          assignmentRetired = !host.readProjectAssignment(
+            host.supervisionRuntime(),
+            candidate.manager.repoKey,
+            branch,
+          );
+        } catch (error) {
+          assignmentRetired = !host.readProjectAssignment(
+            host.supervisionRuntime(),
+            candidate.manager.repoKey,
+            branch,
+          );
+          retirementError =
+            error instanceof Error ? error.message : String(error);
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: checkoutRemoved
+                ? assignmentRetired
+                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.`
+                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}`
+                : checkoutState === "present"
+                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal was not confirmed for ${branch}; checkout remains and assignment ${assignmentRetired ? "was retired" : "was not retired"}${"error" in removed ? `: ${removed.error}` : "."}`
+                  : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}`,
+            },
+          ],
+          details: {
+            ok: checkoutRemoved && assignmentRetired,
+            action: "remove",
+            branch,
+            lead_stopped: leadStopped,
+            checkout_removed: checkoutRemoved,
+            assignment_retired: assignmentRetired,
+            forced: false,
+            checkout_state: checkoutRemoved ? "removed" : checkoutState,
+            ...("error" in removed ? { removal_error: removed.error } : {}),
+            ...("error" in removed && removed.reopened
+              ? { workspace_reopened: true }
+              : {}),
+            ...(retirementError ? { retirement_error: retirementError } : {}),
+          },
+        };
+      },
+    );
+  };
   const {
     pi,
     leadRuntime,
@@ -5901,6 +6315,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         files?: string[];
       }
     | { action: "resume"; branch: string }
+    | { action: "remove"; branch: string }
     | { action: "stop"; session: string }
     | { action: "inspect" | "transcript"; session: string }
     | { action: "message"; session: string; message: string; files?: string[] };
@@ -6637,6 +7052,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error("Only Managers can control project work");
       return activateProjectLead(params, ctx, signal);
     }
+    if (params.action === "remove") {
+      if (activeRole() !== "manager")
+        throw new Error("Only Managers can remove project worktrees");
+      return removeWorktree(params.branch, ctx, signal);
+    }
     if (params.action === "stop") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can control project work");
@@ -6941,7 +7361,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
     });
   };
-  return { stopExecution, stop, activateProjectLead, executeStaff };
+  return {
+    stopExecution,
+    stop,
+    activateProjectLead,
+    removeWorktree,
+    executeStaff,
+  };
 }
 
 export function readLeadSessionIds(

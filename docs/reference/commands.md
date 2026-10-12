@@ -23,13 +23,14 @@ Herdsman package version.
 /lead [flexible|orchestrate]
 /manager
 /manager leave
+/manager remove <branch>
 /chief
 /chief leave
 /takeover
 ```
 
 For the Herdsman commands above, replacing `/herdsman` with `/agents` is
-equivalent. The `/manager`, `/chief`, and `/takeover` commands are unchanged.
+equivalent. The role commands are separate from these aliases.
 
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
 version. Its seven destinations are `Execution`, `Agents`, `Project manager`,
@@ -246,6 +247,23 @@ continuation of the exact assigned Pi session. `managed-lead` is launch policy,
 not authority. Successful Herdr worktree removal or verified checkout absence
 retires an assignment; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, though new work may use the remaining Git branch.
+
+An active Manager can remove an assigned project checkout with:
+
+```text
+/manager remove <branch>
+```
+
+This command does not activate Manager mode. It accepts a manually typed branch;
+completion suggests `leave` or `remove`, then branches assigned to the active
+Manager's repository after `remove`. Suggestions are advisory and are not
+required. Before removal, the shared operation verifies the exact assignment
+and linked checkout, checks that the checkout is clean, and asks for interactive
+confirmation. Type `remove` to confirm. Running owned project execution may be
+stopped and will not be automatically restarted if a later removal step fails.
+Herdr removes the checkout without force; the Git branch and Pi conversation
+remain, and the confirmation explains that the assignment is retired only
+after authoritative removal is verified. Cancellation makes no changes.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` refreshes its validated profile after the current turn

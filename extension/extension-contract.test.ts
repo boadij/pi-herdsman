@@ -226,6 +226,7 @@ const REGISTERED_ROLE_TOOLS = [
     "delegate_project",
     "resume_project",
     "stop_lead",
+    "remove_worktree",
   ].map((name) => ({ name })),
 ];
 
@@ -335,6 +336,12 @@ const MANAGER_STAFF_TOOL_CASES = [
     { session: "session-id", branch: "feat/x" },
     ["session"],
   ],
+  [
+    "remove_worktree",
+    { branch: "feat/existing" },
+    { branch: "feat/existing", force: true },
+    ["branch"],
+  ],
 ] as const;
 
 test("semantic coordination tools expose exact strict object contracts", () => {
@@ -363,6 +370,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     delegate_project: "delegate project",
     resume_project: "resume project",
     stop_lead: "stop lead",
+    remove_worktree: "remove worktree",
   };
   for (const legacy of ["agent", "chief", "peer", "staff"])
     assert.equal(tools.has(legacy), false, `legacy tool remains: ${legacy}`);
@@ -436,6 +444,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "delegate_project",
       "resume_project",
       "stop_lead",
+      "remove_worktree",
     ].sort(),
   );
   for (const name of [
@@ -446,6 +455,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "delegate_project",
     "resume_project",
     "stop_lead",
+    "remove_worktree",
   ]) {
     const tool = tools.get(name)!;
     assert.equal(tool.defaultActive, false);
@@ -757,6 +767,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "delegate_project",
       "resume_project",
       "stop_lead",
+      "remove_worktree",
     ].sort(),
   );
   assert.equal(

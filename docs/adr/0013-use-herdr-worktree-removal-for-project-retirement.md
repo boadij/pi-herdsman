@@ -1,6 +1,6 @@
 # Use Herdr worktree removal for project retirement
 
-> **Historical decision; superseded in part.** [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md) adds confirmed `/takeover` as a separate assignment-release path. [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md) supersedes the event-only retirement rule and the decision to recover assignments after verified worktree absence; the current runtime implements both retirement authorities.
+> **Historical decision; superseded in part.** [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md) adds confirmed `/takeover` as a separate assignment-release path. [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md) supersedes the event-only retirement rule and the decision to recover assignments after verified worktree absence; the current runtime implements both retirement authorities. [ADR 0020](0020-authorize-confirmed-manager-worktree-removal.md) supersedes only this ADR's prohibition on a Manager-facing removal interface; Herdr remains the worktree lifecycle authority and the branch-preservation rationale remains.
 
 ## Decision
 

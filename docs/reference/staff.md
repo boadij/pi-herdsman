@@ -5,7 +5,7 @@
 Staff tools are available to active Chief and Manager sessions. Both roles can
 use `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 `message_staff`. Manager additionally has the branch-based project operations
-`delegate_project`, `resume_project`, and `stop_lead`.
+`delegate_project`, `resume_project`, `stop_lead`, and `remove_worktree`.
 Chief has no project-operation tools.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
@@ -144,6 +144,39 @@ assignment. The
 assigned Lead may separately release Manager authority through confirmed
 `/takeover`, which removes the assignment and pending project messages without
 stopping the session or owned Agents.
+
+## `remove_worktree`
+
+Manager only. Remove an exact assigned project's linked checkout after
+interactive human confirmation:
+
+```json
+{ "branch": "feat/example" }
+```
+
+Use this only for an explicitly requested checkout removal, never as an
+inference from task completion, review, or inactivity. Herdsman requires the
+active Manager's exact current assignment and matching linked checkout, refuses
+ambiguous or dirty targets, and never forces removal. If the assigned Lead is
+running, its proven owned execution is stopped before removal; a paused Lead is
+not restarted. If a later removal step fails, the Lead can remain stopped; it is
+not automatically restarted. A closed Herdr workspace may be reopened to
+address its verified checkout. Herdr remains responsible for removing the
+worktree.
+
+The confirmation identifies the branch and project checkout, explains that
+managed execution may be stopped, and says the Git branch and Pi conversation
+remain while the assignment will be retired only after verified checkout
+removal. Type the exact word `remove`; cancellation or any other response has
+no destructive effect. Successful checkout removal is followed by
+the existing assignment reconciliation, which retires the matching assignment
+and pending project messages when authoritative checkout absence is verified.
+The result includes checkout state (`removed`, `present`, or `unknown`) and an
+`assignment_retired` status. It is true only when checkout absence and
+assignment retirement are both confirmed; when checkout state is `unknown`, a
+false value is not proof that the assignment remains. Overall success requires
+both checkout absence and assignment retirement to be confirmed. Removal never
+deletes the Git branch or Pi conversation.
 
 ## See also
 

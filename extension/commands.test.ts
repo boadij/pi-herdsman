@@ -49,7 +49,10 @@ import {
 import { OperationError } from "./errors.ts";
 import { resultPath } from "./storage.ts";
 import { claimDelegationLock } from "./agent-controller.ts";
-import { createLeadCommandRuntime } from "./lead-runtime.ts";
+import {
+  createLeadCommandRuntime,
+  createLeadProjectRuntime,
+} from "./lead-runtime.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -131,6 +134,7 @@ const managerTools = [
   "delegate_project",
   "resume_project",
   "stop_lead",
+  "remove_worktree",
 ];
 const chiefTools = [
   "list_staff",
@@ -2945,6 +2949,297 @@ test("linked and non-project sessions derive ordinary Lead tools", async () => {
   }
 });
 
+async function managerRemovalFixture(
+  t: TestContext,
+  options: {
+    runningLead?: boolean;
+    closedWorkspace?: boolean;
+    reopenedWorkspaceId?: string | null;
+    reconcileError?: boolean;
+    removeError?: boolean;
+    snapshotErrorAfterStop?: boolean;
+    changeAssignmentAfterConfirmation?: boolean;
+  } = {},
+) {
+  const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
+  const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  t.after(() => rmSync(repoKey, { recursive: true, force: true }));
+  t.after(() => rmSync(checkoutPath, { recursive: true, force: true }));
+  const branch = "feat/remove-test";
+  const manager = {
+    repoKey,
+    workspaceId: "manager-workspace",
+    leaseId: "manager-lease",
+    piSessionId: "manager-session",
+  };
+  let assignment: any = {
+    version: 2,
+    id: "assigned-lead",
+    repoKey,
+    branch,
+    text: "test assignment",
+  };
+  let checkoutPresent = true;
+  let leadRunning = options.runningLead ?? false;
+  let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
+  let assignmentLockHeld = false;
+  let confirmationCount = 0;
+  const removals: string[] = [];
+  const calls: string[][] = [];
+  const inventoryOutput = () => {
+    const worktrees = [
+      `worktree ${repoKey}`,
+      `HEAD ${"0".repeat(40)}`,
+      "branch refs/heads/main",
+      "",
+      ...(checkoutPresent
+        ? [
+            `worktree ${checkoutPath}`,
+            `HEAD ${"1".repeat(40)}`,
+            `branch refs/heads/${branch}`,
+            "",
+          ]
+        : []),
+      "",
+    ];
+    return worktrees.join("\0");
+  };
+  const runtime = createLeadProjectRuntime({
+    pi: {
+      exec: async (command: string, args: string[], runOptions: any) => {
+        assert.equal(command, "git");
+        if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
+          return { code: 0, stdout: `${checkoutPath}\n`, stderr: "" };
+        if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
+          return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
+        if (args[0] === "worktree" && args[1] === "list")
+          return { code: 0, stdout: inventoryOutput(), stderr: "" };
+        if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+        throw new Error(
+          `Unexpected Git command: ${args.join(" ")} (${runOptions.cwd})`,
+        );
+      },
+    } as any,
+    leadRuntime: { managerLease: { descriptor: manager } } as any,
+    managerLease: () => ({ descriptor: manager }),
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    sameManagerDescriptor: (left: any, right: any) => left === right,
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: manager.workspaceId,
+    }),
+    supervisionRuntime: () => ({}),
+    listProjectAssignments: () => (assignment ? [assignment] : []),
+    readProjectAssignment: () => assignment,
+    liveLead: async () =>
+      leadRunning
+        ? [
+            {
+              workspace_id: "child-workspace",
+              pane_id: "child-pane",
+              tab_id: "child-tab",
+              cwd: checkoutPath,
+            },
+          ]
+        : [],
+    readLeadCoordinationState: () => ({
+      role: "lead",
+      piSessionId: assignment?.id,
+    }),
+    requireCompatibleBuild: () => {},
+    runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
+      calls.push(args);
+      if (args[1] === "list")
+        return {
+          source: {
+            source_workspace_id: manager.workspaceId,
+            repo_key: repoKey,
+            source_checkout_path: repoKey,
+          },
+          worktrees: checkoutPresent
+            ? [
+                {
+                  open_workspace_id: workspaceId,
+                  branch,
+                  path: checkoutPath,
+                  is_linked_worktree: true,
+                },
+              ]
+            : [],
+        };
+      if (args[1] === "open") {
+        workspaceId =
+          options.reopenedWorkspaceId === null
+            ? undefined
+            : (options.reopenedWorkspaceId ?? "new-child-workspace");
+        return {
+          workspace: { workspace_id: "new-child-workspace" },
+          worktree: { branch, path: checkoutPath },
+        };
+      }
+      if (args[1] === "remove") {
+        if (options.removeError) throw new Error("Herdr remove failed");
+        removals.push(args[args.indexOf("--workspace") + 1]!);
+        checkoutPresent = false;
+        rmSync(checkoutPath, { recursive: true });
+        return { worktree_removed: true, forced: false };
+      }
+      throw new Error(`Unexpected Herdr command: ${args.join(" ")}`);
+    },
+    herdrSessionSnapshot: async () => {
+      if (options.snapshotErrorAfterStop && !leadRunning)
+        throw new Error("snapshot failed after stop");
+      return { agents: [], panes: [] };
+    },
+    isPiAgent: () => true,
+    herdrSessionId: () => "assigned-lead",
+    scanAgentStates: () => ({ states: [] }),
+    stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
+    stopProjectLeadPane: async () => {
+      leadRunning = false;
+    },
+    withProjectWorkLock: async (_key: string, operation: () => unknown) =>
+      operation(),
+    withProjectAssignmentLock: async (
+      _repoKey: string,
+      _branch: string,
+      operation: () => unknown,
+    ) => {
+      assignmentLockHeld = true;
+      try {
+        return await operation();
+      } finally {
+        assignmentLockHeld = false;
+      }
+    },
+    reconcileProjectAssignments: async () => {
+      assert.equal(assignmentLockHeld, false);
+      if (options.reconcileError) throw new Error("reconcile uncertain");
+      if (!checkoutPresent) assignment = undefined;
+    },
+    HERDSMAN_BUILD: {} as any,
+  } as any);
+  const ctx = fakeContext([]) as any;
+  ctx.hasUI = true;
+  ctx.ui.input = async () => {
+    confirmationCount++;
+    if (options.changeAssignmentAfterConfirmation)
+      assignment = { ...assignment, id: "replacement-assignment" };
+    return "remove";
+  };
+  return {
+    runtime,
+    ctx,
+    assignment: () => assignment,
+    checkoutPath,
+    calls,
+    removals,
+    confirmationCount: () => confirmationCount,
+  };
+}
+
+test("Manager removal covers paused, running, and reopened checkout lifecycles", async (t) => {
+  for (const scenario of [
+    { name: "paused", runningLead: false, closedWorkspace: false },
+    { name: "running", runningLead: true, closedWorkspace: false },
+    { name: "closed", runningLead: false, closedWorkspace: true },
+  ]) {
+    await t.test(scenario.name, async (subtest) => {
+      const fixture = await managerRemovalFixture(subtest, scenario);
+      const result = await fixture.runtime.removeWorktree(
+        "feat/remove-test",
+        fixture.ctx,
+      );
+      assert.equal(result.details.checkout_removed, true);
+      assert.equal(result.details.assignment_retired, true);
+      assert.equal(result.details.forced, false);
+      assert.equal(fixture.assignment(), undefined);
+      if (scenario.runningLead) assert.equal(result.details.lead_stopped, true);
+      else assert.equal(result.details.lead_stopped, false);
+      if (scenario.closedWorkspace) {
+        assert.ok(
+          fixture.calls.some(
+            (args) =>
+              args[1] === "open" &&
+              args.includes("--branch") &&
+              args.includes("feat/remove-test"),
+          ),
+        );
+        assert.deepEqual(fixture.removals, ["new-child-workspace"]);
+      } else {
+        assert.deepEqual(fixture.removals, ["child-workspace"]);
+      }
+    });
+  }
+});
+
+test("Manager removal reports native failure and uncertain assignment reconciliation truthfully", async (t) => {
+  const failed = await managerRemovalFixture(t, {
+    runningLead: true,
+    removeError: true,
+  });
+  const failure = await failed.runtime.removeWorktree(
+    "feat/remove-test",
+    failed.ctx,
+  );
+  assert.equal(failure.details.lead_stopped, true);
+  assert.equal(failure.details.checkout_removed, false);
+  assert.equal(failure.details.assignment_retired, false);
+  assert.match(failure.details.removal_error, /Herdr remove failed/);
+  assert.ok(failed.assignment());
+
+  const uncertain = await managerRemovalFixture(t, { reconcileError: true });
+  const outcome = await uncertain.runtime.removeWorktree(
+    "feat/remove-test",
+    uncertain.ctx,
+  );
+  assert.equal(outcome.details.checkout_removed, true);
+  assert.equal(outcome.details.assignment_retired, false);
+  assert.equal(uncertain.assignment()?.id, "assigned-lead");
+  assert.match(outcome.details.retirement_error, /reconcile uncertain/);
+
+  const stopped = await managerRemovalFixture(t, {
+    runningLead: true,
+    snapshotErrorAfterStop: true,
+  });
+  await assert.rejects(
+    stopped.runtime.removeWorktree("feat/remove-test", stopped.ctx),
+    /Assigned Lead stopped; worktree removal did not complete: snapshot failed after stop/,
+  );
+  assert.deepEqual(stopped.removals, []);
+  assert.ok(stopped.assignment());
+});
+
+test("closed Manager removal refuses absent or mismatched reopened workspace identity", async (t) => {
+  for (const reopenedWorkspaceId of [null, "unexpected-workspace"]) {
+    await t.test(String(reopenedWorkspaceId), async (subtest) => {
+      const fixture = await managerRemovalFixture(subtest, {
+        closedWorkspace: true,
+        reopenedWorkspaceId,
+      });
+      await assert.rejects(
+        fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+        /Removal target changed before native removal/,
+      );
+      assert.deepEqual(fixture.removals, []);
+      assert.equal(fixture.assignment()?.id, "assigned-lead");
+    });
+  }
+});
+
+test("Manager removal revalidates exact assignment identity after confirmation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    changeAssignmentAfterConfirmation: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Removal target changed during confirmation/,
+  );
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.assignment()?.id, "replacement-assignment");
+});
+
 async function managerDelegateAssignmentTest(
   t: TestContext,
   projectTrusted: boolean,
@@ -2977,6 +3272,7 @@ async function managerDelegateAssignmentTest(
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let createdBranch = "";
+  let gitStatusOutput = "";
   let started = false;
   let manager1Shutdown = false;
   let failScopeLookup = false;
@@ -3004,8 +3300,28 @@ async function managerDelegateAssignmentTest(
   };
   const exec = (command: string, args: string[]) => {
     if (command === "git") {
-      if (args[0] === "rev-parse")
+      if (args[0] === "status")
+        return { stdout: gitStatusOutput, stderr: "", code: 0 };
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
+        return { stdout: `${childCwd}\n`, stderr: "", code: 0 };
+      if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
         return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: [
+            "worktree /tmp/manager-root",
+            `HEAD ${"0".repeat(40)}`,
+            "branch refs/heads/main",
+            "",
+            `worktree ${childCwd}`,
+            `HEAD ${"1".repeat(40)}`,
+            `branch refs/heads/${createdBranch}`,
+            "",
+            "",
+          ].join("\0"),
+          stderr: "",
+          code: 0,
+        };
       if (args[0] === "symbolic-ref")
         return { stdout: `${createdBranch}\n`, stderr: "", code: 0 };
     }
@@ -3317,6 +3633,58 @@ async function managerDelegateAssignmentTest(
       ),
     );
     assert.equal(assignment?.id, childSession);
+    const managerCommand = pi.commandOptions.get("manager")!;
+    assert.deepEqual(managerCommand.getArgumentCompletions(""), [
+      { value: "leave", label: "leave" },
+      { value: "remove", label: "remove" },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
+      { value: "remove", label: "remove" },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
+      { value: `remove ${assignment.branch}`, label: assignment.branch },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("remove"), [
+      { value: `remove ${assignment.branch}`, label: assignment.branch },
+    ]);
+    let confirmationPrompts = 0;
+    ctx.hasUI = true;
+    ctx.ui.input = async () => {
+      confirmationPrompts++;
+      return "cancel";
+    };
+    const removeTool = pi.tools.find(
+      (tool) => tool.name === "remove_worktree",
+    )!;
+    gitStatusOutput = "?? dirty-file\n";
+    await assert.rejects(
+      removeTool.execute(
+        "remove-dirty",
+        { branch: assignment.branch },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /dirty or could not be verified/,
+    );
+    assert.equal(confirmationPrompts, 0);
+    gitStatusOutput = "";
+    const cancelledTool = await removeTool.execute(
+      "remove",
+      { branch: assignment.branch },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.equal(cancelledTool.details.cancelled, true);
+    assert.equal(confirmationPrompts, 1);
+    await managerCommand.handler(`remove ${assignment.branch}`, ctx);
+    assert.equal(confirmationPrompts, 2);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "worktree" && args[1] === "remove"),
+      false,
+      "both public entry points share confirmation and cancellation has no destructive effect",
+    );
     assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
     assert.equal(assignment!.branch.includes(assignment!.id), false);
     assert.equal(

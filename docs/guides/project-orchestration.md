@@ -178,6 +178,19 @@ accepted. Takeover and worktree removal are distinct explicit assignment
 release paths; settlement, review, and user interaction do not release an
 assignment.
 
+For an explicitly requested checkout removal, an active Manager can use
+`/manager remove <branch>` or the `remove_worktree` staff tool. Both entry
+points use the same operation and require the user to type `remove` in an
+interactive confirmation; neither treats task completion, review, or inactivity
+as approval. The operation validates the exact Manager assignment and linked
+checkout, refuses a dirty or ambiguous target, and uses Herdr's non-forced
+worktree removal. If the assigned Lead is running, its owned execution may be
+stopped first and is not automatically restarted if a later step fails. A
+closed Herdr workspace may be reopened for the verified checkout. The result
+distinguishes checkout state from assignment retirement; the assignment is
+retired only after authoritative removal is confirmed. The Git branch and Pi
+conversation are preserved.
+
 ## Leave and return
 
 Run:

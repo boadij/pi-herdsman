@@ -16,6 +16,10 @@ successful Herdr worktree removal, or authoritative verification that its
 checkout no longer exists. Failed or ambiguous verification preserves the
 assignment.
 
+Use `remove_worktree` only when the user explicitly requests removal of a
+project checkout. Do not infer removal from task completion, review, or
+inactivity. The user must confirm removal interactively.
+
 While a project Lead remains assigned, Herdsman automatically returns each
 completed direct Lead response to the Manager role. If managed Agent work is
 active, the herd run owns that handoff until it settles. These handoffs are

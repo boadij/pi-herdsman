@@ -35,7 +35,8 @@ Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
 Manager additionally uses branch-based project operations to start and resume
-project work, and can stop a Lead without retiring its assignment.
+project work, can stop a Lead without retiring its assignment, and can remove
+an assigned project's worktree with explicit human confirmation.
 
 ```text
 list_staff
@@ -47,6 +48,7 @@ Manager only:
 delegate_project
 resume_project
 stop_lead
+remove_worktree
 ```
 
 ## Direct supervisor
