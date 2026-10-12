@@ -2959,12 +2959,23 @@ async function managerRemovalFixture(
     removeError?: boolean;
     snapshotErrorAfterStop?: boolean;
     changeAssignmentAfterConfirmation?: boolean;
+    persistedCheckoutPath?: string;
+    persistedSessionId?: string;
+    primaryWorkspaceInitially?: boolean;
+    primaryWorkspaceAfterConfirmation?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
   const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  const persistedCheckoutPath = options.persistedCheckoutPath
+    ? realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-original-"))
+    : undefined;
   t.after(() => rmSync(repoKey, { recursive: true, force: true }));
   t.after(() => rmSync(checkoutPath, { recursive: true, force: true }));
+  if (persistedCheckoutPath)
+    t.after(() =>
+      rmSync(persistedCheckoutPath, { recursive: true, force: true }),
+    );
   const branch = "feat/remove-test";
   const manager = {
     repoKey,
@@ -2978,10 +2989,16 @@ async function managerRemovalFixture(
     repoKey,
     branch,
     text: "test assignment",
+    ...(persistedCheckoutPath || options.persistedSessionId
+      ? { piSessionFile: "persisted-session.jsonl" }
+      : {}),
   };
   let checkoutPresent = true;
   let leadRunning = options.runningLead ?? false;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
+  let topologyWorkspaceId = options.primaryWorkspaceInitially
+    ? manager.workspaceId
+    : workspaceId;
   let assignmentLockHeld = false;
   let confirmationCount = 0;
   const removals: string[] = [];
@@ -3032,6 +3049,12 @@ async function managerRemovalFixture(
     supervisionRuntime: () => ({}),
     listProjectAssignments: () => (assignment ? [assignment] : []),
     readProjectAssignment: () => assignment,
+    SessionManager: {
+      open: () => ({
+        getSessionId: () => options.persistedSessionId ?? assignment?.id,
+        getCwd: () => persistedCheckoutPath ?? checkoutPath,
+      }),
+    },
     liveLead: async () =>
       leadRunning
         ? [
@@ -3060,7 +3083,7 @@ async function managerRemovalFixture(
           worktrees: checkoutPresent
             ? [
                 {
-                  open_workspace_id: workspaceId,
+                  open_workspace_id: topologyWorkspaceId,
                   branch,
                   path: checkoutPath,
                   is_linked_worktree: true,
@@ -3073,6 +3096,7 @@ async function managerRemovalFixture(
           options.reopenedWorkspaceId === null
             ? undefined
             : (options.reopenedWorkspaceId ?? "new-child-workspace");
+        topologyWorkspaceId = workspaceId;
         return {
           workspace: { workspace_id: "new-child-workspace" },
           worktree: { branch, path: checkoutPath },
@@ -3126,6 +3150,8 @@ async function managerRemovalFixture(
     confirmationCount++;
     if (options.changeAssignmentAfterConfirmation)
       assignment = { ...assignment, id: "replacement-assignment" };
+    if (options.primaryWorkspaceAfterConfirmation)
+      topologyWorkspaceId = "manager-workspace";
     return "remove";
   };
   return {
@@ -3238,6 +3264,69 @@ test("Manager removal revalidates exact assignment identity after confirmation",
   );
   assert.deepEqual(fixture.removals, []);
   assert.equal(fixture.assignment()?.id, "replacement-assignment");
+});
+
+test("Manager removal requires persisted session checkout provenance", async (t) => {
+  const stale = await managerRemovalFixture(t, {
+    persistedCheckoutPath: join(PI_AGENT_ROOT, "other-checkout-a"),
+  });
+  await assert.rejects(
+    stale.runtime.removeWorktree("feat/remove-test", stale.ctx),
+    /Persisted project session provenance does not match the checkout/,
+  );
+  assert.equal(stale.confirmationCount(), 0);
+  assert.deepEqual(stale.removals, []);
+
+  const wrongSession = await managerRemovalFixture(t, {
+    persistedSessionId: "different-lead-session",
+  });
+  await assert.rejects(
+    wrongSession.runtime.removeWorktree("feat/remove-test", wrongSession.ctx),
+    /Persisted project session provenance does not match the checkout/,
+  );
+  assert.equal(wrongSession.confirmationCount(), 0);
+  assert.deepEqual(wrongSession.removals, []);
+});
+
+test("Manager removal rejects primary workspace identity before and after confirmation", async (t) => {
+  const initial = await managerRemovalFixture(t, {
+    primaryWorkspaceInitially: true,
+  });
+  await assert.rejects(
+    initial.runtime.removeWorktree("feat/remove-test", initial.ctx),
+    /primary workspace cannot be removed/,
+  );
+  assert.equal(initial.confirmationCount(), 0);
+
+  const changed = await managerRemovalFixture(t, {
+    primaryWorkspaceAfterConfirmation: true,
+  });
+  await assert.rejects(
+    changed.runtime.removeWorktree("feat/remove-test", changed.ctx),
+    /primary workspace cannot be removed/,
+  );
+  assert.equal(changed.confirmationCount(), 1);
+  assert.deepEqual(changed.removals, []);
+});
+
+test("Manager removal confirmation is dismissed by an aborted tool/context signal", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const controller = new AbortController();
+  fixture.ctx.signal = controller.signal;
+  fixture.ctx.ui.input = async (
+    _prompt: string,
+    _placeholder: undefined,
+    options: any,
+  ) => {
+    assert.equal(options.signal, controller.signal);
+    controller.abort();
+    return "remove";
+  };
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /abort/i,
+  );
+  assert.deepEqual(fixture.removals, []);
 });
 
 async function managerDelegateAssignmentTest(

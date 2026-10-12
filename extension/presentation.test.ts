@@ -1452,6 +1452,30 @@ test("expanded staff project results show resolved branches and resume scope", (
   assert.match(resumed, /task: Recover the existing project work/);
 });
 
+test("compact successful worktree removal reports the branch and retirement", () => {
+  const output = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "remove",
+      {
+        details: {
+          ok: true,
+          action: "remove",
+          branch: "feat/recovery",
+          checkout_removed: true,
+          assignment_retired: true,
+          forced: false,
+        },
+      },
+      {},
+      presentationTheme,
+      { args: { branch: "feat/recovery" } },
+    ),
+  );
+  assert.match(output, /removed feat\/recovery · assignment retired/);
+  assert.doesNotMatch(output, /sent to lead/);
+});
+
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "steer agent  release-review · researcher"],

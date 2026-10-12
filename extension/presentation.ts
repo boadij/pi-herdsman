@@ -3082,6 +3082,18 @@ export function renderCoordinationResult(
       0,
       0,
     );
+  if (tool === "staff" && action === "remove") {
+    const branch = value(details.branch) || value(args.branch) || "worktree";
+    const outcome =
+      details.checkout_removed === true
+        ? details.assignment_retired === true
+          ? `removed ${branch} · assignment retired`
+          : `removed ${branch} · assignment retirement unconfirmed`
+        : details.checkout_state === "present"
+          ? `removal failed · ${branch} preserved`
+          : `removal outcome unknown · ${branch}`;
+    return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);
+  }
   return new WidthSafeText(
     statusLine(theme, "success", "✓", `sent to ${display}`),
     0,

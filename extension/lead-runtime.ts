@@ -5874,6 +5874,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const checkoutPath = resolve(worktree.path);
     if (checkoutPath === resolve(topology.source.source_checkout_path))
       throw new Error("The Manager's primary checkout cannot be removed");
+    if (worktree.open_workspace_id === manager.workspaceId)
+      throw new Error("The Manager's primary workspace cannot be removed");
+    if (assignment.piSessionFile) {
+      try {
+        const session = host.SessionManager.open(assignment.piSessionFile);
+        if (
+          session.getSessionId() !== assignment.id ||
+          resolve(session.getCwd()) !== checkoutPath
+        )
+          throw new Error();
+      } catch {
+        throw new Error(
+          "Persisted project session provenance does not match the checkout; worktree preserved",
+        );
+      }
+    }
     const [gitRoot, gitCommonDir, gitInventory] = await Promise.all([
       host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
         cwd: checkoutPath,
@@ -6017,13 +6033,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Only Managers can remove project worktrees");
     if (!ctx.hasUI)
       throw new Error("Worktree removal requires interactive confirmation");
-    const candidate = await inspectRemovalTarget(branch, ctx, signal);
-    await assertNoUnrelatedPiExecution(candidate, ctx, signal);
+    const operationSignal = signal ?? ctx.signal;
+    operationSignal?.throwIfAborted();
+    const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
+    await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
     const answer = await ctx.ui.input(
       `Remove branch ${branch} at ${candidate.checkoutPath} from project ${candidate.manager.repoKey}? ` +
         "This removes the checkout and associated Herdr workspace; running managed execution may be stopped. " +
         "The Git branch and Pi conversation remain, and the project assignment is retired after removal. Type remove to confirm.",
+      undefined,
+      { signal: operationSignal },
     );
+    operationSignal?.throwIfAborted();
     if (answer !== "remove")
       return {
         content: [
@@ -6044,7 +6065,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             candidate.manager.repoKey,
             branch,
             async () => {
-              const current = await inspectRemovalTarget(branch, ctx, signal);
+              operationSignal?.throwIfAborted();
+              const current = await inspectRemovalTarget(
+                branch,
+                ctx,
+                operationSignal,
+              );
               if (
                 current.assignment.id !== candidate.assignment.id ||
                 current.checkoutPath !== candidate.checkoutPath ||
@@ -6053,14 +6079,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 throw new Error(
                   "Removal target changed during confirmation; worktree preserved",
                 );
-              await assertNoUnrelatedPiExecution(current, ctx, signal);
+              await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
               if (current.liveLead) {
                 try {
                   await stopExecution(
                     current.assignment.id,
                     current.liveLead,
                     ctx,
-                    signal,
+                    operationSignal,
                   );
                   leadStopped = true;
                 } catch (error) {
@@ -6072,7 +6098,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               const inventory = await host.herdrSessionSnapshot(
                 host.pi,
                 ctx,
-                signal,
+                operationSignal,
               );
               const occupants = inventory.agents.filter(
                 (agent) =>
@@ -6097,7 +6123,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     branch,
                     "--no-focus",
                   ],
-                  { signal },
+                  { signal: operationSignal },
                 );
                 workspaceId = opened?.workspace?.workspace_id;
                 if (
@@ -6113,7 +6139,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               }
               let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
               try {
-                final = await inspectRemovalTarget(branch, ctx, signal);
+                final = await inspectRemovalTarget(
+                  branch,
+                  ctx,
+                  operationSignal,
+                );
               } catch (error) {
                 if (!leadStopped) throw error;
                 throw new Error(
@@ -6129,12 +6159,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   "Removal target changed before native removal; worktree preserved",
                 );
               try {
+                operationSignal?.throwIfAborted();
                 return {
                   result: await host.runHerdr(
                     host.pi,
                     ctx,
                     ["worktree", "remove", "--workspace", workspaceId],
-                    { signal },
+                    { signal: operationSignal },
                   ),
                 };
               } catch (error) {
