@@ -3460,6 +3460,7 @@ test("delegating agents receive only their allowed definition roster", async () 
     piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
     piSessionFile: "/tmp/registered-agent.jsonl",
   };
+  assert.equal(readAgentState(mailbox), undefined);
   const entries = [
     {
       type: "custom",
@@ -3480,6 +3481,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   const sessionStartHandlers = pi.events.get("session_start") ?? [];
   assert.equal(sessionStartHandlers.length, 1);
   await sessionStartHandlers[0](undefined, context);
+  assert.ok(readAgentState(mailbox), "fresh managed agent was not initialized");
   const contextHandlers = pi.events.get("context") ?? [];
   assert.equal(contextHandlers.length, 1);
   const ordinaryContext = {
@@ -3530,6 +3532,14 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.deepEqual(
     roster.map((definition: Record<string, unknown>) => definition.name),
     ["scout"],
+  );
+  assert.equal(roster[0].model, undefined);
+  assert.equal(roster[0].thinking, undefined);
+  assert.doesNotMatch(
+    event.systemPromptOptions.sections.agent_definitions.split(
+      "\n\nThis is the session-start definition snapshot.",
+    )[0],
+    /\n/,
   );
   const listResult = await pi.tools
     .find((tool) => tool.name === "list_agents")!
@@ -4248,6 +4258,7 @@ test("invalid mailbox-intent agent environment reports the exact field", async (
 
 test("managed non-TUI agents do not receive the widget", async () => {
   const mailbox = setAgentEnvironment("non-tui-agent");
+  assert.equal(readAgentState(mailbox), undefined);
   const pi = fakePi();
   const context = fakeAgentContext() as any;
   context.mode = "rpc";
@@ -4260,6 +4271,16 @@ test("managed non-TUI agents do not receive the widget", async () => {
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
   assert.equal(registrations, 0);
+  assert.ok(
+    readAgentState(mailbox),
+    "fresh managed session was not initialized",
+  );
+  assert.equal(
+    pi.entries.some(
+      (entry: any) => entry.customType === "pi_herdsman_state_error",
+    ),
+    false,
+  );
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();

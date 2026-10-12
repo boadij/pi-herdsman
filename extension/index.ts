@@ -171,7 +171,7 @@ import {
   herdrSessionsMatch,
   validateIdentity,
   validateAssignmentRequest,
-  visibleAgentDefinitionMetadata,
+  visibleAgentCapabilities,
 } from "./agent-controller.ts";
 import {
   acquireProcessLock,
@@ -2048,11 +2048,11 @@ export default function (pi: ExtensionAPI): void {
         },
         initialStatusBreadcrumb: () => initialStatusBreadcrumb,
         ownToolsSnapshot,
-        visibleAgentDefinitionMetadata: async (
+        visibleAgentCapabilities: async (
           ctx: ExtensionContext,
           definitions?: AgentDefinition[],
         ) =>
-          visibleAgentDefinitionMetadata(
+          visibleAgentCapabilities(
             definitions ?? (await contextAgentDefinitions(ctx)).definitions,
             controllerScope,
           ),

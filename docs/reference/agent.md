@@ -138,9 +138,24 @@ prominent for a later `continue_agent` call.
 No selectors or other fields are accepted. A successful result includes the
 effective `agent_definitions` roster and visible agent records.
 
+`agent_definitions` is an enabled-only runtime capability summary, not a
+configuration-management interface. Each entry identifies the effective
+definition by exact name and exposes its effective description, configured
+ordinary-tool policy, explicit skills and native-skill-discovery status, and
+permitted direct child names only when delegation is supported. It omits
+disabled definitions, reserved role profiles, definitions with unavailable
+required children, and configuration-only details such as source paths,
+model/thinking settings, extension configuration, and raw policy switches.
+Configured tool policy does not establish which tools are installed or
+callable. Explicit skills are separate from Pi native skill discovery.
+
 Each valid durable generation in the controller's proven ownership projection
 remains visible, including physically unresolved `unknown` and proven `lost`
 records. Each actionable live agent record includes:
+
+The definition summary's configured ordinary-tool policy is not the live
+Agent's `available_tools` snapshot below. That field reports currently
+eligible callable coordination tools for the active record.
 
 | Field                                                           | Meaning                                                                                                                                                                                                          |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -177,14 +192,22 @@ no mutation actions. Every operation rechecks identity, ownership, mailbox
 state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
 
-The session-start instructions include the same complete definition metadata
-projection returned by `list_agents` for that controller. It is a startup snapshot;
-use `list_agents` for live agent state, ownership, or a refreshed definition roster
-after configuration changes. Leaf agents do not receive a definition roster.
+The session-start instructions include the same scoped `agent_definitions`
+capability projection as `list_agents`; it is a stable startup snapshot.
+`list_agents` refreshes definition discovery and live agent records after
+configuration changes. Neither is a complete configuration view: inspect
+bundled, trusted project, and global Markdown layers to identify contributing
+files and resolve effective configuration. Use frontmatter `name` as the
+definition identity, never a filename. Disabled definitions, definitions with
+unavailable required children, and reserved role profiles require direct
+configuration inspection.
 
-Lead controllers see the complete effective definition roster and agents whose
-durable ownership chain resolves to that lead. Delegating agents see only allowed
-enabled leaf definitions and their direct agents. Unrooted, ambiguous, or cyclic
+Lead controllers see enabled definitions available to them and agents whose
+durable ownership chain resolves to that lead. Delegating agents see only
+allowed enabled leaf definitions and their direct agents. Live records are
+separate from definition availability: an already-active Agent may still appear
+after its definition is disabled, with its current ownership, lifecycle,
+available actions, and recovery evidence. Unrooted, ambiguous, or cyclic
 durable ancestry is not attributed to the current controller. Unknown mailbox
 diagnostics remain non-actionable.
 

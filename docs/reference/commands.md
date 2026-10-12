@@ -118,8 +118,11 @@ The details view shows applicable effective metadata:
 
 Bundled implementation paths are intentionally hidden from the human overview.
 
-Structured `list_agents` keeps exact deterministic metadata, including exact
-source and skill paths when available.
+Structured `list_agents` returns the lean capability roster (name, optional
+description, normalized tools/skills summaries, and permitted child names)
+alongside live Agent records. It omits definition source paths and raw
+configuration. Use the Definitions UI for full configuration details and
+source paths; explicitly provisioned skill paths remain in the skills summary.
 
 `/herdsman definitions` does not probe runtime tool availability.
 

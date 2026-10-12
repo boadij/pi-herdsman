@@ -11,14 +11,23 @@ this skill does not define a second schema or management API.
 
 ## Workflow
 
-1. Inspect the current effective definition before changing it.
-   - In an ordinary Lead session, use `list_agents` first. It refreshes the
-     definition roster and returns effective metadata plus contributing source
-     paths.
-   - Reserved role definitions are intentionally excluded from the Agent roster.
-     Inspect the relevant bundled and override layers directly; do not expect
-     `list_agents` to expose them. Chief is global-only; project-local Chief
-     definitions are rejected.
+1. Inspect the Markdown definition layers before changing configuration.
+   - Identify a definition by its frontmatter `name`, never by its filename.
+     Inspect bundled, trusted project, and global layers in precedence order
+     (`bundled < project < global`), including which files contribute to the
+     effective definition. Project definitions apply only when Pi trusts the
+     project.
+   - Resolve matching overlays and effective field values before choosing the
+     requested project or global edit scope. `list_agents` is useful after an
+     edit to invoke Herdsman's existing discovery and validation, but its
+     enabled-definition capability summary does not expose source paths or
+     complete configuration. It cannot establish effective configuration by
+     itself.
+   - Disabled definitions, definitions with unavailable required children,
+     and reserved role profiles are not included in the runtime definition
+     capability list; inspect their Markdown layers directly. Reserved role
+     definitions have special restrictions. Chief is global-only;
+     project-local Chief definitions are rejected.
    - Read the canonical contract when exact field behavior matters:
      - `../../docs/reference/agent-definition-schema.md`
      - `../../docs/guides/agent-definitions.md`
@@ -58,15 +67,19 @@ this skill does not define a second schema or management API.
      ordinary Lead tool baseline when `tools` is omitted. Chief defaults to no
      ordinary tools and accepts global overrides only.
 
-4. Validate through Herdsman's existing definition engine.
+4. Validate through Herdsman's existing definition engine where available.
    - After an edit in a Lead session, call `list_agents` again. Treat any
      discovery or validation failure as a failed edit and repair or restore the
-     target file.
+     target file. Its returned summary can confirm discoverability and
+     validation, not the complete effective configuration.
    - If `list_agents` is unavailable, do not claim that the effective Herdsman
      definition set was runtime-validated. The next normal definition discovery
      will validate it.
 
-5. Report the changed scope and file, the effective change, and validation.
+5. Inspect the effective result using the definition layers and available
+   runtime evidence. Report the changed scope and file, effective change, and
+   validation evidence; distinguish configuration inspection from runtime
+   validation.
    Agent-definition changes affect future Agent assignments; they do not
    mutate an active Agent. Lead execution profiles resolve at session start,
    resume, or `/lead`. Manager and Chief profiles resolve at role activation or

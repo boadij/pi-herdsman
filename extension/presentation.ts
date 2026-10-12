@@ -24,6 +24,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
+import { matchesToolPattern } from "./agent-definitions.ts";
 import {
   chmodSync,
   closeSync,
@@ -1685,27 +1686,41 @@ function toolNames(v: unknown): string[] {
   );
 }
 export function formatTools(definition: Record<string, unknown>): string {
-  const hasExplicitTools =
-    Array.isArray(definition.tools) && definition.tools.length > 0;
+  if (typeof definition.tools === "string") return definition.tools;
+  const hasExplicitTools = Array.isArray(definition.tools);
   const tools = toolNames(definition.tools);
-  const excluded = new Set(toolNames(definition.excludeTools));
+  const excluded = toolNames(definition.excludeTools);
   if (hasExplicitTools) {
-    const selected = tools.filter((tool) => !excluded.has(tool));
-    return selected.length ? selected.join(", ") : "none";
+    const selected = tools.filter((tool) =>
+      tool.includes("*")
+        ? !excluded.includes(tool) && !excluded.includes("*")
+        : !excluded.some((pattern) => matchesToolPattern(pattern, tool)),
+    );
+    if (!selected.length) return "none";
+    const summary = selected.join(", ");
+    return selected.some((tool) => tool.includes("*")) && excluded.length
+      ? `${summary} except ${excluded.join(", ")}`
+      : summary;
   }
   if (definition.noTools === true) return "none";
-  const excludedNames = [...excluded];
-  return excludedNames.length
-    ? `default except ${excludedNames.join(", ")}`
-    : "default";
+  const baseline =
+    definition.noBuiltinTools === true
+      ? "default without built-ins"
+      : "default";
+  return excluded.length
+    ? `${baseline} except ${excluded.join(", ")}`
+    : baseline;
 }
 export function formatSkills(definition: Record<string, unknown>): string {
+  if (typeof definition.skills === "string") return definition.skills;
   const skills = names(definition.skills);
   const discovered =
     definition.noSkills === false ||
     (definition.noSkills === undefined && definition.inheritSkills === true);
   if (!discovered) return skills.length ? skills.join(", ") : "none";
-  return skills.length ? `default + ${skills.join(", ")}` : "default";
+  return skills.length
+    ? `native discovery + ${skills.join(", ")}`
+    : "native discovery";
 }
 export function formatAgentDefinitions(
   definitions: Record<string, unknown>[],
@@ -1768,8 +1783,7 @@ function humanTools(definition: Record<string, unknown>): string | undefined {
   if (formatted === "default") return undefined;
   if (formatted !== "none") return formatted;
   const intentionalRestriction =
-    definition.noTools === true ||
-    (Array.isArray(definition.tools) && definition.tools.length > 0);
+    definition.noTools === true || Array.isArray(definition.tools);
   return intentionalRestriction ? formatted : undefined;
 }
 

@@ -53,6 +53,7 @@ import {
   allDirectChildrenAskBlocked,
   hasUndeliveredDirectChildWork,
   managedAgentSnapshots,
+  visibleAgentCapabilities,
   type AgentControllerOptions,
   type ManagedAgentSnapshotCollection,
 } from "./agent-controller.ts";
@@ -93,7 +94,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { ResultBinding } from "./storage.ts";
 import {
   agentDefinitionEnabled,
-  agentDefinitionMetadata,
   validateAgentDefinitionReferences,
   type AgentDefinition,
 } from "./agent-definitions.ts";
@@ -134,18 +134,6 @@ function validateManagedAgentDefinition(definitions: AgentDefinition[]): void {
       `agent ${definition.name} is disabled; enable it from a Lead session through /herdsman → Definitions before starting a new agent`,
     );
   validateAgentDefinitionReferences(definition, definitions);
-}
-
-function managedAgentDefinitionRoster(
-  definitions: AgentDefinition[],
-  allowed: string[],
-): Record<string, unknown>[] {
-  return definitions
-    .map((definition) => agentDefinitionMetadata(definition, "leaf"))
-    .filter(
-      (definition) =>
-        allowed.includes(definition.name) && definition.enabled !== false,
-    );
 }
 
 export function ensureManagedAgentIdentity(
@@ -1971,7 +1959,7 @@ export function registerManagedAgentRuntime(
         DELEGATING_AGENT_ROLE_CHARTER;
       if (availableRoster)
         event.systemPromptOptions.sections.agent_definitions =
-          `${JSON.stringify(availableRoster.definitions, null, 2)}\n\n` +
+          `${JSON.stringify(availableRoster.definitions)}\n\n` +
           `This is the session-start definition snapshot. ` +
           `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
     }
@@ -2194,9 +2182,12 @@ export function registerManagedAgentRuntime(
     try {
       startupDefinitionRoster = {
         sessionId: ctx.sessionManager.getSessionId(),
-        definitions: managedAgentDefinitionRoster(
+        definitions: visibleAgentCapabilities(
           await options.getAgentDefinitions(ctx),
-          allowedAgentDefinitions,
+          {
+            kind: "managed-agent",
+            allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+          },
         ),
       };
     } catch (error) {

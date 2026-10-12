@@ -1025,7 +1025,7 @@ export function createLeadSessionStartRuntime(host: {
     sessionId: string;
     definitions: Record<string, unknown>[];
   }): void;
-  visibleAgentDefinitionMetadata(
+  visibleAgentCapabilities(
     ctx: ExtensionContext,
     definitions?: AgentDefinition[],
   ): Promise<Record<string, unknown>[]>;
@@ -1248,7 +1248,7 @@ export function createLeadSessionStartRuntime(host: {
         );
       if (needsLeadRoster) {
         try {
-          const definitions = await host.visibleAgentDefinitionMetadata(
+          const definitions = await host.visibleAgentCapabilities(
             ctx,
             definitionSnapshot?.definitions,
           );
@@ -1363,7 +1363,7 @@ export function createLeadAgentEventRuntime(host: {
       else delete sections.pi_herdsman_lead_execution;
       if (roster && roster.sessionId === ctx.sessionManager.getSessionId())
         sections.agent_definitions =
-          `${JSON.stringify(roster.definitions, null, 2)}\n\n` +
+          `${JSON.stringify(roster.definitions)}\n\n` +
           `This is the session-start definition snapshot. ` +
           `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
       else delete sections.agent_definitions;

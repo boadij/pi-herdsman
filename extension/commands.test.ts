@@ -11126,7 +11126,7 @@ test("superseded lead startup cannot recover or publish over current session", a
       assert.equal(signal.aborted, false);
       prepared.push(ctx.sessionManager.getSessionId());
     },
-    visibleAgentDefinitionMetadata: async (ctx: any) => [
+    visibleAgentCapabilities: async (ctx: any) => [
       { sessionId: ctx.sessionManager.getSessionId() },
     ],
     setDefinitionRoster(roster: { sessionId: string }) {

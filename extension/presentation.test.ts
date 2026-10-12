@@ -4138,6 +4138,14 @@ test("Agent definition overview preserves provenance, status, and heading semant
       .render(160)
       .join("\n");
     assert.match(rendered, /status\s+disabled/);
+
+    const emptyAllowlist = renderAgentDefinitionsOverview(
+      [{ name: "restricted", tools: [] }],
+      theme,
+    )
+      .render(160)
+      .join("\n");
+    assert.match(emptyAllowlist, /tools\s+none/);
   }
 
   {
@@ -4503,10 +4511,16 @@ test("Definition formatting preserves model, status, and source contracts", (t) 
           agents: ["scout"],
         },
         { name: "agent" },
+        {
+          name: "normalized",
+          tools: "default except write*",
+          skills: "native discovery + ./skills/review/SKILL.md",
+        },
       ]),
       [
         "  reviewer — Final independent review | tools read, grep | skills review | delegates scout",
         "  agent | tools default | skills none",
+        "  normalized | tools default except write* | skills native discovery + ./skills/review/SKILL.md",
       ],
     );
   }
@@ -4641,6 +4655,42 @@ test("Capability summaries preserve deterministic tool and skill policy output",
         "read",
       ],
       [
+        "wildcard allowlist preserves matching exclusion",
+        {
+          tools: ["mcp__github__*"],
+          excludeTools: ["mcp__github__delete*"],
+        },
+        "mcp__github__* except mcp__github__delete*",
+      ],
+      [
+        "universal wildcard allowlist preserves concrete exclusion",
+        { tools: ["*"], excludeTools: ["bash"] },
+        "* except bash",
+      ],
+      [
+        "fully excluded wildcard allowlist is none",
+        { tools: ["mcp__github__*"], excludeTools: ["mcp__github__*"] },
+        "none",
+      ],
+      [
+        "explicit allowlist takes precedence over disabled built-ins",
+        { tools: ["read"], noBuiltinTools: true, excludeTools: ["write"] },
+        "read",
+      ],
+      [
+        "wildcard exclusion matches explicit tools",
+        {
+          tools: ["read", "bash", "message_supervisor"],
+          excludeTools: ["mess*", "b*"],
+        },
+        "read",
+      ],
+      [
+        "wildcard exclusion treats other pattern characters literally",
+        { tools: ["tool.[x]+?", "tool.x"], excludeTools: ["tool.[x]+?*"] },
+        "tool.x",
+      ],
+      [
         "comma-separated allowlist honors exclusion",
         { tools: ["read,bash"], excludeTools: ["bash"] },
         "read",
@@ -4663,14 +4713,19 @@ test("Capability summaries preserve deterministic tool and skill policy output",
       [
         "dynamic tools after built-in defaults are disabled",
         { noBuiltinTools: true },
-        "default",
+        "default without built-ins",
+      ],
+      [
+        "disabled built-ins remain visible with exclusions",
+        { noBuiltinTools: true, excludeTools: ["bash"] },
+        "default without built-ins except bash",
       ],
       [
         "excluded tools",
         { excludeTools: ["bash", "write"] },
         "default except bash, write",
       ],
-      ["empty tool list", { tools: [] }, "default"],
+      ["empty tool list", { tools: [] }, "none"],
       ["explicit empty normalized tool list", { tools: [","] }, "none"],
       [
         "disabled tools with explicit values",
@@ -4682,16 +4737,20 @@ test("Capability summaries preserve deterministic tool and skill policy output",
 
     for (const [label, definition, expected] of [
       ["skills disabled by omitted policy", {}, "none"],
-      ["discovered skills", { inheritSkills: true }, "default"],
+      ["discovered skills", { inheritSkills: true }, "native discovery"],
       [
         "discovered skills with additions",
         {
           inheritSkills: true,
           skills: ["./skills/review.md", "/skills/shared.md"],
         },
-        "default + ./skills/review.md, /skills/shared.md",
+        "native discovery + ./skills/review.md, /skills/shared.md",
       ],
-      ["explicit discovery enablement", { noSkills: false }, "default"],
+      [
+        "explicit discovery enablement",
+        { noSkills: false },
+        "native discovery",
+      ],
       [
         "disabled skills with explicit values",
         { noSkills: true, inheritSkills: true, skills: ["./skills/review.md"] },
@@ -4707,7 +4766,16 @@ test("Capability summaries preserve deterministic tool and skill policy output",
         { skills: [" ./skills/review.md "] },
         " ./skills/review.md ",
       ],
-      ["empty skills list", { inheritSkills: true, skills: [] }, "default"],
+      [
+        "skill paths are preserved explicitly",
+        { skills: ["./skills/review/SKILL.md", "/shared/skills/SKILL.md"] },
+        "./skills/review/SKILL.md, /shared/skills/SKILL.md",
+      ],
+      [
+        "empty skills list",
+        { inheritSkills: true, skills: [] },
+        "native discovery",
+      ],
     ] as const)
       assert.equal(formatSkills(definition), expected, label);
   }

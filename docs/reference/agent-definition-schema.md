@@ -154,10 +154,14 @@ Fresh-delegation settings are snapshotted at launch; changing the controller
 does not change an active agent.
 
 `enabled` controls Agent-definition availability. A disabled definition remains
-in the lead roster so it can be enabled again, but owner-visible definition
-lists omit it. `delegate` and `continue` reject a disabled definition. An
-already active agent may finish and remains controllable according to its current
+visible in the `/agents definitions` UI so it can be enabled again, but it is
+omitted from the runtime `agent_definitions` capability summary. A definition
+that requires a disabled or otherwise unavailable child is also omitted from
+that summary. `delegate` and `continue` reject disabled definitions. An already
+active agent may finish and remains controllable according to its current
 available actions; disabling a definition does not mutate that assignment.
+Runtime discovery is not a complete view of definition configuration: inspect
+Markdown layers to resolve effective fields and source provenance.
 `managed-lead` does not support `enabled`; its bundled definition is always
 the fallback.
 
@@ -194,10 +198,10 @@ Arrays supplied by an override replace the complete inherited array, including
 an explicit `[]`.
 
 When a delegating agent declares an agent definition in `agents`, that definition must
-be enabled. A delegating agent referencing a disabled agent definition can remain
-discoverable, but is rejected during assignment or fresh agent startup with an explicit
-disabled-agent error rather than being silently removed from the delegating agent
-definition.
+be enabled. A delegating agent referencing a disabled agent definition is omitted
+from runtime definition discovery and is rejected during assignment or fresh agent
+startup with an explicit disabled-agent error rather than silently dropping the
+reference.
 
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.
