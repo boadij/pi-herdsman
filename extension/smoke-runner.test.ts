@@ -54,7 +54,6 @@ import {
   retainedProjectMessageRecord,
   managerCleanupTarget,
   terminalFailureEvidence,
-  terminalFailureProviderSource,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -68,8 +67,10 @@ import {
   preparePi,
   requireTestedBaseline,
   resolveSmokeModel,
+  selectSmokeModel,
   runScenario,
 } from "../scripts/smoke.mjs";
+import installFaux, { decide } from "../scripts/smoke-faux.mjs";
 
 test("smoke runtime baseline accepts matching and newer stable versions", () => {
   assert.doesNotThrow(() => requireTestedBaseline("Pi", "1.0.1", "1.0.1"));
@@ -434,6 +435,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.deepEqual(parseSmokeArgs([]), {
     scenario: "core",
     model: undefined,
+    simulated: false,
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
   });
@@ -450,6 +452,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "chief-tree",
       model: "provider/model:high",
+      simulated: false,
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
     },
@@ -459,6 +462,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "continuation",
       model: "provider/model:xhigh",
+      simulated: false,
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
     },
@@ -466,6 +470,26 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
   assert.throws(() => parseSmokeArgs(["--unknown"]));
   assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
+  assert.deepEqual(parseSmokeArgs(["chief-tree", "--simulated"]), {
+    scenario: "chief-tree",
+    model: undefined,
+    simulated: true,
+    managerReadyTimeoutMs: undefined,
+    managerRecoveryDiagnostics: false,
+  });
+  assert.throws(
+    () => parseSmokeArgs(["core", "--simulated", "--model", "p/m"]),
+    /cannot be combined/,
+  );
+  assert.throws(
+    () => parseSmokeArgs(["manager-recovery", "--simulated"]),
+    /does not support --simulated/,
+  );
+  for (const scenario of ["core", "continuation"])
+    assert.throws(
+      () => parseSmokeArgs([scenario, "--simulated"]),
+      /native Agent completion handoffs are not available/,
+    );
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
 });
 
@@ -480,6 +504,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
     {
       scenario: "manager-recovery",
       model: undefined,
+      simulated: false,
       managerReadyTimeoutMs: 45_000,
       managerRecoveryDiagnostics: true,
     },
@@ -501,6 +526,83 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
     () => parseSmokeArgs(["core", "--manager-recovery-diagnostics"]),
     /only valid for manager-recovery/,
   );
+});
+
+test("simulated Manager decision only delegates the exact requested project work", () => {
+  const answer = decide("terminal-failure", {
+    messages: [
+      {
+        role: "user",
+        content:
+          'Use delegate_project exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
+      },
+    ],
+  });
+  assert.equal(answer.stopReason, "toolUse");
+  assert.equal(answer.content[0].name, "delegate_project");
+  assert.deepEqual(answer.content[0].arguments, {
+    branch: "herdsman/smoke-test",
+    task: "Wait for the report.",
+  });
+  assert.throws(
+    () =>
+      decide("terminal-failure", {
+        messages: [
+          {
+            role: "user",
+            content: "Remove worktree herdsman/branch",
+          },
+        ],
+      }),
+    /Unexpected terminal-failure transcript/,
+  );
+});
+
+test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
+  let provider;
+  const handlers = new Map();
+  installFaux({
+    registerProvider(value) {
+      provider = value;
+    },
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+  });
+  const model = (id: string) =>
+    provider.getModels().find((item: any) => item.id === id);
+  const context = (prompt: string) => ({
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+  });
+  const collect = async (stream: AsyncIterable<any>) => {
+    const events = [];
+    for await (const event of stream) events.push(event);
+    return events;
+  };
+  const first = await collect(
+    provider.streamSimple(
+      model("chief-tree"),
+      context("Reply exactly PI_HERDSMAN_CHIEF_TREE_STARTUP."),
+    ),
+  );
+  const second = await collect(
+    provider.streamSimple(
+      model("chief-tree"),
+      context("Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP."),
+    ),
+  );
+  assert.ok(first.some((event: any) => event.type === "text_delta"));
+  assert.ok(second.some((event: any) => event.type === "text_delta"));
+  const failure = await collect(
+    provider.streamSimple(model("terminal-error"), context("wait")),
+  );
+  assert.ok(
+    failure.some(
+      (event: any) =>
+        event.type === "error" && event.error.stopReason === "error",
+    ),
+  );
+  assert.equal(handlers.has("agent_settled"), true);
 });
 
 test("manager diagnostics retain bounded pane evidence", () => {
@@ -918,6 +1020,21 @@ test("smoke model requires configuration when no override exists", async () => {
   );
 });
 
+test("simulated model selection never reads Git smoke configuration", async () => {
+  const calls: string[] = [];
+  assert.equal(
+    await selectSmokeModel(
+      { scenario: "chief-tree", simulated: true },
+      async (...args: any[]) => {
+        calls.push(args.join(" "));
+        throw new Error("must not read Git configuration");
+      },
+    ),
+    "smoke-faux/chief-tree",
+  );
+  assert.deepEqual(calls, []);
+});
+
 test("smoke model propagates Git failures", async () => {
   const failure = Object.assign(new Error("invalid Git config"), { code: 3 });
   await assert.rejects(
@@ -962,16 +1079,7 @@ test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
 });
 
-test("terminal-failure smoke uses a real provider error and verifies one actionable report", () => {
-  const source = terminalFailureProviderSource(
-    "/tmp/attempts.jsonl",
-    "/tmp/settled.jsonl",
-  );
-  assert.match(source, /registerProvider\("smoke-terminal-failure"/);
-  assert.match(source, /type: "text_delta"/);
-  assert.match(source, /type: "error", reason: "error"/);
-  assert.match(source, /agent_settled/);
-  assert.doesNotMatch(source, /trigger|toolCall/);
+test("terminal-failure evidence remains actionable and Manager uses only delegate_project", () => {
   const entries = [
     {
       type: "custom_message",
@@ -988,6 +1096,7 @@ test("terminal-failure smoke uses a real provider error and verifies one actiona
     actionable: true,
     successHandoff: false,
     toolCalls: 0,
+    toolNames: [],
   });
 });
 
@@ -2212,6 +2321,7 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
   ]);
   const args = candidateArgs({
     ...config,
+    simulatedProviderExtension: "/isolated/smoke-faux.mjs",
     chiefTreeProbeExtension: "/isolated/chief-tree-tools.mjs",
   });
   assert.deepEqual(args.slice(args.indexOf("--extension")), [
@@ -2219,6 +2329,8 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
     config.candidateExtension,
     "--extension",
     config.herdrStateExtension,
+    "--extension",
+    "/isolated/smoke-faux.mjs",
     "--extension",
     "/isolated/chief-tree-tools.mjs",
     "--model",
