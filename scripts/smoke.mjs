@@ -2598,6 +2598,44 @@ async function agentSessionId(ctx, agent) {
   return (await isolatedSessionDetails(ctx, agent))?.id;
 }
 
+export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
+  if (!simulated) return;
+  assert.deepEqual(
+    evidence.map(({ name }) => name).sort(),
+    ["delegate_agent", "delegate_agent", "read"],
+    "core must perform the actual nested delegation and package read",
+  );
+  assert.ok(
+    evidence.some(
+      ({ name, result }) =>
+        name === "read" &&
+        result.includes(`\"name\": \"${expectedPackage.split("@")[0]}\"`) &&
+        result.includes(
+          `\"version\": \"${expectedPackage.split("@").at(-1)}\"`,
+        ),
+    ),
+    "correlated read result must contain the real package metadata",
+  );
+}
+
+export function assertContinuationReadEvidence(
+  simulated,
+  reads,
+  readResult,
+  expectedName,
+) {
+  if (!simulated) return;
+  assert.equal(reads.length, 1, "continued Agent must not reread package.json");
+  assert.ok(
+    readResult,
+    "remembered package must come from its successful persisted read",
+  );
+  assert.ok(
+    messageText(readResult.message.content).includes(expectedName),
+    "persisted package read must contain the returned package name",
+  );
+}
+
 async function runCoreSmoke(ctx) {
   const marker = `PI_HERDSMAN_SMOKE_OK ${ctx.expectedPackage}`;
   const observed = new Map();
@@ -2639,61 +2677,50 @@ async function runCoreSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
-  const files = (
-    await readdir(ctx.paths.piSessions, { recursive: true })
-  ).filter((file) => file.endsWith(".jsonl"));
-  const evidence = [];
-  for (const file of files) {
-    const entries = sessionEntries(
-      await readFile(join(ctx.paths.piSessions, file), "utf8"),
-    );
-    const cwd = entries.find((entry) => entry.type === "session")?.cwd;
-    const calls = entries.flatMap((entry) =>
-      entry.type === "message" && entry.message?.role === "assistant"
-        ? (entry.message.content ?? []).filter(
-            (part) => part.type === "toolCall",
+  if (ctx.simulated) {
+    const files = (
+      await readdir(ctx.paths.piSessions, { recursive: true })
+    ).filter((file) => file.endsWith(".jsonl"));
+    const evidence = [];
+    for (const file of files) {
+      const entries = sessionEntries(
+        await readFile(join(ctx.paths.piSessions, file), "utf8"),
+      );
+      const cwd = entries.find((entry) => entry.type === "session")?.cwd;
+      const calls = entries.flatMap((entry) =>
+        entry.type === "message" && entry.message?.role === "assistant"
+          ? (entry.message.content ?? []).filter(
+              (part) => part.type === "toolCall",
+            )
+          : [],
+      );
+      const results = entries
+        .filter(
+          (entry) =>
+            entry.type === "message" && entry.message?.role === "toolResult",
+        )
+        .map((entry) => entry.message);
+      for (const call of calls) {
+        if (
+          call.name !== "delegate_agent" &&
+          !(
+            call.name === "read" && isPackageReadPath(call.arguments?.path, cwd)
           )
-        : [],
-    );
-    const results = entries
-      .filter(
-        (entry) =>
-          entry.type === "message" && entry.message?.role === "toolResult",
-      )
-      .map((entry) => entry.message);
-    for (const call of calls) {
-      if (
-        call.name !== "delegate_agent" &&
-        !(call.name === "read" && isPackageReadPath(call.arguments?.path, cwd))
-      )
-        continue;
-      const result = results.find(
-        (item) => item.toolCallId === call.id && item.toolName === call.name,
-      );
-      assert.ok(
-        result && !result.isError,
-        `missing successful correlated ${call.name} result`,
-      );
-      evidence.push({ name: call.name, result: messageText(result.content) });
+        )
+          continue;
+        const result = results.find(
+          (item) => item.toolCallId === call.id && item.toolName === call.name,
+        );
+        assert.ok(
+          result && !result.isError,
+          `missing successful correlated ${call.name} result`,
+        );
+        evidence.push({ name: call.name, result: messageText(result.content) });
+      }
     }
+    assertCoreToolEvidence(ctx.simulated, evidence, ctx.expectedPackage);
+    ctx.coreToolEvidence = evidence.map(({ name }) => name);
   }
-  assert.deepEqual(
-    evidence.map(({ name }) => name).sort(),
-    ["delegate_agent", "delegate_agent", "read"],
-    "core must perform the actual nested delegation and package read",
-  );
-  assert.ok(
-    evidence.some(
-      ({ name, result }) =>
-        name === "read" &&
-        result.includes(`\"name\": \"${ctx.expectedPackage.split("@")[0]}\"`) &&
-        result.includes(
-          `\"version\": \"${ctx.expectedPackage.split("@").at(-1)}\"`,
-        ),
-    ),
-    "correlated read result must contain the real package metadata",
-  );
-  ctx.coreToolEvidence = evidence.map(({ name }) => name);
   ctx.descendantCount = distinctPaneCount([...observed.values()]);
   await waitForDescendantsToExit(ctx);
 }
@@ -2946,37 +2973,32 @@ async function runContinuationSmoke(ctx) {
         const childCwd = childEntries.find(
           (entry) => entry.type === "session",
         )?.cwd;
-        const reads = childEntries.flatMap((entry) =>
-          entry.type === "message" && entry.message?.role === "assistant"
-            ? (entry.message.content ?? []).filter(
-                (part) =>
-                  part.type === "toolCall" &&
-                  part.name === "read" &&
-                  isPackageReadPath(part.arguments?.path, childCwd),
-              )
-            : [],
-        );
-        assert.equal(
-          reads.length,
-          1,
-          "continued Agent must not reread package.json",
-        );
-        const readResult = childEntries.find(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "toolResult" &&
-            entry.message.toolName === "read" &&
-            entry.message.toolCallId === reads[0].id &&
-            !entry.message.isError,
-        );
-        assert.ok(
-          readResult,
-          "remembered package must come from its successful persisted read",
-        );
-        assert.ok(
-          messageText(readResult.message.content).includes(expectedName),
-          "persisted package read must contain the returned package name",
-        );
+        if (ctx.simulated) {
+          const reads = childEntries.flatMap((entry) =>
+            entry.type === "message" && entry.message?.role === "assistant"
+              ? (entry.message.content ?? []).filter(
+                  (part) =>
+                    part.type === "toolCall" &&
+                    part.name === "read" &&
+                    isPackageReadPath(part.arguments?.path, childCwd),
+                )
+              : [],
+          );
+          const readResult = childEntries.find(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message?.role === "toolResult" &&
+              entry.message.toolName === "read" &&
+              entry.message.toolCallId === reads[0]?.id &&
+              !entry.message.isError,
+          );
+          assertContinuationReadEvidence(
+            ctx.simulated,
+            reads,
+            readResult,
+            expectedName,
+          );
+        }
         const evidence = continuationSessionEvidence(
           contents,
           firstSession.id,

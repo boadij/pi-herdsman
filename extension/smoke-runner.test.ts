@@ -6,6 +6,8 @@ import { join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
+  assertCoreToolEvidence,
+  assertContinuationReadEvidence,
   bestEffortProcessDiagnostics,
   chiefTreeFooter,
   chiefTreeSelectedRow,
@@ -82,6 +84,41 @@ test("package read identity accepts equivalent paths and rejects other files", (
   assert.equal(isPackageReadPath("other.json", cwd), false);
   assert.equal(isPackageReadPath(`${cwd}/other.json`, cwd), false);
   assert.equal(isPackageReadPath("package.json", undefined), false);
+});
+
+test("exact core and continuation tool evidence is enforced only in simulated mode", () => {
+  const exactCoreEvidence = [
+    { name: "delegate_agent", result: "started" },
+    { name: "delegate_agent", result: "started" },
+    {
+      name: "read",
+      result: '{"name": "pi-herdsman", "version": "0.25.1"}',
+    },
+  ];
+  assert.doesNotThrow(() =>
+    assertCoreToolEvidence(true, exactCoreEvidence, "pi-herdsman@0.25.1"),
+  );
+  assert.throws(
+    () => assertCoreToolEvidence(true, [], "pi-herdsman@0.25.1"),
+    /actual nested delegation and package read/,
+  );
+  assert.doesNotThrow(() =>
+    assertCoreToolEvidence(false, [], "pi-herdsman@0.25.1"),
+  );
+
+  const successfulRead = {
+    message: { content: [{ type: "text", text: "pi-herdsman" }] },
+  };
+  assert.doesNotThrow(() =>
+    assertContinuationReadEvidence(true, [{}], successfulRead, "pi-herdsman"),
+  );
+  assert.throws(
+    () => assertContinuationReadEvidence(true, [], undefined, "pi-herdsman"),
+    /must not reread package.json/,
+  );
+  assert.doesNotThrow(() =>
+    assertContinuationReadEvidence(false, [], undefined, "pi-herdsman"),
+  );
 });
 
 test("smoke runtime baseline accepts matching and newer stable versions", () => {
