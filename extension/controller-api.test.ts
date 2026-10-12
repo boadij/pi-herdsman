@@ -5881,10 +5881,7 @@ test("parent list hides disabled allowed definitions", async () => {
   setAgentEnvironment("listing-parent", ["enabled-child", "disabled-child"]);
   const files = [
     ["enabled-child.md", "---\nname: enabled-child\n---\nchild\n"],
-    [
-      "disabled-child.md",
-      "---\nname: disabled-child\nenabled: false\n---\nchild\n",
-    ],
+    ["disabled-child.md", "---\nname: disabled-child\n---\nchild\n"],
   ];
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
@@ -5897,6 +5894,22 @@ test("parent list hides disabled allowed definitions", async () => {
     }),
     ownerSessionId: state.piSessionId,
   };
+  nativeSessions.set(child.piSessionId, {
+    id: child.piSessionId,
+    path: child.piSessionFile,
+    cwd: child.cwd,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: child.piSessionId,
+          definition: "disabled-child",
+          label: child.agentLabel,
+        },
+      },
+    ],
+  });
   writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
   const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
   writeAgentState(childMailbox, child);
@@ -5937,9 +5950,36 @@ test("parent list hides disabled allowed definitions", async () => {
     );
     assert.deepEqual(
       listed.details.agent_definitions,
-      [{ name: "enabled-child", tools: "default", skills: "none" }],
+      [
+        { name: "disabled-child", tools: "default", skills: "none" },
+        { name: "enabled-child", tools: "default", skills: "none" },
+      ],
       JSON.stringify(listed.details),
     );
+    const liveChildBefore = listed.details.agents.find(
+      (agent: { agent?: string }) => agent.agent === child.agentLabel,
+    );
+    assert.deepEqual(liveChildBefore, {
+      kind: "pi",
+      state: "working",
+      workspace_id: child.workspaceId,
+      pane_id: child.paneId,
+      tab_id: `${child.agentLabel}-tab`,
+      cwd: child.cwd,
+      pi_session_id: child.piSessionId,
+      pi_session_path: child.piSessionFile,
+      managed: true,
+      owner_session_id: child.ownerSessionId,
+      agent_definition: "disabled-child",
+      active_request_id: activeRequestId,
+      agent: child.agentLabel,
+      available_tools: [
+        "inspect_agent",
+        "steer_agent",
+        "interrupt_agent",
+        "close_agent",
+      ],
+    });
 
     realFs.writeFileSync(
       join(PI_AGENTS_DIR, "disabled-child.md"),
@@ -5959,31 +5999,12 @@ test("parent list hides disabled allowed definitions", async () => {
     const liveChild = afterDisable.details.agents.find(
       (agent: { agent?: string }) => agent.agent === child.agentLabel,
     );
-    assert.deepEqual(liveChild, {
-      kind: "pi",
-      state: "working",
-      workspace_id: child.workspaceId,
-      pane_id: child.paneId,
-      tab_id: `${child.agentLabel}-tab`,
-      cwd: child.cwd,
-      pi_session_id: child.piSessionId,
-      pi_session_path: child.piSessionFile,
-      managed: true,
-      owner_session_id: child.ownerSessionId,
-      agent_definition: "agent",
-      active_request_id: activeRequestId,
-      agent: child.agentLabel,
-      available_tools: [
-        "inspect_agent",
-        "steer_agent",
-        "interrupt_agent",
-        "close_agent",
-      ],
-    });
+    assert.deepEqual(liveChild, liveChildBefore);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
     resetAgentMailbox(childMailbox);
+    nativeSessions.delete(child.piSessionId);
     for (const [name] of files)
       realFs.rmSync(join(PI_AGENTS_DIR, name), { force: true });
   }

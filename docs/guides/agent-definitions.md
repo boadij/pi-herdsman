@@ -283,7 +283,10 @@ or the model can use:
 {}
 ```
 
-Both resolve the same effective roster.
+Both use effective definition discovery, but the Definitions UI exposes
+configuration (including disabled definitions and reserved role profiles where
+applicable), while `list_agents` returns only currently available capabilities
+within the caller's scope.
 
 For model-assisted definition management, ask Pi directly or explicitly invoke
 `/skill:agent-definitions`. The bundled skill uses the same
