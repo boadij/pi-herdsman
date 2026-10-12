@@ -5889,7 +5889,17 @@ test("parent list hides disabled allowed definitions", async () => {
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const state = managedState("listing-parent");
+  const activeRequestId = randomUUID();
+  const child = {
+    ...managedState("disabled-child-agent", activeRequestId, {
+      ...recoveryIdentity("disabled-child-agent"),
+      piSessionId: "11111111-1111-4111-8111-111111111111",
+    }),
+    ownerSessionId: state.piSessionId,
+  };
   writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  writeAgentState(childMailbox, child);
   const entries = [
     {
       type: "custom",
@@ -5900,10 +5910,18 @@ test("parent list hides disabled allowed definitions", async () => {
         label: state.agentLabel,
       },
     },
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: child.piSessionId,
+        definition: "disabled-child",
+        label: child.agentLabel,
+      },
+    },
   ];
   const pi = fakePi({
-    entries,
-    exec: agentControllerExecutor(managedState("listing-parent")),
+    exec: agentControllerExecutor(state, [child]),
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries);
@@ -5922,9 +5940,50 @@ test("parent list hides disabled allowed definitions", async () => {
       [{ name: "enabled-child", tools: "default", skills: "none" }],
       JSON.stringify(listed.details),
     );
+
+    realFs.writeFileSync(
+      join(PI_AGENTS_DIR, "disabled-child.md"),
+      "---\nname: disabled-child\nenabled: false\n---\nchild\n",
+      "utf8",
+    );
+    const afterDisable = await agentTool(pi, "list").execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(afterDisable.details.agent_definitions, [
+      { name: "enabled-child", tools: "default", skills: "none" },
+    ]);
+    const liveChild = afterDisable.details.agents.find(
+      (agent: { agent?: string }) => agent.agent === child.agentLabel,
+    );
+    assert.deepEqual(liveChild, {
+      kind: "pi",
+      state: "working",
+      workspace_id: child.workspaceId,
+      pane_id: child.paneId,
+      tab_id: `${child.agentLabel}-tab`,
+      cwd: child.cwd,
+      pi_session_id: child.piSessionId,
+      pi_session_path: child.piSessionFile,
+      managed: true,
+      owner_session_id: child.ownerSessionId,
+      agent_definition: "agent",
+      active_request_id: activeRequestId,
+      agent: child.agentLabel,
+      available_tools: [
+        "inspect_agent",
+        "steer_agent",
+        "interrupt_agent",
+        "close_agent",
+      ],
+    });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    resetAgentMailbox(childMailbox);
     for (const [name] of files)
       realFs.rmSync(join(PI_AGENTS_DIR, name), { force: true });
   }

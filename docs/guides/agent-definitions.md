@@ -253,26 +253,10 @@ path resolution rules.
 
 References are resolved from the Markdown file that declares them.
 
-The bundled Agent definitions are `generalist`, `implementer`,
-`researcher`, `reviewer`, and `scout`. All five reserved role definitions are
-excluded from this roster. The session-start `agent_definitions` summary and
-the `list_agents` result use the same scoped capability projection. Each entry
-identifies an enabled definition by exact name and exposes its effective
-description, configured ordinary-tool policy, explicit skills and native skill-
-discovery status, and permitted direct child names only when delegation is
-supported. It excludes source paths, model/thinking settings, extension
-configuration, and raw configuration switches. Configured tool policy does not
-establish which tools are installed or callable; explicit skills are separate
-from Pi native skill discovery. Delegating agents see only allowed definitions,
-projected as leaves. Disabled definitions, definitions with unavailable
-required children, and reserved role profiles require direct inspection of
-configuration layers.
-
-`list_agents` also returns live Agent records, separate from the definition
-summary. An already-active Agent may remain visible after its definition is
-disabled, with its current ownership, lifecycle, available actions, and
-recovery evidence. The startup summary is a stable snapshot; `list_agents`
-refreshes discovery and live records.
+Startup discovery and `list_agents` provide runtime Agent capabilities, not a
+complete configuration view. For their exact contract, see the
+[`list_agents` reference](../reference/agent.md#list_agents); use the workflow
+below to inspect and manage definition configuration.
 
 For configuration management, inspect bundled, trusted project, and global
 Markdown layers in precedence order (`bundled < project < global`), identify
