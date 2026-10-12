@@ -6060,6 +6060,17 @@ test("visible capabilities omit unlaunchable parents and non-capability metadata
     ),
     [{ name: "parent", tools: "default", skills: "none" }],
   );
+  assert.deepEqual(
+    visibleAgentCapabilities(
+      [
+        definition("parent", { agents: ["child"] }),
+        definition("child", { agents: ["disabled-grandchild"] }),
+        definition("disabled-grandchild", { enabled: false }),
+      ],
+      { kind: "lead" },
+    ),
+    [],
+  );
 });
 
 test("visible capabilities advertise children only when delegation is enabled", () => {

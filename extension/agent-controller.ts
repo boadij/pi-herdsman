@@ -1751,40 +1751,45 @@ export function visibleAgentCapabilities(
   definitions: AgentDefinition[],
   scope: ControllerScope,
 ) {
-  const enabledNames = new Set(
+  const availableNames = new Set(
     definitions.filter(agentDefinitionEnabled).map(({ name }) => name),
   );
+  let previousSize: number;
+  do {
+    previousSize = availableNames.size;
+    for (const definition of definitions)
+      if (
+        availableNames.has(definition.name) &&
+        definition.frontmatter.agents?.some((name) => !availableNames.has(name))
+      )
+        availableNames.delete(definition.name);
+  } while (availableNames.size !== previousSize);
+
   const available = definitions.filter(
     (definition) =>
-      agentDefinitionEnabled(definition) &&
+      availableNames.has(definition.name) &&
       (scope.kind === "lead" ||
         scope.allowedAgentDefinitions.has(definition.name)),
   );
-  return available
-    .filter((definition) =>
-      (definition.frontmatter.agents ?? []).every((name) =>
-        enabledNames.has(name),
-      ),
-    )
-    .map((definition) => {
-      const metadata: Record<string, unknown> = agentDefinitionMetadata(
-        definition,
-        scope.kind === "managed-agent" ? "leaf" : "delegating",
-      );
-      return {
-        name: definition.name,
-        ...(typeof metadata.description === "string"
-          ? { description: metadata.description }
-          : {}),
-        tools: formatTools(metadata),
-        skills: formatSkills(metadata),
-        ...(scope.kind === "lead" &&
-        agentDefinitionDelegationEnabled(definition) &&
-        definition.frontmatter.agents?.length
-          ? { agents: [...definition.frontmatter.agents] }
-          : {}),
-      };
-    });
+  return available.map((definition) => {
+    const metadata: Record<string, unknown> = agentDefinitionMetadata(
+      definition,
+      scope.kind === "managed-agent" ? "leaf" : "delegating",
+    );
+    return {
+      name: definition.name,
+      ...(typeof metadata.description === "string"
+        ? { description: metadata.description }
+        : {}),
+      tools: formatTools(metadata),
+      skills: formatSkills(metadata),
+      ...(scope.kind === "lead" &&
+      agentDefinitionDelegationEnabled(definition) &&
+      definition.frontmatter.agents?.length
+        ? { agents: [...definition.frontmatter.agents] }
+        : {}),
+    };
+  });
 }
 
 export type Params =

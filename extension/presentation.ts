@@ -1688,7 +1688,7 @@ function toolNames(v: unknown): string[] {
 export function formatTools(definition: Record<string, unknown>): string {
   if (typeof definition.tools === "string") return definition.tools;
   const hasExplicitTools = Array.isArray(definition.tools);
-  const tools = toolNames(definition.tools);
+  const tools = toolNames(definition.tools).filter((tool) => tool !== "agent");
   const excluded = toolNames(definition.excludeTools);
   if (hasExplicitTools) {
     const selected = tools.filter((tool) =>

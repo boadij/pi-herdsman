@@ -4640,6 +4640,12 @@ test("Capability summaries preserve deterministic tool and skill policy output",
       ["disabled tools", { noTools: true }, "none"],
       ["explicit tool allowlist", { tools: ["read", "grep"] }, "read, grep"],
       [
+        "delegation sentinel is excluded from ordinary tools",
+        { tools: ["read", "agent"] },
+        "read",
+      ],
+      ["delegation sentinel alone is none", { tools: ["agent"] }, "none"],
+      [
         "padded explicit tool names",
         { tools: [" read ", " grep "] },
         "read, grep",
