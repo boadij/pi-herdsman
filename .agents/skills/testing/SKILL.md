@@ -36,7 +36,10 @@ Test behavior at its lowest authoritative layer.
 
 Integration tests prove wiring and layer crossings. They do not repeat complete lower-layer behavior matrices.
 
-Use live smoke only when behavior crosses the real Pi/Herdr runtime boundary.
+For changes crossing the real Pi/Herdr runtime boundary, prefer relevant
+`--simulated` smoke first. Use real-model smoke when model decisions,
+instruction adherence, provider behavior, or coverage beyond simulation
+matters; `manager-recovery` is live-only.
 
 Prefer real local objects, temporary directories, files, and processes. Mock only the boundary that must be controlled to reach otherwise inaccessible behavior or failure.
 
