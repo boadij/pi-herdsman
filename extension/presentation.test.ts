@@ -1476,6 +1476,43 @@ test("compact successful worktree removal reports the branch and retirement", ()
   assert.doesNotMatch(output, /sent to lead/);
 });
 
+test("worktree removal calls and expanded results identify the checkout and assignment outcome", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "staff",
+        "remove",
+        { branch: "feat/recovery" },
+        presentationTheme,
+      ),
+    ).split("\n")[0],
+    "remove worktree  feat/recovery",
+  );
+  const output = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "remove",
+      {
+        details: {
+          ok: true,
+          branch: "feat/recovery",
+          checkout_path: "/repo/feat-recovery",
+          checkout_removed: true,
+          checkout_state: "removed",
+          assignment_retired: true,
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { branch: "feat/recovery" } },
+    ),
+  );
+  assert.match(output, /^remove worktree/m);
+  assert.match(output, /checkout path: \/repo\/feat-recovery/);
+  assert.match(output, /checkout: removed/);
+  assert.match(output, /assignment: retired/);
+});
+
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "steer agent  release-review · researcher"],

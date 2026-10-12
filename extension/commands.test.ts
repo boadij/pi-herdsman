@@ -2961,6 +2961,7 @@ async function managerRemovalFixture(
     changeAssignmentAfterConfirmation?: boolean;
     persistedCheckoutPath?: string;
     persistedSessionId?: string;
+    missingSessionProvenance?: boolean;
     primaryWorkspaceInitially?: boolean;
     primaryWorkspaceAfterConfirmation?: boolean;
   } = {},
@@ -2989,12 +2990,13 @@ async function managerRemovalFixture(
     repoKey,
     branch,
     text: "test assignment",
-    ...(persistedCheckoutPath || options.persistedSessionId
+    ...(!options.missingSessionProvenance
       ? { piSessionFile: "persisted-session.jsonl" }
       : {}),
   };
   let checkoutPresent = true;
   let leadRunning = options.runningLead ?? false;
+  let stoppedLeadCount = 0;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
   let topologyWorkspaceId = options.primaryWorkspaceInitially
     ? manager.workspaceId
@@ -3121,6 +3123,7 @@ async function managerRemovalFixture(
     scanAgentStates: () => ({ states: [] }),
     stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
     stopProjectLeadPane: async () => {
+      stoppedLeadCount++;
       leadRunning = false;
     },
     withProjectWorkLock: async (_key: string, operation: () => unknown) =>
@@ -3162,6 +3165,7 @@ async function managerRemovalFixture(
     calls,
     removals,
     confirmationCount: () => confirmationCount,
+    stoppedLeadCount: () => stoppedLeadCount,
   };
 }
 
@@ -3286,6 +3290,21 @@ test("Manager removal requires persisted session checkout provenance", async (t)
   );
   assert.equal(wrongSession.confirmationCount(), 0);
   assert.deepEqual(wrongSession.removals, []);
+});
+
+test("Manager removal refuses a same-branch replacement without persisted checkout provenance", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    missingSessionProvenance: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Project checkout provenance is unavailable; worktree preserved/,
+  );
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.equal(fixture.stoppedLeadCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
 });
 
 test("Manager removal rejects primary workspace identity before and after confirmation", async (t) => {

@@ -5876,6 +5876,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("The Manager's primary checkout cannot be removed");
     if (worktree.open_workspace_id === manager.workspaceId)
       throw new Error("The Manager's primary workspace cannot be removed");
+    if (!assignment.piSessionFile)
+      throw new Error(
+        "Project checkout provenance is unavailable; worktree preserved",
+      );
     if (assignment.piSessionFile) {
       try {
         const session = host.SessionManager.open(assignment.piSessionFile);
@@ -6038,7 +6042,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
     await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
     const answer = await ctx.ui.input(
-      `Remove branch ${branch} at ${candidate.checkoutPath} from project ${candidate.manager.repoKey}? ` +
+      `Remove worktree for branch ${branch} at ${candidate.checkoutPath} from project ${candidate.manager.repoKey}? ` +
         "This removes the checkout and associated Herdr workspace; running managed execution may be stopped. " +
         "The Git branch and Pi conversation remain, and the project assignment is retired after removal. Type remove to confirm.",
       undefined,
@@ -6226,6 +6230,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ok: checkoutRemoved && assignmentRetired,
             action: "remove",
             branch,
+            checkout_path: candidate.checkoutPath,
             lead_stopped: leadStopped,
             checkout_removed: checkoutRemoved,
             assignment_retired: assignmentRetired,

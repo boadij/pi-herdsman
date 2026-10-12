@@ -2408,7 +2408,7 @@ function coordinationHeader(
       : tool === "staff"
         ? verb === "transcript"
           ? "read staff transcript"
-          : `${verb} ${verb === "delegate" || verb === "resume" ? "project" : verb === "stop" ? "lead" : "staff"}`
+          : `${verb} ${verb === "delegate" || verb === "resume" ? "project" : verb === "stop" ? "lead" : verb === "remove" ? "worktree" : "staff"}`
         : tool === "peer"
           ? verb === "list"
             ? "list peers"
@@ -2718,19 +2718,21 @@ function expandedResultLines(
           : "agents"
       : action === "inspect"
         ? `inspect ${display}`
-        : action === "delegate" || action === "continue"
-          ? `${display} started`
-          : tool === "supervisor"
-            ? "sent to supervisor"
-            : action === "steer"
-              ? "steering queued"
-              : action === "interrupt"
-                ? "interrupt accepted"
-                : tool === "agent" && action === "reply"
-                  ? `reply sent to ${display}`
-                  : action === "close"
-                    ? `${display} closed`
-                    : `${action} ${display}`;
+        : tool === "staff" && action === "remove"
+          ? "remove worktree"
+          : action === "delegate" || action === "continue"
+            ? `${display} started`
+            : tool === "supervisor"
+              ? "sent to supervisor"
+              : action === "steer"
+                ? "steering queued"
+                : action === "interrupt"
+                  ? "interrupt accepted"
+                  : tool === "agent" && action === "reply"
+                    ? `reply sent to ${display}`
+                    : action === "close"
+                      ? `${display} closed`
+                      : `${action} ${display}`;
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
@@ -2742,6 +2744,12 @@ function expandedResultLines(
         details.chiefSessionId,
     ],
     ["branch", tool === "staff" ? details.branch : undefined],
+    [
+      "checkout path",
+      tool === "staff" && action === "remove"
+        ? details.checkout_path
+        : undefined,
+    ],
     [
       "task",
       tool === "staff" && action === "resume"
@@ -2771,6 +2779,12 @@ function expandedResultLines(
   for (const [label, field] of fields)
     if (field !== undefined && field !== "")
       lines.push(`${label}: ${String(field)}`);
+  if (tool === "staff" && action === "remove") {
+    lines.push(
+      `checkout: ${details.checkout_removed === true ? "removed" : details.checkout_state === "present" ? "preserved" : `unconfirmed (${value(details.checkout_state) || "unknown"})`}`,
+      `assignment: ${details.assignment_retired === true ? "retired" : details.assignment_retired === false ? "not retired" : "unconfirmed"}`,
+    );
+  }
   if (action === "list" && tool === "agent")
     lines.push(
       "",
@@ -2933,6 +2947,18 @@ export function renderCoordinationResult(
         expanded,
         coordinationHeader(tool, action, "", theme),
       ).join("\n"),
+      0,
+      0,
+    );
+  if (
+    tool === "staff" &&
+    action === "remove" &&
+    expanded &&
+    (details.checkout_state !== undefined ||
+      details.checkout_removed !== undefined)
+  )
+    return new WidthSafeText(
+      expandedResultLines(tool, action, details, args, theme).join("\n"),
       0,
       0,
     );
