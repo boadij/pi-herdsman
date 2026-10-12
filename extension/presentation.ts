@@ -2951,6 +2951,7 @@ export function renderCoordinationResult(
       0,
     );
   if (
+    !failed &&
     tool === "staff" &&
     action === "remove" &&
     expanded &&
