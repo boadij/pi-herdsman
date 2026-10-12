@@ -2462,8 +2462,6 @@ export function registerLeadRuntime(
       !!options.leadRuntime.chiefLease &&
       options.leadRuntime.chiefLease.descriptor.piSessionId ===
         ctx.sessionManager.getSessionId(),
-    assignmentDelivered: (ctx: ExtensionContext) =>
-      publishLeadRole(ctx, "inactive", options.leadRuntime.chiefModeGeneration),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
@@ -2757,6 +2755,7 @@ export function registerLeadRuntime(
           timeout: 10_000,
         });
         ownedTab = { tabId: tab.tab_id, label };
+        reportedTabRenameFailure = undefined;
       })
       .catch((error) => {
         if (!current()) return;
@@ -9136,7 +9135,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 triggerTurn: options?.triggerTurn === true,
               });
             await result;
-            if (projectAssignment) host.assignmentDelivered?.(ctx);
+            if (projectAssignment) {
+              try {
+                host.assignmentDelivered?.(ctx);
+              } catch (error) {
+                appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+              }
+            }
             return;
           } catch (error) {
             managerDiagnostic("inbox_catch", { category: "send" });

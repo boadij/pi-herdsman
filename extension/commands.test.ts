@@ -4056,6 +4056,10 @@ async function managerDelegateAssignmentTest(
           args[0] === "agent" && args[1] === "start" && args.includes("--pane"),
       ),
     );
+    const managerIsIdle = ctx.isIdle;
+    // Keep the Manager's lifecycle subscription for retirement coverage, but
+    // prevent it from draining the retained-message assertion below.
+    ctx.isIdle = () => false;
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
@@ -4091,13 +4095,44 @@ async function managerDelegateAssignmentTest(
     leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
+    const waitForStage = async (stage: string, assertion: () => void) => {
+      console.error(
+        `[managerDelegateAssignmentTest:${projectTrusted ? "trusted" : "untrusted"}] waiting: ${stage}`,
+      );
+      try {
+        await t.waitFor(assertion);
+      } catch (error) {
+        console.error(
+          `[managerDelegateAssignmentTest:${projectTrusted ? "trusted" : "untrusted"}] failed: ${JSON.stringify(
+            {
+              stage,
+              tabCommands,
+              failedScopeCalls: lead.callResults
+                .filter(
+                  ({
+                    args,
+                    succeeded,
+                  }: {
+                    args: string[];
+                    succeeded: boolean;
+                  }) =>
+                    args[0] === "worktree" && args[1] === "list" && !succeeded,
+                )
+                .map(({ args }: { args: string[] }) => args),
+              lifecycleSubscriptions,
+            },
+          )}`,
+        );
+        throw error;
+      }
+    };
     try {
       // Keep the verified assignment and its delivery unavailable until after
       // startup, so the first role publication must name the ordinary Lead.
       unlinkSync(assignmentFile);
       unlinkSync(paths[0]!);
       await lead.events.get("session_start")![0](undefined, leadCtx);
-      await t.waitFor(() =>
+      await waitForStage("initial Lead tab rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>
@@ -4113,7 +4148,7 @@ async function managerDelegateAssignmentTest(
 
       writeFileSync(assignmentFile, assignmentSnapshot);
       writeFileSync(paths[0]!, deliverySnapshot);
-      await t.waitFor(() =>
+      await waitForStage("assignment delivery", () =>
         assert.ok(
           lead.sent.some(
             (message: any) =>
@@ -4143,7 +4178,7 @@ async function managerDelegateAssignmentTest(
         assignmentDelivery.content!,
         /If the Manager needs coordination, a question, clarification, warning, or FYI[\s\S]*use message_supervisor\. If it can wait, let[\s\S]*the automatic result handoff carry it\./,
       );
-      await t.waitFor(() =>
+      await waitForStage("Managed Lead tab rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>
@@ -4161,14 +4196,16 @@ async function managerDelegateAssignmentTest(
         undefined,
         leadCtx,
       );
-      await t.waitFor(() => assert.equal(childPaneGetDidStart, true));
+      await waitForStage("held pane lookup started", () =>
+        assert.equal(childPaneGetDidStart, true),
+      );
       await heldManagedRefresh;
       failScopeLookup = true;
       const ambiguousReconciliation = lead.events.get("session_tree")![0](
         undefined,
         leadCtx,
       );
-      await t.waitFor(() =>
+      await waitForStage("failed scope lookup recorded", () =>
         assert.ok(
           lead.callResults.some(
             ({ args, succeeded }) =>
@@ -4178,7 +4215,7 @@ async function managerDelegateAssignmentTest(
       );
       releaseChildPaneGet();
       await ambiguousReconciliation;
-      await t.waitFor(() =>
+      await waitForStage("ambiguous reconciliation Lead rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>
@@ -4220,7 +4257,7 @@ async function managerDelegateAssignmentTest(
       ]);
       failScopeLookup = false;
       await lead.events.get("session_tree")![0](undefined, leadCtx);
-      await t.waitFor(() =>
+      await waitForStage("managed label restored after scope recovery", () =>
         assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
       const message = await lead.tools
@@ -4245,6 +4282,7 @@ async function managerDelegateAssignmentTest(
       assert.equal(retained.length, 1);
       assert.equal(retained[0]!.fromSessionId, childSession);
       assert.equal(retained[0]!.text, "Ready for review");
+      ctx.isIdle = managerIsIdle;
       assert.equal(
         listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
         childSession,
@@ -4274,10 +4312,12 @@ async function managerDelegateAssignmentTest(
           })}\n`,
         );
       };
-      await t.waitFor(() => assert.ok(lifecycleSubscriptions > 0));
+      await waitForStage("lifecycle subscription ready", () =>
+        assert.ok(lifecycleSubscriptions > 0),
+      );
       failScopeLookup = true;
       publishRetirement();
-      await t.waitFor(() =>
+      await waitForStage("first retirement processed", () =>
         assert.ok(
           lead.entries.some((entry: any) =>
             String(entry.data?.error).includes("scope lookup failure"),
@@ -4324,7 +4364,7 @@ async function managerDelegateAssignmentTest(
       const requestsBeforeRemoval = topologyRequests;
       tabCommands.length = 0;
       publishRetirement();
-      await t.waitFor(() =>
+      await waitForStage("retirement topology refresh", () =>
         assert.ok(topologyRequests > requestsBeforeRemoval),
       );
       assert.equal(
@@ -4355,13 +4395,13 @@ async function managerDelegateAssignmentTest(
       rmSync(childCwd, { recursive: true, force: true });
       tabCommands.length = 0;
       publishRetirement();
-      await t.waitFor(() =>
+      await waitForStage("removed assignment", () =>
         assert.equal(
           listProjectAssignments(supervisionRuntime(), repoKey).length,
           0,
         ),
       );
-      await t.waitFor(() =>
+      await waitForStage("removed assignment Lead rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>
@@ -4391,9 +4431,6 @@ async function managerDelegateAssignmentTest(
         listProjectAssignments(supervisionRuntime(), repoKey).length,
         0,
       );
-      await pi.events.get("session_shutdown")?.[0]();
-      manager1Shutdown = true;
-      managerAgent = undefined;
       process.env.HERDR_WORKSPACE_ID = childWorkspace;
       await lead.events.get("session_shutdown")?.[0]();
       realFs.mkdirSync(childCwd);
@@ -4413,7 +4450,7 @@ async function managerDelegateAssignmentTest(
       leadCtx.sessionManager.getSessionId = () => childSession;
       leadCtx.sessionManager.getSessionFile = childSessionPath;
       await lead.events.get("session_start")![0](undefined, leadCtx);
-      await t.waitFor(() =>
+      await waitForStage("restarted Lead Managed label", () =>
         assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
       const originalAppend = lead.pi.appendEntry;
@@ -4444,7 +4481,7 @@ async function managerDelegateAssignmentTest(
               "Error: injected execution persistence failure",
         ),
       );
-      await t.waitFor(() =>
+      await waitForStage("failed takeover Lead rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>

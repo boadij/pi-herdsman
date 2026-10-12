@@ -2068,6 +2068,13 @@ for (const scenario of [
     assignmentAfterStartup: true,
   },
   {
+    name: "keeps assignment delivery successful when role presentation throws",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+    presentationThrows: true,
+  },
+  {
     name: "denies an exact Lead moved to a sibling worktree",
     moved: true,
     mismatchedPath: false,
@@ -2098,7 +2105,7 @@ for (const scenario of [
     const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
     const previousConsoleError = console.error;
     const diagnosticOutput: string[] = [];
-    if (scenario.prospectivePath) {
+    if (scenario.prospectivePath || scenario.presentationThrows) {
       process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
       console.error = (...values: unknown[]) => {
         diagnosticOutput.push(values.join(" "));
@@ -2217,13 +2224,29 @@ for (const scenario of [
         };
       },
     });
+    let throwNextSessionId = false;
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(entries) as any;
     ctx.sessionManager = {
       ...ctx.sessionManager,
-      getSessionId: () => sessionId,
+      getSessionId: () => {
+        if (throwNextSessionId) {
+          throwNextSessionId = false;
+          throw new Error("injected role presentation failure");
+        }
+        return sessionId;
+      },
       getSessionFile: () => sessionPath,
     };
+    if (scenario.presentationThrows) {
+      const sendMessage = pi.pi.sendMessage.bind(pi.pi);
+      pi.pi.sendMessage = ((message: any, options?: unknown) => {
+        const result = sendMessage(message, options);
+        if (message?.customType === "pi-herdsman-project_assignment")
+          throwNextSessionId = true;
+        return result;
+      }) as typeof pi.pi.sendMessage;
+    }
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
       if (scenario.assignmentAfterStartup) {
@@ -2248,6 +2271,32 @@ for (const scenario of [
       if (!scenario.moved && !scenario.mismatchedPath) {
         assert.equal(delivered[0].details.id, sessionId);
         assert.equal(delivered[0].details.branch, assignment.branch);
+        if (scenario.presentationThrows) {
+          const diagnostics = diagnosticOutput
+            .filter((line) =>
+              line.startsWith("[pi-herdsman-manager-diagnostic] "),
+            )
+            .map((line) =>
+              JSON.parse(
+                line.slice("[pi-herdsman-manager-diagnostic] ".length),
+              ),
+            );
+          assert.deepEqual(
+            diagnostics
+              .filter(({ event }) => event === "project_assignment_send")
+              .map(({ outcome }) => outcome),
+            ["resolved"],
+          );
+          assert.ok(
+            entries.some(
+              (entry: any) =>
+                entry.customType === "pi_herdsman_state_error" &&
+                String(entry.data?.error).includes(
+                  "injected role presentation failure",
+                ),
+            ),
+          );
+        }
         if (scenario.assignmentAfterStartup)
           assert.deepEqual(
             entries
@@ -2274,7 +2323,7 @@ for (const scenario of [
           ),
         );
       }
-      if (scenario.prospectivePath) {
+      if (scenario.prospectivePath || scenario.presentationThrows) {
         assert.equal(realFs.existsSync(sessionPath), false);
         const diagnosticEvents = diagnosticOutput
           .filter((line) =>
@@ -2348,7 +2397,7 @@ for (const scenario of [
       );
     } finally {
       if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
-      if (scenario.prospectivePath) {
+      if (scenario.prospectivePath || scenario.presentationThrows) {
         realFs.rmSync(sessionPath, { force: true });
         console.error = previousConsoleError;
         if (previousDiagnostics === undefined)
