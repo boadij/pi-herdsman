@@ -2204,7 +2204,25 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     await settle({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(pi.sent.length, 1);
+    assert.equal(
+      pi.sent.length,
+      1,
+      JSON.stringify(
+        pi.sentMessageCalls.map(({ message, options }) => {
+          const sentMessage = message as any;
+          return {
+            message: sentMessage.content,
+            customType: sentMessage.customType,
+            details: sentMessage.details,
+            requestId: sentMessage.details?.requestId,
+            agentLabel: sentMessage.details?.agentLabel,
+            options,
+          };
+        }),
+        null,
+        2,
+      ),
+    );
     assert.deepEqual(
       pi.sentMessageCalls.slice(0, 2).map(({ message, options }) => ({
         customType: (message as any).customType,
