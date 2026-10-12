@@ -4119,9 +4119,6 @@ async function managerDelegateAssignmentTest(
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
     const waitForStage = async (stage: string, assertion: () => void) => {
-      console.error(
-        `[managerDelegateAssignmentTest:${projectTrusted ? "trusted" : "untrusted"}] waiting: ${stage}`,
-      );
       try {
         await t.waitFor(assertion);
       } catch (error) {

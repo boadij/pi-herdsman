@@ -9139,7 +9139,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               try {
                 host.assignmentDelivered?.(ctx);
               } catch (error) {
-                appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+                try {
+                  appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+                } catch {
+                  // Presentation and diagnostic failures cannot undo delivery.
+                }
               }
             }
             return;

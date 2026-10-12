@@ -2068,11 +2068,12 @@ for (const scenario of [
     assignmentAfterStartup: true,
   },
   {
-    name: "keeps assignment delivery successful when role presentation throws",
+    name: "keeps assignment delivery successful when role presentation and diagnostics throw",
     moved: false,
     mismatchedPath: false,
     prospectivePath: false,
     presentationThrows: true,
+    diagnosticThrows: true,
   },
   {
     name: "denies an exact Lead moved to a sibling worktree",
@@ -2105,7 +2106,11 @@ for (const scenario of [
     const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
     const previousConsoleError = console.error;
     const diagnosticOutput: string[] = [];
-    if (scenario.prospectivePath || scenario.presentationThrows) {
+    if (
+      scenario.prospectivePath ||
+      scenario.presentationThrows ||
+      scenario.diagnosticThrows
+    ) {
       process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
       console.error = (...values: unknown[]) => {
         diagnosticOutput.push(values.join(" "));
@@ -2224,9 +2229,22 @@ for (const scenario of [
         };
       },
     });
+    if (scenario.diagnosticThrows) {
+      const appendEntry = pi.pi.appendEntry.bind(pi.pi);
+      pi.pi.appendEntry = (customType, data) => {
+        if (customType === "pi_herdsman_state_error")
+          throw new Error("injected diagnostic persistence failure");
+        appendEntry(customType, data);
+      };
+    }
     let throwNextSessionId = false;
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(entries) as any;
+    if (scenario.diagnosticThrows) {
+      ctx.ui.notify = () => {
+        throw new Error("injected diagnostic notification failure");
+      };
+    }
     ctx.sessionManager = {
       ...ctx.sessionManager,
       getSessionId: () => {
@@ -2287,7 +2305,7 @@ for (const scenario of [
               .map(({ outcome }) => outcome),
             ["resolved"],
           );
-          assert.ok(
+          assert.equal(
             entries.some(
               (entry: any) =>
                 entry.customType === "pi_herdsman_state_error" &&
@@ -2295,6 +2313,7 @@ for (const scenario of [
                   "injected role presentation failure",
                 ),
             ),
+            !scenario.diagnosticThrows,
           );
         }
         if (scenario.assignmentAfterStartup)
