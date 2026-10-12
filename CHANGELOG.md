@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.26.0](https://github.com/boadij/pi-herdsman/compare/v0.25.1...v0.26.0) (2026-10-12)
+
+
+### Features
+
+* **manager:** add accessible worktree removal ([#373](https://github.com/boadij/pi-herdsman/issues/373)) ([d548c48](https://github.com/boadij/pi-herdsman/commit/d548c48e945182d5343d6b1b113f9e7808713e6a))
+* **ui:** name Herdr tabs by Herdsman role ([#378](https://github.com/boadij/pi-herdsman/issues/378)) ([c72acad](https://github.com/boadij/pi-herdsman/commit/c72acadfe7ab1f6602bb698c6ef1d29eea34bf35))
+
+
+### Fixes
+
+* **runtime:** converge terminal execution failures across hierarchy ([#366](https://github.com/boadij/pi-herdsman/issues/366)) ([321114d](https://github.com/boadij/pi-herdsman/commit/321114de1b061502a39aa67cf1f368a42c7b8689))
+
+
+### Documentation
+
+* clarify architectural history and interface contracts ([#370](https://github.com/boadij/pi-herdsman/issues/370)) ([0447493](https://github.com/boadij/pi-herdsman/commit/0447493b07d26f5c6c03f83ac9f5a3827b897c69))
+* **testing:** prefer simulated smoke before live acceptance ([#379](https://github.com/boadij/pi-herdsman/issues/379)) ([56bd025](https://github.com/boadij/pi-herdsman/commit/56bd02583aaba027ab044bf027a4693d558e8f66))
+
+
+### Tests
+
+* **smoke:** add Pi-native simulated smoke testing ([#377](https://github.com/boadij/pi-herdsman/issues/377)) ([44698e4](https://github.com/boadij/pi-herdsman/commit/44698e40fcd6b5b50d6e073fbbdadf951b424ef5))
+
+
+### Other Changes
+
+* **dev:** add on-demand simplification audit skill ([#359](https://github.com/boadij/pi-herdsman/issues/359)) ([7cf50e8](https://github.com/boadij/pi-herdsman/commit/7cf50e824b8b5a7a9af0b4130cb533e24a0e0b57))
+
 ## [0.25.1](https://github.com/boadij/pi-herdsman/compare/v0.25.0...v0.25.1) (2026-10-10)
 
 
