@@ -3551,13 +3551,14 @@ async function managerDelegateAssignmentTest(
   let topologyRequests = 0;
   let lifecycleServer: ReturnType<typeof createServer> | undefined;
   const lifecycleClients = new Set<any>();
-  let lifecycleClient: any;
+  const subscribedLifecycleClients = new Set<any>();
   let lifecycleSubscriptions = 0;
   const tabLabels = new Map([
     ["root-tab", "1"],
     ["child-tab", "1"],
   ]);
   const tabCommands: string[][] = [];
+  let managerUsesRootPane = false;
   let holdChildPaneGet = false;
   let childPaneGetDidStart = false;
   let releaseChildPaneGet!: () => void;
@@ -3880,9 +3881,27 @@ async function managerDelegateAssignmentTest(
       return respond({ agent: managerAgent });
     return respond({});
   };
+  const managerExec = (command: string, args: string[]) => {
+    if (
+      managerUsesRootPane &&
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "get"
+    )
+      return respond({
+        pane: {
+          pane_id: "root-pane",
+          workspace_id: WORKSPACE,
+          tab_id: "root-tab",
+          terminal_id: "root-terminal",
+          cwd: "/tmp/manager-root",
+        },
+      });
+    return exec(command, args);
+  };
   const pi = fakeChiefPi({
     activeTools: ["read"],
-    exec,
+    exec: managerExec,
     persistMessages: true,
   });
   registerExtension!(pi.pi as never);
@@ -4063,10 +4082,13 @@ async function managerDelegateAssignmentTest(
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
+    managerUsesRootPane = true;
     lifecycleServer = createServer((socket) => {
       lifecycleClients.add(socket);
-      lifecycleClient = socket;
-      socket.once("close", () => lifecycleClients.delete(socket));
+      socket.once("close", () => {
+        lifecycleClients.delete(socket);
+        subscribedLifecycleClients.delete(socket);
+      });
       socket.setEncoding("utf8");
       let buffer = "";
       socket.on("data", (chunk: string) => {
@@ -4075,6 +4097,7 @@ async function managerDelegateAssignmentTest(
         if (newline < 0) return;
         const request = JSON.parse(buffer.slice(0, newline));
         lifecycleSubscriptions++;
+        subscribedLifecycleClients.add(socket);
         socket.write(
           `${JSON.stringify({ id: request.id, result: { type: "subscription_started" } })}\n`,
         );
@@ -4107,6 +4130,7 @@ async function managerDelegateAssignmentTest(
             {
               stage,
               tabCommands,
+              tabLabels: Object.fromEntries(tabLabels),
               failedScopeCalls: lead.callResults
                 .filter(
                   ({
@@ -4288,32 +4312,32 @@ async function managerDelegateAssignmentTest(
         childSession,
       );
       const publishRetirement = () => {
-        lifecycleClient.write(
-          `${JSON.stringify({
-            event: "worktree_removed",
-            data: {
-              type: "worktree_removed",
+        const event = `${JSON.stringify({
+          event: "worktree_removed",
+          data: {
+            type: "worktree_removed",
+            workspace_id: childWorkspace,
+            workspace: {
               workspace_id: childWorkspace,
-              workspace: {
-                workspace_id: childWorkspace,
-                worktree: {
-                  repo_key: repoKey,
-                  checkout_path: childCwd,
-                  is_linked_worktree: true,
-                },
-              },
               worktree: {
-                path: childCwd,
-                branch: assignment!.branch,
+                repo_key: repoKey,
+                checkout_path: childCwd,
                 is_linked_worktree: true,
               },
-              forced: false,
             },
-          })}\n`,
-        );
+            worktree: {
+              path: childCwd,
+              branch: assignment!.branch,
+              is_linked_worktree: true,
+            },
+            forced: false,
+          },
+        })}\n`;
+        for (const client of subscribedLifecycleClients)
+          if (!client.destroyed) client.write(event);
       };
-      await waitForStage("lifecycle subscription ready", () =>
-        assert.ok(lifecycleSubscriptions > 0),
+      await waitForStage("lifecycle subscriptions ready", () =>
+        assert.ok(subscribedLifecycleClients.size >= 2),
       );
       failScopeLookup = true;
       publishRetirement();
