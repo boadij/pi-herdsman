@@ -1,6 +1,13 @@
 # Manager owns project assignment resolution
 
-> Superseded by [ADR 0013](0013-use-herdr-worktree-removal-for-project-retirement.md) for project retirement and [ADR 0016](0016-consume-project-messages-after-manager-delivery.md) for project-message delivery/retention semantics.
+> **Historical decision; superseded.**
+> [ADR 0013](0013-use-herdr-worktree-removal-for-project-retirement.md)
+> replaced Manager-driven completion/discard with worktree-based retirement,
+> subsequently updated by [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md).
+> [ADR 0016](0016-consume-project-messages-after-manager-delivery.md)
+> replaced permanent project-message retention with pending-delivery
+> consumption. [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md)
+> establishes assignment-based Manager authority and confirmed takeover.
 
 ## Decision
 

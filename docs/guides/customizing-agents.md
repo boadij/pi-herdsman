@@ -300,17 +300,10 @@ presentation layer, so their displayed tool set may require separate
 integration-level verification; loaded provider code is not sandboxed by this
 setting.
 
-An explicit `tools` list controls selection even when `noTools` or
-`noBuiltinTools` also selects restrictive defaults, while `excludeTools` wins
-over ordinary names. Managed agents retain `ask_owner` and, when applicable,
-Agent coordination tools as mandatory infrastructure. Managed project Leads
-retain their required Agent, supervisor, and peer coordination tools. These
-role-required names are restored to explicit allowlists and removed from
-exclusions; unmanaged Pi launches receive no such exception. Same-named tools
-cannot be permissioned by source, and collision winner ordering is not promised.
-Launcher-injected agent and Herdr-state extensions are separate from definition
-extensions and remain available when `noExtensions` disables ordinary
-discovery.
+Managed roles retain their required coordination tools independently of
+ordinary tool selection. The [agent-definition schema](../reference/agent-definition-schema.md)
+owns the exact precedence, protected-tool, collision, and launcher-injected
+extension rules.
 
 For an integration-level smoke check, load the repository's
 `scripts/tool-policy-diagnostic.mjs` extension and set `POLICY_EVIDENCE`,

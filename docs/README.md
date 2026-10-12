@@ -59,7 +59,9 @@ Human-facing surfaces are documented separately:
 
 Maintainer-only material stays separate from product use:
 
+- [Contributing](../CONTRIBUTING.md)
 - [Product philosophy](development/product-philosophy.md)
+- [Architecture decision records](adr/)
 - [Validation](development/validation.md)
 - [Smoke testing](development/smoke-testing.md)
 - [Documentation maintenance](development/documentation.md)

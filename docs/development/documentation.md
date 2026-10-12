@@ -49,6 +49,7 @@ disagrees.
 | Settings                                               | [Configuration](../reference/configuration.md)                      |
 | TUI status presentation                                | [Status widget](../reference/status-widget.md)                      |
 | Error categories                                       | [Errors](../reference/errors.md)                                    |
+| Product scope and boundaries                           | [Product philosophy](product-philosophy.md)                         |
 | Repository checks                                      | [Validation](validation.md)                                         |
 | Live acceptance                                        | [Smoke testing](smoke-testing.md)                                   |
 | Instruction/interface design                           | [Instruction and interface design](instruction-interface-design.md) |
@@ -93,6 +94,14 @@ Do not mix these procedures into normal user setup.
 strategy, rationale, examples, and recovery guidance. It is not a second
 normative owner for public schemas or runtime semantics.
 
+## Architecture decision records
+
+ADRs preserve decisions and their original rationale, including rejected
+alternatives and subsequently superseded semantics. Annotate older decisions
+with links to later ADRs instead of rewriting history to appear current.
+Runtime and canonical public documentation describe current behavior; ADRs
+explain how architectural boundaries were established and changed.
+
 ## Runtime and skill authority
 
 Runtime model contracts own operational semantics.
@@ -115,7 +124,7 @@ aligned.
 - Relative repository links
 - One H1 per file
 - Short descriptive headings
-- Current behavior only
+- Current behavior only in product and maintainer guidance; ADRs retain history
 - Progressive disclosure from outcome to exact contract
 - Prefer a diagram or table only when it removes prose
 - Spell the visible product `Pi Herdsman`, package/repository `pi-herdsman`, local coordination directory `.pi-herdsman`, configuration file `config.json`, and upstream dependency `herdr`
@@ -126,7 +135,8 @@ aligned.
 
 ## Cross-links
 
-Every page under `docs/` links to the documentation index.
+Every current-behavior page under `docs/` links to the documentation index.
+The index itself is exempt; historical ADRs may instead link related decisions.
 
 Use a `See also` section only for genuinely adjacent material. Do not create a
 navigation manifest, generated docs framework, redirect layer, or duplicate

@@ -99,7 +99,7 @@ extension is optional; Pi Herdsman does not install or depend on it.
 
 Definitions are enabled by default. Set `enabled: false` in a matching project
 or global overlay to make a definition unavailable without copying the bundled
-bundled definition:
+definition:
 
 ```markdown
 ---
@@ -206,18 +206,12 @@ The effective roster is validated atomically. Every `agents` name must exist.
 Bundled role descriptions communicate each role's purpose and selection boundary;
 the active controller contract remains authoritative for delegation behavior.
 
-The non-empty `agents` list is required, but is not by itself sufficient, to
-enable all nine managed-agent coordination tools. Delegation is disabled when
-`excludeTools` contains `agent`, when `noTools: true` unless the explicit
-`tools` list contains `agent`, or when `tools` is explicitly empty. Otherwise,
-omitted `tools` permits delegation and explicit ordinary tools permit it. Every
-managed agent receives mandatory `ask_owner`; a definition launched as a leaf
-has its `agents` list removed. The `agent` name in these policy settings is not
-a registered or callable tool, and leaf projection also removes it from an
-existing `tools` list. Ordinary tool settings cannot remove role-required
-coordination tools. When `tools` is omitted, Pi's configured/default tool
-selection is preserved; an explicit allowlist is augmented with required role
-tools. See [Delegation](../concepts/delegation.md).
+A non-empty `agents` list is required but does not alone enable delegation;
+the effective tool policy also governs eligibility. Every managed agent retains
+mandatory `ask_owner`, and Agent-started agents are leaves. See
+[Delegation](../concepts/delegation.md) for the ownership model and the
+[agent-definition schema](../reference/agent-definition-schema.md#managed-agent-coordination-tools)
+for the exact tool-policy rules.
 
 ## Add body files
 

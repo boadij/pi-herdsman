@@ -1,6 +1,9 @@
 # Use project assignments for managed-Lead authority
 
-> **Lifecycle update:** [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md) adds authoritative missing-checkout reconciliation as an assignment-retirement condition. The exact-assignment authority rule and confirmed `/takeover` remain unchanged; the current runtime implements the update.
+> **Lifecycle update:** [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md)
+> supersedes the retirement conditions described below: verified checkout
+> absence also retires assignments. Exact-assignment authority and confirmed
+> `/takeover` remain unchanged; the current runtime implements the later policy.
 
 ## Status
 

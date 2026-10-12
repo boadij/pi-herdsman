@@ -12,22 +12,11 @@ decision authority.
 
 ## Delegating agent
 
-A lead-launched agent must have a non-empty effective `agents` list to be
-delegation-enabled, but that condition is not sufficient by itself. Delegation
-is disabled if `excludeTools` contains `agent`, if `noTools: true` unless the
-explicit `tools` list contains `agent`, or if `tools` is explicitly empty.
-Otherwise a non-empty `agents` list enables the nine Agent ownership tools
-(`list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `close_agent`, `inspect_agent`, and
-`read_agent_transcript`), and the agent may delegate only to definitions named
-in that list. Omitted `tools` permits delegation; explicit ordinary tools
-permit it unless an opt-out applies. Every managed agent also receives
-`ask_owner`.
-
-The `agent` name is configuration-policy evidence only, never a registered or
-callable tool: it opts into delegation under `noTools: true` when present in
-an explicit `tools` list, and opts out when present in `excludeTools`. Leaf
-projection removes it from an existing `tools` list.
+A lead-launched agent may delegate to the definitions in its effective
+`agents` allowlist only when delegation is enabled by its tool policy. Every
+managed agent receives `ask_owner`; qualifying delegating agents also receive
+Agent ownership tools. See the [agent-definition schema](../reference/agent-definition-schema.md#managed-agent-coordination-tools)
+for the exact eligibility, exclusion, and mandatory-tool rules.
 
 A delegating agent:
 
@@ -70,25 +59,6 @@ lead                          [lead]
 
 Physical layout never determines ownership; the durable owner/session
 relationships do.
-
-## Agent tool policy
-
-A non-empty effective `agents` list is necessary for all nine coordination
-tools: `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `close_agent`, `inspect_agent`, and
-`read_agent_transcript`, but is not sufficient if a delegation opt-out applies.
-An omitted or empty list always means the agent is a leaf, with `ask_owner` as
-its only mandatory Herdsman tool. Normal `tools` and `excludeTools` settings
-configure ordinary execution tools and cannot remove role-required tools.
-
-When `tools` is omitted, no `--tools` option is emitted and Pi's configured or
-default selection is preserved. An explicit `tools` allowlist is augmented
-with the required coordination tools for a delegating agent and with
-`ask_owner` for every managed agent, excluding the configuration-only `agent`
-name.
-
-The exact field semantics live in the
-[agent-definition schema](../reference/agent-definition-schema.md).
 
 ## Delegation and parallelism
 

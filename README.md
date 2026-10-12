@@ -104,8 +104,8 @@ ownership: Lead → Agent → Agent
 ```
 
 Project work is durable by Git branch. It does not belong to the Manager session
-that happened to start it, so work can be paused, resumed, completed, or
-reconciled across Manager turnover.
+that happened to start it, so assignments can be paused, resumed, or retired
+across Manager turnover.
 
 See [Coordination](docs/concepts/coordination.md) for the mental model and
 [Project orchestration](docs/guides/project-orchestration.md) for the Manager
@@ -121,7 +121,7 @@ workflow.
 | Customize Agents                           | [Agent definitions](docs/guides/agent-definitions.md)         |
 | Build against the model-facing tools       | [Coordination API](docs/coordination-api.md)                  |
 | Deploy an SSH-ready environment            | [Container deployment](docs/guides/container-deployment.md)   |
-| Contribute to Pi Herdsman                  | [Documentation index](docs/README.md#develop-pi-herdsman)     |
+| Contribute to Pi Herdsman                  | [Contributing](CONTRIBUTING.md)                               |
 
 ## Community
 
