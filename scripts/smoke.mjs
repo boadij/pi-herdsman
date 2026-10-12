@@ -1024,6 +1024,14 @@ function sessionEntries(contents) {
     });
 }
 
+export function isPackageReadPath(path, cwd) {
+  return (
+    typeof path === "string" &&
+    typeof cwd === "string" &&
+    resolve(cwd, path) === resolve(cwd, "package.json")
+  );
+}
+
 export function managerProjectMessageSettled(
   contents,
   branch,
@@ -2639,6 +2647,7 @@ async function runCoreSmoke(ctx) {
     const entries = sessionEntries(
       await readFile(join(ctx.paths.piSessions, file), "utf8"),
     );
+    const cwd = entries.find((entry) => entry.type === "session")?.cwd;
     const calls = entries.flatMap((entry) =>
       entry.type === "message" && entry.message?.role === "assistant"
         ? (entry.message.content ?? []).filter(
@@ -2655,7 +2664,7 @@ async function runCoreSmoke(ctx) {
     for (const call of calls) {
       if (
         call.name !== "delegate_agent" &&
-        !(call.name === "read" && call.arguments?.path === "package.json")
+        !(call.name === "read" && isPackageReadPath(call.arguments?.path, cwd))
       )
         continue;
       const result = results.find(
@@ -2934,13 +2943,16 @@ async function runContinuationSmoke(ctx) {
           );
         const contents = await readFile(firstSession.path, "utf8");
         const childEntries = sessionEntries(contents);
+        const childCwd = childEntries.find(
+          (entry) => entry.type === "session",
+        )?.cwd;
         const reads = childEntries.flatMap((entry) =>
           entry.type === "message" && entry.message?.role === "assistant"
             ? (entry.message.content ?? []).filter(
                 (part) =>
                   part.type === "toolCall" &&
                   part.name === "read" &&
-                  part.arguments?.path === "package.json",
+                  isPackageReadPath(part.arguments?.path, childCwd),
               )
             : [],
         );

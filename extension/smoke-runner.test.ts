@@ -34,6 +34,7 @@ import {
   initialPromptForScenario,
   inspectPaneProcesses,
   isolatedEnv,
+  isPackageReadPath,
   listedPanes,
   nestedControlEnv,
   nestedHerdrApiSocketPath,
@@ -72,6 +73,16 @@ import {
   runScenario,
 } from "../scripts/smoke.mjs";
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
+
+test("package read identity accepts equivalent paths and rejects other files", () => {
+  const cwd = "/workspace/project";
+  assert.equal(isPackageReadPath("package.json", cwd), true);
+  assert.equal(isPackageReadPath("./package.json", cwd), true);
+  assert.equal(isPackageReadPath(`${cwd}/package.json`, cwd), true);
+  assert.equal(isPackageReadPath("other.json", cwd), false);
+  assert.equal(isPackageReadPath(`${cwd}/other.json`, cwd), false);
+  assert.equal(isPackageReadPath("package.json", undefined), false);
+});
 
 test("smoke runtime baseline accepts matching and newer stable versions", () => {
   assert.doesNotThrow(() => requireTestedBaseline("Pi", "1.0.1", "1.0.1"));
