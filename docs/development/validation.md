@@ -176,7 +176,7 @@ Record:
 
 Do not claim a passing full check from a partial focused run.
 
-## Live verification
+## Runtime smoke verification
 
 Deterministic tests are the repository gate. Cross-process Pi/herdr behavior may
 also require isolated live smoke, selected according to the change being
@@ -188,11 +188,18 @@ npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
 npm run smoke -- manager-recovery
+npm run smoke -- terminal-failure
 ```
 
-`npm run smoke` defaults to `core`. Run it from an active Herdr-managed Pi
-session; it incurs real provider usage and may fail. The smoke model is
-configured once through `pi-herdsman.smoke-model` in Git configuration, or
-overridden for one run with `--model`. See [Smoke testing](smoke-testing.md) for setup.
-Live smoke is opt-in and not part of `npm run validate`. See [Smoke testing](smoke-testing.md)
-for its one-invocation project trust scope and isolated runtime boundaries.
+The opt-in `--simulated` mode covers `core`, `continuation`, `chief-tree`, and
+`terminal-failure` using
+Pi's native faux provider, without remote inference credentials. It retains
+the real Pi/Herdr runtime checks and does not replace live-model acceptance.
+`manager-recovery` remains live-only and rejects `--simulated`. Asynchronous
+Agent results are delivered as user messages to the real Pi transcript; the
+simulated scenarios require those delivered results and correlated tool
+evidence. Without that flag, smoke remains live-model acceptance and uses the configured
+`pi-herdsman.smoke-model` or a one-run `--model` override.
+`npm run smoke` defaults to live `core`. Run smoke from an active
+Herdr-managed Pi session. See [Smoke testing](smoke-testing.md) for setup,
+scope, and isolation. Smoke is opt-in and not part of `npm run validate`.

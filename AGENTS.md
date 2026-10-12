@@ -134,18 +134,23 @@ order in [Development validation](docs/development/validation.md): run
 checks `npm run format:check`, `npm run check`, and `git diff --check` before
 staging or committing.
 
-For changes that cross the real Pi/Herdr runtime boundary, use the isolated live
-smoke harness documented in [Smoke testing](docs/development/smoke-testing.md):
+For changes crossing the real Pi/Herdr runtime boundary, prefer the relevant
+simulated smoke scenario first when it covers the behavior. Pi, Herdsman, and
+Herdr still run for real; only model decisions are scripted:
 
 ```sh
-npm run smoke -- core
-npm run smoke -- continuation
-npm run smoke -- chief-tree
-npm run smoke -- manager-recovery
+npm run smoke -- core --simulated
+npm run smoke -- continuation --simulated
+npm run smoke -- chief-tree --simulated
+npm run smoke -- terminal-failure --simulated
 ```
 
-Run only the scenarios relevant to the change. Live smoke is opt-in and must
-complete before the final formatting/validation sequence.
+Use real-model smoke (omit `--simulated`) when validating model decisions,
+instruction adherence, provider behavior, or coverage simulation cannot prove.
+`manager-recovery` is live-only (`npm run smoke -- manager-recovery`).
+Run only relevant scenarios. Smoke is opt-in, and plain `npm run smoke`
+still uses the configured real model. Complete smoke before final
+formatting/validation; see [Smoke testing](docs/development/smoke-testing.md).
 
 ### Testing architecture
 

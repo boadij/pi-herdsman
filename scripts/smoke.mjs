@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import {
   access,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -64,11 +65,17 @@ export function parseSmokeArgs(args) {
     allowPositionals: true,
     options: {
       model: { type: "string" },
+      simulated: { type: "boolean" },
       "manager-ready-timeout-ms": { type: "string" },
       "manager-recovery-diagnostics": { type: "boolean" },
     },
   });
   const scenario = parseScenario(positionals);
+  const simulated = values.simulated ?? false;
+  if (simulated && values.model !== undefined)
+    throw new Error("--simulated cannot be combined with --model");
+  if (simulated && scenario === "manager-recovery")
+    throw new Error("manager-recovery does not support --simulated");
   const timeout = values["manager-ready-timeout-ms"];
   const managerReadyTimeoutMs =
     timeout === undefined ? undefined : Number(timeout);
@@ -92,6 +99,7 @@ export function parseSmokeArgs(args) {
   return {
     scenario,
     model: values.model,
+    simulated,
     managerReadyTimeoutMs,
     managerRecoveryDiagnostics,
   };
@@ -370,6 +378,12 @@ export async function resolveSmokeModel(override, execute = run) {
   );
 }
 
+export function selectSmokeModel(args, execute = run) {
+  return args.simulated
+    ? Promise.resolve(`smoke-faux/${args.scenario}`)
+    : resolveSmokeModel(args.model, execute);
+}
+
 export function isolatedEnv(base, paths) {
   const env = { ...base };
   for (const key of HERDR_ROUTING_KEYS) delete env[key];
@@ -421,6 +435,9 @@ export function candidateArgs(config) {
     config.candidateExtension,
     "--extension",
     config.herdrStateExtension,
+    ...(config.simulatedProviderExtension
+      ? ["--extension", config.simulatedProviderExtension]
+      : []),
     ...(config.chiefTreeProbeExtension
       ? ["--extension", config.chiefTreeProbeExtension]
       : []),
@@ -1007,6 +1024,14 @@ function sessionEntries(contents) {
     });
 }
 
+export function isPackageReadPath(path, cwd) {
+  return (
+    typeof path === "string" &&
+    typeof cwd === "string" &&
+    resolve(cwd, path) === resolve(cwd, "package.json")
+  );
+}
+
 export function managerProjectMessageSettled(
   contents,
   branch,
@@ -1014,7 +1039,7 @@ export function managerProjectMessageSettled(
   marker,
 ) {
   const entries = sessionEntries(contents);
-  const receipt = entries.findIndex(
+  const receipt = entries.find(
     (entry) =>
       entry.type === "custom_message" &&
       entry.customType === "pi-herdsman-project_message" &&
@@ -1022,17 +1047,26 @@ export function managerProjectMessageSettled(
       entry.details?.fromSessionId === fromSessionId &&
       String(entry.content).includes(marker),
   );
-  return (
-    receipt >= 0 &&
-    entries
-      .slice(receipt + 1)
-      .some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "assistant" &&
-          entry.message.stopReason === "stop",
-      )
+  if (!receipt?.id) return false;
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
   );
+  return entries.some((entry) => {
+    if (
+      entry.type !== "message" ||
+      entry.message?.role !== "assistant" ||
+      entry.message.stopReason !== "stop"
+    )
+      return false;
+    const visited = new Set();
+    let parentId = entry.parentId;
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === receipt.id) return true;
+      visited.add(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+    return false;
+  });
 }
 
 export function savedSessionHeaderEvidence(contents, expectedSessionId) {
@@ -1554,6 +1588,16 @@ export async function preparePi(paths, model, execute = run) {
   }
 }
 
+export async function prepareContinuationFaux(paths, extensionPath) {
+  const agents = join(paths.piAgent, "agents");
+  await mkdir(agents, { recursive: true });
+  await writeFile(
+    join(agents, "implementer.md"),
+    `---\nname: implementer\nextensions: [${JSON.stringify(extensionPath)}]\n---\n`,
+    { flag: "wx" },
+  );
+}
+
 async function prepareHerdr(paths) {
   await run("herdr", ["config", "check"], {
     env: isolatedEnv(process.env, paths),
@@ -1711,6 +1755,9 @@ async function startCandidate(ctx) {
   await Promise.all([
     access(ctx.candidateExtension),
     access(ctx.herdrStateExtension),
+    ...(ctx.simulatedProviderExtension
+      ? [access(ctx.simulatedProviderExtension)]
+      : []),
     ...(ctx.chiefTreeProbeExtension
       ? [access(ctx.chiefTreeProbeExtension)]
       : []),
@@ -1734,6 +1781,9 @@ async function startCandidate(ctx) {
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
     herdrStateExtension: ctx.herdrStateExtension,
+    ...(ctx.simulatedProviderExtension
+      ? { simulatedProviderExtension: ctx.simulatedProviderExtension }
+      : {}),
     ...(ctx.chiefTreeProbeExtension
       ? { chiefTreeProbeExtension: ctx.chiefTreeProbeExtension }
       : {}),
@@ -1797,38 +1847,6 @@ export function managerRecoveryFreshPrompt(branch) {
   return `Use delegate_project exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_project returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
-export function terminalFailureProviderSource(attemptsPath, settledPath) {
-  for (const path of [attemptsPath, settledPath])
-    assert.ok(typeof path === "string" && isAbsolute(path));
-  return `import { appendFileSync } from "node:fs";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
-const attemptsPath = ${JSON.stringify(attemptsPath)};
-const settledPath = ${JSON.stringify(settledPath)};
-export default function (pi) {
-  pi.registerProvider("smoke-terminal-failure", {
-    api: "smoke-terminal-failure-api",
-    baseUrl: "http://127.0.0.1/unused",
-    apiKey: "smoke-only",
-    models: [{ id: "terminal-failure", name: "Terminal Failure Smoke", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 128 }],
-    streamSimple(model) {
-      const stream = createAssistantMessageEventStream();
-      const output = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "error", timestamp: Date.now() };
-      appendFileSync(attemptsPath, JSON.stringify({ type: "request", at: Date.now() }) + "\\n");
-      stream.push({ type: "start", partial: output });
-      output.content.push({ type: "text", text: "CONTROLLED_PARTIAL_RESPONSE", index: 0 });
-      stream.push({ type: "text_start", contentIndex: 0, partial: output });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "CONTROLLED_PARTIAL_RESPONSE", partial: output });
-      stream.push({ type: "text_end", contentIndex: 0, content: "CONTROLLED_PARTIAL_RESPONSE", partial: output });
-      output.errorMessage = "503 Service Unavailable (controlled smoke failure)";
-      stream.push({ type: "error", reason: "error", error: output });
-      stream.end();
-      return stream;
-    },
-  });
-  pi.on("agent_settled", (event, ctx) => appendFileSync(settledPath, JSON.stringify({ sessionId: ctx.sessionManager.getSessionId(), aborted: event.aborted }) + "\\n"));
-}`;
-}
-
 export function terminalFailureEvidence(contents, branch, sessionId) {
   const entries = sessionEntries(contents);
   const reports = projectMessageEntries(contents, branch, sessionId);
@@ -1842,6 +1860,11 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
       String(entry.content),
     ),
   );
+  const toolCalls = entries.flatMap((entry) =>
+    entry.message?.role === "assistant" && Array.isArray(entry.message.content)
+      ? entry.message.content.filter((part) => part.type === "toolCall")
+      : [],
+  );
   return {
     executionFailures: failures.length,
     logicalReports: reports.length,
@@ -1849,12 +1872,8 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
       failures.length === 1 &&
       /inspect|unresolved|failed/i.test(String(failures[0].content)),
     successHandoff: success,
-    toolCalls: entries.flatMap((entry) =>
-      entry.message?.role === "assistant" &&
-      Array.isArray(entry.message.content)
-        ? entry.message.content.filter((part) => part.type === "toolCall")
-        : [],
-    ).length,
+    toolCalls: toolCalls.length,
+    toolNames: toolCalls.map((part) => part.name),
   };
 }
 
@@ -1862,23 +1881,16 @@ async function runTerminalFailureSmoke(ctx) {
   const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
   const task =
     "Do not call tools or perform work. Wait for your first model response.";
-  const providerPath = join(
-    ctx.paths.piAgent,
-    "extensions",
-    "terminal-failure-provider.mjs",
-  );
-  const attemptsPath = join(ctx.paths.root, "terminal-failure-attempts.jsonl");
-  const settledPath = join(ctx.paths.root, "terminal-failure-settled.jsonl");
-  await writeFile(
-    providerPath,
-    terminalFailureProviderSource(attemptsPath, settledPath),
-    { flag: "wx" },
-  );
+  const providerPath = ctx.simulatedProviderExtension;
+  const evidenceDir = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  await mkdir(evidenceDir, { recursive: true });
+  const attemptsPath = join(evidenceDir, "smoke-faux-attempts.jsonl");
+  const settledPath = join(evidenceDir, "smoke-faux-settled.jsonl");
   const definitionDir = join(ctx.rootCwd, ".pi", "agents");
   await mkdir(definitionDir, { recursive: true });
   await writeFile(
     join(definitionDir, "managed-lead.md"),
-    `---\nname: managed-lead\nmodel: smoke-terminal-failure/terminal-failure\nextensions: [${JSON.stringify(providerPath)}]\n---\n`,
+    `---\nname: managed-lead\nmodel: smoke-faux/terminal-error\nextensions: [${JSON.stringify(providerPath)}]\n---\n`,
   );
   await writeFile(
     join(ctx.paths.piAgent, "settings.json"),
@@ -1916,7 +1928,7 @@ async function runTerminalFailureSmoke(ctx) {
   ctx.owned.managerWorktreeRetirementRequested = true;
   ctx.terminalFailure = {
     branch,
-    model: "smoke-terminal-failure/terminal-failure",
+    model: "smoke-faux/terminal-error",
     providerPath,
   };
   ctx.managerRecovery = { branch };
@@ -2024,6 +2036,24 @@ async function runTerminalFailureSmoke(ctx) {
       const reports = manager
         ? terminalFailureEvidence(manager.contents, branch, sessionId)
         : null;
+      const failureMessage =
+        manager &&
+        projectMessageEntries(manager.contents, branch, sessionId).find(
+          (entry) =>
+            /Lead model execution failed|Lead execution settled without verified completion/.test(
+              String(entry.content),
+            ),
+        );
+      const managerResponded = !!(
+        manager &&
+        failureMessage &&
+        managerProjectMessageSettled(
+          manager.contents,
+          branch,
+          sessionId,
+          String(failureMessage.content),
+        )
+      );
       const settledRows = settled
         .split(/\r?\n/)
         .filter(Boolean)
@@ -2052,6 +2082,7 @@ async function runTerminalFailureSmoke(ctx) {
         reports?.executionFailures === 1 &&
         reports.logicalReports === 1 &&
         reports.actionable &&
+        managerResponded &&
         !reports.successHandoff &&
         settledRows.length === 1 &&
         settledRows[0].aborted === false &&
@@ -2075,6 +2106,7 @@ async function runTerminalFailureSmoke(ctx) {
           reportCount: reports?.executionFailures ?? 0,
           logicalReports: reports?.logicalReports ?? 0,
           actionable: !!reports?.actionable,
+          managerResponded,
           settledCount: settledRows.length,
           finalError: !!finalError,
           partialObserved: !!partialObserved,
@@ -2095,11 +2127,32 @@ async function runTerminalFailureSmoke(ctx) {
   assert.equal(report.logicalReports, 1);
   assert.equal(report.actionable, true);
   assert.equal(report.successHandoff, false);
+  const failureMessage = projectMessageEntries(
+    managerSession.contents,
+    branch,
+    sessionId,
+  ).find((entry) =>
+    /Lead model execution failed|Lead execution settled without verified completion/.test(
+      String(entry.content),
+    ),
+  );
+  assert.ok(failureMessage);
+  assert.equal(
+    managerProjectMessageSettled(
+      managerSession.contents,
+      branch,
+      sessionId,
+      String(failureMessage.content),
+    ),
+    true,
+    "Manager must complete its response to the exact delivered Lead failure report",
+  );
   assert.equal(
     report.toolCalls,
     1,
     "Manager should make only the requested delegate_project call",
   );
+  assert.deepEqual(report.toolNames, ["delegate_project"]);
   const preservedLead = [];
   for (const agent of await agents())
     if ((await agentSessionId(ctx, agent)) === sessionId)
@@ -2545,6 +2598,44 @@ async function agentSessionId(ctx, agent) {
   return (await isolatedSessionDetails(ctx, agent))?.id;
 }
 
+export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
+  if (!simulated) return;
+  assert.deepEqual(
+    evidence.map(({ name }) => name).sort(),
+    ["delegate_agent", "delegate_agent", "read"],
+    "core must perform the actual nested delegation and package read",
+  );
+  assert.ok(
+    evidence.some(
+      ({ name, result }) =>
+        name === "read" &&
+        result.includes(`\"name\": \"${expectedPackage.split("@")[0]}\"`) &&
+        result.includes(
+          `\"version\": \"${expectedPackage.split("@").at(-1)}\"`,
+        ),
+    ),
+    "correlated read result must contain the real package metadata",
+  );
+}
+
+export function assertContinuationReadEvidence(
+  simulated,
+  reads,
+  readResult,
+  expectedName,
+) {
+  if (!simulated) return;
+  assert.equal(reads.length, 1, "continued Agent must not reread package.json");
+  assert.ok(
+    readResult,
+    "remembered package must come from its successful persisted read",
+  );
+  assert.ok(
+    messageText(readResult.message.content).includes(expectedName),
+    "persisted package read must contain the returned package name",
+  );
+}
+
 async function runCoreSmoke(ctx) {
   const marker = `PI_HERDSMAN_SMOKE_OK ${ctx.expectedPackage}`;
   const observed = new Map();
@@ -2586,6 +2677,50 @@ async function runCoreSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
+  if (ctx.simulated) {
+    const files = (
+      await readdir(ctx.paths.piSessions, { recursive: true })
+    ).filter((file) => file.endsWith(".jsonl"));
+    const evidence = [];
+    for (const file of files) {
+      const entries = sessionEntries(
+        await readFile(join(ctx.paths.piSessions, file), "utf8"),
+      );
+      const cwd = entries.find((entry) => entry.type === "session")?.cwd;
+      const calls = entries.flatMap((entry) =>
+        entry.type === "message" && entry.message?.role === "assistant"
+          ? (entry.message.content ?? []).filter(
+              (part) => part.type === "toolCall",
+            )
+          : [],
+      );
+      const results = entries
+        .filter(
+          (entry) =>
+            entry.type === "message" && entry.message?.role === "toolResult",
+        )
+        .map((entry) => entry.message);
+      for (const call of calls) {
+        if (
+          call.name !== "delegate_agent" &&
+          !(
+            call.name === "read" && isPackageReadPath(call.arguments?.path, cwd)
+          )
+        )
+          continue;
+        const result = results.find(
+          (item) => item.toolCallId === call.id && item.toolName === call.name,
+        );
+        assert.ok(
+          result && !result.isError,
+          `missing successful correlated ${call.name} result`,
+        );
+        evidence.push({ name: call.name, result: messageText(result.content) });
+      }
+    }
+    assertCoreToolEvidence(ctx.simulated, evidence, ctx.expectedPackage);
+    ctx.coreToolEvidence = evidence.map(({ name }) => name);
+  }
   ctx.descendantCount = distinctPaneCount([...observed.values()]);
   await waitForDescendantsToExit(ctx);
 }
@@ -2834,6 +2969,36 @@ async function runContinuationSmoke(ctx) {
             `continuation-follow-up: expected exactly one final result, observed ${matchingResults.length}`,
           );
         const contents = await readFile(firstSession.path, "utf8");
+        const childEntries = sessionEntries(contents);
+        const childCwd = childEntries.find(
+          (entry) => entry.type === "session",
+        )?.cwd;
+        if (ctx.simulated) {
+          const reads = childEntries.flatMap((entry) =>
+            entry.type === "message" && entry.message?.role === "assistant"
+              ? (entry.message.content ?? []).filter(
+                  (part) =>
+                    part.type === "toolCall" &&
+                    part.name === "read" &&
+                    isPackageReadPath(part.arguments?.path, childCwd),
+                )
+              : [],
+          );
+          const readResult = childEntries.find(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message?.role === "toolResult" &&
+              entry.message.toolName === "read" &&
+              entry.message.toolCallId === reads[0]?.id &&
+              !entry.message.isError,
+          );
+          assertContinuationReadEvidence(
+            ctx.simulated,
+            reads,
+            readResult,
+            expectedName,
+          );
+        }
         const evidence = continuationSessionEvidence(
           contents,
           firstSession.id,
@@ -4421,7 +4586,7 @@ async function main() {
     await readFile(join(repoRoot, "package.json"), "utf8"),
   );
   const preflightEvidence = await preflight(pkg);
-  const model = await resolveSmokeModel(args.model);
+  const model = await selectSmokeModel(args);
   const scenario = args.scenario;
   await run("npm", ["run", "build"], { cwd: repoRoot });
   const paths = await createIsolation();
@@ -4443,6 +4608,16 @@ async function main() {
     sessionName: undefined,
     paths,
     model,
+    simulated: args.simulated,
+    ...(args.simulated || scenario === "terminal-failure"
+      ? {
+          simulatedProviderExtension: join(
+            paths.piAgent,
+            "extensions",
+            "smoke-faux.ts",
+          ),
+        }
+      : {}),
     managerReadyTimeoutMs:
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
@@ -4460,7 +4635,16 @@ async function main() {
     if (scenario === "manager-recovery" || scenario === "terminal-failure") {
       ctx.primaryCheckoutPath = ctx.rootCwd;
     }
-    ctx.authMechanism = await preparePi(paths, model);
+    if (ctx.simulatedProviderExtension) {
+      await copyFile(
+        join(repoRoot, "scripts", "smoke-faux.mjs"),
+        ctx.simulatedProviderExtension,
+      );
+      if (scenario === "continuation")
+        await prepareContinuationFaux(paths, ctx.simulatedProviderExtension);
+    }
+    if (args.simulated) ctx.authMechanism = "not required (simulated)";
+    else ctx.authMechanism = await preparePi(paths, model);
     await prepareHerdr(paths);
     if (ctx.chiefTreeProbeExtension)
       await writeFile(

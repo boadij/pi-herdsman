@@ -54,6 +54,42 @@ session directory, and Herdr XDG configuration/state directories remain isolated
 `chief-tree` additionally loads a disposable, root-only Pi probe extension;
 managed descendants do not load the probe.
 
+### Deterministic simulated acceptance
+
+The harness also supports an opt-in Pi-native faux provider for four bounded
+scenarios:
+
+```sh
+npm run smoke -- core --simulated
+npm run smoke -- continuation --simulated
+npm run smoke -- chief-tree --simulated
+npm run smoke -- terminal-failure --simulated
+```
+
+Simulation supplies model decisions only. Pi still runs its real agent loop and
+tools, while Herdsman and Herdr perform and record the actual delegation,
+continuation, role transitions, process/session lifecycle, and cleanup. The
+provider accepts only expected transcript states and requires actual correlated
+tool results before producing completion responses. It cannot produce
+successful tool results or directly mutate Herdsman or Herdr state. Simulated
+runs do not require model credentials or inference, but retain runtime
+compatibility checks, build, isolation, Herdr setup, and cleanup. They are
+integration checks, not replacements for real-model acceptance.
+
+Nested Agent completions arrive asynchronously through Herdsman's normal
+`pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` path. Pi
+normalizes these custom results as user messages in the provider transcript.
+The faux rules require the exact delivered Agent-result message and its
+correlated successful tool call before returning completion markers; the smoke
+assertions independently verify the persisted tool and session evidence.
+`manager-recovery --simulated` remains unsupported and fails immediately.
+`--simulated` cannot be combined with `--model`. Without
+`--simulated`, the configured or explicitly selected live model remains in use;
+there is no fallback between modes. `terminal-failure` uses the same native
+faux fixture for its disposable Lead's controlled partial response and terminal
+error, while its Manager remains on the selected live model unless the whole
+scenario is explicitly simulated.
+
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
@@ -62,15 +98,16 @@ pause/resume with an intact checkout, Manager turnover with a pending project
 message, verified missing-worktree retirement without recreating the assignment,
 and refusal to resume retired work).
 `terminal-failure` creates an isolated Manager project and exactly assigned
-Lead, selects a disposable custom provider only for that Lead, and exhausts
-Pi's bounded native retry after partial assistant output followed by a
-controlled retryable error. It verifies real final error settlement, one
-actionable project failure report, and preservation of the exact Lead,
-assignment worktree, and session without success handoff or tool replay. The
-provider, project definition, retry settings, and evidence files remain within
-the smoke isolation. The Manager continues using the configured smoke model;
-the harness still requires its normal live-model credential preflight. This
-scenario is a single acceptance invocation and is never automatically retried.
+Lead, selects the isolated native faux `terminal-error` model only for that
+Lead, and exhausts Pi's bounded native retry after partial assistant output
+followed by a controlled retryable error. It verifies real final error
+settlement, one actionable project failure report, and preservation of the
+exact Lead, assignment worktree, and session without success handoff or tool
+replay. The provider fixture, project definition, retry settings, and evidence
+files remain within the smoke isolation. For live acceptance the Manager
+continues using the configured smoke model; simulated acceptance scripts only
+its intended `delegate_project` action and report acknowledgment. This scenario
+is a single acceptance invocation and is never automatically retried.
 
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
