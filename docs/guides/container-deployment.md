@@ -1,5 +1,7 @@
 # Container deployment
 
+[Documentation index](../README.md)
+
 Run Pi Herdsman as a portable SSH-accessible coding-agent environment with Pi, Herdr, developer tools, and persistent state.
 
 ## Quick start

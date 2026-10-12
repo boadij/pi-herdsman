@@ -83,6 +83,4 @@ This supersedes ADR 0013's event-only retirement and missing-checkout
 recovery decisions, and extends the retirement boundary in
 [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md).
 ADR 0017's exact-session authority checks and confirmed `/takeover` path
-remain unchanged. The existing user-facing guides and runtime contracts
-must be updated alongside the implementation; this ADR alone does not
-change shipped behavior.
+remain unchanged.

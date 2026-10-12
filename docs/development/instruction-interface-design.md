@@ -1,12 +1,17 @@
 # Instruction and Interface Design Principles
 
+[Documentation index](../README.md)
+
 Herdsman should minimize cognitive complexity for agents, users, and maintainers while preserving a complete, explicit, and reliable operational contract.
 
 These principles apply to the repository as a whole, including runtime behavior, agent orchestration, instructions, tools, schemas, state, validation, documentation, tests, and public interfaces.
 
 ## One invariant, one meaning
 
-Every behavioral invariant should have one authoritative meaning.
+Every behavioral invariant should have one authoritative meaning. Runtime
+behavior and authoritative runtime contracts define operational semantics;
+skills, documentation, examples, and tests project those contracts rather
+than independently redefining them.
 
 The same invariant may appear in multiple surfaces when reinforcement, discoverability, validation, local context, or timing requires it. This includes deliberate reinforcement at model-facing decision points where salience materially improves reliability.
 
@@ -98,14 +103,6 @@ Remove distinctions once they no longer carry meaningful semantics.
 
 Do not expose implementation details merely because they exist internally.
 
-## Make valid behavior the easiest behavior
-
-The normal path should require the fewest decisions and the least reconstruction of hidden context.
-
-Where Herdsman knows the correct value, state, identity, action, or relationship, provide or enforce it instead of asking the model to derive or repeat it.
-
-Interfaces should make correct behavior obvious and incorrect behavior difficult.
-
 ## Do not accumulate defensive guidance
 
 A model mistake is evidence to investigate, not automatically evidence that another instruction is needed.
@@ -128,16 +125,6 @@ Additional reinforcement is justified when no distinct new rule is needed, but r
 When touching an area, remove obsolete, overlapping, contradictory, or compensatory behavior and guidance when doing so improves the resulting design.
 
 Current behavior should be understandable without knowing the system's history.
-
-## Keep authority explicit
-
-Operational semantics should have a clear source of truth.
-
-Runtime behavior and authoritative runtime contracts define what Herdsman actually guarantees. Other surfaces, including skills, documentation, examples, tests, and reinforcement guidance, should project those semantics rather than independently redefine them.
-
-Reinforcement may repeat an authoritative invariant where timing, salience, discoverability, or local context materially improves reliability. Such projections remain reinforcement, not separate authority, and must preserve the same meaning.
-
-When projections disagree, correct the non-authoritative representation or the underlying contract. Do not preserve disagreement by documenting around it.
 
 ## Optimize the resulting system
 

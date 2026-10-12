@@ -1,5 +1,7 @@
 # Product philosophy
 
+[Documentation index](../README.md)
+
 Pi Herdsman is a thin orchestration layer for coordinating Pi agents.
 
 It should own only the coordination problems that naturally belong to the

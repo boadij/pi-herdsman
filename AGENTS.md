@@ -2,14 +2,16 @@
 
 ## Repository documentation
 
-All repository-local documentation must describe only the current extension
-behavior.
+Product, guide, reference, and maintainer documentation describes verified
+current extension behavior. Historical ADRs instead preserve decisions made
+at the time, including rejected alternatives and later supersession; they do
+not redefine current runtime semantics.
 
-- Keep `SKILL.md`, `docs/reference/`, `docs/guides/`, and all other docs
-  current-version-only.
+- Keep `SKILL.md`, `docs/reference/`, `docs/guides/`, and other current-behavior
+  documentation current-version-only.
 - Do not add historical release, migration, legacy-name, or compatibility
-  guidance for removed behavior.
-- Document only verified current semantics and known limitations.
+  guidance for removed behavior to current-behavior documentation.
+- Document only verified current semantics and known limitations in those pages.
 
 ## Product philosophy
 
