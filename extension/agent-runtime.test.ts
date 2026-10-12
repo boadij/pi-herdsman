@@ -2207,21 +2207,19 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.equal(
       pi.sent.length,
       1,
-      JSON.stringify(
-        pi.sentMessageCalls.map(({ message, options }) => {
-          const sentMessage = message as any;
-          return {
-            message: sentMessage.content,
-            customType: sentMessage.customType,
-            details: sentMessage.details,
-            requestId: sentMessage.details?.requestId,
-            agentLabel: sentMessage.details?.agentLabel,
-            options,
-          };
-        }),
-        null,
-        2,
-      ),
+      pi.sent.length === 1
+        ? undefined
+        : JSON.stringify(
+            pi.sentMessageCalls.map(({ message, options }) => {
+              const sentMessage = message as any;
+              return {
+                customType: sentMessage.customType,
+                requestId: sentMessage.details?.requestId,
+                agentLabel: sentMessage.details?.agentLabel,
+                options,
+              };
+            }),
+          ),
     );
     assert.deepEqual(
       pi.sentMessageCalls.slice(0, 2).map(({ message, options }) => ({
