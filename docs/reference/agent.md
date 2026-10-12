@@ -151,11 +151,13 @@ callable. Explicit skills are separate from Pi native skill discovery.
 
 Each valid durable generation in the controller's proven ownership projection
 remains visible, including physically unresolved `unknown` and proven `lost`
-records. Each actionable live agent record includes:
+records.
 
 The definition summary's configured ordinary-tool policy is not the live
 Agent's `available_tools` snapshot below. That field reports currently
 eligible callable coordination tools for the active record.
+
+Each actionable live agent record includes:
 
 | Field                                                           | Meaning                                                                                                                                                                                                          |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
