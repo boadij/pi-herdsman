@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import {
@@ -65,6 +65,7 @@ import {
   exactIsolatedSession,
   isolatedSessionDetails,
   preparePi,
+  prepareContinuationFaux,
   requireTestedBaseline,
   resolveSmokeModel,
   selectSmokeModel,
@@ -486,10 +487,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     /does not support --simulated/,
   );
   for (const scenario of ["core", "continuation"])
-    assert.throws(
-      () => parseSmokeArgs([scenario, "--simulated"]),
-      /native Agent completion handoffs are not available/,
-    );
+    assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
 });
 
@@ -558,51 +556,256 @@ test("simulated Manager decision only delegates the exact requested project work
   );
 });
 
-test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
-  let provider;
-  const handlers = new Map();
-  installFaux({
-    registerProvider(value) {
-      provider = value;
-    },
-    on(event, handler) {
-      handlers.set(event, handler);
-    },
+test("core and continuation faux decisions wait for correlated delivered Agent results", () => {
+  const call = (name: string, arguments_: object, id = "call") => ({
+    role: "assistant",
+    content: [{ type: "toolCall", id, name, arguments: arguments_ }],
   });
-  const model = (id: string) =>
-    provider.getModels().find((item: any) => item.id === id);
-  const context = (prompt: string) => ({
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+  const result = (name: string, id = "call", details = {}) => ({
+    role: "toolResult",
+    toolName: name,
+    toolCallId: id,
+    isError: false,
+    details,
+    content: [{ type: "text", text: "started" }],
   });
-  const collect = async (stream: AsyncIterable<any>) => {
-    const events = [];
-    for await (const event of stream) events.push(event);
-    return events;
+  const delivered = (
+    label: string,
+    session = "child-session",
+    body = '{"name":"pi-herdsman","version":"0.25.1"}',
+  ) => ({
+    role: "user",
+    content: `Agent result · agent=${label} · definition=implementer · session=${session} · status=completed\n\nResult ref: result:fixture#1\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+  });
+  const rootPrompt =
+    "Do not read package.json yourself. Delegate and return PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1.";
+  const rootStarted = [
+    { role: "user", content: rootPrompt },
+    call("delegate_agent", {
+      definition: "implementer",
+      label: "smoke-core-implementer",
+    }),
+    result("delegate_agent"),
+  ];
+  const pendingRoot = decide("core", { messages: rootStarted });
+  assert.doesNotMatch(pendingRoot.content[0].text, /PI_HERDSMAN_SMOKE_OK/);
+  assert.equal(
+    decide("core", {
+      messages: [...rootStarted, delivered("smoke-core-implementer")],
+    }).content[0].text,
+    "PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1",
+  );
+
+  const scoutTask = {
+    role: "user",
+    content: "SMOKE_CORE_SCOUT: read package.json",
   };
-  const first = await collect(
-    provider.streamSimple(
-      model("chief-tree"),
-      context("Reply exactly PI_HERDSMAN_CHIEF_TREE_STARTUP."),
+  const scoutRead = [
+    scoutTask,
+    call("read", { path: "package.json" }, "read-1"),
+    {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "read-1",
+      isError: false,
+      content: [
+        { type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' },
+      ],
+    },
+  ];
+  assert.deepEqual(
+    JSON.parse(decide("core", { messages: scoutRead }).content[0].text),
+    { name: "pi-herdsman", version: "0.25.1" },
+  );
+  const nestedPackage = [
+    { role: "user", content: "SMOKE_CORE_IMPLEMENTER: delegate one scout." },
+    call("delegate_agent", { definition: "scout" }, "scout-1"),
+    result("delegate_agent", "scout-1"),
+    delivered(
+      "smoke-core-scout",
+      "scout-session",
+      '{"name":"pi-herdsman","version":"0.25.1","repository":{"type":"git"}}',
     ),
+  ];
+  assert.deepEqual(
+    JSON.parse(decide("core", { messages: nestedPackage }).content[0].text),
+    { name: "pi-herdsman", version: "0.25.1" },
   );
-  const second = await collect(
-    provider.streamSimple(
-      model("chief-tree"),
-      context("Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP."),
+  assert.throws(
+    () =>
+      decide("core", {
+        messages: [
+          scoutTask,
+          call("read", { path: "other.json" }, "wrong"),
+          { ...scoutRead[2], toolCallId: "wrong" },
+        ],
+      }),
+    /Package read result missing|Unexpected core transcript/,
+  );
+
+  const continuationPrompt =
+    "Delegate exactly one bounded task to an implementer: read package.json, remember its exact package name, and return only CONTINUATION_FIRST_DONE.";
+  const continuationStarted = [
+    { role: "user", content: continuationPrompt },
+    call("delegate_agent", {
+      definition: "implementer",
+      label: "smoke-continuation-implementer",
+    }),
+    result("delegate_agent"),
+  ];
+  assert.doesNotMatch(
+    decide("continuation", { messages: continuationStarted }).content[0].text,
+    /PI_HERDSMAN_CONTINUATION_FIRST/,
+  );
+  assert.equal(
+    decide("continuation", {
+      messages: [
+        ...continuationStarted,
+        delivered(
+          "smoke-continuation-implementer",
+          "child-session",
+          "pi-herdsman CONTINUATION_FIRST_DONE",
+        ),
+      ],
+    }).content[0].text,
+    "PI_HERDSMAN_CONTINUATION_FIRST",
+  );
+
+  const savedPath = "/isolated/pi-sessions/saved.jsonl";
+  const followup = `Continue the exact saved Pi session at ${savedPath}. This is the same implementer you delegated previously.`;
+  const firstHandoff = delivered(
+    "smoke-continuation-implementer",
+    "saved-id",
+    "pi-herdsman CONTINUATION_FIRST_DONE",
+  );
+  const beforeContinue = [
+    ...continuationStarted,
+    firstHandoff,
+    { role: "user", content: followup },
+  ];
+  const continueCall = decide("continuation", { messages: beforeContinue });
+  assert.equal(continueCall.content[0].name, "continue_agent");
+  assert.equal(continueCall.content[0].arguments.session, savedPath);
+  const continued = [
+    ...beforeContinue,
+    call("continue_agent", continueCall.content[0].arguments, "continue-1"),
+    result("continue_agent", "continue-1", { session_id: "saved-id" }),
+    delivered(
+      "smoke-continuation-implementer",
+      "saved-id",
+      "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
     ),
+  ];
+  assert.equal(
+    decide("continuation", { messages: continued }).content[0].text,
+    "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
-  assert.ok(first.some((event: any) => event.type === "text_delta"));
-  assert.ok(second.some((event: any) => event.type === "text_delta"));
-  const failure = await collect(
-    provider.streamSimple(model("terminal-error"), context("wait")),
+  assert.doesNotMatch(
+    decide("continuation", {
+      messages: [
+        ...continued,
+        { role: "user", content: "delegation guidance" },
+      ],
+    }).content[0].text,
+    /PI_HERDSMAN_CONTINUATION_SECOND/,
   );
-  assert.ok(
-    failure.some(
-      (event: any) =>
-        event.type === "error" && event.error.stopReason === "error",
-    ),
+
+  const resumed = [
+    {
+      role: "user",
+      content: "SMOKE_CONTINUATION_SECOND: do not reread package.json.",
+    },
+    call("read", { path: "package.json" }, "read-1"),
+    {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "read-1",
+      isError: false,
+      content: [
+        { type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' },
+      ],
+    },
+  ];
+  assert.equal(
+    decide("continuation", { messages: resumed }).content[0].text,
+    "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
-  assert.equal(handlers.has("agent_settled"), true);
+});
+
+test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-herdsman-faux-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const evidenceDir = join(agentDir, "pi-herdsman", "runtime");
+  await mkdir(evidenceDir, { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    let provider;
+    const handlers = new Map();
+    installFaux({
+      registerProvider(value) {
+        provider = value;
+      },
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+    });
+    const model = (id: string) =>
+      provider.getModels().find((item: any) => item.id === id);
+    const context = (prompt: string) => ({
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+    const collect = async (stream: AsyncIterable<any>) => {
+      const events = [];
+      for await (const event of stream) events.push(event);
+      return events;
+    };
+    const first = await collect(
+      provider.streamSimple(
+        model("chief-tree"),
+        context("Reply exactly PI_HERDSMAN_CHIEF_TREE_STARTUP."),
+      ),
+    );
+    const second = await collect(
+      provider.streamSimple(
+        model("chief-tree"),
+        context("Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP."),
+      ),
+    );
+    assert.ok(first.some((event: any) => event.type === "text_delta"));
+    assert.ok(second.some((event: any) => event.type === "text_delta"));
+    const failure = await collect(
+      provider.streamSimple(model("terminal-error"), context("wait")),
+    );
+    const error = failure.find((event: any) => event.type === "error");
+    assert.equal(
+      error?.error.errorMessage,
+      "503 Service Unavailable (controlled smoke failure)",
+    );
+    assert.ok(
+      failure
+        .filter((event: any) => event.type === "text_delta")
+        .map((event: any) => event.delta)
+        .join("")
+        .includes("CONTROLLED_PARTIAL_RESPONSE"),
+    );
+    assert.ok(
+      error?.error.content.some(
+        (part: any) =>
+          part.type === "text" && part.text === "CONTROLLED_PARTIAL_RESPONSE",
+      ),
+    );
+    assert.equal(
+      (await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8"))
+        .trim()
+        .split("\n").length,
+      1,
+    );
+    assert.equal(handlers.has("agent_settled"), true);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("manager diagnostics retain bounded pane evidence", () => {
@@ -1069,6 +1272,22 @@ test("smoke auth resolves credentials from the configured model", async () => {
   ]);
 });
 
+test("continuation installs the faux extension on the isolated implementer definition", async () => {
+  const piAgent = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-agent-"));
+  try {
+    await prepareContinuationFaux(
+      { piAgent },
+      "/isolated/extensions/smoke-faux.mjs",
+    );
+    assert.match(
+      await readFile(join(piAgent, "agents", "implementer.md"), "utf8"),
+      /extensions: \["\/isolated\/extensions\/smoke-faux\.mjs"\]/,
+    );
+  } finally {
+    await rm(piAgent, { recursive: true, force: true });
+  }
+});
+
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {
   const prompt = initialPromptForScenario("chief-tree", {});
   assert.equal(prompt, "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.");
@@ -1209,12 +1428,25 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
 test("manager-recovery waits for the exact automatic project message turn to settle", () => {
   const contents = [
     {
+      id: "receipt",
+      parentId: "prior",
       type: "custom_message",
       customType: "pi-herdsman-project_message",
       content: "Project branch-a from lead lead-session:\n\nCONTEXT_MARKER",
       details: { branch: "branch-a", fromSessionId: "lead-session" },
     },
-    { type: "message", message: { role: "assistant", stopReason: "stop" } },
+    {
+      id: "response",
+      parentId: "receipt",
+      type: "message",
+      message: { role: "assistant", stopReason: "stop" },
+    },
+    {
+      id: "unrelated-response",
+      parentId: "unrelated",
+      type: "message",
+      message: { role: "assistant", stopReason: "stop" },
+    },
   ]
     .map((entry) => JSON.stringify(entry))
     .join("\n");
@@ -1240,6 +1472,15 @@ test("manager-recovery waits for the exact automatic project message turn to set
   assert.equal(
     managerProjectMessageSettled(
       contents.replace('"stopReason":"stop"', '"stopReason":"toolUse"'),
+      "branch-a",
+      "lead-session",
+      "CONTEXT_MARKER",
+    ),
+    false,
+  );
+  assert.equal(
+    managerProjectMessageSettled(
+      contents.replace('"parentId":"receipt"', '"parentId":"unrelated"'),
       "branch-a",
       "lead-session",
       "CONTEXT_MARKER",

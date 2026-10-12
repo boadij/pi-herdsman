@@ -56,10 +56,12 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for two bounded
+The harness also supports an opt-in Pi-native faux provider for four bounded
 scenarios:
 
 ```sh
+npm run smoke -- core --simulated
+npm run smoke -- continuation --simulated
 npm run smoke -- chief-tree --simulated
 npm run smoke -- terminal-failure --simulated
 ```
@@ -74,15 +76,14 @@ runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.
 
-`core` and `continuation` remain live-model-only. Their required completion
-depends on asynchronous managed-Agent result delivery, but the native faux
-provider receives only the current Pi transcript and there is no supported
-tool result that lets a parent synchronously observe a nested Agent's eventual
-handoff. The harness rejects `core --simulated` and
-`continuation --simulated` rather than fabricate a success marker or add a
-second orchestration mechanism. `manager-recovery --simulated` is also
-unsupported and fails immediately. `--simulated` cannot be combined with
-`--model`. Without
+Nested Agent completions arrive asynchronously through Herdsman's normal
+`pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` path. Pi
+normalizes these custom results as user messages in the provider transcript.
+The faux rules require the exact delivered Agent-result message and its
+correlated successful tool call before returning completion markers; the smoke
+assertions independently verify the persisted tool and session evidence.
+`manager-recovery --simulated` remains unsupported and fails immediately.
+`--simulated` cannot be combined with `--model`. Without
 `--simulated`, the configured or explicitly selected live model remains in use;
 there is no fallback between modes. `terminal-failure` uses the same native
 faux fixture for its disposable Lead's controlled partial response and terminal

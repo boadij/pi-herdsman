@@ -191,13 +191,14 @@ npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
 ```
 
-The opt-in `--simulated` mode covers `chief-tree` and `terminal-failure` using
+The opt-in `--simulated` mode covers `core`, `continuation`, `chief-tree`, and
+`terminal-failure` using
 Pi's native faux provider, without remote inference credentials. It retains
 the real Pi/Herdr runtime checks and does not replace live-model acceptance.
-`core`, `continuation`, and `manager-recovery` remain live-only and reject
-`--simulated`: their required asynchronous Agent-result handoffs cannot be
-observed by the faux provider through an authoritative tool result. Without
-that flag, smoke remains live-model acceptance and uses the configured
+`manager-recovery` remains live-only and rejects `--simulated`. Asynchronous
+Agent results are delivered as user messages to the real Pi transcript; the
+simulated scenarios require those delivered results and correlated tool
+evidence. Without that flag, smoke remains live-model acceptance and uses the configured
 `pi-herdsman.smoke-model` or a one-run `--model` override.
 `npm run smoke` defaults to live `core`. Run smoke from an active
 Herdr-managed Pi session. See [Smoke testing](smoke-testing.md) for setup,
