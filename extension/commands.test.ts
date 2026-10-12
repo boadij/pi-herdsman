@@ -543,7 +543,7 @@ test("superseded Manager restoration releases its lease without replacing curren
   assert.ok(!released.has("current-session"));
 });
 
-test("Chief transitions and mode changes preserve the ordinary Lead baseline", async () => {
+test("Chief transitions and mode changes preserve the ordinary Lead baseline", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-baseline-pane";
   process.env.HERDR_TAB_ID = "chief-baseline-tab";
@@ -552,13 +552,56 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
     `chief-baseline-${randomUUID()}.sock`,
   );
   const baseline = ["read", "bash"];
+  const tabRenames: string[] = [];
+  const renameArgs: string[][] = [];
+  let tabLabel = "1";
   const pi = fakeChiefPi({ activeTools: baseline });
+  const originalExec = pi.pi.exec.bind(pi.pi);
+  (pi.pi as any).exec = async (
+    command: string,
+    args: string[],
+    options: any,
+  ) => {
+    if (command !== "herdr" || !["pane", "tab"].includes(args[0]!))
+      return originalExec(command, args, options);
+    const respond = (result: unknown) => ({
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    });
+    if (args[0] === "pane" && args[1] === "get")
+      return respond({
+        pane: {
+          pane_id: "chief-baseline-pane",
+          workspace_id: WORKSPACE,
+          tab_id: "chief-baseline-tab",
+        },
+      });
+    if (args[0] === "tab" && args[1] === "list")
+      return respond({
+        tabs: [{ tab_id: "chief-baseline-tab", number: 38, label: tabLabel }],
+      });
+    if (args[0] === "tab" && args[1] === "rename") {
+      tabLabel = args[3]!;
+      tabRenames.push(args[3]!);
+      renameArgs.push(args);
+      return respond({});
+    }
+    return originalExec(command, args, options);
+  };
   const context = fakeContext(pi.entries) as any;
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() => assert.equal(tabLabel, "Lead"));
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     await pi.commandOptions.get("chief").handler("", context);
+    await t.waitFor(() => assert.equal(tabLabel, "Chief"));
+    assert.deepEqual(tabRenames, ["Lead", "Chief"]);
+    assert.deepEqual(renameArgs, [
+      ["tab", "rename", "chief-baseline-tab", "Lead"],
+      ["tab", "rename", "chief-baseline-tab", "Chief"],
+    ]);
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     await pi.commandOptions.get("lead").handler("flexible", context);
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
@@ -567,6 +610,14 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
       leadTools: baseline,
     });
     await pi.commandOptions.get("chief").handler("leave", context);
+    await t.waitFor(() => assert.equal(tabLabel, "Lead"));
+    assert.deepEqual(tabRenames, ["Lead", "Chief", "Lead"]);
+    assert.deepEqual(renameArgs.at(-1), [
+      "tab",
+      "rename",
+      "chief-baseline-tab",
+      "Lead",
+    ]);
     assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     assert.deepEqual(
       sessionLeadExecutionState(pi.entries)?.leadTools,
@@ -1396,7 +1447,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   return fixture;
 }
 
-test("root Lead explicitly enters Manager; a competing root session stays Lead", async () => {
+test("root Lead explicitly enters Manager; a competing root session stays Lead", async (t) => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);
   process.env.HERDR_PANE_ID = "root-pane";
@@ -1411,6 +1462,24 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     code: 0,
   });
   const metadataReports: string[][] = [];
+  const tabRenames: string[] = [];
+  const tabCommands: string[][] = [];
+  let currentTabLabel = "1";
+  let managerRenameCount = 0;
+  let failManagerRename = false;
+  let tabListCalls = 0;
+  let deferNextLeadRename = false;
+  let deferredLeadRenameDidStart = false;
+  let releaseDeferredLeadRename!: () => void;
+  const deferredLeadRename = new Promise<void>(
+    (resolve) => (releaseDeferredLeadRename = resolve),
+  );
+  let deferNextPaneGet = false;
+  let deferredPaneGetDidStart = false;
+  let releaseDeferredPaneGet!: () => void;
+  const deferredPaneGet = new Promise<void>(
+    (resolve) => (releaseDeferredPaneGet = resolve),
+  );
   let failManagerMetadata = false;
   const exec = (command: string, args: string[]) => {
     if (
@@ -1429,6 +1498,57 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       args[1] === "report-metadata"
     )
       metadataReports.push(args);
+    if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
+      if (deferNextPaneGet) {
+        deferNextPaneGet = false;
+        deferredPaneGetDidStart = true;
+        return deferredPaneGet.then(() =>
+          respond({
+            pane: {
+              pane_id: args[2],
+              workspace_id: WORKSPACE,
+              tab_id: "root-tab",
+            },
+          }),
+        );
+      }
+      return respond({
+        pane: {
+          pane_id: args[2],
+          workspace_id: WORKSPACE,
+          tab_id: "root-tab",
+        },
+      });
+    }
+    if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
+      tabListCalls++;
+      return respond({
+        tabs: [{ tab_id: "root-tab", number: 27, label: currentTabLabel }],
+      });
+    }
+    if (command === "herdr" && args[0] === "tab" && args[1] === "rename") {
+      tabCommands.push(args);
+      const label = args[3]!;
+      if (label === "Manager" && failManagerRename) {
+        failManagerRename = false;
+        return { stdout: "", stderr: "injected tab rename failure", code: 1 };
+      }
+      if (label === "Lead" && deferNextLeadRename) {
+        deferNextLeadRename = false;
+        deferredLeadRenameDidStart = true;
+        return deferredLeadRename.then(() => {
+          currentTabLabel = label;
+          tabRenames.push(label);
+          return respond({});
+        });
+      }
+      currentTabLabel = label;
+      tabRenames.push(label);
+      if (label === "Manager") {
+        managerRenameCount++;
+      }
+      return respond({});
+    }
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -1535,8 +1655,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       /Delegate bounded execution work when an Agent can reasonably own it/,
     );
     failManagerMetadata = true;
+    failManagerRename = true;
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(
+      tabCommands.at(-1),
+      ["tab", "rename", "root-tab", "Manager"],
+      "the attempted Herdr rename fails during the committed Manager transition",
+    );
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
       ctx1.sessionManager.getSessionId(),
@@ -1556,9 +1682,45 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       ),
     );
     await first.events.get("session_start")![0](undefined, ctx1);
+    await t.waitFor(() =>
+      assert.ok(tabRenames.includes("Manager"), JSON.stringify(first.calls)),
+    );
     assert.ok(
       metadataReports.some((args) => args.includes("pi_herdsman_role=manager")),
       "a later publication succeeds after the failed report",
+    );
+    deferNextLeadRename = true;
+    const leaveWithDelayedRename = first.commandOptions
+      .get("manager")
+      .handler("leave", ctx1);
+    await t.waitFor(() => assert.equal(deferredLeadRenameDidStart, true));
+    await leaveWithDelayedRename;
+    const reenterManager = first.commandOptions
+      .get("manager")
+      .handler("", ctx1);
+    await reenterManager;
+    releaseDeferredLeadRename();
+    await t.waitFor(() => assert.equal(managerRenameCount, 2));
+    assert.deepEqual(tabRenames.slice(-2), ["Lead", "Manager"]);
+    const tabListsBeforeStaleRead = tabListCalls;
+    deferNextPaneGet = true;
+    const leaveWithDelayedRead = first.commandOptions
+      .get("manager")
+      .handler("leave", ctx1);
+    await t.waitFor(() => assert.equal(deferredPaneGetDidStart, true));
+    await leaveWithDelayedRead;
+    const reenterAfterStaleRead = first.commandOptions
+      .get("manager")
+      .handler("", ctx1);
+    await reenterAfterStaleRead;
+    releaseDeferredPaneGet();
+    await t.waitFor(() =>
+      assert.equal(tabListCalls, tabListsBeforeStaleRead + 1),
+    );
+    assert.equal(
+      tabListCalls,
+      tabListsBeforeStaleRead + 1,
+      "the superseded pane read stops before listing tabs",
     );
     const managerPromptEvent = {
       systemPrompt: "base",
@@ -3380,6 +3542,7 @@ async function managerDelegateAssignmentTest(
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let createdBranch = "";
+  let reportCheckoutAbsent = false;
   let gitStatusOutput = "";
   let started = false;
   let manager1Shutdown = false;
@@ -3390,6 +3553,17 @@ async function managerDelegateAssignmentTest(
   const lifecycleClients = new Set<any>();
   let lifecycleClient: any;
   let lifecycleSubscriptions = 0;
+  const tabLabels = new Map([
+    ["root-tab", "1"],
+    ["child-tab", "1"],
+  ]);
+  const tabCommands: string[][] = [];
+  let holdChildPaneGet = false;
+  let childPaneGetDidStart = false;
+  let releaseChildPaneGet!: () => void;
+  const heldChildPaneGet = new Promise<void>(
+    (resolve) => (releaseChildPaneGet = resolve),
+  );
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -3407,6 +3581,24 @@ async function managerDelegateAssignmentTest(
     tab_id: "root-tab",
   };
   const exec = (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
+      tabCommands.push(args);
+      const tabId = args[3] === childWorkspace ? "child-tab" : "root-tab";
+      return respond({
+        tabs: [
+          {
+            tab_id: tabId,
+            number: tabId === "child-tab" ? 41 : 27,
+            label: tabLabels.get(tabId),
+          },
+        ],
+      });
+    }
+    if (command === "herdr" && args[0] === "tab" && args[1] === "rename") {
+      tabCommands.push(args);
+      tabLabels.set(args[2]!, args[3]!);
+      return respond({});
+    }
     if (command === "git") {
       if (args[0] === "status")
         return { stdout: gitStatusOutput, stderr: "", code: 0 };
@@ -3417,13 +3609,16 @@ async function managerDelegateAssignmentTest(
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: [
-            "worktree /tmp/manager-root",
+            `worktree ${reportCheckoutAbsent ? repoKey : "/tmp/manager-root"}`,
             `HEAD ${"0".repeat(40)}`,
             "branch refs/heads/main",
             "",
             `worktree ${childCwd}`,
             `HEAD ${"1".repeat(40)}`,
             `branch refs/heads/${createdBranch}`,
+            ...(reportCheckoutAbsent
+              ? ["prunable gitdir file points to non-existent location"]
+              : []),
             "",
             "",
           ].join("\0"),
@@ -3471,7 +3666,9 @@ async function managerDelegateAssignmentTest(
           source_workspace_id: primaryWorkspace,
           repo_key: repoKey,
           repo_name: "project",
-          source_checkout_path: "/tmp/manager-root",
+          source_checkout_path: reportCheckoutAbsent
+            ? repoKey
+            : "/tmp/manager-root",
         },
         worktrees: created
           ? [
@@ -3521,16 +3718,25 @@ async function managerDelegateAssignmentTest(
           },
         ],
       });
-    if (command === "herdr" && args[0] === "pane" && args[1] === "get")
-      return respond({
-        pane: {
-          pane_id: "child-pane",
-          workspace_id: childWorkspace,
-          tab_id: "child-tab",
-          terminal_id: "child-terminal",
-          cwd: childCwd,
-        },
-      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
+      if (args[2] === "child-pane") tabCommands.push(args);
+      const paneResult = () =>
+        respond({
+          pane: {
+            pane_id: "child-pane",
+            workspace_id: childWorkspace,
+            tab_id: "child-tab",
+            terminal_id: "child-terminal",
+            cwd: childCwd,
+          },
+        });
+      if (args[2] === "child-pane" && holdChildPaneGet) {
+        holdChildPaneGet = false;
+        childPaneGetDidStart = true;
+        return heldChildPaneGet.then(paneResult);
+      }
+      return paneResult();
+    }
     if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
       return respond({
         process_info: {
@@ -3828,6 +4034,13 @@ async function managerDelegateAssignmentTest(
       childSession,
     );
     assert.equal(paths.length, 1);
+    const assignmentFile = projectAssignmentPath(
+      supervisionRuntime(),
+      repoKey,
+      assignment!.branch,
+    );
+    const assignmentSnapshot = readFileSync(assignmentFile);
+    const deliverySnapshot = readFileSync(paths[0]!);
     const delivery = readChiefMessage(paths[0]!);
     assert.equal(delivery.kind, "project_assignment");
     assert.equal(delivery.text, "Project assignment ready.");
@@ -3843,18 +4056,6 @@ async function managerDelegateAssignmentTest(
           args[0] === "agent" && args[1] === "start" && args.includes("--pane"),
       ),
     );
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
-      undefined,
-    );
-    assert.equal(
-      listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
-      childSession,
-    );
-    await pi.events.get("session_shutdown")?.[0]();
-    manager1Shutdown = true;
-    managerAgent = undefined;
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
@@ -3879,14 +4080,39 @@ async function managerDelegateAssignmentTest(
       lifecycleServer!.once("error", reject);
       lifecycleServer!.listen(process.env.HERDR_SOCKET_PATH!, resolve);
     });
-    let lead = fakeChiefPi({ activeTools: ["read"], exec });
+    let lead = fakeChiefPi({
+      activeTools: ["read"],
+      exec,
+      sessionName: "Existing session name",
+      entries: [{ type: "session_info", name: "Existing session name" }],
+    });
     registerExtension!(lead.pi as never);
-    let leadCtx = fakeContext() as any;
+    let leadCtx = fakeContext(lead.entries) as any;
     leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
+      // Keep the verified assignment and its delivery unavailable until after
+      // startup, so the first role publication must name the ordinary Lead.
+      unlinkSync(assignmentFile);
+      unlinkSync(paths[0]!);
       await lead.events.get("session_start")![0](undefined, leadCtx);
+      await t.waitFor(() =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[2] === "child-tab" &&
+              args[3] === "Lead",
+          ),
+        ),
+      );
+      assert.equal(tabLabels.get("child-tab"), "Lead");
+      assert.equal(lead.pi.getSessionName(), "Existing session name");
+
+      writeFileSync(assignmentFile, assignmentSnapshot);
+      writeFileSync(paths[0]!, deliverySnapshot);
       await t.waitFor(() =>
         assert.ok(
           lead.sent.some(
@@ -3916,6 +4142,86 @@ async function managerDelegateAssignmentTest(
       assert.match(
         assignmentDelivery.content!,
         /If the Manager needs coordination, a question, clarification, warning, or FYI[\s\S]*use message_supervisor\. If it can wait, let[\s\S]*the automatic result handoff carry it\./,
+      );
+      await t.waitFor(() =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[3] === "Managed Lead",
+          ),
+        ),
+      );
+      assert.equal(tabLabels.get("child-tab"), "Managed Lead");
+      assert.equal(lead.pi.getSessionName(), "Existing session name");
+      tabCommands.length = 0;
+      holdChildPaneGet = true;
+      const heldManagedRefresh = lead.events.get("session_tree")![0](
+        undefined,
+        leadCtx,
+      );
+      await t.waitFor(() => assert.equal(childPaneGetDidStart, true));
+      await heldManagedRefresh;
+      failScopeLookup = true;
+      const ambiguousReconciliation = lead.events.get("session_tree")![0](
+        undefined,
+        leadCtx,
+      );
+      await t.waitFor(() =>
+        assert.ok(
+          lead.callResults.some(
+            ({ args, succeeded }) =>
+              args[0] === "worktree" && args[1] === "list" && !succeeded,
+          ),
+        ),
+      );
+      releaseChildPaneGet();
+      await ambiguousReconciliation;
+      await t.waitFor(() =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[2] === "child-tab" &&
+              args[3] === "Lead",
+          ),
+        ),
+      );
+      assert.equal(
+        tabCommands.some(
+          (args) =>
+            args[0] === "tab" &&
+            args[1] === "rename" &&
+            args[2] === "child-tab" &&
+            args[3] === "Managed Lead",
+        ),
+        false,
+        "ambiguous assignment evidence supersedes the pending managed label",
+      );
+      const childTabCommands = tabCommands.filter(
+        (args) =>
+          (args[0] === "pane" &&
+            args[1] === "get" &&
+            args[2] === "child-pane") ||
+          (args[0] === "tab" &&
+            args[1] === "list" &&
+            args[3] === childWorkspace) ||
+          (args[0] === "tab" &&
+            args[1] === "rename" &&
+            args[2] === "child-tab"),
+      );
+      assert.deepEqual(childTabCommands, [
+        ["pane", "get", "child-pane"],
+        ["pane", "get", "child-pane"],
+        ["tab", "list", "--workspace", childWorkspace],
+        ["tab", "rename", "child-tab", "Lead"],
+      ]);
+      failScopeLookup = false;
+      await lead.events.get("session_tree")![0](undefined, leadCtx);
+      await t.waitFor(() =>
+        assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
       const message = await lead.tools
         .find((tool) => tool.name === "message_supervisor")!
@@ -4016,6 +4322,7 @@ async function managerDelegateAssignmentTest(
 
       failScopeLookup = false;
       const requestsBeforeRemoval = topologyRequests;
+      tabCommands.length = 0;
       publishRetirement();
       await t.waitFor(() =>
         assert.ok(topologyRequests > requestsBeforeRemoval),
@@ -4023,6 +4330,17 @@ async function managerDelegateAssignmentTest(
       assert.equal(
         listProjectAssignments(supervisionRuntime(), repoKey).length,
         1,
+      );
+      assert.equal(
+        tabCommands.some(
+          (args) =>
+            args[0] === "tab" &&
+            args[1] === "rename" &&
+            args[2] === "child-tab" &&
+            args[3] === "Lead",
+        ),
+        false,
+        "retained checkout keeps both the assignment and Managed Lead tab label",
       );
       assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
@@ -4032,8 +4350,62 @@ async function managerDelegateAssignmentTest(
       assert.ok(
         managedPresentation.some((item) => /^Execution\s+Managed$/u.test(item)),
       );
+
+      reportCheckoutAbsent = true;
+      rmSync(childCwd, { recursive: true, force: true });
+      tabCommands.length = 0;
+      publishRetirement();
+      await t.waitFor(() =>
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), repoKey).length,
+          0,
+        ),
+      );
+      await t.waitFor(() =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[2] === "child-tab" &&
+              args[3] === "Lead",
+          ),
+        ),
+      );
+      assert.deepEqual(
+        tabCommands.filter(
+          (args) =>
+            args[0] === "tab" &&
+            args[1] === "rename" &&
+            args[2] === "child-tab",
+        ),
+        [["tab", "rename", "child-tab", "Lead"]],
+      );
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+      await pi.commandOptions.get("manager").handler("leave", ctx);
+      assert.equal(
+        readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+        undefined,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), repoKey).length,
+        0,
+      );
+      await pi.events.get("session_shutdown")?.[0]();
+      manager1Shutdown = true;
+      managerAgent = undefined;
+      process.env.HERDR_WORKSPACE_ID = childWorkspace;
       await lead.events.get("session_shutdown")?.[0]();
+      realFs.mkdirSync(childCwd);
+      realFs.mkdirSync(managedLeadDir, { recursive: true });
+      realFs.writeFileSync(
+        join(managedLeadDir, "managed-lead.md"),
+        "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
+      );
+      reportCheckoutAbsent = false;
       writeProjectAssignment(supervisionRuntime(), assignment!);
+      tabCommands.length = 0;
+      tabLabels.set("child-tab", "Lead");
       lead = fakeChiefPi({ activeTools: ["read"], exec });
       registerExtension!(lead.pi as never);
       leadCtx = fakeContext() as any;
@@ -4041,6 +4413,9 @@ async function managerDelegateAssignmentTest(
       leadCtx.sessionManager.getSessionId = () => childSession;
       leadCtx.sessionManager.getSessionFile = childSessionPath;
       await lead.events.get("session_start")![0](undefined, leadCtx);
+      await t.waitFor(() =>
+        assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
+      );
       const originalAppend = lead.pi.appendEntry;
       let injected = false;
       lead.pi.appendEntry = (type: string, data: unknown) => {
@@ -4068,6 +4443,29 @@ async function managerDelegateAssignmentTest(
             entry.data?.error ===
               "Error: injected execution persistence failure",
         ),
+      );
+      await t.waitFor(() =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[2] === "child-tab" &&
+              args[3] === "Lead",
+          ),
+        ),
+      );
+      assert.deepEqual(
+        tabCommands.filter(
+          (args) =>
+            args[0] === "tab" &&
+            args[1] === "rename" &&
+            args[2] === "child-tab",
+        ),
+        [
+          ["tab", "rename", "child-tab", "Managed Lead"],
+          ["tab", "rename", "child-tab", "Lead"],
+        ],
       );
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
     } finally {
@@ -10637,6 +11035,7 @@ test("superseded lead startup cannot recover or publish over current session", a
       chiefModeInactive: () => true,
       canStartChiefInbox: () => false,
       mayPublishLeadPresence: () => false,
+      currentRoleGeneration: () => 0,
     },
     sessionLeadRoleState: () => undefined,
     normalizeBaseTools: (tools: string[]) => tools,

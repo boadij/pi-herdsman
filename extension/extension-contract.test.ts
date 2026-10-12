@@ -2869,6 +2869,330 @@ test("lead metadata omits coordination state and follows session names", async (
   delete process.env.HERDR_PANE_ID;
 });
 
+test("Lead tab naming verifies the pane's current tab and automatic position", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const pi = fakePi({
+    exec: async (command, args) => {
+      if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "pane" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: "ok",
+            result: {
+              pane: {
+                pane_id: "lead-pane",
+                workspace_id: "workspace-1",
+                tab_id: "current-tab",
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "tab" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: "ok",
+            result: {
+              tabs: [
+                { tab_id: "first", number: 10, label: "1" },
+                { tab_id: "second", number: 20, label: "2" },
+                { tab_id: "current-tab", number: 44, label: "3" },
+              ],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return {
+        stdout: JSON.stringify({ id: "ok", result: {} }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  await pi.events.get("session_start")![0](undefined, context);
+  await t.waitFor(() =>
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args[0] === "tab" &&
+          args[1] === "rename" &&
+          args[2] === "current-tab" &&
+          args[3] === "Lead",
+      ),
+    ),
+  );
+  const calls = pi.calls.filter(
+    (args) =>
+      (args[0] === "pane" && args[1] === "get") ||
+      (args[0] === "tab" && (args[1] === "list" || args[1] === "rename")),
+  );
+  assert.deepEqual(calls, [
+    ["pane", "get", "lead-pane"],
+    ["tab", "list", "--workspace", "workspace-1"],
+    ["tab", "rename", "current-tab", "Lead"],
+  ]);
+  pi.events.get("session_shutdown")?.[0]();
+  delete process.env.HERDR_PANE_ID;
+  setLeadEnvironment();
+});
+
+test("Lead tab naming preserves custom names and contains malformed/failed Herdr operations", async (t) => {
+  for (const mode of [
+    "custom",
+    "malformed",
+    "invalid-entry",
+    "duplicate-id",
+    "empty-identity",
+    "rename-fails",
+  ] as const) {
+    await t.test(mode, async () => {
+      setLeadEnvironment();
+      process.env.HERDR_PANE_ID = "lead-pane";
+      const pi = fakePi({
+        exec: async (command, args) => {
+          if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+          if (args[0] === "pane" && args[1] === "get")
+            return {
+              stdout: JSON.stringify({
+                id: "ok",
+                result: {
+                  pane: {
+                    pane_id: "lead-pane",
+                    workspace_id:
+                      mode === "empty-identity" ? "" : "workspace-1",
+                    tab_id: mode === "empty-identity" ? "" : "current-tab",
+                  },
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+          if (args[0] === "tab" && args[1] === "list")
+            return {
+              stdout:
+                mode === "malformed"
+                  ? JSON.stringify({ id: "ok", result: { tabs: "invalid" } })
+                  : mode === "invalid-entry"
+                    ? JSON.stringify({
+                        id: "ok",
+                        result: {
+                          tabs: [
+                            null,
+                            { tab_id: "current-tab", number: 44, label: "2" },
+                          ],
+                        },
+                      })
+                    : mode === "duplicate-id"
+                      ? JSON.stringify({
+                          id: "ok",
+                          result: {
+                            tabs: [
+                              { tab_id: "current-tab", number: 44, label: "1" },
+                              { tab_id: "current-tab", number: 45, label: "2" },
+                            ],
+                          },
+                        })
+                      : JSON.stringify({
+                          id: "ok",
+                          result: {
+                            tabs: [
+                              {
+                                tab_id: "current-tab",
+                                number: 44,
+                                label: mode === "custom" ? "Architecture" : "1",
+                              },
+                            ],
+                          },
+                        }),
+              stderr: "",
+              code: 0,
+            };
+          if (
+            args[0] === "tab" &&
+            args[1] === "rename" &&
+            mode === "rename-fails"
+          )
+            return { stdout: "", stderr: "failed", code: 1 };
+          return {
+            stdout: JSON.stringify({ id: "ok", result: {} }),
+            stderr: "",
+            code: 0,
+          };
+        },
+      });
+      registerExtension!(pi.pi as never);
+      const context = fakeContext() as any;
+      await pi.events.get("session_start")![0](undefined, context);
+      await t.waitFor(() =>
+        assert.ok(
+          pi.calls.some(
+            (args) =>
+              (args[0] === "tab" && args[1] === "list") ||
+              (mode === "empty-identity" &&
+                args[0] === "pane" &&
+                args[1] === "get") ||
+              (mode === "rename-fails" &&
+                args[0] === "tab" &&
+                args[1] === "rename"),
+          ),
+        ),
+      );
+      const renames = pi.calls.filter(
+        (args) => args[0] === "tab" && args[1] === "rename",
+      );
+      assert.equal(renames.length, mode === "rename-fails" ? 1 : 0);
+      assert.ok(
+        pi.calls.some(
+          (args) => args[0] === "pane" && args[1] === "report-metadata",
+        ),
+        "role metadata remains independent from tab presentation",
+      );
+      pi.events.get("session_shutdown")?.[0]();
+      delete process.env.HERDR_PANE_ID;
+      setLeadEnvironment();
+    });
+  }
+});
+
+test("Lead tab naming remembers manual overrides, skips the target, and reclaims role labels after restart", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  let tabLabel = "1";
+  const tabCalls: string[][] = [];
+  let deferNextPaneGet = true;
+  let paneGetDidStart = false;
+  let releasePaneGet!: () => void;
+  const heldPaneGet = new Promise<void>(
+    (resolve) => (releasePaneGet = resolve),
+  );
+  const makePi = () =>
+    fakePi({
+      exec: async (command, args) => {
+        if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+        const result = (value: unknown) => ({
+          stdout: JSON.stringify({ id: "ok", result: value }),
+          stderr: "",
+          code: 0,
+        });
+        if (args[0] === "pane" && args[1] === "get") {
+          tabCalls.push(args);
+          const paneResult = () =>
+            result({
+              pane: {
+                pane_id: "lead-pane",
+                workspace_id: "workspace-1",
+                tab_id: "current-tab",
+              },
+            });
+          if (deferNextPaneGet) {
+            deferNextPaneGet = false;
+            paneGetDidStart = true;
+            return heldPaneGet.then(paneResult);
+          }
+          return paneResult();
+        }
+        if (args[0] === "tab" && args[1] === "list") {
+          tabCalls.push(args);
+          return result({
+            tabs: [{ tab_id: "current-tab", number: 44, label: tabLabel }],
+          });
+        }
+        if (args[0] === "tab" && args[1] === "rename") {
+          tabCalls.push(args);
+          tabLabel = args[3]!;
+          return result({});
+        }
+        return result({});
+      },
+    });
+  const first = makePi();
+  registerExtension!(first.pi as never);
+  const firstContext = fakeContext() as any;
+  const initialSessionId = firstContext.sessionManager.getSessionId();
+  let activeSessionId = initialSessionId;
+  firstContext.sessionManager.getSessionId = () => activeSessionId;
+  const startFirst = () =>
+    first.events.get("session_start")![0](undefined, firstContext);
+  const supersededStart = startFirst();
+  await t.waitFor(() => assert.equal(paneGetDidStart, true));
+  await supersededStart;
+  activeSessionId = `${initialSessionId}-replacement`;
+  await startFirst();
+  releasePaneGet();
+  await t.waitFor(() =>
+    assert.ok(
+      first.calls.some(
+        (args) =>
+          args[0] === "tab" &&
+          args[1] === "rename" &&
+          args[2] === "current-tab" &&
+          args[3] === "Lead",
+      ),
+    ),
+  );
+  assert.deepEqual(
+    tabCalls.filter(
+      (args) =>
+        (args[0] === "pane" && args[1] === "get") ||
+        (args[0] === "tab" && args[1] === "list") ||
+        (args[0] === "tab" && args[1] === "rename"),
+    ),
+    [
+      ["pane", "get", "lead-pane"],
+      ["pane", "get", "lead-pane"],
+      ["tab", "list", "--workspace", "workspace-1"],
+      ["tab", "rename", "current-tab", "Lead"],
+    ],
+  );
+  const firstRenameCount = () =>
+    first.calls.filter((args) => args[0] === "tab" && args[1] === "rename")
+      .length;
+  const firstListCount = () =>
+    first.calls.filter((args) => args[0] === "tab" && args[1] === "list")
+      .length;
+  const writesAfterLead = firstRenameCount();
+  let lists = firstListCount();
+  tabLabel = "Architecture";
+  await startFirst();
+  await t.waitFor(() => assert.equal(firstListCount(), lists + 1));
+  assert.equal(firstRenameCount(), writesAfterLead);
+  tabLabel = "Lead";
+  lists = firstListCount();
+  await startFirst();
+  await t.waitFor(() => assert.equal(firstListCount(), lists + 1));
+  assert.equal(firstRenameCount(), writesAfterLead, "target label is a no-op");
+  first.events.get("session_shutdown")?.[0]();
+
+  tabLabel = "Chief";
+  const restarted = makePi();
+  registerExtension!(restarted.pi as never);
+  const restartedContext = fakeContext() as any;
+  await restarted.events.get("session_start")![0](undefined, restartedContext);
+  await t.waitFor(() =>
+    assert.ok(
+      restarted.calls.some(
+        (args) =>
+          args[0] === "tab" &&
+          args[1] === "rename" &&
+          args[2] === "current-tab" &&
+          args[3] === "Lead",
+      ),
+    ),
+  );
+  assert.deepEqual(
+    restarted.calls.filter((args) => args[0] === "tab" && args[1] === "rename"),
+    [["tab", "rename", "current-tab", "Lead"]],
+  );
+  restarted.events.get("session_shutdown")?.[0]();
+  delete process.env.HERDR_PANE_ID;
+  setLeadEnvironment();
+});
+
 test("malformed persisted role fails closed without authoritative lead state", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -3730,9 +4054,10 @@ test("lead metadata reports preserve session event order", async () => {
   const reports = pi.calls.filter(
     (args) => args[0] === "pane" && args[1] === "report-metadata",
   );
-  assert.equal(reports.length, 2);
+  assert.equal(reports.length, 3);
   assert.ok(reports[0].includes("pi_herdsman_name=first name"));
-  assert.ok(reports[1].includes("pi_herdsman_name=new name"));
+  assert.ok(reports[1].includes("pi_herdsman_name=first name"));
+  assert.ok(reports[2].includes("pi_herdsman_name=new name"));
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
 });

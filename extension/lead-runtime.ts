@@ -622,6 +622,7 @@ type LeadInboxHost = LeadInboxBaseHost & {
   coordinationHealthy(): boolean;
   managerDiagnostic(event: string, details?: Record<string, unknown>): void;
   managerDiagnosticEvents: ReadonlySet<string>;
+  assignmentDelivered?(ctx: ExtensionContext): void;
   isCurrentChief(ctx: ExtensionContext): boolean;
   prepareSupervisionMessage(
     ctx: ExtensionContext,
@@ -1239,7 +1240,7 @@ export function createLeadSessionStartRuntime(host: {
         }
       }
       if (sessionSignal.aborted) return;
-      if (host.roleTransitions.activeManager())
+      if (host.isLead() && host.roleTransitions.chiefModeInactive())
         await host.publishLeadRole(
           ctx,
           "inactive",
@@ -2461,6 +2462,8 @@ export function registerLeadRuntime(
       !!options.leadRuntime.chiefLease &&
       options.leadRuntime.chiefLease.descriptor.piSessionId ===
         ctx.sessionManager.getSessionId(),
+    assignmentDelivered: (ctx: ExtensionContext) =>
+      publishLeadRole(ctx, "inactive", options.leadRuntime.chiefModeGeneration),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
@@ -2556,7 +2559,19 @@ export function registerLeadRuntime(
     );
   };
   const roleHost = options.roleTransitionHost;
+  const effectiveLeadRole = () =>
+    leadRuntime.chiefMode === "active"
+      ? "chief"
+      : leadRuntime.controllerRole === "manager" && !leadRuntime.roleSuspended
+        ? "manager"
+        : leadRuntime.roleSuspended
+          ? undefined
+          : "lead";
   let leadMetadataQueue = Promise.resolve();
+  let tabRenameQueue = Promise.resolve();
+  let tabRenameRevision = 0;
+  let ownedTab: { tabId: string; label: string } | undefined;
+  let reportedTabRenameFailure: string | undefined;
   let reportedRoleMetadataFailure: string | undefined;
   const publishLeadRole = (
     ctx: ExtensionContext,
@@ -2577,15 +2592,7 @@ export function registerLeadRuntime(
           return;
         const paneId = roleHost.paneId();
         if (!paneId) return;
-        const role =
-          leadRuntime.chiefMode === "active"
-            ? "chief"
-            : leadRuntime.controllerRole === "manager" &&
-                !leadRuntime.roleSuspended
-              ? "manager"
-              : leadRuntime.roleSuspended
-                ? undefined
-                : "lead";
+        const role = effectiveLeadRole();
         const leadName =
           role === "lead" ? roleHost.getSessionName()?.trim() : undefined;
         const args = [
@@ -2648,7 +2655,125 @@ export function registerLeadRuntime(
           // Presentation diagnostics cannot change authority.
         }
       });
+    scheduleTabRename(ctx, leadMetadataQueue);
     return leadMetadataQueue;
+  };
+  const scheduleTabRename = (
+    ctx: ExtensionContext,
+    afterMetadata: Promise<void>,
+  ): void => {
+    const revision = ++tabRenameRevision;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionGeneration = leadRuntime.sessionGeneration;
+    const current = () =>
+      revision === tabRenameRevision &&
+      sessionGeneration === leadRuntime.sessionGeneration &&
+      sessionId === ctx.sessionManager.getSessionId();
+    tabRenameQueue = tabRenameQueue
+      .catch(() => {})
+      .then(async () => {
+        await afterMetadata.catch(() => {});
+        if (!current()) return;
+        const role = effectiveLeadRole();
+        if (!role) return;
+        let label: string;
+        if (role === "chief") label = "Chief";
+        else if (role === "manager") label = "Manager";
+        else {
+          try {
+            label = (await currentProjectAssignment(ctx))
+              ? "Managed Lead"
+              : "Lead";
+          } catch (error) {
+            // A verified assignment is required to claim Managed Lead.
+            options.sessionStartOptions.appendRoleError(ctx, error);
+            label = "Lead";
+          }
+        }
+        if (!current()) return;
+        const paneId = roleHost.paneId();
+        if (!paneId) return;
+        const paneResult = await roleHost.runHerdr(pi, ctx, [
+          "pane",
+          "get",
+          paneId,
+        ]);
+        if (!current()) return;
+        const pane = paneResult?.pane;
+        if (
+          !pane ||
+          pane.pane_id !== paneId ||
+          typeof pane.workspace_id !== "string" ||
+          !pane.workspace_id ||
+          typeof pane.tab_id !== "string" ||
+          !pane.tab_id
+        )
+          return;
+        const tabResult = await roleHost.runHerdr(pi, ctx, [
+          "tab",
+          "list",
+          "--workspace",
+          pane.workspace_id,
+        ]);
+        if (!current()) return;
+        const tabs = tabResult?.tabs;
+        if (!Array.isArray(tabs)) return;
+        const tabIds = new Set<string>();
+        if (
+          tabs.some((entry: any) => {
+            if (
+              !entry ||
+              typeof entry !== "object" ||
+              typeof entry.tab_id !== "string" ||
+              !entry.tab_id ||
+              typeof entry.label !== "string" ||
+              !entry.label ||
+              tabIds.has(entry.tab_id)
+            )
+              return true;
+            tabIds.add(entry.tab_id);
+            return false;
+          })
+        )
+          return;
+        const index = tabs.findIndex((tab: any) => tab.tab_id === pane.tab_id);
+        if (index < 0) return;
+        const tab = tabs[index];
+        if (typeof tab.label !== "string") return;
+        if (tab.label === label) return;
+        const previousLabel =
+          ownedTab?.tabId === tab.tab_id ? ownedTab.label : undefined;
+        // Herdr has no name provenance; canonical role labels may be reclaimed after restart.
+        if (
+          previousLabel !== undefined
+            ? tab.label !== previousLabel
+            : tab.label !== String(index + 1) &&
+              !["Lead", "Managed Lead", "Manager", "Chief"].includes(tab.label)
+        )
+          return;
+        if (!current()) return;
+        await roleHost.runHerdr(pi, ctx, ["tab", "rename", tab.tab_id, label], {
+          noResult: true,
+          timeout: 10_000,
+        });
+        ownedTab = { tabId: tab.tab_id, label };
+      })
+      .catch((error) => {
+        if (!current()) return;
+        const key = `${sessionId}:${sessionGeneration}`;
+        if (reportedTabRenameFailure === key) return;
+        reportedTabRenameFailure = key;
+        try {
+          roleHost.appendDurableError(
+            pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        } catch {
+          // Tab presentation diagnostics cannot affect role transitions.
+        }
+      });
   };
   const queueLeadMetadata = (
     ctx: ExtensionContext,
@@ -2839,6 +2964,8 @@ export function registerLeadRuntime(
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
     managerDiagnostic,
     managerDiagnosticEvents,
+    assignmentDelivered: (ctx: ExtensionContext) =>
+      void publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration),
     isCurrentChief: (ctx: ExtensionContext) =>
       options.leadRuntime.chiefMode === "active" &&
       !!options.leadRuntime.chiefLease &&
@@ -3410,8 +3537,10 @@ export function registerLeadRuntime(
       if (assignment) {
         leadExecution = { mode, valid: false, managed: true };
         statusRuntime.requestRefresh();
+        publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
         return;
       }
+      publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
     } catch (error) {
       if (signal?.aborted) return;
       leadExecution = {
@@ -3421,6 +3550,7 @@ export function registerLeadRuntime(
       };
       statusRuntime.requestRefresh();
       options.sessionStartOptions.appendRoleError(ctx, error);
+      publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
       return;
     }
     try {
@@ -3505,6 +3635,7 @@ export function registerLeadRuntime(
       leadToolState.normalizeBaseTools(pi.getActiveTools());
     const targetTools = leadToolState.projectLeadTools(baseline, definition);
     if (!(await roleTransitions.takeover(ctx))) return false;
+    publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
     try {
       persistLeadExecution("orchestrate", baseline);
       leadToolState.setLeadTools(baseline);
@@ -9004,7 +9135,9 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 outcome: "resolved",
                 triggerTurn: options?.triggerTurn === true,
               });
-            return result;
+            await result;
+            if (projectAssignment) host.assignmentDelivered?.(ctx);
+            return;
           } catch (error) {
             managerDiagnostic("inbox_catch", { category: "send" });
             if (projectAssignment)

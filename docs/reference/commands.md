@@ -275,6 +275,18 @@ Managers and ordinary unassigned Leads, including those in a project scope
 with an active Manager. A Manager's roster contains only live exact Leads named
 by its current project assignments.
 
+In Herdr, Herdsman best-effort names an eligible Lead controller's tab by its
+current role: `Lead`, `Managed Lead`, `Manager`, or `Chief`. `Managed Lead`
+requires an exact current project assignment. These labels are presentation
+only and do not grant or change role authority. Herdsman updates tabs currently
+named with their 1-based workspace position or one of those canonical role
+labels; other custom names are preserved. Herdr does not record who set a name,
+so after Pi restarts a canonical role label may be reclaimed even if a user set
+it. Herdsman cannot restore automatic tab numbering. The last role label may
+remain after Pi exits or while no eligible role is available to update it.
+Independent Pi controllers sharing a tab have no coordinated naming ownership
+and can disagree over its label.
+
 ## `/takeover`
 
 Available in Lead mode with an interactive UI. On an assigned managed Lead,
