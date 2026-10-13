@@ -729,7 +729,10 @@ export const AGENT_HANDOFF_GUIDANCE =
 export const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution,
 and final technical decisions within your assigned objective. Integrate resolved Agent results and
 carry relevant evidence into onward handoffs. Decompose only as far as useful.
-Reuse adequate existing evidence instead of duplicating work.`;
+Reuse adequate existing evidence instead of duplicating work.
+Your herd is your internal team: you and your recursively owned Agents.
+Internal review findings inform your decisions; they do not constitute
+supervisor or user review or approval.`;
 export const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own the assigned objective and your direct permitted agents. While direct assignments are unresolved, your execution scope is limited to the non-delegated remainder. Agent-started
 agents are leaves. Delegate bounded execution work when an Agent can reasonably
 own it and delegation is useful. Keep work local when it is trivial,
