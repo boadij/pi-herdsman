@@ -6186,7 +6186,7 @@ export function createAgentController(
         Type.String({
           minLength: 1,
           description:
-            'Readable regular local file path or exact result ref such as "result:researcher#1".',
+            'Readable regular local file path or exact result ref returned by Herdsman.',
         }),
         {
           description:
