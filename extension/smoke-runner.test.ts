@@ -632,7 +632,8 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       role: "system",
       content: "You are a helpful assistant.",
       sections: {
-        pi_herdsman_role: "<pi_herdsman_role>Lead</pi_herdsman_role>",
+        pi_herdsman_role:
+          "<pi_herdsman_role>\n## Lead role\n</pi_herdsman_role>",
       },
       timestamp: Date.now(),
     },
@@ -645,15 +646,23 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   ];
   const pendingRoot = decide("core", { messages: rootStarted });
   assert.doesNotMatch(pendingRoot.content[0].text, /PI_HERDSMAN_SMOKE_OK/);
+  const managerRoleRoot = rootStarted.map((message, index) =>
+    index === 0
+      ? {
+          ...message,
+          sections: {
+            pi_herdsman_role:
+              "<pi_herdsman_role>\n## Manager role\n</pi_herdsman_role>",
+          },
+        }
+      : message,
+  );
   assert.throws(
     () =>
       decide("core", {
-        messages: [
-          ...rootStarted.slice(1),
-          delivered("smoke-core-implementer"),
-        ],
+        messages: [...managerRoleRoot, delivered("smoke-core-implementer")],
       }),
-    /Lead role context missing from Agent-result continuation/,
+    /Lead role context missing or incorrect after Agent result/,
   );
   assert.equal(
     decide("core", {
@@ -874,11 +883,13 @@ test("installed faux provider requeues decisions and emits its terminal failure 
           part.type === "text" && part.text === "CONTROLLED_PARTIAL_RESPONSE",
       ),
     );
-    assert.equal(
-      (await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8"))
-        .trim()
-        .split("\n").length,
-      1,
+    assert.deepEqual(
+      JSON.parse(
+        (
+          await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8")
+        ).trim(),
+      ),
+      { model: "terminal-error", hasRoster: true },
     );
     assert.equal(handlers.has("agent_settled"), true);
   } finally {

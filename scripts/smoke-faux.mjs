@@ -169,9 +169,9 @@ function coreDecision(context) {
     );
     if (result) {
       const systemPrompt = getCurrentSystemPrompt(context.messages);
-      if (!systemPrompt.includes("<pi_herdsman_role>"))
+      if (!/<pi_herdsman_role>\s*## Lead role(?:\r?\n|$)/.test(systemPrompt))
         throw new Error(
-          "Lead role context missing from Agent-result continuation",
+          "Lead role context missing or incorrect after Agent result",
         );
       const pkg = packageDetails(result);
       return fauxAssistantMessage(
@@ -386,15 +386,10 @@ export default function install(pi) {
   });
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
-    if (model.id === "terminal-error" && terminalErrorRequests++ === 0) {
-      const systemPrompt = getCurrentSystemPrompt(context.messages);
-      if (!systemPrompt.includes("<agent_definitions>"))
-        throw new Error(
-          "Assigned Lead's initial request omitted session-matched agent definitions",
-        );
-    }
-    const answer = decide(model.id, context);
     if (model.id === "terminal-error") {
+      const first = terminalErrorRequests++ === 0;
+      const systemPrompt = getCurrentSystemPrompt(context.messages);
+      const hasRoster = systemPrompt.includes("<agent_definitions>");
       const evidenceDir = join(
         process.env.PI_CODING_AGENT_DIR,
         "pi-herdsman",
@@ -402,9 +397,14 @@ export default function install(pi) {
       );
       appendFileSync(
         join(evidenceDir, "smoke-faux-attempts.jsonl"),
-        `${JSON.stringify({ model: model.id })}\n`,
+        `${JSON.stringify({ model: model.id, hasRoster })}\n`,
       );
+      if (first && !hasRoster)
+        throw new Error(
+          "Assigned Lead's initial request omitted session-matched agent definitions",
+        );
     }
+    const answer = decide(model.id, context);
     return answer;
   }
   faux.setResponses([response]);
