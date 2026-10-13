@@ -2277,9 +2277,25 @@ for (const scenario of [
         publishAssignment();
         assertSignal();
       }
-      await t.waitFor(() =>
-        assert.equal(listChiefMessagePaths(runtime, sessionId).length, 0),
-      );
+      try {
+        await t.waitFor(
+          () =>
+            assert.equal(listChiefMessagePaths(runtime, sessionId).length, 0),
+          { timeout: 5_000 },
+        );
+      } catch (error) {
+        const remainingPaths = listChiefMessagePaths(runtime, sessionId);
+        const managerDiagnostics = diagnosticOutput.filter((line) =>
+          line.startsWith("[pi-herdsman-manager-diagnostic] "),
+        );
+        const stateErrors = entries.filter(
+          (entry: any) => entry.customType === "pi_herdsman_state_error",
+        );
+        throw new Error(
+          `Timed out waiting for chief messages to clear; remaining count=${remainingPaths.length}, paths=${JSON.stringify(remainingPaths)}, manager diagnostics=${JSON.stringify(managerDiagnostics)}, state errors=${JSON.stringify(stateErrors)}`,
+          { cause: error },
+        );
+      }
       const delivered = pi.sent.filter(
         (message: any) =>
           message.customType === "pi-herdsman-project_assignment",
