@@ -15,63 +15,35 @@ This is a **read-only audit**. Do not modify the repository.
 
 # Operating model
 
-Delegate the audit. The orchestrator coordinates and returns the result; it should not perform a competing repository review.
+Own the audit and final verdict. Delegate bounded, independent evidence work when
+a suitable read-only Agent is available and delegation is useful. Select Agent
+definitions by their **effective capabilities**, never by a bundled name.
+Respect available tools, definition allowlists, ownership, and execution depth.
+If no suitable Agent exists, investigate and synthesize locally using permitted
+read-only capabilities; report any material capability gap.
 
-Use:
+Start with the current `list_agents` roster when available. Refresh it if
+configuration changes. A configured child allowance does not guarantee that
+the child is available or that the current controller can delegate.
 
-- `reviewer`: lead auditor, evidence reconciliation, synthesis;
-- `scout`: focused local evidence;
-- `researcher`: external/API verification when material conclusions depend on it;
-- `implementer`: never during the audit;
-- `generalist`: fallback only when the required role is unavailable and its effective policy is read-only.
+## Coverage lenses
 
-Start with:
+Cover three concerns, delegating independent lenses when useful:
 
-```json
-{ "action": "list" }
-```
+- **A — runtime:** producers, validation, state, identity, lifecycle, and reachability;
+- **B — instructions:** instruction ownership and effective capabilities;
+- **C — consumers:** model/UI projections, docs, tests, and package glue.
 
-Use effective capabilities from the current context. Do not assume definition-level delegation, tools, skills, or extensions survive overrides or depth.
+External/API research is conditional on the research trigger and actual available
+tools. One capable Agent may cover multiple lenses; three Agents are not
+required. Avoid redundant analysis between the audit owner and delegated work.
 
-## Preferred topology
+## Delegated audit contract
 
-```text
-orchestrator
-└── reviewer
-    ├── scout A: runtime/contracts/reachability
-    ├── scout B: instructions/capabilities
-    ├── scout C: presentation/docs/tests/package glue
-    └── researcher: only when the research trigger is met
-```
+Pass each investigator the relevant lens, canonical evidence, and the following
+rules; do not assume it receives this skill automatically:
 
-Use one lead reviewer. Do not spawn a second generic reviewer by default.
-
-## Leaf fallback
-
-If the lead reviewer cannot delegate:
-
-1. run the three scout lenses directly in parallel;
-2. run researcher only when triggered;
-3. pass exact scout/researcher `resultPath` values to one reviewer through `files`;
-4. have that reviewer verify, reconcile, prioritize, and synthesize.
-
-The orchestrator must not redo the scouts' analysis.
-
-# Lead reviewer contract
-
-The reviewer may not receive this skill directly, so its assignment must carry the rules required for a valid audit.
-
-Give the reviewer this objective:
-
-> Audit the repository as one agentic system. Remain strictly read-only.
->
-> Delegate three focused scouts:
->
-> - A: runtime producers, validation, state, identity, lifecycle, and production reachability;
-> - B: instruction ownership and effective capabilities;
-> - C: model/UI projections, docs, tests, and repository/package glue.
->
-> Use researcher when a candidate material finding or its impact depends on external API/runtime truth.
+> Audit the assigned area as part of one agentic system. Remain strictly read-only.
 >
 > Before reporting any P0-P2 finding:
 >
@@ -87,13 +59,16 @@ Give the reviewer this objective:
 >
 > Compare root/parent/child, definition/session/fork, model/UI, success/failure/recovery, configured/effective capability, and static/dynamic guidance.
 >
-> Independently verify material conclusions and return one de-duplicated report using the required output contract with the smallest durable fix for each finding.
+> Return candidate findings with exact evidence and the smallest durable correction.
 
-Pass supplied canonical diffs, snapshots, specs, or source artifacts to scouts instead of making them rediscover the same material.
+The audit owner independently verifies and reconciles material candidates,
+de-duplicates findings, and returns one report using the required output contract.
+Pass supplied canonical diffs, snapshots, specs, or source artifacts to
+investigators instead of making them rediscover the same material.
 
 # Material finding closure
 
-Scouts return **candidate evidence**. The reviewer closes candidates before severity is assigned.
+Each lens returns **candidate evidence**. The audit owner closes candidates before severity is assigned.
 
 Trace every boundary used by the claim. For result/state findings, prefer:
 
@@ -173,7 +148,7 @@ An `Unverified risk` must state known evidence, missing evidence, version/runtim
 
 Do not use it for an answerable question that was not investigated.
 
-# Scout A: runtime contracts and reachability
+# Lens A: runtime contracts and reachability
 
 Own:
 
@@ -214,7 +189,7 @@ Check:
 
 Return exact production paths, reachability evidence, and candidate mismatches. Do not decide architecture from local evidence alone.
 
-# Scout B: instruction and capability stack
+# Lens B: instruction and capability stack
 
 Own:
 
@@ -269,7 +244,7 @@ Find:
 
 Return exact instruction text, owner, effective runtime evidence, and candidate conflicts.
 
-# Scout C: presentation, docs, tests, and repository glue
+# Lens C: presentation, docs, tests, and repository glue
 
 Own:
 
@@ -311,7 +286,7 @@ Return projection chains, consumer visibility, docs/tests evidence, and candidat
 
 Research is conditional. Once triggered, verification is required when capability exists.
 
-Trigger researcher when:
+Use external research when:
 
 ```text
 a candidate likely to affect a P0-P2 finding, verdict, or remediation
@@ -475,9 +450,9 @@ Consequence: what can actually go wrong
 Minimal correction: narrowest root owner
 ```
 
-A scout's conclusion is evidence, not authority.
+An investigator's conclusion is evidence, not authority.
 
-The lead reviewer independently verifies every P0/P1, every P2 affecting architecture/verdict/external assumptions, and any disputed conclusion.
+The audit owner independently verifies every P0/P1, every P2 affecting architecture/verdict/external assumptions, and any disputed conclusion.
 
 Do not report architectural preference as a defect.
 
@@ -504,13 +479,13 @@ Use these to find candidates. They do not replace closure.
 1. Start from entry points and contract surfaces.
 2. Search ownership before opening large files.
 3. Trace callers and producers before declaring a bug.
-4. Keep scouts inside their lenses.
+4. Keep delegated investigators inside their lenses.
 5. Pass canonical artifacts instead of rediscovering them.
 6. Research only external assumptions that can change a material conclusion.
-7. Reviewer verifies candidate findings, not every inspected line.
+7. Verify candidate findings, not every inspected line.
 8. Do not spawn agents merely to confirm `No findings.`
-9. Use a second reviewer only for an uncertain P0/P1 or disputed architecture.
-10. Never assign an implementer during diagnosis.
+9. Use an independent second pass only for an uncertain P0/P1 or disputed architecture.
+10. Do not assign implementation work during diagnosis.
 11. Stop when the contract matrix is covered and new searches produce no materially new issue class.
 
 Optimize for useful evidence per agent, not agent count.
@@ -630,9 +605,9 @@ Never put answerable material uncertainty here.
 
 Omit when empty.
 
-# Orchestrator finalization
+# Finalization
 
-Normally return the lead reviewer's report instead of writing a second review.
+Return the synthesized report without repeating completed review work.
 
 Before returning, verify:
 
@@ -641,13 +616,13 @@ Before returning, verify:
 - material P2 findings have closed evidence;
 - result/state findings trace producer, reachability, and consumer semantics;
 - material external assumptions were resolved for supported versions when possible;
-- duplicate scout candidates were consolidated;
+- duplicate lens candidates were consolidated;
 - fixes target root owners, not symptoms;
 - only genuinely unresolved claims are `Unverified risk`;
 - no answerable material question was deferred to follow-up;
 - implementation remains separate from diagnosis.
 
-If a check fails, return the report to the reviewer for reconciliation.
+If a check fails, reconcile the affected finding before finalizing.
 
 Otherwise stop.
 
@@ -658,7 +633,7 @@ Do not automatically fix findings.
 If implementation is requested later:
 
 1. use the audit report as canonical scope;
-2. assign the smallest capable `implementer`;
+2. use the smallest capable execution Agent, or work locally when permitted;
 3. keep unrelated cleanup out unless it simplifies the same proven root cause;
 4. independently review the final diff against the audit findings;
 5. run focused and repository validation appropriate to the change.
