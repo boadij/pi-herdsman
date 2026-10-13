@@ -685,17 +685,39 @@ export function sameShellProcessOwner(
   )
     return false;
   const processes = observed.foreground_processes;
+  // The shell owns the terminal when it is the foreground process group and
+  // appears among that group's foreground processes. The group is deliberately
+  // not required to contain the shell alone: interactive prompts run short-lived
+  // foreground children (prompt and precmd hooks) inside the shell's own process
+  // group. No process-group separation by the agent is assumed here: a
+  // still-listed or replacement Herdr agent is rejected by the agent-list,
+  // session, pane and lifecycle-lock proofs around this call, and any untracked
+  // process still sharing the shell's group is accepted by design. Without a
+  // reported group the stricter singleton observation remains the only proof.
   const foregroundShell =
-    processes?.length === 1 && processes[0]?.pid === observed.shell_pid;
-  if (processes !== undefined && !foregroundShell) return false;
-  if (observed.foreground_process_group_id === undefined && !foregroundShell)
+    processes !== undefined &&
+    processes.some((process) => process.pid === observed.shell_pid);
+  if (observed.foreground_process_group_id === undefined) {
+    if (processes?.length !== 1 || processes[0]?.pid !== observed.shell_pid)
+      return false;
+  } else if (processes !== undefined && !foregroundShell) {
     return false;
+  }
   const captured = capturedShellProcess(expected);
-  return (
+  // A captured shell identity exists only when the expected observation listed
+  // the shell itself (rollback and post-completion transitions). The stop path
+  // passes the running-agent snapshot, which lists the agent, so it proves the
+  // original shell through shell pid, foreground group, foreground presence and
+  // the readiness marker rather than through argv0 continuity.
+  if (
     !captured ||
     typeof captured.argv0 !== "string" ||
-    processes === undefined ||
-    (foregroundShell && processes[0]?.argv0 === captured.argv0)
+    processes === undefined
+  )
+    return true;
+  return processes.some(
+    (process) =>
+      process.pid === observed.shell_pid && process.argv0 === captured.argv0,
   );
 }
 

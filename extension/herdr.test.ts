@@ -3286,6 +3286,130 @@ test("unnamed pane-targeted stop settles only with exact ownership", async () =>
   }
 });
 
+test("preserving stop settles a shell shared with prompt hook children", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "id",
+    value: "session-1",
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  const running = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 99,
+    foreground_processes: [{ pid: 99, argv0: "/usr/bin/pi" }],
+  };
+  // Observed after the agent exits: the shell owns the terminal and its prompt
+  // hook runs as a foreground child inside the shell's own process group.
+  const preserved = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [
+      { pid: 13, argv0: "/opt/homebrew/bin/mise" },
+      { pid: 12, argv0: "/bin/zsh" },
+    ],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const stopWith = (markerObservation: unknown, agentStillListed = false) => {
+    const calls: string[][] = [];
+    let stopped = false;
+    let markerAsked = false;
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        const key = args.slice(0, 2).join(" ");
+        if (key === "agent get") return response({ agent: pane });
+        if (key === "pane get") return response({ pane });
+        if (key === "tab list")
+          return response({
+            tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+          });
+        if (key === "pane process-info")
+          return response({
+            process_info: markerAsked
+              ? (markerObservation ?? preserved)
+              : !stopped
+                ? running
+                : preserved,
+          });
+        if (key === "agent list")
+          return response({
+            agents: stopped && !agentStillListed ? [] : [pane],
+          });
+        if (key === "agent send-keys") {
+          stopped = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (key === "pane run") {
+          markerAsked = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (key === "pane wait-output")
+          return { code: 0, stdout: "{}", stderr: "" };
+        throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+      },
+    } as any;
+    const stop = () =>
+      stopHerdrAgentPreservingPane(pi, { cwd: "/tmp" } as any, "pane-1", {
+        paneId: "pane-1",
+        tabId: "tab-1",
+        workspaceId: "workspace-1",
+        cwd: "/tmp",
+        session: { id: "session-1" },
+      });
+    return { calls, stop };
+  };
+  try {
+    const preservedRun = stopWith(undefined);
+    await preservedRun.stop();
+    assert.deepEqual(
+      preservedRun.calls.filter(
+        (args) => args[0] === "agent" && args[1] === "send-keys",
+      ),
+      [["agent", "send-keys", "pane-1", "ctrl+c", "ctrl+d"]],
+    );
+    assert.ok(
+      preservedRun.calls.some(
+        (args) => args[0] === "pane" && args[1] === "run",
+      ),
+      "the settled shell still proves readiness",
+    );
+
+    // A prompt hook in the shell's group must not hide a takeover: the pane
+    // ownership proof still fails closed when the agent keeps the terminal.
+    await assert.rejects(
+      stopWith(running).stop(),
+      /did not become an available shell/,
+    );
+
+    // A tracked agent that still occupies the pane keeps settlement blocked even
+    // when the process observation already looks like a settled shell: the
+    // agent-list guard, not the relaxed predicate, is what rules the agent out.
+    await assert.rejects(
+      stopWith(undefined, true).stop(),
+      /did not settle back to its original shell/,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("preserving stop refuses a process takeover at the destructive boundary", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -4889,6 +5013,44 @@ test("process ownership handles optional foreground process groups", () => {
       true,
     ],
     [
+      "prompt hook child inside the shell process group settles",
+      {
+        ...shell,
+        foreground_processes: [
+          { pid: 13, argv0: "/opt/homebrew/bin/starship" },
+          { pid: 12, argv0: "pwsh.exe" },
+        ],
+      },
+      true,
+    ],
+    [
+      // Predicate-only acceptance: with no shell allowlist an agent-like child in
+      // the shell's own process group is indistinguishable from a prompt hook
+      // here. Settlement additionally requires an empty agent list plus the
+      // session, pane and lifecycle-lock proofs, which reject tracked agents.
+      "agent-like child inside the shell process group is accepted",
+      {
+        ...shell,
+        foreground_processes: [
+          { pid: 12, argv0: "pwsh.exe" },
+          { pid: 99, argv0: "/usr/bin/pi" },
+        ],
+      },
+      true,
+    ],
+    [
+      "prompt hook child without a reported group fails closed",
+      {
+        ...shell,
+        foreground_process_group_id: undefined,
+        foreground_processes: [
+          { pid: 13, argv0: "/opt/homebrew/bin/starship" },
+          { pid: 12, argv0: "pwsh.exe" },
+        ],
+      },
+      false,
+    ],
+    [
       "busy foreground fails closed",
       { ...shell, foreground_processes: [{ pid: 99, argv0: "node" }] },
       false,
@@ -4989,12 +5151,29 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
     ),
     true,
   );
+  // Interactive prompts run transient foreground children in the shell's own
+  // process group; the captured shell identity still has to match its entry.
+  // This comparison only applies when the expected observation carries a shell
+  // capture (rollback and close/post-completion transitions). The stop path
+  // passes the running-agent snapshot, which lists the agent, so it proves the
+  // original shell through pid, foreground group, foreground presence and the
+  // readiness marker rather than through argv0 continuity.
   assert.equal(
     sameShellProcessOwner(captured, {
       ...captured,
       foreground_processes: [
         { pid: 12, argv0: "pwsh.exe" },
         { pid: 13, argv0: "child" },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    sameShellProcessOwner(captured, {
+      ...captured,
+      foreground_processes: [
+        { pid: 13, argv0: "child" },
+        { pid: 12, argv0: "/bin/zsh" },
       ],
     }),
     false,
