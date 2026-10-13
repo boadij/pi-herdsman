@@ -1,6 +1,6 @@
 ---
 agents: [scout, researcher]
-description: General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer
+description: General-purpose execution agent for bounded tasks requiring broad capabilities
 extensions: []
 inheritGlobalContext: false
 inheritProjectContext: true
