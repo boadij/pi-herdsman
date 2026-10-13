@@ -87,6 +87,15 @@ import support, {
   writeAgentState,
 } from "./support.ts";
 import { parseHerdrVersion } from "./herdr.ts";
+import { LEAD_SCOPE_DESCRIPTION } from "./agent-controller.ts";
+
+test("shared Lead review guidance is independent of the Agent roster", () => {
+  assert.match(LEAD_SCOPE_DESCRIPTION, /Any review conducted within the herd/);
+  assert.doesNotMatch(
+    LEAD_SCOPE_DESCRIPTION,
+    /\b(?:scout|researcher|reviewer|implementer|generalist)\b/i,
+  );
+});
 
 test("new project worktree creation gets an extended Herdr timeout", async () => {
   const { createLeadProjectRuntime } = await import("./lead-runtime.ts");
