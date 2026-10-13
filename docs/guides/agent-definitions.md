@@ -157,8 +157,8 @@ Extension code itself is not sandboxed by the callable-tool allowlist.
 
 ### `reviewer`
 
-Independent read-only agent for team-internal reviews. Its findings are not
-reviews or approval supplied by the user or a supervisor.
+Independent read-only internal team reviewer. Findings inform the delegator's
+decisions, not user or supervisor approval.
 
 ### `scout`
 
