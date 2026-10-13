@@ -791,7 +791,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "reviewer",
-      "Independent read-only reviewer for plans, diffs, implementations, and codebase health; use when work needs verification, missing-case analysis, or regression review rather than modification",
+      "Independent read-only agent for internal review of plans, diffs, implementations, and codebase health; use for verification, missing-case analysis, and regression review, not as a substitute for user or supervisor review",
     ],
     [
       "generalist",
@@ -850,6 +850,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   assert.match(required.get("implementer")!, /scoped edits and validation/);
   assert.match(required.get("generalist")!, /smallest complete action/);
   assert.match(required.get("reviewer")!, /strictly read-only/);
+  assert.match(required.get("reviewer")!, /Internal Review/);
+  assert.match(required.get("reviewer")!, /External Review.*user or a supervisor/);
   assert.match(required.get("scout")!, /read-only codebase reconnaissance/);
   assert.match(
     required.get("researcher")!,
