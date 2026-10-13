@@ -8216,8 +8216,9 @@ test("Running explains how to delegate when no agents are running", async () => 
   assert.ok(
     notices.some(
       (message) =>
-        message.includes("No running agents") &&
-        message.includes("Use scout to inspect this repository"),
+        message.includes("No running Agents") &&
+        message.includes("available definition") &&
+        !message.includes("scout"),
     ),
   );
 });
