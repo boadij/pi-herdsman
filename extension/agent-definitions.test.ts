@@ -795,7 +795,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "generalist",
-      "General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer",
+      "General-purpose execution agent for bounded tasks requiring broad capabilities",
     ],
   ]);
   const required = withPiAgentDir(
