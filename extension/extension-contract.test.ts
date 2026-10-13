@@ -9,6 +9,8 @@ import packageMetadata from "../package.json" with { type: "json" };
 import {
   buildSessionProjection,
   convertToLlm,
+  type BeforeAgentStartEvent,
+  type NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
@@ -3337,7 +3339,7 @@ test("chief guidance carries the lead coordination contract", () => {
   delete process.env.HERDR_PANE_ID;
 });
 
-test("definition roster matches live list and rejects stale sessions", async () => {
+test("ordinary Lead custom startup receives the exact-session definition roster", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const pi = fakePi({
@@ -3361,10 +3363,32 @@ test("definition roster matches live list and rejects stale sessions", async () 
     getSessionId: () => sessionId,
   };
   await pi.events.get("session_start")![0](undefined, context);
-  const promptEvent = {
-    systemPrompt: "base",
-    systemPromptOptions: { sections: {} },
-  };
+  const createPromptEvent = () =>
+    ({
+      type: "before_agent_start",
+      messageType: "custom",
+      message: {
+        role: "custom",
+        customType: "pi-herdsman-test",
+        content: "custom startup",
+        display: true,
+        timestamp: Date.now(),
+      },
+      systemPrompt: "base",
+      systemPromptOptions: {
+        cwd: context.cwd,
+        selectedTools: [],
+        hiddenTools: [],
+        toolSnippets: {},
+        toolGuidelines: {},
+        promptGuidelines: [],
+        appendSystemPrompt: "",
+        sections: {},
+        contextFiles: [],
+        skills: [],
+      } satisfies NormalizedBuildSystemPromptOptions,
+    }) satisfies BeforeAgentStartEvent;
+  const promptEvent = createPromptEvent();
   const prompt = await pi.events.get("before_agent_start")![0](
     promptEvent,
     context,
@@ -3420,10 +3444,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     JSON.stringify(listResult.details),
   );
   sessionId = randomUUID();
-  const staleEvent = {
-    systemPrompt: "base",
-    systemPromptOptions: { sections: {} },
-  };
+  const staleEvent = createPromptEvent();
   const stalePrompt = await pi.events.get("before_agent_start")![0](
     staleEvent,
     context,
@@ -3438,10 +3459,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     undefined,
   );
   await pi.events.get("session_start")![0](undefined, context);
-  const restartedEvent = {
-    systemPrompt: "base",
-    systemPromptOptions: { sections: {} },
-  };
+  const restartedEvent = createPromptEvent();
   const restartedPrompt = await pi.events.get("before_agent_start")![0](
     restartedEvent,
     context,

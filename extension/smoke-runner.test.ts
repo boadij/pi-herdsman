@@ -628,6 +628,14 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   const rootPrompt =
     "Do not read package.json yourself. Delegate and return PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1.";
   const rootStarted = [
+    {
+      role: "system",
+      content: "You are a helpful assistant.",
+      sections: {
+        pi_herdsman_role: "<pi_herdsman_role>Lead</pi_herdsman_role>",
+      },
+      timestamp: Date.now(),
+    },
     { role: "user", content: rootPrompt },
     call("delegate_agent", {
       definition: "implementer",
@@ -637,6 +645,16 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   ];
   const pendingRoot = decide("core", { messages: rootStarted });
   assert.doesNotMatch(pendingRoot.content[0].text, /PI_HERDSMAN_SMOKE_OK/);
+  assert.throws(
+    () =>
+      decide("core", {
+        messages: [
+          ...rootStarted.slice(1),
+          delivered("smoke-core-implementer"),
+        ],
+      }),
+    /Lead role context missing from Agent-result continuation/,
+  );
   assert.equal(
     decide("core", {
       messages: [...rootStarted, delivered("smoke-core-implementer")],
@@ -799,8 +817,16 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     });
     const model = (id: string) =>
       provider.getModels().find((item: any) => item.id === id);
-    const context = (prompt: string) => ({
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    const context = (prompt: string, sections = {}) => ({
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant.",
+          sections,
+          timestamp: Date.now(),
+        },
+        { role: "user", content: [{ type: "text", text: prompt }] },
+      ],
     });
     const collect = async (stream: AsyncIterable<any>) => {
       const events = [];
@@ -822,7 +848,13 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     assert.ok(first.some((event: any) => event.type === "text_delta"));
     assert.ok(second.some((event: any) => event.type === "text_delta"));
     const failure = await collect(
-      provider.streamSimple(model("terminal-error"), context("wait")),
+      provider.streamSimple(
+        model("terminal-error"),
+        context("wait", {
+          agent_definitions:
+            "<agent_definitions>[]\n\nThis is the session-start definition snapshot. Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.</agent_definitions>",
+        }),
+      ),
     );
     const error = failure.find((event: any) => event.type === "error");
     assert.equal(

@@ -4,6 +4,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 
 const modelIds = [
@@ -152,7 +153,8 @@ function rootAgentPrompt(messages, marker) {
   );
 }
 
-function coreDecision(messages) {
+function coreDecision(context) {
+  const messages = context.messages;
   const latest = messages.at(-1);
   const prompt = text(lastUser(messages));
   const rootTask = rootAgentPrompt(
@@ -166,6 +168,11 @@ function coreDecision(messages) {
       "smoke-core-implementer",
     );
     if (result) {
+      const systemPrompt = getCurrentSystemPrompt(context.messages);
+      if (!systemPrompt.includes("<pi_herdsman_role>"))
+        throw new Error(
+          "Lead role context missing from Agent-result continuation",
+        );
       const pkg = packageDetails(result);
       return fauxAssistantMessage(
         `PI_HERDSMAN_SMOKE_OK ${pkg.name}@${pkg.version}`,
@@ -338,7 +345,7 @@ export function decide(model, context) {
     if (!marker) throw new Error("Unexpected chief-tree request");
     return fauxAssistantMessage(marker);
   }
-  if (model === "core") return coreDecision(messages);
+  if (model === "core") return coreDecision(context);
   if (model === "continuation") return continuationDecision(messages);
 
   if (model === "terminal-failure") {
@@ -371,6 +378,7 @@ export function decide(model, context) {
 }
 
 export default function install(pi) {
+  let terminalErrorRequests = 0;
   const faux = fauxProvider({
     provider: "smoke-faux",
     api: "smoke-faux-api",
@@ -378,6 +386,13 @@ export default function install(pi) {
   });
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
+    if (model.id === "terminal-error" && terminalErrorRequests++ === 0) {
+      const systemPrompt = getCurrentSystemPrompt(context.messages);
+      if (!systemPrompt.includes("<agent_definitions>"))
+        throw new Error(
+          "Assigned Lead's initial request omitted session-matched agent definitions",
+        );
+    }
     const answer = decide(model.id, context);
     if (model.id === "terminal-error") {
       const evidenceDir = join(

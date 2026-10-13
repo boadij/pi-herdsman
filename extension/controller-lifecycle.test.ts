@@ -6,6 +6,10 @@ import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
 import { Value } from "typebox/value";
 import type {
+  BeforeAgentStartEvent,
+  NormalizedBuildSystemPromptOptions,
+} from "@earendil-works/pi-coding-agent";
+import type {
   AskRecord,
   RequestRecord,
   ResultRecord,
@@ -4378,22 +4382,80 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       text: "failure arrived during active Manager work",
     };
     writeProjectMessage(activeFailure, runtime);
+    assert.equal(
+      ctx.sessionManager.getSessionId(),
+      manager.piSessionId,
+      "the active transcript is the exact authorized Manager session",
+    );
     ctx.isIdle = () => false;
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      ctx,
-    );
+    const customStartup = {
+      type: "before_agent_start",
+      messageType: "custom",
+      message: {
+        role: "custom",
+        customType: "pi-herdsman-project_message",
+        content: "Project coordination message",
+        display: true,
+        timestamp: Date.now(),
+      },
+      systemPrompt: "base",
+      systemPromptOptions: {
+        cwd: ctx.cwd,
+        selectedTools: [],
+        hiddenTools: [],
+        toolSnippets: {},
+        toolGuidelines: {},
+        promptGuidelines: [],
+        appendSystemPrompt: "",
+        sections: {},
+        contextFiles: [],
+        skills: [],
+      } satisfies NormalizedBuildSystemPromptOptions,
+    } satisfies BeforeAgentStartEvent;
+    await pi.events.get("before_agent_start")![0](customStartup, ctx);
     assert.equal(deliveries(activeFailure.id).length, 0);
-    ctx.isIdle = () => true;
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      ctx,
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", branch).map(({ id }) => id),
+      [activeFailure.id],
+      "busy custom startup preserves the authorized durable message",
     );
+    assert.ok(
+      customStartup.systemPromptOptions.sections.pi_herdsman_role,
+      "custom startup applies the Manager role projection",
+    );
+
+    ctx.isIdle = () => true;
+    await pi.events.get("agent_settled")![0]({ aborted: false }, ctx);
     await t.waitFor(() => assert.equal(deliveries(activeFailure.id).length, 1));
     assert.equal(
       (deliveries(activeFailure.id)[0].options as any).triggerTurn,
       true,
     );
+    const [activeDelivery] = deliveries(activeFailure.id);
+    assert.equal(
+      (activeDelivery.message as any).details.fromSessionId,
+      leadId,
+      "receipt identifies the authorized assigned Lead",
+    );
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-project_message" &&
+          entry.details?.id === activeFailure.id &&
+          entry.details?.fromSessionId === leadId,
+      ).length,
+      1,
+      "the exact owner transcript contains one delivery receipt",
+    );
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", branch).some(
+        ({ id }) => id === activeFailure.id,
+      ),
+      false,
+      "receipt-backed delivery consumes the durable message",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(deliveries(activeFailure.id).length, 1);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     removeProjectAssignment(runtime, "repo-key", branch);
