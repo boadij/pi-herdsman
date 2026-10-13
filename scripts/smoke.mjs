@@ -50,6 +50,18 @@ const HERDR_ROUTING_KEYS = [
   "HERDR_TAB_ID",
   "HERDR_PANE_ID",
 ];
+const MANAGED_AGENT_IDENTITY_KEYS = [
+  "PI_HERDSMAN_MAILBOX",
+  "PI_HERDSMAN_RUN_ID",
+  "PI_HERDSMAN_OWNER_SESSION_ID",
+  "PI_HERDSMAN_OWNER_DISPLAY",
+  "PI_HERDSMAN_LABEL",
+  "PI_HERDSMAN_WORKSPACE_ID",
+  "PI_HERDSMAN_AGENT_DEFINITION",
+  "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
+  "PI_SUBAGENT_PARENT_SESSION",
+  "PI_SUBAGENT_CHILD",
+];
 
 export function parseScenario(args) {
   if (args.length > 1) throw new Error(`unexpected smoke argument: ${args[1]}`);
@@ -399,6 +411,14 @@ export function isolatedEnv(base, paths) {
 
 export function nestedControlEnv(base, paths, sessionName) {
   return { ...isolatedEnv(base, paths), HERDR_SESSION: sessionName };
+}
+
+export function rootCandidateCommand(args) {
+  return shellCommand([
+    "env",
+    ...MANAGED_AGENT_IDENTITY_KEYS.flatMap((key) => ["-u", key]),
+    ...args,
+  ]);
 }
 
 export function nestedHerdrApiSocketPath(paths, sessionName) {
@@ -1795,7 +1815,11 @@ async function startCandidate(ctx) {
       "pane",
       "run",
       paneId,
-      shellCommand(["pi", ...args, ...(prompt === undefined ? [] : [prompt])]),
+      rootCandidateCommand([
+        "pi",
+        ...args,
+        ...(prompt === undefined ? [] : [prompt]),
+      ]),
     ],
     {
       env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),

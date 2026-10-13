@@ -39,6 +39,7 @@ import {
   isPackageReadPath,
   listedPanes,
   nestedControlEnv,
+  rootCandidateCommand,
   nestedHerdrApiSocketPath,
   nestedPaneInput,
   nestedPaneText,
@@ -456,6 +457,92 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     HERDR_SESSION: "smoke-123",
   });
   assert.equal(base.HERDR_SESSION, "parent");
+});
+
+test("root pane command removes inherited managed identity before Pi only", async () => {
+  const paths = {
+    herdrConfig: "/smoke/herdr.toml",
+    xdgConfig: "/smoke/xdg-config",
+    xdgState: "/smoke/xdg-state",
+    piAgent: "/smoke/pi-agent",
+    piSessions: "/smoke/pi-sessions",
+  };
+  const identity = {
+    PI_HERDSMAN_MAILBOX: "/synthetic/mailbox",
+    PI_HERDSMAN_RUN_ID: "synthetic-run",
+    PI_HERDSMAN_OWNER_SESSION_ID: "synthetic-owner",
+    PI_HERDSMAN_OWNER_DISPLAY: "synthetic display",
+    PI_HERDSMAN_LABEL: "synthetic-agent",
+    PI_HERDSMAN_WORKSPACE_ID: "synthetic-workspace",
+    PI_HERDSMAN_AGENT_DEFINITION: "implementer",
+    PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS: '["scout"]',
+    PI_SUBAGENT_PARENT_SESSION: "synthetic-parent",
+    PI_SUBAGENT_CHILD: "1",
+  };
+  const args = [
+    "pi",
+    ...candidateArgs({
+      candidateExtension: "/smoke/dist/index.js",
+      herdrStateExtension: "/smoke/herdr-agent-state.ts",
+      model: "provider/model:high",
+    }),
+    "startup prompt",
+  ];
+  const expectedCommand = [
+    "env",
+    ...Object.keys(identity).flatMap((key) => ["-u", key]),
+    ...args,
+  ]
+    .map((arg) => `'${arg.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const command = rootCandidateCommand(args);
+  assert.equal(command, expectedCommand);
+  assert.ok(
+    command.indexOf("'-u' 'PI_SUBAGENT_CHILD'") < command.indexOf("'pi'"),
+  );
+  assert.match(
+    command,
+    /'--approve'.*'--extension' '\/smoke\/dist\/index\.js'.*'--model' 'provider\/model:high'.*'startup prompt'/,
+  );
+
+  const ctx = {
+    paths,
+    sessionName: "smoke-root",
+  };
+  let paneArgs;
+  let paneOptions;
+  await submitPaneCommand(
+    ctx,
+    "w1:p1",
+    command,
+    async (_file, callArgs, options) => {
+      paneArgs = callArgs;
+      paneOptions = options;
+      return { stdout: "", stderr: "", pid: 123 };
+    },
+  );
+  assert.deepEqual(paneArgs, ["pane", "run", "w1:p1", expectedCommand]);
+
+  const base = { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" };
+  const descendantEnv = nestedControlEnv(base, paths, "smoke-child");
+  assert.deepEqual(descendantEnv, {
+    ...identity,
+    HERDR_ENV: "1",
+    HERDR_CONFIG_PATH: "/smoke/herdr.toml",
+    XDG_CONFIG_HOME: "/smoke/xdg-config",
+    XDG_STATE_HOME: "/smoke/xdg-state",
+    PI_CODING_AGENT_DIR: "/smoke/pi-agent",
+    PI_CODING_AGENT_SESSION_DIR: "/smoke/pi-sessions",
+    KEEP_ME: "yes",
+    HERDR_SESSION: "smoke-child",
+  });
+  assert.equal(paneOptions.env.HERDR_ENV, "1");
+  assert.equal(paneOptions.env.HERDR_CONFIG_PATH, paths.herdrConfig);
+  assert.equal(paneOptions.env.PI_CODING_AGENT_DIR, paths.piAgent);
+  assert.equal(paneOptions.env.PI_CODING_AGENT_SESSION_DIR, paths.piSessions);
+  for (const [key, value] of Object.entries(identity))
+    assert.equal(descendantEnv[key], value);
+  assert.deepEqual(base, { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" });
 });
 
 test("nested Herdr hashes the API socket while checking both socket limits", () => {
