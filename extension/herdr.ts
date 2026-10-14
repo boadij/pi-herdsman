@@ -691,9 +691,11 @@ export function sameShellProcessOwner(
   // foreground children (prompt and precmd hooks) inside the shell's own process
   // group. No process-group separation by the agent is assumed here: a
   // still-listed or replacement Herdr agent is rejected by the agent-list,
-  // session, pane and lifecycle-lock proofs around this call, and any untracked
-  // process still sharing the shell's group is accepted by design. Without a
-  // reported group the stricter singleton observation remains the only proof.
+  // session, pane and lifecycle-lock proofs around this call. Settlement
+  // separately rejects pids captured from the terminal occupier through
+  // terminalOccupierSurvived; this predicate alone accepts any other untracked
+  // process sharing the shell's group. Without a reported group the stricter
+  // singleton observation remains the only proof.
   const foregroundShell =
     processes !== undefined &&
     processes.some((process) => process.pid === observed.shell_pid);
@@ -718,6 +720,31 @@ export function sameShellProcessOwner(
   return processes.some(
     (process) =>
       process.pid === observed.shell_pid && process.argv0 === captured.argv0,
+  );
+}
+
+// Herdr reports the pane's foreground process group. A snapshot taken while a
+// delegated agent owned the terminal names the processes that occupied it; the
+// pane shell itself is excluded because settlement proves restoral toward that
+// shell. An occupier pid still listed in the restored shell's foreground group
+// is the captured original process, still alive, so settlement must not report
+// success. Prelaunch shell captures are passed as expected identities, never as
+// occupiers, so their prompt-hook children are not mistaken for the original
+// agent.
+export function terminalOccupierSurvived(
+  occupier: PaneProcess | undefined,
+  observed: PaneProcess,
+): boolean {
+  if (!occupier) return false;
+  const captured = (occupier.foreground_processes ?? [])
+    .map((process) => process.pid)
+    .filter(
+      (pid): pid is number => pid !== undefined && pid !== occupier.shell_pid,
+    );
+  const foreground = observed.foreground_processes;
+  if (captured.length === 0 || foreground === undefined) return false;
+  return foreground.some(
+    (process) => process.pid !== undefined && captured.includes(process.pid),
   );
 }
 
@@ -2027,6 +2054,7 @@ async function proveShellReady(
   deadline: number,
   operation: "start" | "close" | "rollback",
   signal?: AbortSignal,
+  terminalOccupier?: PaneProcess,
 ): Promise<PaneProcess> {
   await waitForShellMarker(pi, ctx, paneId, deadline, operation, signal);
   const timeout =
@@ -2043,7 +2071,11 @@ async function proveShellReady(
   );
   const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
-  if (!shell || !sameShellProcessOwner(expected ?? shell, shell))
+  if (
+    !shell ||
+    !sameShellProcessOwner(expected ?? shell, shell) ||
+    terminalOccupierSurvived(terminalOccupier, shell)
+  )
     error(operation, `pane ${paneId} did not become an available shell`);
   return shell;
 }
@@ -2061,6 +2093,7 @@ async function settlePreservedPane(
   processIdentity: PaneProcess,
   operation: "close" | "rollback",
   signal?: AbortSignal,
+  terminalOccupier?: PaneProcess,
 ): Promise<void> {
   const deadline = Date.now() + SETTLE_TIMEOUT;
   let safeObservation = false;
@@ -2089,7 +2122,11 @@ async function settlePreservedPane(
       )
         error(operation, `pane ${expected.paneId} ownership changed`);
       const observed = await paneProcess(pi, ctx, expected.paneId, signal);
-      if (observed && sameShellProcessOwner(processIdentity, observed)) {
+      if (
+        observed &&
+        sameShellProcessOwner(processIdentity, observed) &&
+        !terminalOccupierSurvived(terminalOccupier, observed)
+      ) {
         if (safeObservation) {
           if (!capturedShellProcess(processIdentity))
             await proveShellReady(
@@ -2100,6 +2137,7 @@ async function settlePreservedPane(
               deadline,
               operation,
               signal,
+              terminalOccupier,
             );
           return;
         }
@@ -2380,7 +2418,8 @@ async function proveExactRunningAgent(
   ) {
     if (
       !allowPostCompletionTransition ||
-      !sameShellProcessOwner(processOwner, observed)
+      !sameShellProcessOwner(processOwner, observed) ||
+      terminalOccupierSurvived(processOwner, observed)
     )
       error(operation, `pane ${paneId} process ownership is unproven`);
     await proveShellReady(
@@ -2391,6 +2430,7 @@ async function proveExactRunningAgent(
       Date.now() + SETTLE_TIMEOUT,
       operation,
       signal,
+      processOwner,
     );
   }
   return {
@@ -2557,6 +2597,7 @@ export async function stopHerdrAgentPreservingPane(
       proved.process,
       "rollback",
       signal,
+      proved.process,
     );
   } finally {
     release();

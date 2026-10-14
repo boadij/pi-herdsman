@@ -30,6 +30,7 @@ import {
   runHerdr,
   sameShellProcessOwner,
   sameRunningProcessOwner,
+  terminalOccupierSurvived,
   sameCwd,
   stopHerdrAgentPreservingPane,
   closeHerdrPane,
@@ -3410,6 +3411,173 @@ test("preserving stop settles a shell shared with prompt hook children", async (
   }
 });
 
+test("preserving stop rejects a surviving original agent process", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "id",
+    value: "session-1",
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  // Captured while the agent owns the terminal: the shell is not among the
+  // foreground processes and the foreground group is the agent's own group.
+  const running = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 99,
+    foreground_processes: [{ pid: 99, argv0: "/usr/bin/pi" }],
+  };
+  // Herdr no longer lists the agent and the shell owns the terminal again.
+  const settled = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [
+      { pid: 13, argv0: "/opt/homebrew/bin/mise" },
+      { pid: 12, argv0: "/bin/zsh" },
+    ],
+  };
+  const surviving = {
+    ...settled,
+    foreground_processes: [
+      { pid: 13, argv0: "/opt/homebrew/bin/mise" },
+      { pid: 99, argv0: "/usr/bin/pi" },
+      { pid: 12, argv0: "/bin/zsh" },
+    ],
+  };
+  // A new process running the same executable carries a different pid, so it is
+  // not the captured original.
+  const respawned = {
+    ...settled,
+    foreground_processes: [
+      { pid: 98, argv0: "/usr/bin/pi" },
+      { pid: 12, argv0: "/bin/zsh" },
+    ],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const stopWith = (
+    beforeMarker: unknown,
+    afterMarker?: unknown,
+    runningProcess: unknown = running,
+  ) => {
+    const calls: string[][] = [];
+    let stopped = false;
+    let markerAsked = false;
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        const key = args.slice(0, 2).join(" ");
+        if (key === "agent get") return response({ agent: pane });
+        if (key === "pane get") return response({ pane });
+        if (key === "tab list")
+          return response({
+            tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+          });
+        if (key === "pane process-info")
+          return response({
+            process_info: markerAsked
+              ? (afterMarker ?? beforeMarker)
+              : stopped
+                ? beforeMarker
+                : runningProcess,
+          });
+        if (key === "agent list")
+          return response({ agents: stopped ? [] : [pane] });
+        if (key === "agent send-keys") {
+          stopped = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (key === "pane run") {
+          markerAsked = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (key === "pane wait-output")
+          return { code: 0, stdout: "{}", stderr: "" };
+        throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+      },
+    } as any;
+    return {
+      calls,
+      stop: () =>
+        stopHerdrAgentPreservingPane(pi, { cwd: "/tmp" } as any, "pane-1", {
+          paneId: "pane-1",
+          tabId: "tab-1",
+          workspaceId: "workspace-1",
+          cwd: "/tmp",
+          session: { id: "session-1" },
+        }),
+    };
+  };
+  try {
+    // The captured original pid is still alive in the restored shell's
+    // foreground group, so no observation settles the pane.
+    const settlement = stopWith(surviving);
+    await assert.rejects(
+      settlement.stop(),
+      /did not settle back to its original shell/,
+    );
+    assert.deepEqual(
+      settlement.calls.filter(
+        (args) => args[0] === "agent" && args[1] === "send-keys",
+      ),
+      [["agent", "send-keys", "pane-1", "ctrl+c", "ctrl+d"]],
+    );
+
+    // The running snapshot may already contain shell and Pi in the shell's
+    // group. Even though that shape skips the marker, Pi must still disappear.
+    const sharedGroup = stopWith(surviving, undefined, {
+      ...running,
+      foreground_process_group_id: 12,
+      foreground_processes: [
+        { pid: 12, argv0: "/bin/zsh" },
+        { pid: 99, argv0: "/usr/bin/pi" },
+      ],
+    });
+    await assert.rejects(
+      sharedGroup.stop(),
+      /did not settle back to its original shell/,
+    );
+
+    // The same process shows up only after the readiness marker already
+    // matched, which is the second arrival window.
+    const postMarker = stopWith(settled, surviving);
+    await assert.rejects(
+      postMarker.stop(),
+      /did not become an available shell/,
+    );
+
+    // An unrelated prompt child, even one running the same executable under a
+    // different pid, still settles.
+    const respawn = stopWith(respawned);
+    await respawn.stop();
+    assert.ok(
+      respawn.calls.some((args) => args[0] === "pane" && args[1] === "run"),
+      "the settled shell still proves readiness",
+    );
+    assert.ok(
+      respawn.calls.some(
+        (args) => args[0] === "pane" && args[1] === "wait-output",
+      ),
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("preserving stop refuses a process takeover at the destructive boundary", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -5178,6 +5346,90 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
     }),
     false,
   );
+});
+
+test("shell ownership rejects a captured terminal occupier that survives", () => {
+  const running = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 99,
+    foreground_processes: [{ pid: 99, argv0: "/usr/bin/pi" }],
+  };
+  const restored = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [
+      { pid: 13, argv0: "/opt/homebrew/bin/mise" },
+      { pid: 12, argv0: "/bin/zsh" },
+    ],
+  };
+  assert.equal(sameShellProcessOwner(running, restored), true);
+  assert.equal(terminalOccupierSurvived(running, restored), false);
+  // The captured original process is still listed in the restored shell's
+  // foreground group, so the pane has not settled.
+  assert.equal(
+    terminalOccupierSurvived(running, {
+      ...restored,
+      foreground_processes: [
+        { pid: 13, argv0: "/opt/homebrew/bin/mise" },
+        { pid: 99, argv0: "/usr/bin/pi" },
+        { pid: 12, argv0: "/bin/zsh" },
+      ],
+    }),
+    true,
+  );
+  // A different pid running the same executable is not the captured process.
+  assert.equal(
+    terminalOccupierSurvived(running, {
+      ...restored,
+      foreground_processes: [
+        { pid: 98, argv0: "/usr/bin/pi" },
+        { pid: 12, argv0: "/bin/zsh" },
+      ],
+    }),
+    false,
+  );
+  // An occupier snapshot that also lists the pane shell does not turn the
+  // settlement target into a surviving occupier.
+  const withShell = {
+    ...running,
+    foreground_processes: [
+      { pid: 12, argv0: "/bin/zsh" },
+      { pid: 99, argv0: "/usr/bin/pi" },
+    ],
+  };
+  assert.equal(terminalOccupierSurvived(withShell, restored), false);
+  assert.equal(
+    terminalOccupierSurvived(withShell, {
+      ...restored,
+      foreground_processes: [
+        { pid: 99, argv0: "/usr/bin/pi" },
+        { pid: 12, argv0: "/bin/zsh" },
+      ],
+    }),
+    true,
+  );
+  // Missing occupier or missing observed foreground proof carries no identity,
+  // which is the pre-existing acceptance policy for those observations.
+  assert.equal(terminalOccupierSurvived(undefined, restored), false);
+  assert.equal(
+    terminalOccupierSurvived(running, {
+      ...restored,
+      foreground_processes: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    terminalOccupierSurvived(
+      { ...running, foreground_processes: undefined },
+      restored,
+    ),
+    false,
+  );
+  // A prelaunch shell capture is an expected identity, never an occupier, so a
+  // prompt-hook child of that capture is not mistaken for the original agent.
+  assert.equal(sameShellProcessOwner(restored, restored), true);
 });
 
 test("worktree group scope derives project before linked worktrees exist", async () => {
