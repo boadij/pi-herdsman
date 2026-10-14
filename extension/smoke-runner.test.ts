@@ -60,6 +60,7 @@ import {
   managerCleanupTarget,
   collectDiagnostics,
   captureTerminalFailureAssignment,
+  coreAgentDefinitionsExpectations,
   captureTerminalFailureWorktree,
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
@@ -1637,7 +1638,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
     packageName: "@earendil-works/pi-coding-agent",
     piVersion: "1.2.0",
     model: "core",
-    hasAgentDefinitions: false,
+    hasAgentDefinitions: true,
   };
   const child = {
     ...root,
@@ -1645,6 +1646,50 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
     sessionId: "child",
     hasAgentDefinitions: true,
   };
+  const leaf = {
+    ...child,
+    pid: 43,
+    sessionId: "leaf",
+    hasAgentDefinitions: false,
+  };
+  const expectations = coreAgentDefinitionsExpectations(
+    [
+      {
+        id: "root",
+        entries: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "delegate_agent" }],
+            },
+          },
+        ],
+      },
+      {
+        id: "child",
+        entries: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "delegate_agent" }],
+            },
+          },
+        ],
+      },
+      { id: "leaf", entries: [] },
+    ],
+    "root",
+  );
+  assert.deepEqual(
+    [...expectations],
+    [
+      ["root", true],
+      ["child", true],
+      ["leaf", false],
+    ],
+  );
   assert.deepEqual(
     matchPiProvenance(
       [root],
@@ -1652,7 +1697,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
       "root-pane",
       [{ pid: 41 }],
       "core",
-      false,
+      expectations.get("root"),
     ),
     { paneId: "root-pane", pid: 41, sessionId: "root", piVersion: "1.2.0" },
   );
@@ -1663,7 +1708,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
       "agent-pane",
       [{ pid: 42 }],
       "core",
-      true,
+      expectations.get("child"),
     ),
     { paneId: "agent-pane", pid: 42, sessionId: "child", piVersion: "1.2.0" },
   );
@@ -1675,21 +1720,86 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
         "root-pane",
         [{ pid: 41 }],
         "terminal-error",
-        false,
+        expectations.get("root"),
       ),
     /'core'/,
   );
   assert.throws(
     () =>
       matchPiProvenance(
-        [root],
-        "root",
-        "root-pane",
-        [{ pid: 41 }],
+        [leaf],
+        "leaf",
+        "leaf-pane",
+        [{ pid: 43 }],
         "core",
         true,
       ),
     /false !== true/,
+  );
+});
+
+test("provenance uses retained foreground PID evidence when a pane later disappears", async () => {
+  let observations = 0;
+  const inspection = await inspectPaneProcesses(
+    ["agent-pane"],
+    "root-pane",
+    async () => {
+      observations++;
+      return {
+        process_info: {
+          foreground_processes: [
+            {
+              pid: 52,
+              argv: [
+                "node",
+                "--extension",
+                "/candidate.js",
+                "--extension",
+                "/herdr.js",
+              ],
+            },
+          ],
+        },
+      };
+    },
+    "/candidate.js",
+    "/herdr.js",
+  );
+  const retained = inspection.verified.map(({ paneId, pid }) => ({
+    paneId,
+    processes: [{ pid }],
+  }));
+  const disappeared = await inspectPaneProcesses(
+    ["agent-pane"],
+    "root-pane",
+    async () => {
+      observations++;
+      throw new Error("pane_not_found");
+    },
+    "/candidate.js",
+    "/herdr.js",
+  );
+  assert.equal(observations, 2);
+  assert.equal(disappeared.records[0].error, "pane_not_found");
+  assert.deepEqual(
+    matchPiProvenance(
+      [
+        {
+          pid: 52,
+          sessionId: "child",
+          packageName: "@earendil-works/pi-coding-agent",
+          piVersion: "1.2.0",
+          model: "core",
+          hasAgentDefinitions: false,
+        },
+      ],
+      "child",
+      retained[0].paneId,
+      retained[0].processes,
+      "core",
+      false,
+    ).pid,
+    52,
   );
 });
 
@@ -2412,6 +2522,73 @@ test("terminal-failure assignment polling captures topology before assignment su
       ),
     /one worktree/,
   );
+});
+
+test("terminal-failure retains the assigned Lead PID while its pane is live", async () => {
+  const branch = "smoke-branch";
+  const contents =
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_project",
+        content: JSON.stringify({
+          ok: true,
+          action: "delegate",
+          branch,
+          session: "lead-session",
+        }),
+      },
+    }) + "\n";
+  assert.deepEqual(staffDelegateResults(contents), [
+    { ok: true, action: "delegate", branch, session: "lead-session" },
+  ]);
+  const calls = [];
+  const ctx = {
+    rootWorkspaceId: "workspace",
+    candidateExtension: "/candidate.js",
+    herdrStateExtension: "/herdr.js",
+  };
+  const result = await terminalFailureAssignmentPoll(
+    ctx,
+    branch,
+    async () => ({ contents }),
+    async () => [
+      {
+        pane_id: "lead-pane",
+        agent_session: { kind: "id", value: "lead-session" },
+      },
+    ],
+    async (_ctx, args) => {
+      calls.push(args);
+      if (args[0] === "worktree") return { worktrees: [] };
+      return {
+        process_info: {
+          foreground_processes: [
+            {
+              pid: 91,
+              argv: [
+                "node",
+                "--extension",
+                "/candidate.js",
+                "--extension",
+                "/herdr.js",
+              ],
+            },
+          ],
+        },
+      };
+    },
+  );
+  assert.equal(result.done, true, JSON.stringify(result));
+  assert.deepEqual(result.value.processObservation, {
+    paneId: "lead-pane",
+    processes: [{ pid: 91 }],
+  });
+  assert.deepEqual(calls, [
+    ["worktree", "list", "--workspace", "workspace"],
+    ["pane", "process-info", "--pane", "lead-pane"],
+  ]);
 });
 
 test("terminal-failure assignment polling preserves the first workspace identity", async () => {

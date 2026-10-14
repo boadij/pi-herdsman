@@ -859,9 +859,32 @@ export async function terminalFailureAssignmentPoll(
         child = agent;
         break;
       }
+  let processObservation;
+  if (child?.pane_id) {
+    try {
+      const info = await execute(ctx, [
+        "pane",
+        "process-info",
+        "--pane",
+        child.pane_id,
+      ]);
+      const matches = candidateProcess(
+        info,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      );
+      if (matches.length === 1)
+        processObservation = {
+          paneId: child.pane_id,
+          processes: [{ pid: matches[0].pid }],
+        };
+    } catch {
+      // The existing evidence poll retries while the assigned Lead is starting.
+    }
+  }
   return {
-    done: !!child,
-    value: { delegated: delegated[0], child },
+    done: !!child && !!processObservation,
+    value: { delegated: delegated[0], child, processObservation },
     progress: { delegationCount: delegated.length },
     evidence: session ? summarizeSession(session.contents) : null,
   };
@@ -2057,6 +2080,24 @@ export function matchPiProvenance(
   return { paneId, pid: record.pid, sessionId, piVersion: record.piVersion };
 }
 
+export function coreAgentDefinitionsExpectations(sessions, rootId) {
+  return new Map(
+    sessions.map(({ id, entries }) => [
+      id,
+      id === rootId ||
+        entries.some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            entry.message.content?.some(
+              (part) =>
+                part.type === "toolCall" && part.name === "delegate_agent",
+            ),
+        ),
+    ]),
+  );
+}
+
 async function runTerminalFailureSmoke(ctx) {
   const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
   const task =
@@ -2160,6 +2201,8 @@ async function runTerminalFailureSmoke(ctx) {
   assert.ok(child?.pane_id);
   const sessionId = assigned.session;
   const paneId = child.pane_id;
+  const processObservation = result.processObservation;
+  assert.equal(processObservation?.paneId, paneId);
   const worktrees = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -2282,17 +2325,11 @@ async function runTerminalFailureSmoke(ctx) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  const processInfo = await nestedCommand(ctx, [
-    "pane",
-    "process-info",
-    "--pane",
-    paneId,
-  ]);
   ctx.terminalFailure.provenance = matchPiProvenance(
     provenance,
     sessionId,
     paneId,
-    processInfo?.process_info?.foreground_processes ?? [],
+    processObservation.processes,
     "terminal-error",
     true,
   );
@@ -2825,6 +2862,23 @@ async function runCoreSmoke(ctx) {
       for (const item of inspection.verified) {
         observed.set(`${item.paneId}\0${item.pid}`, item);
       }
+      const rootInfo = await tryNestedCommand(ctx, [
+        "pane",
+        "process-info",
+        "--pane",
+        ctx.rootPaneId,
+      ]);
+      if (!rootInfo.ok) throw observationFailure(rootInfo.error);
+      const rootMatches = candidateProcess(
+        rootInfo.value,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      );
+      if (rootMatches.length === 1)
+        ctx.coreRootProcess = {
+          paneId: ctx.rootPaneId,
+          pid: rootMatches[0].pid,
+        };
       ctx.coreProcessEvidence = [...observed.values()].slice(-40);
       ctx.coreProcessDiagnostics = inspection.records.slice(0, 40);
       const session = await rootSessionSnapshot(ctx);
@@ -2839,7 +2893,7 @@ async function runCoreSmoke(ctx) {
       }
       const paneCount = distinctPaneCount([...observed.values()]);
       return {
-        done: !!ctx.assistantResult && paneCount >= 2,
+        done: !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess,
         progress: {
           rootSessionBytes: session ? Buffer.byteLength(session.contents) : 0,
           verifiedProcesses: [...observed.keys()].sort(),
@@ -2884,29 +2938,28 @@ async function runCoreSmoke(ctx) {
         (entry) => entry.type === "session",
       )?.id;
     assert.ok(rootId, "core root session has no exact Pi session identity");
-    const panes = new Map();
-    const rootInfo = await nestedCommand(ctx, [
-      "pane",
-      "process-info",
-      "--pane",
-      ctx.rootPaneId,
-    ]);
-    panes.set(
-      ctx.rootPaneId,
-      rootInfo?.process_info?.foreground_processes ?? [],
+    const observedProcesses = [ctx.coreRootProcess, ...observed.values()].map(
+      ({ paneId, pid }) => ({ paneId, processes: [{ pid }] }),
     );
-    for (const item of observed.values()) {
-      if (panes.has(item.paneId)) continue;
-      const info = await nestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        item.paneId,
-      ]);
-      panes.set(item.paneId, info?.process_info?.foreground_processes ?? []);
+    const sessions = [];
+    for (const file of sessionFiles) {
+      const entries = sessionEntries(
+        await readFile(join(ctx.paths.piSessions, file), "utf8"),
+      );
+      const id = entries.find((entry) => entry.type === "session")?.id;
+      if (sessionIds.has(id)) sessions.push({ id, entries });
     }
+    const expectedDefinitions = coreAgentDefinitionsExpectations(
+      sessions,
+      rootId,
+    );
     for (const sessionId of sessionIds) {
-      const expectedAgentDefinitions = sessionId !== rootId;
+      const expectedAgentDefinitions = expectedDefinitions.get(sessionId);
+      assert.notEqual(
+        expectedAgentDefinitions,
+        undefined,
+        `missing persisted role evidence for ${sessionId}`,
+      );
       const matches = provenance.filter(
         (record) => record.sessionId === sessionId,
       );
@@ -2916,15 +2969,15 @@ async function runCoreSmoke(ctx) {
         `expected one provenance row for ${sessionId}`,
       );
       const record = matches[0];
-      const pane = [...panes].find(([, processes]) =>
+      const pane = observedProcesses.find(({ processes }) =>
         processes.some((process) => process.pid === record.pid),
       );
       assert.ok(pane, `no exact foreground PID match for ${sessionId}`);
       matchPiProvenance(
         provenance,
         sessionId,
-        pane[0],
-        pane[1],
+        pane.paneId,
+        pane.processes,
         "core",
         expectedAgentDefinitions,
       );
