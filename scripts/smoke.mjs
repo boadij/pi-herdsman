@@ -2026,6 +2026,37 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
   };
 }
 
+export function matchPiProvenance(
+  records,
+  sessionId,
+  paneId,
+  foregroundProcesses,
+  expectedModel,
+  requireAgentDefinitions,
+) {
+  const matches = records.filter((record) => record.sessionId === sessionId);
+  assert.equal(
+    matches.length,
+    1,
+    `expected one provenance row for ${sessionId}`,
+  );
+  const [record] = matches;
+  assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
+  assert.equal(record.piVersion, "1.2.0");
+  assert.equal(record.model, expectedModel);
+  assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
+  const processes = foregroundProcesses.filter(
+    (process) => process.pid === record.pid,
+  );
+  assert.equal(
+    processes.length,
+    1,
+    `expected one foreground PID match in pane ${paneId}`,
+  );
+  assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0);
+  return { paneId, pid: record.pid, sessionId, piVersion: record.piVersion };
+}
+
 async function runTerminalFailureSmoke(ctx) {
   const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
   const task =
@@ -2035,6 +2066,7 @@ async function runTerminalFailureSmoke(ctx) {
   await mkdir(evidenceDir, { recursive: true });
   const attemptsPath = join(evidenceDir, "smoke-faux-attempts.jsonl");
   const settledPath = join(evidenceDir, "smoke-faux-settled.jsonl");
+  const provenancePath = join(evidenceDir, "smoke-faux-provenance.jsonl");
   const definitionDir = join(ctx.rootCwd, ".pi", "agents");
   await mkdir(definitionDir, { recursive: true });
   await writeFile(
@@ -2246,6 +2278,24 @@ async function runTerminalFailureSmoke(ctx) {
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
   const managerSession = await root();
+  const provenance = (await readFile(provenancePath, "utf8"))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const processInfo = await nestedCommand(ctx, [
+    "pane",
+    "process-info",
+    "--pane",
+    paneId,
+  ]);
+  ctx.terminalFailure.provenance = matchPiProvenance(
+    provenance,
+    sessionId,
+    paneId,
+    processInfo?.process_info?.foreground_processes ?? [],
+    "terminal-error",
+    true,
+  );
   const report = terminalFailureEvidence(
     managerSession.contents,
     branch,
@@ -2806,6 +2856,84 @@ async function runCoreSmoke(ctx) {
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
   if (ctx.simulated) {
+    const provenancePath = join(
+      ctx.paths.piAgent,
+      "pi-herdsman",
+      "runtime",
+      "smoke-faux-provenance.jsonl",
+    );
+    const provenance = (await readFile(provenancePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const sessionFiles = (
+      await readdir(ctx.paths.piSessions, { recursive: true })
+    ).filter((file) => file.endsWith(".jsonl"));
+    const sessionIds = new Set();
+    for (const file of sessionFiles) {
+      const header = sessionEntries(
+        await readFile(join(ctx.paths.piSessions, file), "utf8"),
+      ).find((entry) => entry.type === "session");
+      if (typeof header?.id === "string" && header.id)
+        sessionIds.add(header.id);
+    }
+    const rootSession = await rootSessionSnapshot(ctx);
+    const rootId =
+      rootSession &&
+      sessionEntries(rootSession.contents).find(
+        (entry) => entry.type === "session",
+      )?.id;
+    assert.ok(rootId, "core root session has no exact Pi session identity");
+    const panes = new Map();
+    const rootInfo = await nestedCommand(ctx, [
+      "pane",
+      "process-info",
+      "--pane",
+      ctx.rootPaneId,
+    ]);
+    panes.set(
+      ctx.rootPaneId,
+      rootInfo?.process_info?.foreground_processes ?? [],
+    );
+    for (const item of observed.values()) {
+      if (panes.has(item.paneId)) continue;
+      const info = await nestedCommand(ctx, [
+        "pane",
+        "process-info",
+        "--pane",
+        item.paneId,
+      ]);
+      panes.set(item.paneId, info?.process_info?.foreground_processes ?? []);
+    }
+    for (const sessionId of sessionIds) {
+      const expectedAgentDefinitions = sessionId !== rootId;
+      const matches = provenance.filter(
+        (record) => record.sessionId === sessionId,
+      );
+      assert.equal(
+        matches.length,
+        1,
+        `expected one provenance row for ${sessionId}`,
+      );
+      const record = matches[0];
+      const pane = [...panes].find(([, processes]) =>
+        processes.some((process) => process.pid === record.pid),
+      );
+      assert.ok(pane, `no exact foreground PID match for ${sessionId}`);
+      matchPiProvenance(
+        provenance,
+        sessionId,
+        pane[0],
+        pane[1],
+        "core",
+        expectedAgentDefinitions,
+      );
+    }
+    assert.equal(
+      provenance.length,
+      sessionIds.size,
+      "unexpected or duplicate core provenance rows",
+    );
     const files = (
       await readdir(ctx.paths.piSessions, { recursive: true })
     ).filter((file) => file.endsWith(".jsonl"));

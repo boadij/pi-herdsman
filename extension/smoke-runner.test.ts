@@ -63,6 +63,7 @@ import {
   captureTerminalFailureWorktree,
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
+  matchPiProvenance,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -925,9 +926,13 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-herdsman-faux-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousPackageDir = process.env.PI_PACKAGE_DIR;
   const evidenceDir = join(agentDir, "pi-herdsman", "runtime");
   await mkdir(evidenceDir, { recursive: true });
   process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.PI_PACKAGE_DIR = resolve(
+    "node_modules/@earendil-works/pi-coding-agent",
+  );
   try {
     let provider;
     const handlers = new Map();
@@ -939,6 +944,12 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         handlers.set(event, handler);
       },
     });
+    handlers.get("session_start")?.(
+      {},
+      {
+        sessionManager: { getSessionId: () => "faux-test-session" },
+      },
+    );
     const model = (id: string) =>
       provider.getModels().find((item: any) => item.id === id);
     const context = (prompt: string, sections = {}) => ({
@@ -1006,10 +1017,28 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       ),
       { model: "terminal-error", hasRoster: true },
     );
+    const provenance = (
+      await readFile(join(evidenceDir, "smoke-faux-provenance.jsonl"), "utf8")
+    )
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(provenance, [
+      {
+        pid: process.pid,
+        sessionId: "faux-test-session",
+        packageName: "@earendil-works/pi-coding-agent",
+        piVersion: "1.2.0",
+        model: "chief-tree",
+        hasAgentDefinitions: false,
+      },
+    ]);
     assert.equal(handlers.has("agent_settled"), true);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousPackageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+    else process.env.PI_PACKAGE_DIR = previousPackageDir;
     await rm(agentDir, { recursive: true, force: true });
   }
 });
@@ -1523,6 +1552,145 @@ test("terminal-failure evidence remains actionable and Manager uses only delegat
     toolCalls: 0,
     toolNames: [],
   });
+});
+
+test("Pi provenance requires exact session, foreground PID, and Pi version", () => {
+  const record = {
+    pid: 42,
+    sessionId: "session",
+    packageName: "@earendil-works/pi-coding-agent",
+    piVersion: "1.2.0",
+    model: "terminal-error",
+    hasAgentDefinitions: true,
+  };
+  const processes = [{ pid: 42 }];
+  assert.deepEqual(
+    matchPiProvenance(
+      [record],
+      "session",
+      "lead-pane",
+      processes,
+      "terminal-error",
+      true,
+    ),
+    {
+      paneId: "lead-pane",
+      pid: 42,
+      sessionId: "session",
+      piVersion: "1.2.0",
+    },
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [record],
+        "session",
+        "lead-pane",
+        [{ pid: 43 }],
+        "terminal-error",
+        true,
+      ),
+    /foreground PID match/,
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [record],
+        "other-session",
+        "lead-pane",
+        processes,
+        "terminal-error",
+        true,
+      ),
+    /provenance row/,
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [{ ...record, piVersion: "1.1.0" }],
+        "session",
+        "lead-pane",
+        processes,
+        "terminal-error",
+        true,
+      ),
+    /1\.2\.0/,
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [record, record],
+        "session",
+        "lead-pane",
+        processes,
+        "terminal-error",
+        true,
+      ),
+    /expected one provenance row/,
+  );
+});
+
+test("core Pi provenance matches the core model and role-specific roster", () => {
+  const root = {
+    pid: 41,
+    sessionId: "root",
+    packageName: "@earendil-works/pi-coding-agent",
+    piVersion: "1.2.0",
+    model: "core",
+    hasAgentDefinitions: false,
+  };
+  const child = {
+    ...root,
+    pid: 42,
+    sessionId: "child",
+    hasAgentDefinitions: true,
+  };
+  assert.deepEqual(
+    matchPiProvenance(
+      [root],
+      "root",
+      "root-pane",
+      [{ pid: 41 }],
+      "core",
+      false,
+    ),
+    { paneId: "root-pane", pid: 41, sessionId: "root", piVersion: "1.2.0" },
+  );
+  assert.deepEqual(
+    matchPiProvenance(
+      [child],
+      "child",
+      "agent-pane",
+      [{ pid: 42 }],
+      "core",
+      true,
+    ),
+    { paneId: "agent-pane", pid: 42, sessionId: "child", piVersion: "1.2.0" },
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [root],
+        "root",
+        "root-pane",
+        [{ pid: 41 }],
+        "terminal-error",
+        false,
+      ),
+    /'core'/,
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        [root],
+        "root",
+        "root-pane",
+        [{ pid: 41 }],
+        "core",
+        true,
+      ),
+    /false !== true/,
+  );
 });
 
 test("manager-recovery uses nonblocking messages only when information cannot wait for the automatic result", () => {

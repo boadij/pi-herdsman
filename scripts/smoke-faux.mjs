@@ -1,5 +1,5 @@
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -379,6 +379,8 @@ export function decide(model, context) {
 
 export default function install(pi) {
   let terminalErrorRequests = 0;
+  let sessionId;
+  const recordedSessions = new Set();
   const faux = fauxProvider({
     provider: "smoke-faux",
     api: "smoke-faux-api",
@@ -386,6 +388,46 @@ export default function install(pi) {
   });
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
+    const currentSessionId = sessionId;
+    if (typeof currentSessionId !== "string" || !currentSessionId)
+      throw new Error("Faux provider request has no Pi session identity");
+    if (!recordedSessions.has(currentSessionId)) {
+      const packageDir =
+        process.env.PI_PACKAGE_DIR ?? dirname(process.execPath);
+      let piPackage;
+      try {
+        piPackage = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+      } catch {
+        throw new Error("Could not resolve Pi package metadata");
+      }
+      if (
+        piPackage.name !== "@earendil-works/pi-coding-agent" ||
+        typeof piPackage.version !== "string" ||
+        !piPackage.version
+      )
+        throw new Error("Pi package metadata has an unexpected identity");
+      const systemPrompt = getCurrentSystemPrompt(context.messages);
+      const provenance = {
+        pid: process.pid,
+        sessionId: currentSessionId,
+        packageName: piPackage.name,
+        piVersion: piPackage.version,
+        model: model.id,
+        hasAgentDefinitions: systemPrompt.includes("<agent_definitions>"),
+      };
+      const evidenceDir = join(
+        process.env.PI_CODING_AGENT_DIR,
+        "pi-herdsman",
+        "runtime",
+      );
+      appendFileSync(
+        join(evidenceDir, "smoke-faux-provenance.jsonl"),
+        `${JSON.stringify(provenance)}\n`,
+      );
+      recordedSessions.add(currentSessionId);
+    }
     if (model.id === "terminal-error") {
       const first = terminalErrorRequests++ === 0;
       const systemPrompt = getCurrentSystemPrompt(context.messages);
@@ -409,6 +451,9 @@ export default function install(pi) {
   }
   faux.setResponses([response]);
   pi.registerProvider(faux.provider);
+  pi.on("session_start", (_event, ctx) => {
+    sessionId = ctx.sessionManager.getSessionId();
+  });
   pi.on("agent_settled", (event, ctx) => {
     if (
       ctx.model?.provider !== "smoke-faux" ||
