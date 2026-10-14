@@ -5,6 +5,7 @@ import {
   readFileSync,
   realpathSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1056,6 +1057,22 @@ test("discovers project definitions and gives global overlays final precedence",
   assert.equal(definition.projectSource, join(projectAgentDir, "project.md"));
   assert.equal(definition.overrideSource, join(globalAgents, "project.md"));
   assert.equal(definition.body, "Global policy");
+});
+
+test("follows symlinked definitions so dotfile-managed overlays apply", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-symlink-agents-"));
+  const agents = join(root, "agents");
+  mkdirSync(agents);
+  const target = join(root, "scout-disabled.md");
+  writeFileSync(target, "---\nname: scout\nenabled: false\n---\n");
+  symlinkSync(target, join(agents, "scout.md"));
+  withPiAgentDir(root, () => {
+    const scout = discoverAgent("scout");
+    assert.equal(agentDefinitionEnabled(scout), false);
+    assert.equal(scout.overrideSource, join(agents, "scout.md"));
+    symlinkSync(join(root, "missing.md"), join(agents, "broken.md"));
+    assert.throws(() => discoverAgentDefinitions(), /ENOENT.*broken\.md/);
+  });
 });
 
 test("project discovery tolerates a missing directory and rejects a file", () => {

@@ -156,7 +156,11 @@ function markdownFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
     if (entry.isDirectory()) return markdownFiles(path);
-    return entry.isFile() && entry.name.endsWith(".md") ? [path] : [];
+    // Dotfile managers deploy definitions as symlinks; reading follows them.
+    return (entry.isFile() || entry.isSymbolicLink()) &&
+      entry.name.endsWith(".md")
+      ? [path]
+      : [];
   });
 }
 
