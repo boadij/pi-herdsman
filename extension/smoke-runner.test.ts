@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
@@ -153,6 +153,8 @@ test("failure result projection allowlists only bounded nonsensitive fields", ()
       stage: "core-delegation",
       lastVerified: "agent_process_observed",
       coreProcessEvidence: [{ pid: 10 }, { pid: 11 }],
+      firstRequestObserved: true,
+      firstRequestVerified: false,
       prompt: "private prompt",
       environment: { TOKEN: "secret" },
     },
@@ -173,6 +175,7 @@ test("failure result projection allowlists only bounded nonsensitive fields", ()
     lastVerified: "agent_process_observed",
     processesVerified: 2,
     sessionStartObserved: false,
+    firstRequestObserved: true,
     firstRequestVerified: false,
     parentOwnership: null,
     parentCleanup: null,
@@ -235,19 +238,17 @@ test("failure artifact retains allowlisted parent routing identity across cleanu
   assert.deepEqual(result.parentOwnership, {
     session: "phs-a1b2c3d4e5f6",
     workspaceId: "workspace-owned",
-    temporaryRoot: paths.root,
-    herdrConfig: paths.herdrConfig,
-    xdgConfig: paths.xdgConfig,
-    xdgState: paths.xdgState,
     childPid: 4321,
     childExitObserved: false,
   });
 
   const artifactPath = await preserveFailureEvidence(result);
-  const directory = artifactPath.slice(0, artifactPath.lastIndexOf("/"));
+  const directory = dirname(artifactPath);
   const permissions = await stat(artifactPath);
-  assert.equal(permissions.mode & 0o777, 0o600);
-  assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  if (process.platform !== "win32") {
+    assert.equal(permissions.mode & 0o777, 0o600);
+    assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  }
   result.cleanup = "FAIL";
   await preserveFailureEvidence(result, artifactPath);
   const persisted = await readFile(artifactPath, "utf8");
@@ -261,8 +262,9 @@ test("failure artifact retains allowlisted parent routing identity across cleanu
   assert.match(persisted, /"cleanupErrorCode": "PARENT_SHUTDOWN_UNVERIFIED"/);
   assert.doesNotMatch(
     persisted,
-    /private post-cleanup stderr|environment|TOKEN/,
+    /private post-cleanup stderr|environment|TOKEN|\/tmp\/phs-owned/,
   );
+  assert.match(persisted, /"session": "phs-a1b2c3d4e5f6"/);
   assert.doesNotMatch(
     persisted,
     /TOKEN|must-not-leak|private server output|private prompt/,
@@ -1707,7 +1709,7 @@ test("terminal-failure evidence remains actionable and Manager uses only delegat
   });
 });
 
-test("Pi provenance requires exact session, foreground PID, and Pi version", () => {
+test("Pi provenance enforces the supported baseline and reports the observed version", () => {
   const record = {
     pid: 42,
     sessionId: "session",
@@ -1762,19 +1764,24 @@ test("Pi provenance requires exact session, foreground PID, and Pi version", () 
       ),
     /provenance row/,
   );
-  assert.throws(
-    () =>
+  for (const [observedVersion, accepted] of [
+    ["1.1.9", false],
+    ["1.2.0", true],
+    ["1.3.0", true],
+  ] as const) {
+    const attempt = () =>
       matchPiProvenance(
-        [{ ...record, piVersion: "1.1.0" }],
+        [{ ...record, piVersion: observedVersion }],
         "session",
         "lead-pane",
         processes,
         "terminal-error",
         true,
         "1.2.0",
-      ),
-    /1\.2\.0/,
-  );
+      );
+    if (!accepted) assert.throws(attempt, /1\.2\.0/);
+    else assert.equal(attempt().piVersion, observedVersion);
+  }
   assert.throws(
     () =>
       matchPiProvenance(
@@ -2039,7 +2046,7 @@ test("parent shutdown requires both owned child exit and named server stopped ev
   const success = await verifyParentShutdown(successParent, {
     stop: async () => {},
     waitForExit: async () => {
-      successParent.server.exit = { code: 0 };
+      successParent.exit = { code: 0 };
     },
     status: async () => ({ server: { running: false } }),
   });
@@ -2101,7 +2108,7 @@ test("parent shutdown requires both owned child exit and named server stopped ev
   assert.match(childStillAlive.join("\n"), /owned child did not exit/);
 
   const serverStillRunning = await verifyParentShutdown(
-    { server: { exit: { code: 0 } } },
+    { server: {}, exit: { code: 0 } },
     {
       stop: async () => {},
       waitForExit: async () => {},
@@ -2167,7 +2174,7 @@ test("cleanup artifact records false child signal results", async () => {
   const persisted = await readFile(artifactPath, "utf8");
   assert.match(persisted, /"sigtermSent": false/);
   assert.match(persisted, /"sigkillSent": false/);
-  await rm(artifactPath.slice(0, artifactPath.lastIndexOf("/")), {
+  await rm(dirname(artifactPath), {
     recursive: true,
     force: true,
   });
@@ -2263,7 +2270,7 @@ test("cleanup closes and verifies the owned parent through Herdr contracts", asy
       runCommand: async (_file, args, options) => {
         calls.push(args);
         stopCall = { args, env: options.env };
-        server.exit = { code: 0 };
+        parent.exit = { code: 0 };
         return {};
       },
       tryHerdrCommand: async (args) => {
@@ -2929,10 +2936,11 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
 test("collectDiagnostics reads the host pane through the parent Herdr environment", async () => {
   const parentEnv = { HERDR_SESSION: "parent-session" };
   const calls = [];
+  let projection;
   const originalError = console.error;
   console.error = () => {};
   try {
-    await collectDiagnostics(
+    projection = await collectDiagnostics(
       {
         parentEnv,
         paths: {},
@@ -2953,6 +2961,13 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
   } finally {
     console.error = originalError;
   }
+  assert.deepEqual(projection, {
+    stage: null,
+    agentsObserved: 0,
+    panesObserved: 0,
+    rootSessionObserved: false,
+    candidateProcessesObserved: 0,
+  });
   assert.deepEqual(
     calls.find(([, args]) => args.includes("host-pane")),
     [

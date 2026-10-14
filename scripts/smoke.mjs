@@ -2147,7 +2147,7 @@ export function matchPiProvenance(
     );
     const [record] = matches;
     assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
-    assert.equal(record.piVersion, expectedPiVersion);
+    requireTestedBaseline("Pi", record.piVersion, expectedPiVersion);
     assert.equal(record.model, expectedModel);
     assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
     const processes = foregroundProcesses.filter(
@@ -2427,7 +2427,7 @@ async function runTerminalFailureSmoke(ctx) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  ctx.firstRequestVerified = provenance.length > 0;
+  ctx.firstRequestObserved = provenance.length > 0;
   try {
     ctx.sessionStartObserved = Boolean(
       (
@@ -2454,6 +2454,7 @@ async function runTerminalFailureSmoke(ctx) {
     true,
     ctx.expectedPiVersion,
   );
+  ctx.firstRequestVerified = true;
   const report = terminalFailureEvidence(
     managerSession.contents,
     branch,
@@ -3048,7 +3049,7 @@ async function runCoreSmoke(ctx) {
       .split(/\r?\n/)
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    ctx.firstRequestVerified = provenance.length > 0;
+    ctx.firstRequestObserved = provenance.length > 0;
     try {
       ctx.sessionStartObserved = Boolean(
         (
@@ -3133,6 +3134,7 @@ async function runCoreSmoke(ctx) {
         ctx.expectedPiVersion,
       );
     }
+    ctx.firstRequestVerified = true;
     requireSmokeEvidence(
       provenance.length === sessionIds.size,
       "unexpected or duplicate core provenance rows",
@@ -4774,7 +4776,7 @@ export async function verifyParentShutdown(
     signalCode: parent.server?.signalCode ?? null,
   });
   const childExited = () =>
-    Boolean(parent.server?.exit) ||
+    Boolean(parent.exit) ||
     (parent.server?.exitCode !== null &&
       parent.server?.exitCode !== undefined) ||
     (parent.server?.signalCode !== null &&
@@ -4787,7 +4789,7 @@ export async function verifyParentShutdown(
       : null;
   const exitedBeforeStop = childExited();
   diagnostics.child = {
-    exitObservedBeforeStop: Boolean(parent.server?.exit),
+    exitObservedBeforeStop: Boolean(parent.exit),
     ...terminalState(),
   };
   let stopError;
@@ -4814,7 +4816,7 @@ export async function verifyParentShutdown(
   }
   if (!exitError && !childExited())
     exitError = new Error("owned child exit event was not observed");
-  diagnostics.child.exitObservedAfterStop ??= Boolean(parent.server?.exit);
+  diagnostics.child.exitObservedAfterStop ??= Boolean(parent.exit);
   Object.assign(diagnostics.child, terminalState());
   let serverStopped = false;
   let statusError;
@@ -4999,6 +5001,21 @@ export async function collectDiagnostics(
   } catch {
     console.error("diagnostics: collection failed");
   }
+  return {
+    stage: diagnostics.stage,
+    agentsObserved: diagnostics.agents?.ok
+      ? (diagnostics.agents.value?.agents?.length ?? 0)
+      : null,
+    panesObserved: diagnostics.panes?.ok
+      ? (diagnostics.panes.value?.panes?.length ?? 0)
+      : null,
+    rootSessionObserved: Boolean(
+      diagnostics.rootSession && !diagnostics.rootSession.error,
+    ),
+    candidateProcessesObserved: Array.isArray(diagnostics.processes)
+      ? diagnostics.processes.filter((record) => record.processMatch).length
+      : null,
+  };
 }
 
 export async function cleanup(
@@ -5152,7 +5169,7 @@ export async function cleanup(
   if (owned.parent) {
     const parent = owned.parent;
     const parentDiagnostics = {
-      child: { exitObservedBeforeStop: Boolean(parent.server.exit) },
+      child: { exitObservedBeforeStop: Boolean(parent.exit) },
     };
     ctx.parentCleanupDiagnostics = parentDiagnostics;
     if (parent.workspaceId) {
@@ -5168,7 +5185,7 @@ export async function cleanup(
     }
     const waitForParentExit = async (timeoutMs) => {
       if (
-        parent.server.exit ||
+        parent.exit ||
         parent.server.exitCode != null ||
         parent.server.signalCode != null
       )
@@ -5192,12 +5209,12 @@ export async function cleanup(
             await waitForParentExit(5_000);
             parentDiagnostics.child.waitAfterStop = "exited";
             parentDiagnostics.child.exitObservedAfterStop = Boolean(
-              parent.server.exit,
+              parent.exit,
             );
           } catch {
             parentDiagnostics.child.waitAfterStop = "timeout";
             parentDiagnostics.child.exitObservedAfterStop = Boolean(
-              parent.server.exit,
+              parent.exit,
             );
             parentDiagnostics.child.sigtermSent = parent.server.kill("SIGTERM");
             try {
@@ -5207,7 +5224,7 @@ export async function cleanup(
               parentDiagnostics.child.waitAfterSigterm = "timeout";
             } finally {
               parentDiagnostics.child.exitObservedAfterSigterm = Boolean(
-                parent.server.exit,
+                parent.exit,
               );
             }
             parentDiagnostics.child.sigkillSent = parent.server.kill("SIGKILL");
@@ -5219,7 +5236,7 @@ export async function cleanup(
               throw error;
             } finally {
               parentDiagnostics.child.exitObservedAfterSigkill = Boolean(
-                parent.server.exit,
+                parent.exit,
               );
             }
           }
@@ -5274,15 +5291,12 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
+    firstRequestObserved: ctx.firstRequestObserved ?? false,
     firstRequestVerified: ctx.firstRequestVerified ?? false,
     parentOwnership: parent
       ? {
           session: parent.name,
           workspaceId: parent.workspaceId ?? null,
-          temporaryRoot: ctx.paths.root,
-          herdrConfig: ctx.paths.herdrConfig,
-          xdgConfig: ctx.paths.xdgConfig,
-          xdgState: ctx.paths.xdgState,
           childPid: parent.server.pid ?? null,
           childExitObserved: Boolean(parent.exit),
         }
@@ -5350,6 +5364,7 @@ async function main() {
         lastVerified: null,
         processesVerified: 0,
         sessionStartObserved: false,
+        firstRequestObserved: false,
         firstRequestVerified: false,
         cleanup: "NOT_REQUIRED",
       });
@@ -5380,6 +5395,7 @@ async function main() {
         lastVerified: null,
         processesVerified: 0,
         sessionStartObserved: false,
+        firstRequestObserved: false,
         firstRequestVerified: false,
         cleanup: "NOT_REQUIRED",
       });
@@ -5522,6 +5538,9 @@ async function main() {
       `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${formatSmokeFailure(error, ctx.stage)}`,
     );
     try {
+      const diagnosticProjection = ctx.sessionName
+        ? await collectDiagnostics(ctx, owned, failure)
+        : null;
       evidence = sanitizedFailureEvidence(
         ctx,
         failure,
@@ -5551,10 +5570,12 @@ async function main() {
           ),
           "utf8",
         );
-        ctx.firstRequestVerified = provenance.trim().length > 0;
+        ctx.firstRequestObserved = provenance.trim().length > 0;
       } catch {}
       evidence.sessionStartObserved = ctx.sessionStartObserved;
+      evidence.firstRequestObserved = ctx.firstRequestObserved ?? false;
       evidence.firstRequestVerified = ctx.firstRequestVerified ?? false;
+      evidence.diagnostics = diagnosticProjection;
       const artifact = await preserveFailureEvidence(evidence);
       ctx.failureArtifact = artifact;
       console.error(`failure evidence: ${artifact}`);
