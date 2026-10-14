@@ -413,6 +413,22 @@ export function nestedControlEnv(base, paths, sessionName) {
   return { ...isolatedEnv(base, paths), HERDR_SESSION: sessionName };
 }
 
+export function parentControlEnv(base) {
+  if (
+    base.HERDR_ENV !== "1" ||
+    !base.HERDR_WORKSPACE_ID ||
+    !base.HERDR_SESSION ||
+    base.HERDR_SESSION === "default"
+  ) {
+    throw new Error("smoke requires a disposable named parent Herdr session");
+  }
+
+  const env = { ...base };
+  delete env.HERDR_SOCKET_PATH;
+  delete env.HERDR_CLIENT_SOCKET_PATH;
+  return env;
+}
+
 export function rootCandidateCommand(args) {
   return shellCommand([
     "env",
@@ -1504,9 +1520,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-async function preflight(pkg) {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID)
-    throw new Error("smoke must run from a Herdr-managed Pi session");
+async function preflight(pkg, parentEnv) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -1515,10 +1529,22 @@ async function preflight(pkg) {
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
-  const [{ stdout: piVersion }, status] = await Promise.all([
+  const [{ stdout: piVersion }, status, workspace] = await Promise.all([
     run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
-    herdr(["status", "--json"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    herdr(["status", "--json"], {
+      env: parentEnv,
+      timeout: OBSERVATION_TIMEOUT_MS,
+    }),
+    herdr(["workspace", "get", parentEnv.HERDR_WORKSPACE_ID], {
+      env: parentEnv,
+      timeout: OBSERVATION_TIMEOUT_MS,
+    }),
   ]);
+  assert.equal(
+    workspace?.workspace?.workspace_id,
+    parentEnv.HERDR_WORKSPACE_ID,
+    "smoke parent workspace is not in the selected named session",
+  );
   const actualPiVersion = piVersion.trim();
   requireTestedBaseline("Pi", actualPiVersion, piBaseline);
   if (!status?.server?.running) throw new Error("Herdr server is not running");
@@ -1633,6 +1659,7 @@ async function prepareHerdr(paths) {
 async function startNestedHerdr(
   paths,
   owned,
+  parentEnv,
   primaryCheckoutPath,
   managerRecoveryDiagnostics,
 ) {
@@ -1645,7 +1672,7 @@ async function startNestedHerdr(
       "tab",
       "create",
       "--workspace",
-      process.env.HERDR_WORKSPACE_ID,
+      parentEnv.HERDR_WORKSPACE_ID,
       "--cwd",
       primaryCheckoutPath,
       "--label",
@@ -1665,7 +1692,7 @@ async function startNestedHerdr(
         ? ["--env", "PI_HERDSMAN_MANAGER_DIAGNOSTICS=1"]
         : []),
     ],
-    { env: process.env },
+    { env: parentEnv },
   );
   const result = host;
   owned.hostTabId = result.tab?.tab_id;
@@ -1689,7 +1716,7 @@ async function startNestedHerdr(
         paths.root,
       ]),
     ],
-    { env: process.env },
+    { env: parentEnv },
   ).catch((error) => {
     throw new Error(`could not launch nested host: ${error.message}`);
   });
@@ -4577,7 +4604,9 @@ async function cleanup(paths, owned, ctx) {
   }
   if (owned.hostTabId) {
     try {
-      await cleanupHerdr(["tab", "close", owned.hostTabId]);
+      await cleanupHerdr(["tab", "close", owned.hostTabId], {
+        env: ctx.parentEnv,
+      });
     } catch (error) {
       failures.push(`host tab ${owned.hostTabId}: ${error.message}`);
     }
@@ -4605,11 +4634,12 @@ function cleanupEvidence(owned) {
 }
 
 async function main() {
+  const parentEnv = parentControlEnv(process.env);
   const args = parseSmokeArgs(process.argv.slice(2));
   const pkg = JSON.parse(
     await readFile(join(repoRoot, "package.json"), "utf8"),
   );
-  const preflightEvidence = await preflight(pkg);
+  const preflightEvidence = await preflight(pkg, parentEnv);
   const model = await selectSmokeModel(args);
   const scenario = args.scenario;
   await run("npm", ["run", "build"], { cwd: repoRoot });
@@ -4647,6 +4677,7 @@ async function main() {
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
+    parentEnv,
     preflight: preflightEvidence,
   };
   ctx.initialPrompt = initialPromptForScenario(scenario, ctx);
@@ -4679,6 +4710,7 @@ async function main() {
     await startNestedHerdr(
       paths,
       owned,
+      parentEnv,
       ctx.rootCwd,
       ctx.managerRecoveryDiagnostics,
     );

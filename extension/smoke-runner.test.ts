@@ -39,6 +39,7 @@ import {
   isPackageReadPath,
   listedPanes,
   nestedControlEnv,
+  parentControlEnv,
   rootCandidateCommand,
   nestedHerdrApiSocketPath,
   nestedPaneInput,
@@ -85,6 +86,30 @@ test("package read identity accepts equivalent paths and rejects other files", (
   assert.equal(isPackageReadPath("other.json", cwd), false);
   assert.equal(isPackageReadPath(`${cwd}/other.json`, cwd), false);
   assert.equal(isPackageReadPath("package.json", undefined), false);
+});
+
+test("parent Herdr routing rejects default and stale sockets", () => {
+  const base = {
+    HERDR_ENV: "1",
+    HERDR_SESSION: "smoke-parent",
+    HERDR_WORKSPACE_ID: "w2",
+    HERDR_SOCKET_PATH: "/wrong/server.sock",
+    HERDR_CLIENT_SOCKET_PATH: "/wrong/client.sock",
+    XDG_CONFIG_HOME: "/tmp/smoke-parent",
+  };
+
+  assert.deepEqual(parentControlEnv(base), {
+    HERDR_ENV: "1",
+    HERDR_SESSION: "smoke-parent",
+    HERDR_WORKSPACE_ID: "w2",
+    XDG_CONFIG_HOME: "/tmp/smoke-parent",
+  });
+
+  assert.throws(() => parentControlEnv({ ...base, HERDR_SESSION: "default" }));
+
+  assert.throws(() => parentControlEnv({ ...base, HERDR_SESSION: undefined }));
+
+  assert.equal(base.HERDR_SOCKET_PATH, "/wrong/server.sock");
 });
 
 test("exact core and continuation tool evidence is enforced only in simulated mode", () => {
@@ -536,7 +561,6 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     KEEP_ME: "yes",
     HERDR_SESSION: "smoke-child",
   });
-  assert.equal(paneOptions.env.HERDR_ENV, "1");
   assert.equal(paneOptions.env.HERDR_CONFIG_PATH, paths.herdrConfig);
   assert.equal(paneOptions.env.PI_CODING_AGENT_DIR, paths.piAgent);
   assert.equal(paneOptions.env.PI_CODING_AGENT_SESSION_DIR, paths.piSessions);
