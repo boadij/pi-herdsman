@@ -53,6 +53,18 @@ Do not ask the model to infer, remember, reconstruct, or supply information the 
 
 Instructions should describe semantics the system cannot make sufficiently obvious or enforce directly.
 
+## Keep shared instructions roster-agnostic
+
+Shared runtime instructions, tool descriptions, and reusable workflows must not
+assume particular Agent definitions exist. Describe work by responsibility and
+required capability. Select from the effective roster, respecting availability,
+permissions, and ownership boundaries. If no suitable Agent is available, use
+permitted local capabilities or report the limitation.
+
+Individual definitions may describe their own roles and explicitly configured
+child dependencies. Bundled Agent names in examples and test fixtures must not
+become requirements for normal operation.
+
 ## Prefer positive steering
 
 Design for desired behavior before constraining against undesired behavior.

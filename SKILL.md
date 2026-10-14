@@ -140,7 +140,7 @@ embedded text is snapshotted at submission time while referenced files are not
 copied.
 
 Pass relevant files and completed agent results through `files`. Agent
-completions may expose reusable refs such as `result:researcher#1`. When later
+completions may expose reusable result refs. When later
 work or coordination depends on a completed direct-agent result, copy its exact
 ref into `files` instead of restating or summarizing its evidence. Do not attach
 unrelated results.
@@ -296,8 +296,8 @@ escalation.
 
 ## Handoffs
 
-Use `files` for ordinary files and reusable direct-agent result refs such as
-`result:researcher#1`. Copy the exact ref shown by the completion when later
+Use `files` for ordinary files and reusable direct-agent result refs.
+Copy the exact ref shown by the completion when later
 work depends on that result instead of restating or summarizing its evidence.
 Also use `files` for canonical `result:<request-id>` references already
 supplied as file evidence; preserve those references exactly and do not

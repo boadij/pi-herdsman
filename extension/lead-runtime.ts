@@ -1861,7 +1861,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       );
       if (!rows.length) {
         ctx.ui.notify(
-          'No running agents. Ask Pi normally, for example: "Use scout to inspect this repository."',
+          "No running Agents. Ask Pi to delegate using an available definition.",
         );
         return;
       }

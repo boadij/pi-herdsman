@@ -36,7 +36,10 @@ Every normal session starts as a Lead. A Lead owns its assigned objective and
 its direct Agents. A delegation-enabled Agent may in turn own only the Agents
 its definition permits.
 
-A Lead and its recursively owned Agent hierarchy form a **herd**.
+A Lead and its recursively owned Agent hierarchy form a **herd**, its internal
+team. Reviews by any member of the herd are internal, regardless of which Agent
+definitions are available. They inform the Lead's decisions, not user or
+supervisor review or approval.
 
 Lead execution configuration is separate from role and authority. An ordinary
 Lead uses its session's `Flexible` or `Orchestrate` preference, selecting

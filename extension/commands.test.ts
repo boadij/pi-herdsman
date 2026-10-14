@@ -8216,8 +8216,9 @@ test("Running explains how to delegate when no agents are running", async () => 
   assert.ok(
     notices.some(
       (message) =>
-        message.includes("No running agents") &&
-        message.includes("Use scout to inspect this repository"),
+        message.includes("No running Agents") &&
+        message.includes("available definition") &&
+        !message.includes("scout"),
     ),
   );
 });
@@ -8419,7 +8420,7 @@ test("Running excludes lost and unknown durable generations", async () => {
         `Pi Herdsman · v${packageMetadata.version}`,
       ],
     );
-    assert.ok(notices.some((message) => message.includes("No running agents")));
+    assert.ok(notices.some((message) => message.includes("No running Agents")));
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "focus"),
       false,

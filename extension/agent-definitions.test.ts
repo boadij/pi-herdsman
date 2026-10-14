@@ -791,11 +791,11 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "reviewer",
-      "Independent read-only reviewer for plans, diffs, implementations, and codebase health; use when work needs verification, missing-case analysis, or regression review rather than modification",
+      "Independent read-only internal team reviewer for plans, diffs, implementations, and codebase health; use for verification, missing cases, and regressions, not user or supervisor approval",
     ],
     [
       "generalist",
-      "General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer",
+      "General-purpose execution agent for bounded tasks requiring broad capabilities",
     ],
   ]);
   const required = withPiAgentDir(
@@ -850,6 +850,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   assert.match(required.get("implementer")!, /scoped edits and validation/);
   assert.match(required.get("generalist")!, /smallest complete action/);
   assert.match(required.get("reviewer")!, /strictly read-only/);
+  assert.match(required.get("reviewer")!, /conduct internal reviews/);
+  assert.match(required.get("reviewer")!, /preserve its origin/);
   assert.match(required.get("scout")!, /read-only codebase reconnaissance/);
   assert.match(
     required.get("researcher")!,
