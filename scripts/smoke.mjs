@@ -753,10 +753,13 @@ export function managerCleanupTarget(
   worktrees,
   branch,
   worktreePath,
+  workspaceId,
   retirementRequested = false,
 ) {
   if (typeof worktreePath !== "string" || !worktreePath)
     throw new Error("captured worktree path is unavailable");
+  if (typeof workspaceId !== "string" || !workspaceId)
+    throw new Error("captured workspace identity is unavailable");
   const matches = worktrees.filter((item) => item.branch === branch);
   if (matches.length === 0 && retirementRequested) return null;
   if (matches.length !== 1)
@@ -766,7 +769,102 @@ export function managerCleanupTarget(
     throw new Error("exact branch worktree path does not match captured path");
   if (typeof target.open_workspace_id !== "string" || !target.open_workspace_id)
     throw new Error("exact branch worktree has no workspace identity");
+  if (target.open_workspace_id !== workspaceId)
+    throw new Error(
+      "exact branch worktree workspace identity does not match captured identity",
+    );
   return target;
+}
+
+export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
+  const matches = worktrees.filter((item) => item.branch === branch);
+  if (matches.length === 0) return null;
+  if (matches.length !== 1)
+    throw new Error("exact branch must identify one worktree");
+  const [worktree] = matches;
+  const path = worktree.path ?? worktree.worktree_path;
+  if (typeof path !== "string" || !path || !worktree.open_workspace_id)
+    throw new Error("exact branch worktree identity is incomplete");
+  captureTerminalFailureAssignment(ctx, path, worktree.open_workspace_id);
+  return worktree;
+}
+
+export function captureTerminalFailureAssignment(ctx, path, workspaceId) {
+  if (typeof path !== "string" || !path || !workspaceId)
+    throw new Error("exact assigned worktree identity is incomplete");
+  if (ctx.owned.managerWorktreePath || ctx.owned.managerWorkspaceId) {
+    if (
+      ctx.owned.managerWorktreePath !== path ||
+      ctx.owned.managerWorkspaceId !== workspaceId
+    )
+      throw new Error(
+        "exact assigned worktree identity conflicts with captured identity",
+      );
+    return;
+  }
+  ctx.owned.managerWorktreePath = path;
+  ctx.owned.managerWorkspaceId = workspaceId;
+  ctx.owned.managerWorktreeRetirementRequested = false;
+}
+
+export function parentHostPaneReadOptions(parentEnv) {
+  return { env: parentEnv, timeout: OBSERVATION_TIMEOUT_MS };
+}
+
+export async function readParentHostPane(ctx, paneId, execute = run) {
+  return execute(
+    "herdr",
+    ["pane", "read", paneId, "--source", "recent-unwrapped", "--lines", "80"],
+    parentHostPaneReadOptions(ctx.parentEnv),
+  );
+}
+
+export async function captureTerminalFailureTopology(
+  ctx,
+  branch,
+  execute = nestedCommand,
+) {
+  const topology = await execute(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  return captureTerminalFailureWorktree(ctx, topology.worktrees ?? [], branch);
+}
+
+export async function terminalFailureAssignmentPoll(
+  ctx,
+  branch,
+  root,
+  agents,
+  execute = nestedCommand,
+  getAgentSessionId = agentSessionId,
+) {
+  const session = await root();
+  const delegated = session
+    ? staffDelegateResults(session.contents).filter(
+        (item) => item.branch === branch,
+      )
+    : [];
+  try {
+    await captureTerminalFailureTopology(ctx, branch, execute);
+  } catch {
+    // Assignment verification remains authoritative; retain cleanup evidence when observable.
+  }
+  let child;
+  if (delegated.length === 1)
+    for (const agent of await agents())
+      if ((await getAgentSessionId(ctx, agent)) === delegated[0].session) {
+        child = agent;
+        break;
+      }
+  return {
+    done: !!child,
+    value: { delegated: delegated[0], child },
+    progress: { delegationCount: delegated.length },
+    evidence: session ? summarizeSession(session.contents) : null,
+  };
 }
 
 export async function prepareManagerRepository(paths, execute = run) {
@@ -2020,27 +2118,7 @@ async function runTerminalFailureSmoke(ctx) {
   const result = await waitForEvidence(
     ctx,
     "terminal-failure-assignment",
-    async () => {
-      const session = await root();
-      const delegated = session
-        ? staffDelegateResults(session.contents).filter(
-            (item) => item.branch === branch,
-          )
-        : [];
-      let child;
-      if (delegated.length === 1)
-        for (const agent of await agents())
-          if ((await agentSessionId(ctx, agent)) === delegated[0].session) {
-            child = agent;
-            break;
-          }
-      return {
-        done: !!child,
-        value: { delegated: delegated[0], child },
-        progress: { delegationCount: delegated.length },
-        evidence: session ? summarizeSession(session.contents) : null,
-      };
-    },
+    () => terminalFailureAssignmentPoll(ctx, branch, root, agents),
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
   const assigned = result.delegated;
@@ -2069,9 +2147,8 @@ async function runTerminalFailureSmoke(ctx) {
     typeof worktreePath === "string" && isAbsolute(worktreePath),
     "exact assigned Lead pane must identify its worktree path",
   );
-  ctx.owned.managerWorktreePath = worktreePath;
+  captureTerminalFailureAssignment(ctx, worktreePath, assigned.workspace_id);
   ctx.owned.managerWorktreeRetirementRequested = false;
-  ctx.owned.managerWorkspaceId = assigned.workspace_id;
   ctx.managerRecovery = { branch, worktreePath };
   assert.equal(resolve(paneCwd), resolve(worktreePath));
   const sessionSnapshot = () => exactIsolatedSession(ctx, sessionId);
@@ -4325,7 +4402,12 @@ async function waitForDescendantsToExit(ctx) {
   );
 }
 
-async function collectDiagnostics(ctx, owned, failure) {
+export async function collectDiagnostics(
+  ctx,
+  owned,
+  failure,
+  { execute = run, observe = tryHerdr, snapshot = rootSessionSnapshot } = {},
+) {
   const diagnostics = {};
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
   diagnostics.chiefTreeProbe = ctx.chiefTreeProbeDiagnostics ?? null;
@@ -4337,11 +4419,11 @@ async function collectDiagnostics(ctx, owned, failure) {
   diagnostics.preflight = ctx.preflight ?? null;
   const [agents, panes, rootSession, rootPane, hostPane] =
     await Promise.allSettled([
-      tryHerdr(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      tryHerdr(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      rootSessionSnapshot(ctx),
+      observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
+      observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
+      snapshot(ctx),
       ctx.rootPaneId
-        ? run(
+        ? execute(
             "herdr",
             [
               "pane",
@@ -4356,19 +4438,7 @@ async function collectDiagnostics(ctx, owned, failure) {
           )
         : null,
       owned.hostPaneId
-        ? run(
-            "herdr",
-            [
-              "pane",
-              "read",
-              owned.hostPaneId,
-              "--source",
-              "recent-unwrapped",
-              "--lines",
-              "80",
-            ],
-            { timeout: OBSERVATION_TIMEOUT_MS },
-          )
+        ? readParentHostPane(ctx, owned.hostPaneId, execute)
         : null,
     ]);
   diagnostics.agents =
@@ -4388,10 +4458,10 @@ async function collectDiagnostics(ctx, owned, failure) {
     paneIds,
     ctx.rootPaneId,
     async (paneId) => {
-      const result = await tryHerdr(
-        ["pane", "process-info", "--pane", paneId],
-        { env, timeout: OBSERVATION_TIMEOUT_MS },
-      );
+      const result = await observe(["pane", "process-info", "--pane", paneId], {
+        env,
+        timeout: OBSERVATION_TIMEOUT_MS,
+      });
       if (!result.ok) throw new Error(result.error);
       return result.value;
     },
@@ -4437,7 +4507,7 @@ async function collectDiagnostics(ctx, owned, failure) {
   ].slice(0, 4);
   const descendantReads = await Promise.allSettled(
     knownDescendants.map((paneId) =>
-      run(
+      execute(
         "herdr",
         [
           "pane",
@@ -4514,6 +4584,7 @@ async function cleanup(paths, owned, ctx) {
         cleanupTopology,
         owned.managerBranch,
         owned.managerWorktreePath,
+        owned.managerWorkspaceId,
         owned.managerWorktreeRetirementRequested === true,
       );
       if (target) {

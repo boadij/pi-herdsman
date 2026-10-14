@@ -58,6 +58,10 @@ import {
   projectMessageEntries,
   retainedProjectMessageRecord,
   managerCleanupTarget,
+  collectDiagnostics,
+  captureTerminalFailureAssignment,
+  captureTerminalFailureWorktree,
+  terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -2051,6 +2055,7 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
       [worktree],
       "feature/current",
       "/smoke/project-worktree",
+      worktree.open_workspace_id,
     ),
     worktree,
   );
@@ -2060,11 +2065,18 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
         [worktree, worktree],
         worktree.branch,
         worktree.path,
+        worktree.open_workspace_id,
       ),
     /one worktree/,
   );
   assert.throws(
-    () => managerCleanupTarget([worktree], worktree.branch, "/other/path"),
+    () =>
+      managerCleanupTarget(
+        [worktree],
+        worktree.branch,
+        "/other/path",
+        worktree.open_workspace_id,
+      ),
     /path does not match/,
   );
   assert.throws(
@@ -2073,15 +2085,28 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
         [{ ...worktree, open_workspace_id: "" }],
         worktree.branch,
         worktree.path,
+        worktree.open_workspace_id,
       ),
     /no workspace identity/,
   );
   assert.throws(
-    () => managerCleanupTarget([], worktree.branch, worktree.path),
+    () =>
+      managerCleanupTarget(
+        [],
+        worktree.branch,
+        worktree.path,
+        worktree.open_workspace_id,
+      ),
     /one worktree/,
   );
   assert.equal(
-    managerCleanupTarget([], worktree.branch, worktree.path, true),
+    managerCleanupTarget(
+      [],
+      worktree.branch,
+      worktree.path,
+      worktree.open_workspace_id,
+      true,
+    ),
     null,
   );
   assert.throws(
@@ -2090,9 +2115,182 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
         [worktree, worktree],
         worktree.branch,
         worktree.path,
+        worktree.open_workspace_id,
         true,
       ),
     /one worktree/,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [{ ...worktree, open_workspace_id: "replacement-workspace" }],
+        worktree.branch,
+        worktree.path,
+        worktree.open_workspace_id,
+      ),
+    /workspace identity does not match captured identity/,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [worktree],
+        worktree.branch,
+        worktree.path,
+        undefined,
+      ),
+    /captured workspace identity is unavailable/,
+  );
+});
+
+test("collectDiagnostics reads the host pane through the parent Herdr environment", async () => {
+  const parentEnv = { HERDR_SESSION: "parent-session" };
+  const calls = [];
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await collectDiagnostics(
+      {
+        parentEnv,
+        paths: {},
+        sessionName: "nested",
+        rootPaneId: "root-pane",
+      },
+      { hostPaneId: "host-pane" },
+      null,
+      {
+        execute: async (...args) => {
+          calls.push(args);
+          return { stdout: "host output" };
+        },
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => null,
+      },
+    );
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(
+    calls.find(([, args]) => args.includes("host-pane")),
+    [
+      "herdr",
+      [
+        "pane",
+        "read",
+        "host-pane",
+        "--source",
+        "recent-unwrapped",
+        "--lines",
+        "80",
+      ],
+      { env: parentEnv, timeout: 5_000 },
+    ],
+  );
+});
+
+test("terminal-failure assignment polling captures topology before assignment succeeds", async () => {
+  const ctx = {
+    rootWorkspaceId: "parent-workspace",
+    owned: { managerBranch: "herdsman/smoke-terminal-failure" },
+  };
+  const worktree = {
+    branch: "herdsman/smoke-terminal-failure",
+    path: "/smoke/terminal-failure",
+    open_workspace_id: "workspace-2",
+  };
+  const calls = [];
+  const result = await terminalFailureAssignmentPoll(
+    ctx,
+    worktree.branch,
+    async () => null,
+    async () => [],
+    async (...args) => {
+      calls.push(args);
+      return { worktrees: [worktree] };
+    },
+  );
+  assert.equal(result.done, false);
+  assert.deepEqual(calls, [
+    [ctx, ["worktree", "list", "--workspace", "parent-workspace"]],
+  ]);
+  // No successful assignment is required to retain identity exposed by topology.
+  assert.equal(ctx.owned.managerWorktreePath, worktree.path);
+  assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
+  assert.equal(ctx.owned.managerWorktreeRetirementRequested, false);
+  assert.equal(
+    managerCleanupTarget(
+      [worktree],
+      worktree.branch,
+      ctx.owned.managerWorktreePath,
+      ctx.owned.managerWorkspaceId,
+    ),
+    worktree,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [{ ...worktree, open_workspace_id: "replacement-workspace" }],
+        worktree.branch,
+        ctx.owned.managerWorktreePath,
+        ctx.owned.managerWorkspaceId,
+      ),
+    /workspace identity does not match captured identity/,
+  );
+  assert.throws(
+    () =>
+      captureTerminalFailureWorktree(
+        ctx,
+        [worktree, worktree],
+        worktree.branch,
+      ),
+    /one worktree/,
+  );
+});
+
+test("terminal-failure assignment polling preserves the first workspace identity", async () => {
+  const ctx = {
+    rootWorkspaceId: "parent-workspace",
+    owned: { managerBranch: "herdsman/smoke-terminal-failure" },
+  };
+  const worktree = {
+    branch: "herdsman/smoke-terminal-failure",
+    path: "/smoke/terminal-failure",
+    open_workspace_id: "workspace-2",
+  };
+  const poll = () =>
+    terminalFailureAssignmentPoll(
+      ctx,
+      worktree.branch,
+      async () => null,
+      async () => [],
+      async () => ({ worktrees: [{ ...worktree }] }),
+    );
+
+  assert.equal((await poll()).done, false);
+  worktree.open_workspace_id = "replacement-workspace";
+  assert.equal((await poll()).done, false);
+
+  assert.equal(ctx.owned.managerWorktreePath, worktree.path);
+  assert.equal(ctx.owned.managerWorkspaceId, "workspace-2");
+  assert.throws(
+    () =>
+      captureTerminalFailureAssignment(
+        ctx,
+        worktree.path,
+        "replacement-workspace",
+      ),
+    /conflicts with captured identity/,
+  );
+  assert.equal(ctx.owned.managerWorktreePath, worktree.path);
+  assert.equal(ctx.owned.managerWorkspaceId, "workspace-2");
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [worktree],
+        worktree.branch,
+        ctx.owned.managerWorktreePath,
+        ctx.owned.managerWorkspaceId,
+      ),
+    /workspace identity does not match captured identity/,
   );
 });
 
