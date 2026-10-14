@@ -28,7 +28,7 @@ Override it for one invocation with:
 npm run smoke -- chief-tree --model 'provider/model:thinking'
 ```
 
-Run the live harness from a Pi session managed by Herdr:
+Run the harness from an ordinary repository shell:
 
 ```sh
 npm run smoke
@@ -39,12 +39,13 @@ npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
 ```
 
-`npm run smoke` runs the default `core` scenario. The harness creates a
-disposable named Herdr session with isolated Herdr configuration/state, Pi
-configuration, and Pi session storage. It launches the current worktree's
-`dist/index.js` explicitly alongside Herdr's Pi integration. The invoking
-development Agent remains outside that candidate session and owns observation
-and cleanup. The harness removes only resources it created.
+`npm run smoke` runs the default live `core` scenario. The runner builds the
+current candidate, creates isolated Herdr and Pi configuration/session state,
+starts an owned named headless Herdr server, and creates an owned parent
+workspace before launching the disposable nested session. It routes commands
+only through that generated named session and removes inherited Herdr routing
+and managed-Agent identity variables. An already-running or invoking Herdr
+session is not used or modified. The runner cleans up only resources it owns.
 
 The candidate Pi uses `--approve` for this one invocation, trusting
 project-local files so project Agent definitions can be discovered. This does
@@ -135,10 +136,8 @@ delivery is ambiguous. Failure diagnostics and cleanup are bounded. A failed
 scenario is never automatically rerun and converted into a pass: success means
 one successful invocation.
 
-The harness must run inside Herdr and requires a configured smoke model or an
-explicit `--model` override. The smoke model is independent of the invoking Pi
-session's active model and reasoning level. Live smoke uses real provider
-credentials and usage. Live scenarios may fail; running one is not
+Live smoke requires a configured smoke model or an explicit `--model`
+override. Live smoke uses real provider credentials and usage. Live scenarios may fail; running one is not
 evidence of a pass. It does not replace or reconfigure the installed
 Herdsman, copy normal Pi settings or extensions, or run as part of
 `npm run validate`. Run selected scenarios according to the change being
@@ -146,12 +145,18 @@ verified; `npm run smoke` defaults to `core`.
 
 ## Runtime preflight
 
-Before creating isolated smoke resources, the harness validates the current
-checkout against the repository's `package.json` runtime contract: Node uses
-`engines.node`, Pi uses `piHerdsman.runtime.pi`, and Herdr uses
-`piHerdsman.runtime.herdr.version`. A mutable host Pi or Herdr installation may
-be newer than its baseline. Smoke also requires a running Herdr server and a
-compatible Herdr client/server session.
+Before allocating the Herdr environment, the harness validates installed Node,
+Pi, and Herdr versions against the repository's `package.json` runtime
+baselines. The owned server's readiness and client/server compatibility are
+then checked before creating the parent workspace. A pre-existing Herdr server
+or session is not required.
+
+On failure, the runner reports whether setup, scenario behavior, required
+evidence, or cleanup failed. It preserves one bounded, allowlisted JSON result
+outside the disposable runtime directory with owner-only permissions; raw
+prompts, environment variables, transcripts, and pane text are not included.
+The result is retained for diagnosis, while successful runs retain no diagnostic
+artifact. A final `PASS` is printed only after owned-resource cleanup succeeds.
 
 For troubleshooting, inspect the host runtime and integration status:
 

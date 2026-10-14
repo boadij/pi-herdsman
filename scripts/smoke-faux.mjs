@@ -453,6 +453,15 @@ export default function install(pi) {
   pi.registerProvider(faux.provider);
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
+    const evidenceDir = join(
+      process.env.PI_CODING_AGENT_DIR,
+      "pi-herdsman",
+      "runtime",
+    );
+    appendFileSync(
+      join(evidenceDir, "smoke-faux-session-start.jsonl"),
+      `${JSON.stringify({ sessionId, pid: process.pid })}\n`,
+    );
   });
   pi.on("agent_settled", (event, ctx) => {
     if (

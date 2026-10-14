@@ -40,6 +40,8 @@ For changes crossing the real Pi/Herdr runtime boundary, prefer relevant
 `--simulated` smoke first. Use real-model smoke when model decisions,
 instruction adherence, provider behavior, or coverage beyond simulation
 matters; `manager-recovery` is live-only.
+The smoke runner owns its disposable Herdr server and workspace and runs from
+an ordinary repository shell; do not prepare an external parent session.
 
 Prefer real local objects, temporary directories, files, and processes. Mock only the boundary that must be controlled to reach otherwise inaccessible behavior or failure.
 

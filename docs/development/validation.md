@@ -200,6 +200,8 @@ Agent results are delivered as user messages to the real Pi transcript; the
 simulated scenarios require those delivered results and correlated tool
 evidence. Without that flag, smoke remains live-model acceptance and uses the configured
 `pi-herdsman.smoke-model` or a one-run `--model` override.
-`npm run smoke` defaults to live `core`. Run smoke from an active
-Herdr-managed Pi session. See [Smoke testing](smoke-testing.md) for setup,
-scope, and isolation. Smoke is opt-in and not part of `npm run validate`.
+`npm run smoke` defaults to live `core`. The runner creates its own isolated
+Herdr server and workspace, so smoke can run from an ordinary repository
+shell, including one already inside Herdr. See [Smoke testing](smoke-testing.md)
+for setup, scope, and isolation. Smoke is opt-in and not part of
+`npm run validate`.

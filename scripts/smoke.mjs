@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   access,
   copyFile,
@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
@@ -413,20 +413,13 @@ export function nestedControlEnv(base, paths, sessionName) {
   return { ...isolatedEnv(base, paths), HERDR_SESSION: sessionName };
 }
 
-export function parentControlEnv(base) {
-  if (
-    base.HERDR_ENV !== "1" ||
-    !base.HERDR_WORKSPACE_ID ||
-    !base.HERDR_SESSION ||
-    base.HERDR_SESSION === "default"
-  ) {
-    throw new Error("smoke requires a disposable named parent Herdr session");
-  }
-
-  const env = { ...base };
-  delete env.HERDR_SOCKET_PATH;
-  delete env.HERDR_CLIENT_SOCKET_PATH;
-  return env;
+export function parentControlEnv(base, paths, sessionName) {
+  const env = isolatedEnv(base, paths);
+  delete env.HERDR_ENV;
+  delete env.HERDR_STARTUP_CWD;
+  delete env.HERDR_MACOS_SERVER_CONTEXT;
+  for (const key of MANAGED_AGENT_IDENTITY_KEYS) delete env[key];
+  return { ...env, HERDR_SESSION: sessionName };
 }
 
 export function rootCandidateCommand(args) {
@@ -1641,7 +1634,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-async function preflight(pkg, parentEnv) {
+async function preflight(pkg) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -1650,35 +1643,122 @@ async function preflight(pkg, parentEnv) {
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
-  const [{ stdout: piVersion }, status, workspace] = await Promise.all([
+  const [{ stdout: piVersion }, { stdout: herdrVersion }] = await Promise.all([
     run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
-    herdr(["status", "--json"], {
-      env: parentEnv,
-      timeout: OBSERVATION_TIMEOUT_MS,
-    }),
-    herdr(["workspace", "get", parentEnv.HERDR_WORKSPACE_ID], {
-      env: parentEnv,
-      timeout: OBSERVATION_TIMEOUT_MS,
-    }),
+    run("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
-  assert.equal(
-    workspace?.workspace?.workspace_id,
-    parentEnv.HERDR_WORKSPACE_ID,
-    "smoke parent workspace is not in the selected named session",
-  );
   const actualPiVersion = piVersion.trim();
   requireTestedBaseline("Pi", actualPiVersion, piBaseline);
+  const actualHerdrVersion = herdrVersion.trim().replace(/^herdr\s+v?/, "");
+  requireTestedBaseline("Herdr", actualHerdrVersion, herdrBaseline);
+  return { piVersion: actualPiVersion, herdrVersion: actualHerdrVersion };
+}
+
+export async function startParent(
+  paths,
+  owned,
+  {
+    spawnProcess = spawn,
+    tryHerdrCommand = tryHerdr,
+    wait = waitForEvidence,
+  } = {},
+) {
+  const name = `phs-${randomUUID().slice(0, 12)}`;
+  nestedHerdrApiSocketPath(paths, name);
+  const env = parentControlEnv(process.env, paths, name);
+  const server = spawnProcess("herdr", ["--session", name, "server"], {
+    env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const parent = { name, server, env, stderr: "" };
+  owned.parent = parent;
+  server.stderr.setEncoding("utf8");
+  server.stderr.on("data", (chunk) => {
+    parent.stderr = `${parent.stderr}${chunk}`.slice(-8_192);
+  });
+  server.on("error", (error) => {
+    parent.spawnError = error;
+  });
+  server.on("exit", (code, signal) => {
+    parent.exit = { code, signal };
+  });
+  await wait(
+    { stage: "parent-herdr-ready" },
+    "parent-herdr-ready",
+    async () => {
+      if (parent.spawnError) throw parent.spawnError;
+      if (parent.exit)
+        throw new Error(
+          `owned Herdr server exited (${JSON.stringify(parent.exit)})`,
+        );
+      const result = await tryHerdrCommand(["status", "--json"], {
+        env,
+        timeout: OBSERVATION_TIMEOUT_MS,
+      });
+      if (!result.ok) return { done: false, observationError: result.error };
+      if (!result.value?.server?.running)
+        return {
+          done: false,
+          observationError: "owned Herdr server is not running",
+        };
+      if (!result.value.server.compatible)
+        throw new Error("owned Herdr client/server are incompatible");
+      return { done: true, value: result.value };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 150 },
+  );
+  return { name, env };
+}
+
+export async function createParentWorkspace(
+  paths,
+  parent,
+  owned,
+  cwd,
+  herdrCommand = herdr,
+) {
+  const created = await herdrCommand(
+    [
+      "workspace",
+      "create",
+      "--cwd",
+      cwd,
+      "--label",
+      "pi-herdsman-smoke",
+      "--no-focus",
+    ],
+    { env: parent.env, timeout: OBSERVATION_TIMEOUT_MS },
+  );
+  const workspaceId = created?.workspace?.workspace_id;
+  const paneId = created?.root_pane?.pane_id;
+  assert.ok(workspaceId && paneId, "Herdr workspace create omitted owned IDs");
+  owned.parent.workspaceId = workspaceId;
+  owned.parent.rootPaneId = paneId;
+  const observed = await herdrCommand(["workspace", "get", workspaceId], {
+    env: parent.env,
+    timeout: OBSERVATION_TIMEOUT_MS,
+  });
+  assert.equal(observed?.workspace?.workspace_id, workspaceId);
+  return workspaceId;
+}
+
+async function preflightParent(pkg, parentEnv) {
+  const status = await herdr(["status", "--json"], {
+    env: parentEnv,
+    timeout: OBSERVATION_TIMEOUT_MS,
+  });
   if (!status?.server?.running) throw new Error("Herdr server is not running");
   if (!status?.server?.compatible)
     throw new Error("Herdr client/server are incompatible");
   const herdrClientVersion = status.client?.version;
   if (typeof herdrClientVersion !== "string")
     throw new Error("Herdr client version is unavailable or invalid");
-  requireTestedBaseline("Herdr", herdrClientVersion, herdrBaseline);
-  return {
-    piVersion: actualPiVersion,
+  requireTestedBaseline(
+    "Herdr",
     herdrClientVersion,
-  };
+    pkg.piHerdsman.runtime.herdr.version,
+  );
+  return { herdrClientVersion };
 }
 
 async function createIsolation() {
@@ -1785,7 +1865,7 @@ async function startNestedHerdr(
   managerRecoveryDiagnostics,
 ) {
   const id = randomUUID().slice(0, 12);
-  const sessionName = `pi-herdsman-smoke-${id}`;
+  const sessionName = `phs-${id}`;
   owned.sessionName = sessionName;
   nestedHerdrApiSocketPath(paths, sessionName);
   const host = await herdr(
@@ -2056,28 +2136,50 @@ export function matchPiProvenance(
   foregroundProcesses,
   expectedModel,
   requireAgentDefinitions,
+  expectedPiVersion,
 ) {
-  const matches = records.filter((record) => record.sessionId === sessionId);
-  assert.equal(
-    matches.length,
-    1,
-    `expected one provenance row for ${sessionId}`,
-  );
-  const [record] = matches;
-  assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
-  assert.equal(record.piVersion, "1.2.0");
-  assert.equal(record.model, expectedModel);
-  assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
-  const processes = foregroundProcesses.filter(
-    (process) => process.pid === record.pid,
-  );
-  assert.equal(
-    processes.length,
-    1,
-    `expected one foreground PID match in pane ${paneId}`,
-  );
-  assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0);
-  return { paneId, pid: record.pid, sessionId, piVersion: record.piVersion };
+  try {
+    const matches = records.filter((record) => record.sessionId === sessionId);
+    assert.equal(
+      matches.length,
+      1,
+      `expected one provenance row for ${sessionId}`,
+    );
+    const [record] = matches;
+    assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
+    assert.equal(record.piVersion, expectedPiVersion);
+    assert.equal(record.model, expectedModel);
+    assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
+    const processes = foregroundProcesses.filter(
+      (process) => process.pid === record.pid,
+    );
+    assert.equal(
+      processes.length,
+      1,
+      `expected one foreground PID match in pane ${paneId}`,
+    );
+    assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0);
+    return { paneId, pid: record.pid, sessionId, piVersion: record.piVersion };
+  } catch (error) {
+    error.code = "SMOKE_EVIDENCE";
+    throw error;
+  }
+}
+
+export function requireSmokeEvidence(condition, message) {
+  if (!condition) {
+    const error = new Error(message);
+    error.code = "SMOKE_EVIDENCE";
+    throw error;
+  }
+}
+
+export function classifySmokeFailure(phase, error) {
+  return phase === "setup"
+    ? "SETUP_FAIL"
+    : ["SMOKE_PROTOCOL", "SMOKE_EVIDENCE"].includes(error.code)
+      ? "EVIDENCE_FAIL"
+      : "SCENARIO_FAIL";
 }
 
 export function coreAgentDefinitionsExpectations(sessions, rootId) {
@@ -2325,6 +2427,24 @@ async function runTerminalFailureSmoke(ctx) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+  ctx.firstRequestVerified = provenance.length > 0;
+  try {
+    ctx.sessionStartObserved = Boolean(
+      (
+        await readFile(
+          join(
+            ctx.paths.piAgent,
+            "pi-herdsman",
+            "runtime",
+            "smoke-faux-session-start.jsonl",
+          ),
+          "utf8",
+        )
+      ).trim(),
+    );
+  } catch {
+    ctx.sessionStartObserved = false;
+  }
   ctx.terminalFailure.provenance = matchPiProvenance(
     provenance,
     sessionId,
@@ -2332,6 +2452,7 @@ async function runTerminalFailureSmoke(ctx) {
     processObservation.processes,
     "terminal-error",
     true,
+    ctx.expectedPiVersion,
   );
   const report = terminalFailureEvidence(
     managerSession.contents,
@@ -2682,11 +2803,14 @@ async function inspectCandidateProcesses(ctx) {
     ctx.candidateExtension,
     ctx.herdrStateExtension,
   );
-  const errors = inspection.records
+  const unresolved = inspection.records
     .filter((record) => record.error)
-    .map((record) => `${record.paneId}: ${record.error}`);
-  if (errors.length) throw observationFailure(errors.join("; "));
-  return inspection;
+    .map((record) => ({ paneId: record.paneId, error: record.error }));
+  return {
+    ...inspection,
+    paneIds: listedPanes(listed.value).map(({ paneId }) => paneId),
+    unresolved,
+  };
 }
 
 async function rootSessionSnapshot(ctx) {
@@ -2815,12 +2939,12 @@ async function agentSessionId(ctx, agent) {
 
 export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
   if (!simulated) return;
-  assert.deepEqual(
-    evidence.map(({ name }) => name).sort(),
-    ["delegate_agent", "delegate_agent", "read"],
+  requireSmokeEvidence(
+    JSON.stringify(evidence.map(({ name }) => name).sort()) ===
+      JSON.stringify(["delegate_agent", "delegate_agent", "read"]),
     "core must perform the actual nested delegation and package read",
   );
-  assert.ok(
+  requireSmokeEvidence(
     evidence.some(
       ({ name, result }) =>
         name === "read" &&
@@ -2862,6 +2986,8 @@ async function runCoreSmoke(ctx) {
       for (const item of inspection.verified) {
         observed.set(`${item.paneId}\0${item.pid}`, item);
       }
+      if (inspection.verified.length)
+        ctx.lastVerified = "agent_process_observed";
       const rootInfo = await tryNestedCommand(ctx, [
         "pane",
         "process-info",
@@ -2892,6 +3018,8 @@ async function runCoreSmoke(ctx) {
         if (assistantResult) ctx.assistantResult = assistantResult;
       }
       const paneCount = distinctPaneCount([...observed.values()]);
+      if (session && ctx.assistantResult)
+        ctx.lastVerified = "scenario_session_result_observed";
       return {
         done: !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess,
         progress: {
@@ -2920,6 +3048,24 @@ async function runCoreSmoke(ctx) {
       .split(/\r?\n/)
       .filter(Boolean)
       .map((line) => JSON.parse(line));
+    ctx.firstRequestVerified = provenance.length > 0;
+    try {
+      ctx.sessionStartObserved = Boolean(
+        (
+          await readFile(
+            join(
+              ctx.paths.piAgent,
+              "pi-herdsman",
+              "runtime",
+              "smoke-faux-session-start.jsonl",
+            ),
+            "utf8",
+          )
+        ).trim(),
+      );
+    } catch {
+      ctx.sessionStartObserved = false;
+    }
     const sessionFiles = (
       await readdir(ctx.paths.piSessions, { recursive: true })
     ).filter((file) => file.endsWith(".jsonl"));
@@ -2937,7 +3083,10 @@ async function runCoreSmoke(ctx) {
       sessionEntries(rootSession.contents).find(
         (entry) => entry.type === "session",
       )?.id;
-    assert.ok(rootId, "core root session has no exact Pi session identity");
+    requireSmokeEvidence(
+      rootId,
+      "core root session has no exact Pi session identity",
+    );
     const observedProcesses = [ctx.coreRootProcess, ...observed.values()].map(
       ({ paneId, pid }) => ({ paneId, processes: [{ pid }] }),
     );
@@ -2955,24 +3104,25 @@ async function runCoreSmoke(ctx) {
     );
     for (const sessionId of sessionIds) {
       const expectedAgentDefinitions = expectedDefinitions.get(sessionId);
-      assert.notEqual(
-        expectedAgentDefinitions,
-        undefined,
+      requireSmokeEvidence(
+        expectedAgentDefinitions !== undefined,
         `missing persisted role evidence for ${sessionId}`,
       );
       const matches = provenance.filter(
         (record) => record.sessionId === sessionId,
       );
-      assert.equal(
-        matches.length,
-        1,
+      requireSmokeEvidence(
+        matches.length === 1,
         `expected one provenance row for ${sessionId}`,
       );
       const record = matches[0];
       const pane = observedProcesses.find(({ processes }) =>
         processes.some((process) => process.pid === record.pid),
       );
-      assert.ok(pane, `no exact foreground PID match for ${sessionId}`);
+      requireSmokeEvidence(
+        pane,
+        `no exact foreground PID match for ${sessionId}`,
+      );
       matchPiProvenance(
         provenance,
         sessionId,
@@ -2980,11 +3130,11 @@ async function runCoreSmoke(ctx) {
         pane.processes,
         "core",
         expectedAgentDefinitions,
+        ctx.expectedPiVersion,
       );
     }
-    assert.equal(
-      provenance.length,
-      sessionIds.size,
+    requireSmokeEvidence(
+      provenance.length === sessionIds.size,
       "unexpected or duplicate core provenance rows",
     );
     const files = (
@@ -3020,7 +3170,7 @@ async function runCoreSmoke(ctx) {
         const result = results.find(
           (item) => item.toolCallId === call.id && item.toolName === call.name,
         );
-        assert.ok(
+        requireSmokeEvidence(
           result && !result.isError,
           `missing successful correlated ${call.name} result`,
         );
@@ -4563,24 +4713,143 @@ async function runChiefTreeSmoke(ctx) {
   );
 }
 
+export function descendantCleanupStatus(
+  inspection,
+  previouslyVerified,
+  isPidAlive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code !== "ESRCH";
+    }
+  },
+) {
+  const verified = new Map(previouslyVerified);
+  for (const item of inspection.verified)
+    verified.set(item.pid, { paneId: item.paneId, pid: item.pid });
+  const live = [...verified.values()].filter(({ pid }) => isPidAlive(pid));
+  const livePaneIds = new Set(inspection.paneIds);
+  const unresolved = inspection.unresolved.filter(({ paneId }) =>
+    livePaneIds.has(paneId),
+  );
+  return {
+    done: live.length === 0 && unresolved.length === 0,
+    live,
+    unresolved,
+    verified,
+  };
+}
+
 async function waitForDescendantsToExit(ctx) {
+  const previouslyVerified = new Map();
   await waitForEvidence(
     ctx,
     "descendant-cleanup",
     async () => {
       const inspection = await inspectCandidateProcesses(ctx);
+      const status = descendantCleanupStatus(inspection, previouslyVerified);
+      for (const [pid, item] of status.verified)
+        previouslyVerified.set(pid, item);
       return {
-        done: inspection.verified.length === 0,
+        done: status.done,
         progress: {
-          live: inspection.verified
-            .map(({ paneId, pid }) => `${paneId}:${pid}`)
-            .sort(),
+          live: status.live.map(({ paneId, pid }) => `${paneId}:${pid}`).sort(),
+          unresolved: status.unresolved.map(({ paneId }) => paneId).sort(),
         },
         evidence: inspection.records.slice(-20),
       };
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS, pollMs: 500 },
   );
+}
+
+export async function verifyParentShutdown(
+  parent,
+  { stop, waitForExit, status },
+  diagnostics = {},
+) {
+  const terminalState = () => ({
+    exitCode: parent.server?.exitCode ?? null,
+    signalCode: parent.server?.signalCode ?? null,
+  });
+  const childExited = () =>
+    Boolean(parent.server?.exit) ||
+    (parent.server?.exitCode !== null &&
+      parent.server?.exitCode !== undefined) ||
+    (parent.server?.signalCode !== null &&
+      parent.server?.signalCode !== undefined);
+  const signalName = (signal) =>
+    ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGABRT", "SIGQUIT"].includes(
+      signal,
+    )
+      ? signal
+      : null;
+  const exitedBeforeStop = childExited();
+  diagnostics.child = {
+    exitObservedBeforeStop: Boolean(parent.server?.exit),
+    ...terminalState(),
+  };
+  let stopError;
+  try {
+    const result = await stop();
+    diagnostics.stop = {
+      completed: true,
+      exitCode: Number.isInteger(result?.code) ? result.code : null,
+      signal: signalName(result?.signal),
+    };
+  } catch (error) {
+    stopError = error;
+    diagnostics.stop = {
+      completed: false,
+      exitCode: Number.isInteger(error?.code) ? error.code : null,
+      errorCode: "COMMAND_FAILED",
+    };
+  }
+  let exitError;
+  try {
+    await waitForExit();
+  } catch (error) {
+    exitError = error;
+  }
+  if (!exitError && !childExited())
+    exitError = new Error("owned child exit event was not observed");
+  diagnostics.child.exitObservedAfterStop ??= Boolean(parent.server?.exit);
+  Object.assign(diagnostics.child, terminalState());
+  let serverStopped = false;
+  let statusError;
+  try {
+    const observed = await status();
+    serverStopped = observed?.server?.running === false;
+    diagnostics.namedServer = {
+      verified: typeof observed?.server?.running === "boolean",
+      running:
+        typeof observed?.server?.running === "boolean"
+          ? observed.server.running
+          : null,
+    };
+  } catch (error) {
+    statusError = error;
+    diagnostics.namedServer = {
+      verified: false,
+      running: null,
+      errorCode: "STATUS_UNAVAILABLE",
+    };
+  }
+  const failures = [];
+  if (exitedBeforeStop)
+    failures.push("owned child exited before requested server shutdown");
+  if (exitError)
+    failures.push(`owned child did not exit: ${exitError.message}`);
+  if (statusError || !serverStopped)
+    failures.push(
+      `named Herdr server stop not verified${statusError ? `: ${statusError.message}` : ""}`,
+    );
+  if (stopError && (exitError || !serverStopped))
+    failures.push(
+      `named Herdr server stop command failed: ${stopError.message}`,
+    );
+  return failures;
 }
 
 export async function collectDiagnostics(
@@ -4712,14 +4981,39 @@ export async function collectDiagnostics(
       : { paneId: knownDescendants[index], error: entry.reason?.message },
   );
   try {
-    const serialized = JSON.stringify(diagnostics);
+    const serialized = JSON.stringify({
+      stage: diagnostics.stage,
+      failureCode: diagnostics.failure?.code ?? null,
+      agentsObserved: diagnostics.agents?.ok
+        ? (diagnostics.agents.value?.agents?.length ?? 0)
+        : null,
+      panesObserved: diagnostics.panes?.ok
+        ? (diagnostics.panes.value?.panes?.length ?? 0)
+        : null,
+      candidateProcessesObserved: Array.isArray(diagnostics.processes)
+        ? diagnostics.processes.filter((record) => record.processMatch).length
+        : null,
+      rootSessionObserved: !diagnostics.rootSession?.error,
+    });
     console.error(`diagnostics: ${serialized}`);
   } catch {
     console.error("diagnostics: collection failed");
   }
 }
 
-async function cleanup(paths, owned, ctx) {
+export async function cleanup(
+  paths,
+  owned,
+  ctx,
+  {
+    runCommand = run,
+    herdrCommand = herdr,
+    tryHerdrCommand = tryHerdr,
+    remove = rm,
+    removeFile = unlink,
+    sleepFor = sleep,
+  } = {},
+) {
   const deadline = Date.now() + CLEANUP_TIMEOUT_MS;
   const remainingTimeout = () => {
     const remaining = deadline - Date.now();
@@ -4727,12 +5021,12 @@ async function cleanup(paths, owned, ctx) {
     return Math.min(OBSERVATION_TIMEOUT_MS, remaining);
   };
   const cleanupRun = (file, args, options = {}) =>
-    run(file, args, { ...options, timeout: remainingTimeout() });
+    runCommand(file, args, { ...options, timeout: remainingTimeout() });
   const cleanupHerdr = (args, options = {}) =>
-    herdr(args, { ...options, timeout: remainingTimeout() });
+    herdrCommand(args, { ...options, timeout: remainingTimeout() });
   const failures = [];
   try {
-    await unlink(paths.authLink);
+    await removeFile(paths.authLink);
   } catch (error) {
     if (error.code !== "ENOENT")
       failures.push(`auth symlink: ${error.message}`);
@@ -4805,16 +5099,16 @@ async function cleanup(paths, owned, ctx) {
     const env = nestedControlEnv(process.env, paths, owned.sessionName);
     let deleted = false;
     try {
-      await tryHerdr(["session", "stop", owned.sessionName, "--json"], {
+      await tryHerdrCommand(["session", "stop", owned.sessionName, "--json"], {
         env,
         timeout: remainingTimeout(),
       });
       for (let i = 0; i < 3 && !deleted; i++) {
-        const deletion = await tryHerdr(
+        const deletion = await tryHerdrCommand(
           ["session", "delete", owned.sessionName, "--json"],
           { env, timeout: remainingTimeout() },
         );
-        const sessions = await tryHerdr(["session", "list", "--json"], {
+        const sessions = await tryHerdrCommand(["session", "list", "--json"], {
           env,
           timeout: remainingTimeout(),
         });
@@ -4830,22 +5124,14 @@ async function cleanup(paths, owned, ctx) {
           throw new Error(
             `session delete delivery is ambiguous; session still listed: ${deletion.error}`,
           );
-        if (!deleted && i < 2) await sleep(Math.min(300, remainingTimeout()));
+        if (!deleted && i < 2)
+          await sleepFor(Math.min(300, remainingTimeout()));
       }
     } catch (error) {
       failures.push(
         `nested session cleanup ${owned.sessionName}: ${error.message}`,
       );
     }
-    if (
-      !deleted &&
-      !failures.some((item) =>
-        item.startsWith(`nested session cleanup ${owned.sessionName}:`),
-      )
-    )
-      failures.push(
-        `nested session remains: ${owned.sessionName}; temp=${paths.root}`,
-      );
     if (
       !deleted &&
       !failures.some((item) => item.startsWith("nested session remains"))
@@ -4863,39 +5149,249 @@ async function cleanup(paths, owned, ctx) {
       failures.push(`host tab ${owned.hostTabId}: ${error.message}`);
     }
   }
+  if (owned.parent) {
+    const parent = owned.parent;
+    const parentDiagnostics = {
+      child: { exitObservedBeforeStop: Boolean(parent.server.exit) },
+    };
+    ctx.parentCleanupDiagnostics = parentDiagnostics;
+    if (parent.workspaceId) {
+      try {
+        await cleanupHerdr(["workspace", "close", parent.workspaceId], {
+          env: parent.env,
+        });
+      } catch (error) {
+        failures.push(
+          `parent workspace ${parent.workspaceId}: ${error.message}`,
+        );
+      }
+    }
+    const waitForParentExit = async (timeoutMs) => {
+      if (
+        parent.server.exit ||
+        parent.server.exitCode != null ||
+        parent.server.signalCode != null
+      )
+        return;
+      await Promise.race([
+        new Promise((resolve) => parent.server.once("exit", resolve)),
+        sleepFor(timeoutMs).then(() => {
+          throw new Error("owned child process did not exit");
+        }),
+      ]);
+    };
+    const parentFailures = await verifyParentShutdown(
+      parent,
+      {
+        stop: () =>
+          cleanupRun("herdr", ["--session", parent.name, "server", "stop"], {
+            env: parent.env,
+          }),
+        waitForExit: async () => {
+          try {
+            await waitForParentExit(5_000);
+            parentDiagnostics.child.waitAfterStop = "exited";
+            parentDiagnostics.child.exitObservedAfterStop = Boolean(
+              parent.server.exit,
+            );
+          } catch {
+            parentDiagnostics.child.waitAfterStop = "timeout";
+            parentDiagnostics.child.exitObservedAfterStop = Boolean(
+              parent.server.exit,
+            );
+            parentDiagnostics.child.sigtermSent = parent.server.kill("SIGTERM");
+            try {
+              await waitForParentExit(3_000);
+              parentDiagnostics.child.waitAfterSigterm = "exited";
+            } catch {
+              parentDiagnostics.child.waitAfterSigterm = "timeout";
+            } finally {
+              parentDiagnostics.child.exitObservedAfterSigterm = Boolean(
+                parent.server.exit,
+              );
+            }
+            parentDiagnostics.child.sigkillSent = parent.server.kill("SIGKILL");
+            try {
+              await waitForParentExit(2_000);
+              parentDiagnostics.child.waitAfterSigkill = "exited";
+            } catch (error) {
+              parentDiagnostics.child.waitAfterSigkill = "timeout";
+              throw error;
+            } finally {
+              parentDiagnostics.child.exitObservedAfterSigkill = Boolean(
+                parent.server.exit,
+              );
+            }
+          }
+        },
+        status: async () => {
+          const result = await tryHerdrCommand(["status", "--json"], {
+            env: parent.env,
+            timeout: remainingTimeout(),
+          });
+          if (!result.ok) throw new Error(result.error);
+          return result.value;
+        },
+      },
+      parentDiagnostics,
+    );
+    parentDiagnostics.cleanupErrorCode = parentFailures.length
+      ? "PARENT_SHUTDOWN_UNVERIFIED"
+      : null;
+    failures.push(
+      ...parentFailures.map((failure) => `parent ${parent.name}: ${failure}`),
+    );
+  }
   const sessionMayRemain =
     owned.sessionName &&
     failures.some(
       (item) => item.includes(owned.sessionName) && item.includes("cleanup"),
     );
-  if (
-    !sessionMayRemain &&
-    !failures.some((failure) => failure.startsWith("nested session remains"))
-  ) {
+  if (!sessionMayRemain && !failures.length) {
     try {
-      await rm(paths.root, { recursive: true, force: true });
+      await remove(paths.root, { recursive: true, force: true });
     } catch (error) {
       failures.push(`temporary state: ${error.message}`);
     }
   }
+  ctx.cleanupErrorCode = failures.length
+    ? (ctx.parentCleanupDiagnostics?.cleanupErrorCode ?? "CLEANUP_FAILED")
+    : null;
   return failures.length ? failures.join("\n") : null;
 }
 
+export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
+  const parent = ctx.owned?.parent;
+  return {
+    scenario: ctx.scenario,
+    mode: ctx.simulated ? "simulated" : "live",
+    outcome,
+    stage: ctx.stage ?? "setup",
+    errorCode:
+      typeof failure?.error?.code === "string"
+        ? failure.error.code.slice(0, 80)
+        : undefined,
+    lastVerified: ctx.lastVerified ?? null,
+    processesVerified: ctx.coreProcessEvidence?.length ?? 0,
+    sessionStartObserved: ctx.sessionStartObserved ?? false,
+    firstRequestVerified: ctx.firstRequestVerified ?? false,
+    parentOwnership: parent
+      ? {
+          session: parent.name,
+          workspaceId: parent.workspaceId ?? null,
+          temporaryRoot: ctx.paths.root,
+          herdrConfig: ctx.paths.herdrConfig,
+          xdgConfig: ctx.paths.xdgConfig,
+          xdgState: ctx.paths.xdgState,
+          childPid: parent.server.pid ?? null,
+          childExitObserved: Boolean(parent.exit),
+        }
+      : null,
+    parentCleanup: ctx.parentCleanupDiagnostics
+      ? {
+          stop: ctx.parentCleanupDiagnostics.stop ?? null,
+          child: { ...ctx.parentCleanupDiagnostics.child },
+          namedServer: ctx.parentCleanupDiagnostics.namedServer ?? null,
+          cleanupErrorCode:
+            ctx.parentCleanupDiagnostics.cleanupErrorCode ?? null,
+        }
+      : null,
+    cleanupErrorCode: ctx.cleanupErrorCode ?? null,
+    cleanup,
+  };
+}
+
+export async function preserveFailureEvidence(evidence, path) {
+  if (path) {
+    await writeFile(path, `${JSON.stringify(evidence, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    return path;
+  }
+  const directory = await mkdtemp(
+    join(tmpdir(), "pi-herdsman-smoke-evidence-"),
+  );
+  const evidencePath = join(directory, "result.json");
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return evidencePath;
+}
+
 function cleanupEvidence(owned) {
-  return `session=${owned.sessionName ?? "not-created"} host-tab=${owned.hostTabId ?? "not-created"} host-pane=${owned.hostPaneId ?? "not-created"}`;
+  return `parent=${owned.parent?.name ?? "not-created"} workspace=${owned.parent?.workspaceId ?? "not-created"} session=${owned.sessionName ?? "not-created"} host-tab=${owned.hostTabId ?? "not-created"} host-pane=${owned.hostPaneId ?? "not-created"}`;
 }
 
 async function main() {
-  const parentEnv = parentControlEnv(process.env);
   const args = parseSmokeArgs(process.argv.slice(2));
   const pkg = JSON.parse(
     await readFile(join(repoRoot, "package.json"), "utf8"),
   );
-  const preflightEvidence = await preflight(pkg, parentEnv);
-  const model = await selectSmokeModel(args);
   const scenario = args.scenario;
-  await run("npm", ["run", "build"], { cwd: repoRoot });
-  const paths = await createIsolation();
+  let preflightEvidence;
+  let model;
+  try {
+    preflightEvidence = await preflight(pkg);
+    model = await selectSmokeModel(args);
+    await run("npm", ["run", "build"], { cwd: repoRoot });
+  } catch (error) {
+    console.error(
+      `smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "preflight-build")}`,
+    );
+    try {
+      const artifact = await preserveFailureEvidence({
+        scenario,
+        mode: args.simulated ? "simulated" : "live",
+        outcome: "SETUP_FAIL",
+        stage: "preflight-build",
+        errorCode:
+          typeof error?.code === "string" ? error.code.slice(0, 80) : null,
+        lastVerified: null,
+        processesVerified: 0,
+        sessionStartObserved: false,
+        firstRequestVerified: false,
+        cleanup: "NOT_REQUIRED",
+      });
+      console.error(`failure evidence: ${artifact}`);
+    } catch (evidenceError) {
+      console.error(
+        `failure evidence: could not save: ${evidenceError.message}`,
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
+  let paths;
+  try {
+    paths = await createIsolation();
+  } catch (error) {
+    console.error(
+      `smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "isolation")}`,
+    );
+    try {
+      const artifact = await preserveFailureEvidence({
+        scenario,
+        mode: args.simulated ? "simulated" : "live",
+        outcome: "SETUP_FAIL",
+        stage: "isolation",
+        errorCode:
+          typeof error?.code === "string" ? error.code.slice(0, 80) : null,
+        lastVerified: null,
+        processesVerified: 0,
+        sessionStartObserved: false,
+        firstRequestVerified: false,
+        cleanup: "NOT_REQUIRED",
+      });
+      console.error(`failure evidence: ${artifact}`);
+    } catch (evidenceError) {
+      console.error(
+        `failure evidence: could not save: ${evidenceError.message}`,
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
   const owned = {};
   const ctx = {
     repoRoot,
@@ -4928,12 +5424,15 @@ async function main() {
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
     expectedPackage: `${pkg.name}@${pkg.version}`,
+    scenario,
     owned,
-    parentEnv,
+    expectedPiVersion: pkg.piHerdsman.runtime.pi,
     preflight: preflightEvidence,
   };
   ctx.initialPrompt = initialPromptForScenario(scenario, ctx);
   let failure;
+  let phase = "setup";
+  let evidence;
   try {
     ctx.rootCwd =
       scenario === "manager-recovery" || scenario === "terminal-failure"
@@ -4942,6 +5441,20 @@ async function main() {
     if (scenario === "manager-recovery" || scenario === "terminal-failure") {
       ctx.primaryCheckoutPath = ctx.rootCwd;
     }
+    const parent = await startParent(paths, owned);
+    ctx.parentEnv = parent.env;
+    ctx.parentName = parent.name;
+    ctx.preflight = {
+      ...preflightEvidence,
+      ...(await preflightParent(pkg, parent.env)),
+    };
+    ctx.rootWorkspaceId = await createParentWorkspace(
+      paths,
+      parent,
+      owned,
+      ctx.rootCwd,
+    );
+    ctx.parentEnv = { ...parent.env, HERDR_WORKSPACE_ID: ctx.rootWorkspaceId };
     if (ctx.simulatedProviderExtension) {
       await copyFile(
         join(repoRoot, "scripts", "smoke-faux.mjs"),
@@ -4962,15 +5475,15 @@ async function main() {
     await startNestedHerdr(
       paths,
       owned,
-      parentEnv,
+      ctx.parentEnv,
       ctx.rootCwd,
       ctx.managerRecoveryDiagnostics,
     );
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
     ctx.rootPaneId = await startCandidate(ctx);
+    phase = "scenario";
     await runScenario(ctx, scenario);
-    console.log(`smoke ${scenario}: PASS`);
     console.log(`model: ${ctx.model}`);
     console.log(`candidate: ${ctx.candidateExtension}`);
     if (scenario === "core") {
@@ -5004,28 +5517,139 @@ async function main() {
       console.log(`terminal-failure: ${JSON.stringify(ctx.terminalFailure)}`);
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
-    failure = error;
+    failure = { phase, error };
     console.error(
-      `smoke ${scenario}: FAIL\n${formatSmokeFailure(error, ctx.stage)}`,
+      `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${formatSmokeFailure(error, ctx.stage)}`,
     );
     try {
-      await collectDiagnostics(ctx, owned, error);
+      evidence = sanitizedFailureEvidence(
+        ctx,
+        failure,
+        classifySmokeFailure(phase, error),
+        "PENDING",
+      );
+      const markerPath = join(
+        paths.piAgent,
+        "pi-herdsman",
+        "runtime",
+        "smoke-faux-session-start.jsonl",
+      );
+      try {
+        ctx.sessionStarts = (await readFile(markerPath, "utf8"))
+          .trim()
+          .split(/\r?\n/)
+          .filter(Boolean).length;
+      } catch {}
+      ctx.sessionStartObserved = Boolean(ctx.sessionStarts);
+      try {
+        const provenance = await readFile(
+          join(
+            paths.piAgent,
+            "pi-herdsman",
+            "runtime",
+            "smoke-faux-provenance.jsonl",
+          ),
+          "utf8",
+        );
+        ctx.firstRequestVerified = provenance.trim().length > 0;
+      } catch {}
+      evidence.sessionStartObserved = ctx.sessionStartObserved;
+      evidence.firstRequestVerified = ctx.firstRequestVerified ?? false;
+      const artifact = await preserveFailureEvidence(evidence);
+      ctx.failureArtifact = artifact;
+      console.error(`failure evidence: ${artifact}`);
     } catch (diagnosticError) {
       console.error(
-        `diagnostics: collection failed: ${
+        `failure evidence: could not save: ${
           diagnosticError?.message ?? diagnosticError
         }`,
       );
+      ctx.evidenceSaveFailed = true;
     }
   } finally {
+    // Capture routing identity before cleanup can remove the isolated state.
+    const parentOwnership = sanitizedFailureEvidence(
+      { ...ctx, owned },
+      null,
+      "PENDING",
+      "PENDING",
+    ).parentOwnership;
     const cleanupError = await cleanup(paths, owned, ctx);
     if (cleanupError) {
-      console.error(`cleanup: FAIL ${cleanupEvidence(owned)}\n${cleanupError}`);
+      console.error(`CLEANUP FAIL ${cleanupEvidence(owned)}\n${cleanupError}`);
       process.exitCode = 1;
+      if (!failure) {
+        failure = { phase: "cleanup", error: new Error(cleanupError) };
+        evidence = sanitizedFailureEvidence(
+          ctx,
+          failure,
+          "CLEANUP_FAIL",
+          "FAIL",
+        );
+        evidence.parentOwnership = parentOwnership;
+        evidence.parentCleanup = sanitizedFailureEvidence(
+          { ...ctx, owned },
+          null,
+          "PENDING",
+          "PENDING",
+        ).parentCleanup;
+        evidence.cleanupErrorCode = ctx.cleanupErrorCode ?? "CLEANUP_FAILED";
+        try {
+          const artifact = await preserveFailureEvidence(
+            evidence,
+            ctx.failureArtifact,
+          );
+          ctx.failureArtifact = artifact;
+          console.error(`failure evidence: ${artifact}`);
+        } catch (error) {
+          ctx.evidenceSaveFailed = true;
+          console.error(`failure evidence: could not save: ${error.message}`);
+        }
+      } else if (evidence) {
+        evidence.parentOwnership = parentOwnership;
+        evidence.parentCleanup = sanitizedFailureEvidence(
+          { ...ctx, owned },
+          null,
+          "PENDING",
+          "PENDING",
+        ).parentCleanup;
+        evidence.cleanupErrorCode = ctx.cleanupErrorCode ?? "CLEANUP_FAILED";
+        evidence.cleanup = "FAIL";
+        try {
+          const artifact = await preserveFailureEvidence(
+            evidence,
+            ctx.failureArtifact,
+          );
+          ctx.failureArtifact = artifact;
+          console.error(`failure evidence: ${artifact}`);
+        } catch (error) {
+          ctx.evidenceSaveFailed = true;
+          console.error(`failure evidence: could not save: ${error.message}`);
+        }
+      }
     } else {
       console.log(`cleanup: PASS ${cleanupEvidence(owned)}`);
+      if (failure && evidence) {
+        evidence.parentCleanup = sanitizedFailureEvidence(
+          { ...ctx, owned },
+          null,
+          "PENDING",
+          "PENDING",
+        ).parentCleanup;
+        evidence.cleanupErrorCode = null;
+        evidence.cleanup = "PASS";
+        try {
+          await preserveFailureEvidence(evidence, ctx.failureArtifact);
+        } catch (error) {
+          ctx.evidenceSaveFailed = true;
+          console.error(
+            `failure evidence: could not update cleanup result: ${error.message}`,
+          );
+        }
+      }
     }
-    if (failure) process.exitCode = 1;
+    if (!failure && !cleanupError) console.log(`smoke ${scenario}: PASS`);
+    if (failure || ctx.evidenceSaveFailed) process.exitCode = 1;
   }
 }
 
