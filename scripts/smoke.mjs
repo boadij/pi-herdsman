@@ -2174,6 +2174,14 @@ export function requireSmokeEvidence(condition, message) {
   }
 }
 
+export function verifyCoreProvenanceEvidence(ctx, provenance, sessionIds) {
+  requireSmokeEvidence(
+    provenance.length === sessionIds.size,
+    "unexpected or duplicate core provenance rows",
+  );
+  ctx.firstRequestVerified = true;
+}
+
 export function classifySmokeFailure(phase, error) {
   return phase === "setup"
     ? "SETUP_FAIL"
@@ -3134,11 +3142,7 @@ async function runCoreSmoke(ctx) {
         ctx.expectedPiVersion,
       );
     }
-    ctx.firstRequestVerified = true;
-    requireSmokeEvidence(
-      provenance.length === sessionIds.size,
-      "unexpected or duplicate core provenance rows",
-    );
+    verifyCoreProvenanceEvidence(ctx, provenance, sessionIds);
     const files = (
       await readdir(ctx.paths.piSessions, { recursive: true })
     ).filter((file) => file.endsWith(".jsonl"));

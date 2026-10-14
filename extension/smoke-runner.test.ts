@@ -98,6 +98,7 @@ import {
   createParentWorkspace,
   cleanup,
   requireSmokeEvidence,
+  verifyCoreProvenanceEvidence,
 } from "../scripts/smoke.mjs";
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
 
@@ -1806,6 +1807,32 @@ test("missing provenance row is classified as evidence failure", () => {
     () => requireSmokeEvidence(false, "missing persisted role evidence"),
     (error: Error & { code?: string }) => error.code === "SMOKE_EVIDENCE",
   );
+});
+
+test("extra core provenance row fails without retaining verified evidence", async () => {
+  const ctx = {
+    scenario: "core",
+    simulated: true,
+    firstRequestObserved: true,
+    firstRequestVerified: false,
+  };
+  assert.throws(
+    () =>
+      verifyCoreProvenanceEvidence(
+        ctx,
+        [{ sessionId: "root" }, { sessionId: "agent" }, { sessionId: "extra" }],
+        new Set(["root", "agent"]),
+      ),
+    (error: Error & { code?: string }) => error.code === "SMOKE_EVIDENCE",
+  );
+  const artifact = await preserveFailureEvidence(
+    sanitizedFailureEvidence(ctx, {}, "EVIDENCE_FAIL", "FAIL"),
+  );
+  assert.equal(
+    JSON.parse(await readFile(artifact, "utf8")).firstRequestVerified,
+    false,
+  );
+  await rm(dirname(artifact), { recursive: true, force: true });
 });
 
 test("required core tool-result gaps are evidence failures, not behavior failures", () => {
