@@ -2668,6 +2668,14 @@ export async function stopHerdrAgentPreservingPane(
       signal,
     );
     const alreadyAtShell = settledShell(proved.process, proved.process);
+    if (
+      !alreadyAtShell &&
+      sameShellProcessOwner(proved.process, proved.process)
+    )
+      error(
+        "rollback",
+        `pane ${proved.paneId} foreground shell has unproven occupants`,
+      );
     if (!alreadyAtShell)
       await runHerdr(
         pi,
@@ -2770,6 +2778,14 @@ export async function rollbackHerdrStart(
         expectedShell !== undefined &&
         settledShell(expectedShell, proved.process);
       if (alreadyAtShell) runningOccupier = undefined;
+      else if (
+        expectedShell !== undefined &&
+        sameShellProcessOwner(expectedShell, proved.process)
+      )
+        error(
+          "rollback",
+          `pane ${proved.paneId} foreground shell has unproven occupants`,
+        );
       else
         await runHerdr(
           pi,

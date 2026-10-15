@@ -890,6 +890,7 @@ test("rollback requires disappearance proof after a successful close", async () 
   );
   let closeSucceeded = false;
   let paneRemainsAfterClose = false;
+  let agentStarted = false;
   let agentInterrupted = false;
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -900,14 +901,20 @@ test("rollback requires disappearance proof after a successful close", async () 
         args[1] === "process-info"
       ) {
         const payload = JSON.parse(result.stdout);
+        payload.result.process_info.foreground_process_group_id =
+          agentStarted && !agentInterrupted ? 456 : 123;
         payload.result.process_info.foreground_processes = agentInterrupted
           ? [{ pid: 123, argv0: "/bin/zsh" }]
-          : [
-              { pid: 123, argv0: "/bin/zsh" },
-              { pid: 456, argv0: "pi" },
-            ];
+          : agentStarted
+            ? [
+                { pid: 123, argv0: "/bin/zsh" },
+                { pid: 456, argv0: "pi" },
+              ]
+            : [{ pid: 123, argv0: "/bin/zsh" }];
         result.stdout = JSON.stringify(payload);
       }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        agentStarted = true;
       if (command === "herdr" && isPreservePaneStop(args))
         agentInterrupted = true;
       if (command === "herdr" && isTabClose(args)) {

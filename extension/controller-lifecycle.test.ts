@@ -7300,6 +7300,7 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
     false,
     true,
   );
+  let started = false;
   let stopped = false;
   const pi = fakePi({
     exec: async (command, args, options) => {
@@ -7316,13 +7317,14 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
               process_info: {
                 pane_id: "startup-pane",
                 shell_pid: 123,
-                foreground_process_group_id: 123,
-                foreground_processes: stopped
-                  ? [{ pid: 123, argv0: "/bin/zsh" }]
-                  : [
-                      { pid: 123, argv0: "/bin/zsh" },
-                      { pid: 999, argv0: "/usr/local/bin/pi" },
-                    ],
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
               },
             },
           }),
@@ -7331,6 +7333,7 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
         };
       const result = await startup.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        started = true;
         const state = readAgentState(startup.mailbox)!;
         writeAgentState(startup.mailbox, {
           ...state,
@@ -7756,6 +7759,7 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     true,
     true,
   );
+  let started = false;
   let stopped = false;
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -7772,20 +7776,24 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
               process_info: {
                 pane_id: "startup-pane",
                 shell_pid: 123,
-                foreground_process_group_id: 123,
-                foreground_processes: stopped
-                  ? [{ pid: 123, argv0: "/bin/zsh" }]
-                  : [
-                      { pid: 123, argv0: "/bin/zsh" },
-                      { pid: 999, argv0: "/usr/local/bin/pi" },
-                    ],
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
               },
             },
           }),
           stderr: "",
           code: 0,
         };
-      return startup.exec(command, args, options);
+      const result = startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        started = true;
+      return result;
     },
   });
   registerExtension!(pi.pi as never);
@@ -7832,6 +7840,7 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     false,
     true,
   );
+  let started = false;
   let stopped = false;
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -7849,20 +7858,24 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
               process_info: {
                 pane_id: "startup-pane",
                 shell_pid: 123,
-                foreground_process_group_id: 123,
-                foreground_processes: stopped
-                  ? [{ pid: 123, argv0: "/bin/zsh" }]
-                  : [
-                      { pid: 123, argv0: "/bin/zsh" },
-                      { pid: 999, argv0: "/usr/local/bin/pi" },
-                    ],
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
               },
             },
           }),
           stderr: "",
           code: 0,
         };
-      return startup.exec(command, args, options);
+      const result = startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        started = true;
+      return result;
     },
   });
   registerExtension!(pi.pi as never);

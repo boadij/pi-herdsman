@@ -3497,6 +3497,84 @@ test("preserving stop does not interrupt an already-restored shell", async () =>
   }
 });
 
+test("preserving stop does not interrupt an ambiguous shell process group", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi" as const,
+    agent: "pi" as const,
+    kind: "id" as const,
+    value: "session-1",
+  };
+  const pane = {
+    name: "agent-1",
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  const shellOnly = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
+  };
+  const promptStarted = {
+    ...shellOnly,
+    foreground_processes: [
+      { pid: 12, argv0: "/bin/zsh" },
+      { pid: 13, argv0: "prompt-helper" },
+    ],
+  };
+  const calls: string[][] = [];
+  let processInfoCalls = 0;
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "agent get") return response({ agent: pane });
+      if (key === "pane get") return response({ pane });
+      if (key === "tab list")
+        return response({
+          tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+        });
+      if (key === "pane process-info")
+        return response({
+          process_info: processInfoCalls++ === 0 ? shellOnly : promptStarted,
+        });
+      throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+    },
+  } as any;
+
+  try {
+    await assert.rejects(
+      stopHerdrAgentPreservingPane(pi, { cwd: "/tmp" } as any, "agent-1", {
+        paneId: "pane-1",
+        tabId: "tab-1",
+        workspaceId: "workspace-1",
+        cwd: "/tmp",
+        session: { id: "session-1" },
+      }),
+      /foreground shell has unproven occupants/,
+    );
+    assert.equal(processInfoCalls, 2);
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
+      false,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("preserving stop rejects a surviving original agent process", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -3634,7 +3712,7 @@ test("preserving stop rejects a surviving original agent process", async () => {
     });
     await assert.rejects(
       sharedGroup.stop(),
-      /did not settle back to its original shell/,
+      /foreground shell has unproven occupants/,
     );
 
     // The same process shows up only after the readiness marker already
@@ -5339,6 +5417,103 @@ test("managed rollback does not interrupt an already-restored shell", async () =
       assert.equal(agentLists > 2, true);
       assert.equal(processInfoCalls >= 2, true);
     }
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("managed rollback does not interrupt an ambiguous shell process group", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi" as const,
+    agent: "pi" as const,
+    kind: "id" as const,
+    value: "session-1",
+  };
+  const shellOnly = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
+  };
+  const promptStarted = {
+    ...shellOnly,
+    foreground_processes: [
+      { pid: 12, argv0: "/bin/zsh" },
+      { pid: 13, argv0: "prompt-helper" },
+    ],
+  };
+  const managed = {
+    name: "agent-1",
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  const calls: string[][] = [];
+  let processInfoCalls = 0;
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "agent list") return response({ agents: [managed] });
+      if (key === "agent get") return response({ agent: managed });
+      if (key === "pane get")
+        return response({
+          pane: {
+            ...managed,
+            terminal_id: "terminal-1",
+          },
+        });
+      if (key === "tab list")
+        return response({
+          tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+        });
+      if (key === "pane process-info")
+        return response({
+          process_info: processInfoCalls++ === 0 ? shellOnly : promptStarted,
+        });
+      throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+    },
+  } as any;
+
+  try {
+    await assert.rejects(
+      rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
+        herdrAgent: "agent-1",
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        terminalId: "terminal-1",
+        cwd: "/tmp",
+        createdTab: false,
+        launchMayHaveStarted: true,
+        shellProcess: shellOnly,
+        sessionReference: { id: "session-1" },
+      }),
+      /foreground shell has unproven occupants/,
+    );
+    assert.equal(processInfoCalls, 2);
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
+      false,
+    );
+    assert.equal(
+      calls.some(
+        (args) =>
+          (args[0] === "pane" || args[0] === "tab") && args[1] === "close",
+      ),
+      false,
+    );
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
