@@ -19,7 +19,7 @@ this infrastructure capability.
 ```json
 {
   "question": "Should I use option A or option B?",
-  "files": [".pi-herdsman/options.md", "diagram.png", "result:researcher#1"]
+  "files": ["options.md", "diagram.png", "result:researcher#1"]
 }
 ```
 

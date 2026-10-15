@@ -58,7 +58,7 @@ Example:
 {
   "definition": "reviewer",
   "task": "Review the implementation against the approved plan.",
-  "files": [".pi-herdsman/plan.md"]
+  "files": ["plan.md"]
 }
 ```
 
@@ -322,49 +322,6 @@ remains unchanged.
 Oversized non-completion registered-tool output may additionally expose
 `full_output_path` when overflow persistence succeeds. Model-visible content
 remains bounded in both cases.
-
-## Project-local coordination workspace
-
-Use the project-local `.pi-herdsman/` directory for temporary coordination artifacts
-used by agents working on the repository.
-
-Typical contents include implementation plans, scope and non-goals,
-specifications, accepted decisions, investigation notes, review scope or
-acceptance criteria, validation notes, and handoff state.
-
-Prefer one current artifact per coordinated objective. Reuse and update an
-adequate artifact rather than creating multiple competing descriptions of the
-same work.
-
-Keep the default structure flat:
-
-```
-.pi-herdsman/
-  task.md
-  runtime-contract.md
-  plugin-remapping-ui.md
-```
-
-Create subdirectories only when real artifact volume makes the flat layout
-unwieldy.
-
-These files are coordination state, not product state. Do not use `.pi-herdsman/`
-for product source, permanent user documentation, application data, build
-output, caches, or generated artifacts.
-
-Read-only agents may consume existing coordination artifacts but do not gain
-permission to modify them.
-
-When dependent work uses an artifact, pass the same path through `files` on the
-message that creates or updates the dependency: `delegate.files` for a new
-agent, `steer.files` and `interrupt.files` for an active agent, `ask_owner.files` for supporting
-evidence in a question, or `reply.files` for the owner's answer. Update the
-artifact before submission. Small text is embedded at submission time; a
-reference-only artifact remains a live canonical local path.
-
-Required textual instructions or evidence may be passed through `files`.
-`files` does not add runtime capability; use a capable definition when an
-actual runtime capability is required.
 
 ## See also
 

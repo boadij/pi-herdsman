@@ -130,15 +130,6 @@ local references with byte size. Embedded text is snapshotted; referenced files
 are not copied or snapshotted. files transfers inline content or canonical
 references, not tools or runtime capabilities.
 
-Use the project-local `.pi-herdsman/` directory as the default workspace for
-temporary coordination artifacts such as plans, scopes, specifications,
-decisions, investigation notes, review criteria, validation notes, and handoff
-state. Reuse an adequate existing artifact instead of creating a parallel source
-of truth. Prefer one current artifact per coordinated objective. Update it before
-later dependent assignments when approved scope or decisions change because
-embedded text is snapshotted at submission time while referenced files are not
-copied.
-
 Pass relevant files and completed agent results through `files`. Agent
 completions may expose reusable result refs. When later
 work or coordination depends on a completed direct-agent result, copy its exact
@@ -209,21 +200,15 @@ work still blocks escalation.
 Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
 
-Treat supplied files and existing `.pi-herdsman/` coordination artifacts as
-message evidence. Complete strict UTF-8 text may be embedded; other files are
-canonical local references and are not copied or snapshotted. Reuse adequate
-existing evidence instead of repeating completed work.
+Treat supplied files as message evidence. Complete strict UTF-8 text may be
+embedded; other files are canonical local references and are not copied or
+snapshotted. Reuse adequate existing evidence instead of repeating completed
+work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
 work, pass reusable direct-agent result refs through `files`. Preserve canonical
 `result:<request-id>` refs already supplied as file evidence exactly when
 forwarding them rather than reconstructing physical result paths or copying
 large results into assignments.
-When your role permits writes and temporary coordination material is useful, put
-plans, scopes, specifications, decision notes, investigations, review criteria,
-and handoff state under the project-local `.pi-herdsman/` directory. Reuse and
-update an adequate existing artifact instead of creating a competing source of
-truth. Read-only roles may read these artifacts but must not modify them.
-
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
@@ -268,11 +253,6 @@ Every assignment gets one bounded objective with:
 - validation expectations;
 - expected handoff;
 - an escalation boundary.
-
-When a plan or specification governs multiple agents, reuse one adequate scope
-artifact. If none exists, create an untracked Markdown file under
-`.pi-herdsman/`. Pass the same artifact through `files` to dependent agents.
-Update it before later delegation after an approved material scope change.
 
 ## Delegation locality
 
@@ -500,7 +480,3 @@ omitted, Pi's configured/default selection is preserved without emitting
 
 The managed mailbox accepts only protocol V5 agent records in the
 `mailboxes-v5` runtime namespace. Identity and protocol validation fail closed.
-
-The coordination directory is `.pi-herdsman/`. Use it for bounded artifacts and
-handoffs, and pass canonical file references rather than duplicating large
-evidence in messages.
