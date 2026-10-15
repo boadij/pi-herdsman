@@ -969,6 +969,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
   let runId = "";
   let ownerSessionId = "";
   let splitCreated = false;
+  let rollbackStarted = false;
   const emptyList = () => {
     const value = JSON.parse(listResponse(label));
     value.agents = [];
@@ -978,7 +979,8 @@ test("assignment rollback retains primary failure and actionable cleanup details
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        if (args[2] !== "detail-pane") rollbackStarted = true;
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -1007,6 +1009,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
           stderr: "",
           code: 0,
         };
+      }
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (isTabList(args))
         return {
@@ -1163,7 +1166,9 @@ test("assignment rollback retains primary failure and actionable cleanup details
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (isAgentList(args) || isApiSnapshot(args))
+      if (isAgentList(args) || isApiSnapshot(args)) {
+        if (rollbackStarted && isAgentList(args))
+          return { stdout: emptyList(), stderr: "", code: 0 };
         return {
           stdout: (() => {
             const value = JSON.parse(listResponse(label));
@@ -1199,6 +1204,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
           stderr: "",
           code: 0,
         };
+      }
       if (isPreservePaneStop(args))
         return {
           stdout: "",
@@ -1278,7 +1284,10 @@ test("assignment rollback retains primary failure and actionable cleanup details
   assert.equal(result.details.error.cleanup.category, "internal_failure");
   assert.equal(result.details.error.ids.label, label);
   assert.equal(result.details.error.ids.paneId, "detail-pane");
-  assert.match(result.details.error.cleanup.message, /preserved pane identity/);
+  assert.match(
+    result.details.error.cleanup.message,
+    /tab registered-tab did not disappear after close/,
+  );
   assert.equal(
     pi.calls.some((args) => isPaneClose(args)),
     false,

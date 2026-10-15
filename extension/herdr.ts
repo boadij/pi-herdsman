@@ -2667,12 +2667,14 @@ export async function stopHerdrAgentPreservingPane(
       false,
       signal,
     );
-    await runHerdr(
-      pi,
-      ctx,
-      ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
-      { signal, noResult: true },
-    );
+    const alreadyAtShell = settledShell(proved.process, proved.process);
+    if (!alreadyAtShell)
+      await runHerdr(
+        pi,
+        ctx,
+        ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
+        { signal, noResult: true },
+      );
     await settlePreservedPane(
       pi,
       ctx,
@@ -2686,7 +2688,7 @@ export async function stopHerdrAgentPreservingPane(
       proved.process,
       "rollback",
       signal,
-      proved.process,
+      alreadyAtShell ? undefined : proved.process,
     );
   } finally {
     release();
@@ -2764,12 +2766,17 @@ export async function rollbackHerdrStart(
         signal,
       );
       runningOccupier = proved.process;
-      await runHerdr(
-        pi,
-        ctx,
-        ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
-        { signal, noResult: true },
-      );
+      const alreadyAtShell =
+        expectedShell !== undefined &&
+        settledShell(expectedShell, proved.process);
+      if (alreadyAtShell) runningOccupier = undefined;
+      else
+        await runHerdr(
+          pi,
+          ctx,
+          ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
+          { signal, noResult: true },
+        );
       await settlePreservedPane(
         pi,
         ctx,
