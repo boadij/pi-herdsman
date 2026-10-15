@@ -10,8 +10,8 @@ Find improvements worth making, not diagnostics worth silencing. Follow `AGENTS.
 ## Scope
 
 - Use a dedicated clean worktree at current `origin/main`; record the commit.
-- Read a prior audit if supplied or accessible through the existing shared project folder. Compare only findings from comparable tool versions, configuration, and scope. If unavailable, establish a new baseline; do not access another Agent's worktree.
-- Treat the repository, including source, tests, dependencies, scripts, hooks, and CI configuration, as read-only. Temporary tools and ignored `.pi-herdsman/` files are allowed. No implementation, commits, issues, PRs, or permanent dependencies.
+- Read a prior audit if supplied or already available in a shared archive. Compare only findings from comparable tool versions, configuration, and scope. If unavailable, establish a new baseline; do not access another Agent's worktree.
+- Treat the repository, including source, tests, dependencies, scripts, hooks, and CI configuration, as read-only. Temporary diagnostic files may be created outside the repository. No implementation, commits, issues, PRs, or permanent dependencies.
 - Focus on production code; investigate tests or tooling only when a finding makes them relevant.
 
 ## Scan
@@ -21,8 +21,13 @@ Run current tool versions on demand, not in CI. Record actual versions, commands
 **Knip:** use production mode with Pi's nonstandard entry points. From the repository root:
 
 ```sh
-mkdir -p .pi-herdsman
-cat > .pi-herdsman/knip-audit.json <<'JSON'
+(
+  set -eu
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
+
+  cat > "$tmp_dir/knip.json" <<'JSON'
 {
   "entry": [
     "extension/index.ts!",
@@ -38,8 +43,14 @@ cat > .pi-herdsman/knip-audit.json <<'JSON'
   ]
 }
 JSON
-npm exec --yes --package=knip -- knip --production --no-progress --reporter compact --no-exit-code --config .pi-herdsman/knip-audit.json
-rm .pi-herdsman/knip-audit.json
+
+  npm exec --yes --package=knip -- knip \
+    --production \
+    --no-progress \
+    --reporter compact \
+    --no-exit-code \
+    --config "$tmp_dir/knip.json"
+)
 ```
 
 Check entry points against current `package.json`, Pi extension discovery, optional integrations, scripts, and dynamic consumers before interpreting unused-file/export results. These patterns are a starting point, not proof of reachability; test-only utilities and externally invoked maintenance scripts may be intentionally absent from the production graph. If entry points change, adjust the **temporary** config and record the difference.
@@ -70,7 +81,7 @@ Investigate tooling/configuration with the same standard: identify an obsolete o
 
 ## Output
 
-Write one report at `.pi-herdsman/simplification-audit.md`:
+Return one consolidated audit report containing:
 
 - Baseline commit, previous audit if available, and tool versions/commands/configuration changes.
 - Counts for context, clearly separated from **at most five independently verified, actionable findings**.
@@ -78,6 +89,6 @@ Write one report at `.pi-herdsman/simplification-audit.md`:
 - Material rejected/unchanged findings and limitations.
 - Recommended order, or **No action** if nothing justifies a change.
 
-If a shared project audit archive is already accessible, the reviewed report may be copied there for future comparisons; do not build an archive service or require Dropbox availability. Keep prior reports when comparing baselines.
+Write the report to a file when the user requests a file or an existing shared archive is explicitly being used. Keep prior reports when comparing baselines. Do not build an archive service or require Dropbox availability.
 
-Remove temporary config, verify `git status --short` and `git diff --check`, and report any tracked changes or blockers. **Stop after the audit; implementation requires a separate request.**
+Verify `git status --short` and `git diff --check`, and report any tracked changes or blockers. **Stop after the audit; implementation requires a separate request.**

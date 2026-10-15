@@ -506,20 +506,14 @@ export function createAgentStatusRuntime() {
 export const SHARED_AGENT_INSTRUCTIONS = `Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
 
-Treat supplied files and existing \`.pi-herdsman/\` coordination artifacts as message
-evidence. Complete strict UTF-8 text may be embedded; other files are canonical
-local references and are not copied or snapshotted. Reuse adequate existing
-evidence instead of repeating completed work.
+Treat supplied files as message evidence. Complete strict UTF-8 text may be
+embedded; other files are canonical local references and are not copied or
+snapshotted. Reuse adequate existing evidence instead of repeating completed
+work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
 work, pass reusable direct-agent result refs through \`files\`. Preserve
 canonical result:<request-id> refs already supplied as file evidence exactly
 when forwarding them.
-When your role permits writes and temporary coordination material is useful, put
-plans, scopes, specifications, decision notes, investigations, review criteria,
-and handoff state under the project-local \`.pi-herdsman/\` directory. Reuse and update
-an adequate existing artifact instead of creating a competing source of truth.
-Read-only roles may read these artifacts but must not modify them.
-
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 

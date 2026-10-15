@@ -160,12 +160,6 @@ formatting/validation; see [Smoke testing](docs/development/smoke-testing.md).
 - Keep separate test files only for source boundaries or required process/module-mock isolation.
 - Add no dependency or fixture abstraction when `node:test` and a few lines suffice.
 
-Use project-local `.pi-herdsman/` for temporary plans, scopes, specifications,
-decisions, investigations, review criteria, and handoff state used to
-coordinate repository work. Reuse an adequate artifact instead of creating a
-parallel source of truth. These files remain untracked and are not product
-documentation.
-
 ## Backlog
 
 - The ignored `.backlog/` repository exists only in the main worktree.

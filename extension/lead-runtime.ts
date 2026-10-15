@@ -3373,6 +3373,9 @@ export function registerLeadRuntime(
         activateProjectLead: (
           ...args: Parameters<typeof projectRuntime.activateProjectLead>
         ) => projectRuntime.activateProjectLead(...args),
+        removeWorktree: (
+          ...args: Parameters<typeof projectRuntime.removeWorktree>
+        ) => projectRuntime.removeWorktree(...args),
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
@@ -4566,6 +4569,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       activateProjectLead(
         ...args: Parameters<LeadProjectRuntime["activateProjectLead"]>
       ): ReturnType<LeadProjectRuntime["activateProjectLead"]>;
+      removeWorktree(
+        ...args: Parameters<LeadProjectRuntime["removeWorktree"]>
+      ): ReturnType<LeadProjectRuntime["removeWorktree"]>;
       selectMenu(
         ctx: ExtensionContext,
         title: string,
@@ -4579,255 +4585,43 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       ctx.ui.notify(host.formatSupervisionNotification(snapshot, status(ctx)));
       return;
     }
-    await ctx.ui.custom(
-      (tui: any, theme: any, _keys: any, done: (v: unknown) => void) => {
-        const viewGeneration = nextOverviewGeneration();
-        const supervisionGeneration = generation(ctx);
-        const sessionId = ctx.sessionManager.getSessionId();
-        let selected: string | undefined;
-        let mode: "overview" | "peek" = "overview";
-        let peekLead:
-          ReturnType<typeof host.presentationReports>[number] | undefined;
-        let peekEvidence: any;
-        let list: SelectList | undefined;
-        let renderedLeads = "";
-        const container = new host.tui.Container();
-        const selectTheme = getSelectListTheme();
-        const isCurrentOverview = (): boolean =>
-          viewGeneration === overviewGeneration &&
-          generation(ctx) === supervisionGeneration &&
-          ctx.sessionManager.getSessionId() === sessionId &&
-          (host.state.chiefMode === "active" ||
-            (host.activeRole() === "manager" && !host.state.roleSuspended));
-        const finish = (): void => {
-          if (viewGeneration === overviewGeneration) nextOverviewGeneration();
-          renderOverview = undefined;
-          done(undefined);
-        };
-        const focusSelected = (leadId: string): void => {
-          void uiActions
-            .focusLead(ctx, leadId)
-            .then(finish)
-            .catch((error) =>
-              ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
-            );
-        };
-        const showOverview = (): void => {
-          const status = supervisionStatus(ctx);
-          const leads =
-            status === "unavailable"
-              ? []
-              : host.orderedSupervisionLeads(
-                  host.presentationReports(snapshot),
-                );
-          const work =
-            host.activeRole() === "manager" &&
-            status !== "unavailable" &&
-            "work" in snapshot
-              ? (snapshot.work ?? [])
-              : [];
-          const items: SelectItem[] =
-            host.activeRole() === "manager" && status !== "unavailable"
-              ? host.managerSupervisionItems(snapshot).map((entry) =>
-                  entry.kind === "work"
-                    ? {
-                        value: entry.work.branch,
-                        label: entry.work.branch,
-                        description: [
-                          entry.work.status,
-                          entry.work.runtimeState,
-                          entry.work.issue,
-                        ]
-                          .filter(Boolean)
-                          .join(" · "),
-                      }
-                    : {
-                        value: entry.lead.lead,
-                        label: entry.lead.branch ?? entry.lead.displayName,
-                        description: entry.lead.runtimeState,
-                      },
-                )
-              : leads.map((lead) => ({
-                  value: lead.lead,
-                  label: lead.displayName,
-                  description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
-                }));
-          if (!items.some((item) => item.value === selected))
-            selected = items[0]?.value;
-          const maxPrimaryColumnWidth = Math.max(
-            12,
-            ...items.map((item) => visibleWidth(item.label) + 2),
-          );
-          list = new host.tui.SelectList(items, 8, selectTheme, {
-            minPrimaryColumnWidth: 12,
-            maxPrimaryColumnWidth,
-          });
-          const index = items.findIndex((item) => item.value === selected);
-          if (index >= 0) list.setSelectedIndex(index);
-          list.onSelectionChange = (item) => {
-            if (item) selected = item.value;
+    type Selection =
+      | {
+          kind: "project";
+          branch: string;
+          session: string;
+          status: string;
+          liveLead: boolean;
+        }
+      | { kind: "lead"; session: string; label: string };
+    let selected: string | undefined;
+    while (true) {
+      const expectedGeneration = generation(ctx);
+      const selection = await ctx.ui.custom<Selection | undefined>(
+        (tui: any, theme: any, _keys: any, done: (v: unknown) => void) => {
+          const viewGeneration = nextOverviewGeneration();
+          const supervisionGeneration = generation(ctx);
+          const sessionId = ctx.sessionManager.getSessionId();
+          let mode: "overview" | "peek" = "overview";
+          let peekLead:
+            ReturnType<typeof host.presentationReports>[number] | undefined;
+          let peekEvidence: any;
+          let list: SelectList | undefined;
+          let renderedLeads = "";
+          const container = new host.tui.Container();
+          const selectTheme = getSelectListTheme();
+          const isCurrentOverview = (): boolean =>
+            viewGeneration === overviewGeneration &&
+            generation(ctx) === supervisionGeneration &&
+            ctx.sessionManager.getSessionId() === sessionId &&
+            (host.state.chiefMode === "active" ||
+              (host.activeRole() === "manager" && !host.state.roleSuspended));
+          const finish = (result?: Selection): void => {
+            if (viewGeneration === overviewGeneration) nextOverviewGeneration();
+            renderOverview = undefined;
+            done(result);
           };
-          list.onSelect = (item) => {
-            if (!item) return;
-            if (!work.some((entry) => entry.branch === item.value)) {
-              if (host.activeRole() !== "manager")
-                return focusSelected(item.value);
-              void (async () => {
-                const action = await uiActions.selectMenu(
-                  ctx,
-                  items.find((entry) => entry.value === item.value)?.label ??
-                    "Lead",
-                  [
-                    { value: "focus", label: "Focus" },
-                    { value: "stop", label: "Stop Lead" },
-                  ],
-                );
-                if (!action || !isCurrentOverview()) return;
-                if (action === "focus") return focusSelected(item.value);
-                await uiActions.stopProjectLead(item.value, ctx, ctx.signal);
-                await refresh(ctx);
-                showOverview();
-                tui.requestRender();
-              })().catch((error) =>
-                ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
-              );
-              return;
-            }
-            const branch = item.value;
-            const entry = work.find((item) => item.branch === branch);
-            if (!entry) return;
-            const liveLead = host
-              .managerSupervisionItems(snapshot)
-              .some(
-                (item) =>
-                  item.kind === "work" &&
-                  item.work.branch === branch &&
-                  !!item.lead,
-              );
-            void (async () => {
-              const actions =
-                entry.status === "paused"
-                  ? [{ value: "resume", label: "Resume" }]
-                  : liveLead
-                    ? [
-                        { value: "focus", label: "Focus Lead" },
-                        { value: "stop", label: "Stop Lead" },
-                      ]
-                    : [];
-              if (!actions.length) return;
-              const action = await uiActions.selectMenu(ctx, branch, actions);
-              if (!action || !isCurrentOverview()) return;
-              if (action === "focus") return focusSelected(entry.session);
-              if (action === "stop")
-                await uiActions.stopProjectLead(entry.session, ctx, ctx.signal);
-              else if (action === "resume")
-                await uiActions.activateProjectLead(
-                  { action: "resume", branch },
-                  ctx,
-                  ctx.signal,
-                );
-              await refresh(ctx);
-              showOverview();
-              tui.requestRender();
-            })().catch((error) =>
-              ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
-            );
-          };
-          list.onCancel = finish;
-          container.clear();
-          container.addChild(
-            new host.tui.DynamicBorder((line: string) =>
-              theme.fg("border", line),
-            ),
-          );
-          container.addChild(
-            new host.tui.Text(
-              theme.bold(
-                theme.fg(
-                  "accent",
-                  status === "unavailable"
-                    ? "Pi Herdsman · unavailable"
-                    : host.activeRole() === "manager" && "project" in snapshot
-                      ? `Pi Herdsman · ${snapshot.project}`
-                      : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
-                ),
-              ),
-              0,
-              0,
-            ),
-          );
-          container.addChild(list);
-          container.addChild(
-            new host.tui.Text(
-              theme.fg(
-                "muted",
-                host.activeRole() === "manager"
-                  ? "Enter actions · Esc close"
-                  : "Space peek · Enter focus · Esc close",
-              ),
-              0,
-              0,
-            ),
-          );
-          container.addChild(
-            new host.tui.DynamicBorder((line: string) =>
-              theme.fg("border", line),
-            ),
-          );
-          renderedLeads = [
-            status,
-            ...work.map(
-              (item) =>
-                `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
-            ),
-            ...leads.map(
-              (lead) =>
-                `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
-            ),
-          ].join("\0");
-        };
-        const showPeek = (): void => {
-          container.clear();
-          container.addChild(
-            new host.tui.DynamicBorder((line: string) =>
-              theme.fg("border", line),
-            ),
-          );
-          if (peekLead)
-            container.addChild(
-              new host.tui.Text(
-                theme.bold(
-                  theme.fg("accent", `Peek · ${peekLead.displayName}`),
-                ),
-                0,
-                0,
-              ),
-            );
-          if (peekLead)
-            container.addChild(
-              new host.tui.Text(
-                host
-                  .renderSupervisionPeek(peekLead, peekEvidence, 10_000)
-                  .join("\n"),
-                0,
-                0,
-              ),
-            );
-          container.addChild(
-            new host.tui.Text(
-              theme.fg("muted", "Esc back · Enter focus · Ctrl+C close"),
-              0,
-              0,
-            ),
-          );
-          container.addChild(
-            new host.tui.DynamicBorder((line: string) =>
-              theme.fg("border", line),
-            ),
-          );
-        };
-        const component = {
-          render(width: number): string[] {
+          const showOverview = (): void => {
             const status = supervisionStatus(ctx);
             const leads =
               status === "unavailable"
@@ -4835,107 +4629,374 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 : host.orderedSupervisionLeads(
                     host.presentationReports(snapshot),
                   );
-            if (mode === "peek" && peekLead) return container.render(width);
-            const key = [
+            const work =
+              host.activeRole() === "manager" &&
+              status !== "unavailable" &&
+              "work" in snapshot
+                ? (snapshot.work ?? [])
+                : [];
+            const items: SelectItem[] =
+              host.activeRole() === "manager" && status !== "unavailable"
+                ? host.managerSupervisionItems(snapshot).map((entry) =>
+                    entry.kind === "work"
+                      ? {
+                          value: `work:${entry.work.branch}`,
+                          label: entry.work.branch,
+                          description: [
+                            entry.work.status,
+                            entry.work.runtimeState,
+                            entry.work.issue,
+                          ]
+                            .filter(Boolean)
+                            .join(" · "),
+                        }
+                      : {
+                          value: `lead:${entry.lead.lead}`,
+                          label: entry.lead.branch ?? entry.lead.displayName,
+                          description: entry.lead.runtimeState,
+                        },
+                  )
+                : leads.map((lead) => ({
+                    value: lead.lead,
+                    label: lead.displayName,
+                    description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+                  }));
+            if (!items.some((item) => item.value === selected))
+              selected = items[0]?.value;
+            const maxPrimaryColumnWidth = Math.max(
+              12,
+              ...items.map((item) => visibleWidth(item.label) + 2),
+            );
+            list = new host.tui.SelectList(items, 8, selectTheme, {
+              minPrimaryColumnWidth: 12,
+              maxPrimaryColumnWidth,
+            });
+            const index = items.findIndex((item) => item.value === selected);
+            if (index >= 0) list.setSelectedIndex(index);
+            list.onSelectionChange = (item) => {
+              if (item) selected = item.value;
+            };
+            list.onSelect = (item) => {
+              if (!item || !isCurrentOverview()) return;
+              if (item.value.startsWith("work:")) {
+                const branch = item.value.slice("work:".length);
+                const entry = work.find(
+                  (candidate) => candidate.branch === branch,
+                );
+                if (!entry) return;
+                const liveLead = host
+                  .managerSupervisionItems(snapshot)
+                  .some(
+                    (candidate) =>
+                      candidate.kind === "work" &&
+                      candidate.work.branch === branch &&
+                      !!candidate.lead,
+                  );
+                finish({
+                  kind: "project",
+                  branch,
+                  session: entry.session,
+                  status: entry.status,
+                  liveLead,
+                });
+                return;
+              }
+              finish({
+                kind: "lead",
+                session: item.value.startsWith("lead:")
+                  ? item.value.slice("lead:".length)
+                  : item.value,
+                label: item.label,
+              });
+            };
+            list.onCancel = finish;
+            container.clear();
+            container.addChild(
+              new host.tui.DynamicBorder((line: string) =>
+                theme.fg("border", line),
+              ),
+            );
+            container.addChild(
+              new host.tui.Text(
+                theme.bold(
+                  theme.fg(
+                    "accent",
+                    status === "unavailable"
+                      ? "Pi Herdsman · unavailable"
+                      : host.activeRole() === "manager" && "project" in snapshot
+                        ? `Pi Herdsman · ${snapshot.project}`
+                        : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
+                  ),
+                ),
+                0,
+                0,
+              ),
+            );
+            container.addChild(list);
+            container.addChild(
+              new host.tui.Text(
+                theme.fg(
+                  "muted",
+                  host.activeRole() === "manager"
+                    ? "Enter actions · Esc close"
+                    : "Space peek · Enter focus · Esc close",
+                ),
+                0,
+                0,
+              ),
+            );
+            container.addChild(
+              new host.tui.DynamicBorder((line: string) =>
+                theme.fg("border", line),
+              ),
+            );
+            renderedLeads = [
               status,
-              ...("work" in snapshot
-                ? (snapshot.work?.map(
-                    (item) =>
-                      `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
-                  ) ?? [])
-                : []),
+              ...work.map(
+                (item) =>
+                  `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
+              ),
               ...leads.map(
                 (lead) =>
                   `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
               ),
             ].join("\0");
-            if (!list || key !== renderedLeads) showOverview();
-            return container.render(width);
-          },
-          invalidate() {
-            tui.requestRender();
-          },
-          handleInput(data: string) {
-            if (host.tui.matchesKey(data, host.tui.Key.ctrl("c")))
-              return finish();
-            if (mode === "peek") {
-              if (
-                host.tui.matchesKey(data, host.tui.Key.escape) ||
-                host.tui.matchesKey(data, host.tui.Key.space)
-              ) {
-                mode = "overview";
-                showOverview();
-                tui.requestRender();
-              } else if (
-                host.tui.matchesKey(data, host.tui.Key.enter) &&
-                peekLead
-              )
-                focusSelected(peekLead.lead);
-              return;
-            }
-            if (host.tui.matchesKey(data, host.tui.Key.space)) {
-              const lead = host
-                .presentationReports(snapshot)
-                .find((item) => item.lead === selected);
-              if (!lead) return;
-              peekLead = lead;
-              peekEvidence = {
-                agents: (lead.agents ?? []).map(
-                  (agent) => `${agent.label} · ${agent.state}`,
+          };
+          const showPeek = (): void => {
+            container.clear();
+            container.addChild(
+              new host.tui.DynamicBorder((line: string) =>
+                theme.fg("border", line),
+              ),
+            );
+            if (peekLead)
+              container.addChild(
+                new host.tui.Text(
+                  theme.bold(
+                    theme.fg("accent", `Peek · ${peekLead.displayName}`),
+                  ),
+                  0,
+                  0,
                 ),
-              };
-              mode = "peek";
-              showPeek();
+              );
+            if (peekLead)
+              container.addChild(
+                new host.tui.Text(
+                  host
+                    .renderSupervisionPeek(peekLead, peekEvidence, 10_000)
+                    .join("\n"),
+                  0,
+                  0,
+                ),
+              );
+            container.addChild(
+              new host.tui.Text(
+                theme.fg("muted", "Esc back · Enter focus · Ctrl+C close"),
+                0,
+                0,
+              ),
+            );
+            container.addChild(
+              new host.tui.DynamicBorder((line: string) =>
+                theme.fg("border", line),
+              ),
+            );
+          };
+          const component = {
+            render(width: number): string[] {
+              const status = supervisionStatus(ctx);
+              const leads =
+                status === "unavailable"
+                  ? []
+                  : host.orderedSupervisionLeads(
+                      host.presentationReports(snapshot),
+                    );
+              if (mode === "peek" && peekLead) return container.render(width);
+              const key = [
+                status,
+                ...("work" in snapshot
+                  ? (snapshot.work?.map(
+                      (item) =>
+                        `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
+                    ) ?? [])
+                  : []),
+                ...leads.map(
+                  (lead) =>
+                    `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
+                ),
+              ].join("\0");
+              if (!list || key !== renderedLeads) showOverview();
+              return container.render(width);
+            },
+            invalidate() {
               tui.requestRender();
-              void host
-                .inspectHerdrAgent(
-                  host.pi,
-                  ctx,
-                  {
-                    workspaceId: lead.workspaceId,
-                    paneId: lead.paneId,
-                    piSessionId: lead.lead,
-                  },
-                  ctx.signal,
-                  (agent: any) =>
-                    host.isPiAgent(agent) &&
-                    agent?.pane_id === lead.paneId &&
-                    agent?.tab_id === lead.tabId &&
-                    host.herdrSessionId(agent) === lead.lead &&
-                    host.readLeadCoordinationState(
-                      host.supervisionRuntime(),
-                      lead.lead,
-                    )?.piSessionId === lead.lead &&
-                    lead.availableActions.includes("inspect"),
-                )
-                .then((inspection) => {
-                  if (!isCurrentOverview()) return;
-                  peekEvidence = {
-                    recentOutput: inspection.recentOutput,
-                    process: inspection.process,
-                    agents: lead.agents.map(
-                      (agent) => `${agent.label} · ${agent.state}`,
-                    ),
-                  };
-                  mode = "peek";
-                  showPeek();
+            },
+            handleInput(data: string) {
+              if (host.tui.matchesKey(data, host.tui.Key.ctrl("c")))
+                return finish();
+              if (mode === "peek") {
+                if (
+                  host.tui.matchesKey(data, host.tui.Key.escape) ||
+                  host.tui.matchesKey(data, host.tui.Key.space)
+                ) {
+                  mode = "overview";
+                  showOverview();
                   tui.requestRender();
-                })
-                .catch(() => undefined);
+                } else if (
+                  host.tui.matchesKey(data, host.tui.Key.enter) &&
+                  peekLead
+                )
+                  finish({
+                    kind: "lead",
+                    session: peekLead.lead,
+                    label: peekLead.displayName,
+                  });
+                return;
+              }
+              if (host.tui.matchesKey(data, host.tui.Key.space)) {
+                const leadId = selected?.startsWith("lead:")
+                  ? selected.slice("lead:".length)
+                  : selected;
+                const lead = host
+                  .presentationReports(snapshot)
+                  .find((item) => item.lead === leadId);
+                if (!lead) return;
+                peekLead = lead;
+                peekEvidence = {
+                  agents: (lead.agents ?? []).map(
+                    (agent) => `${agent.label} · ${agent.state}`,
+                  ),
+                };
+                mode = "peek";
+                showPeek();
+                tui.requestRender();
+                void host
+                  .inspectHerdrAgent(
+                    host.pi,
+                    ctx,
+                    {
+                      workspaceId: lead.workspaceId,
+                      paneId: lead.paneId,
+                      piSessionId: lead.lead,
+                    },
+                    ctx.signal,
+                    (agent: any) =>
+                      host.isPiAgent(agent) &&
+                      agent?.pane_id === lead.paneId &&
+                      agent?.tab_id === lead.tabId &&
+                      host.herdrSessionId(agent) === lead.lead &&
+                      host.readLeadCoordinationState(
+                        host.supervisionRuntime(),
+                        lead.lead,
+                      )?.piSessionId === lead.lead &&
+                      lead.availableActions.includes("inspect"),
+                  )
+                  .then((inspection) => {
+                    if (!isCurrentOverview()) return;
+                    peekEvidence = {
+                      recentOutput: inspection.recentOutput,
+                      process: inspection.process,
+                      agents: lead.agents.map(
+                        (agent) => `${agent.label} · ${agent.state}`,
+                      ),
+                    };
+                    mode = "peek";
+                    showPeek();
+                    tui.requestRender();
+                  })
+                  .catch(() => undefined);
+                return;
+              }
+              list?.handleInput(data);
+            },
+          };
+          showOverview();
+          renderOverview = () => tui.requestRender();
+          void refresh(ctx)
+            .then(() => tui.requestRender())
+            .catch(() => undefined);
+          void theme;
+          return component;
+        },
+      );
+      if (!selection || generation(ctx) !== expectedGeneration) return;
+      if (selection.kind === "lead") {
+        if (host.activeRole() === "manager") {
+          const action = await uiActions.selectMenu(ctx, selection.label, [
+            { value: "focus", label: "Focus" },
+            { value: "stop", label: "Stop Lead" },
+          ]);
+          if (generation(ctx) !== expectedGeneration) return;
+          if (!action) continue;
+          try {
+            if (action === "focus") {
+              await uiActions.focusLead(ctx, selection.session);
               return;
             }
-            list?.handleInput(data);
-          },
-        };
-        showOverview();
-        renderOverview = () => tui.requestRender();
-        void refresh(ctx)
-          .then(() => tui.requestRender())
-          .catch(() => undefined);
-        void theme;
-        return component;
-      },
-    );
+            await uiActions.stopProjectLead(selection.session, ctx, ctx.signal);
+          } catch (error) {
+            ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error");
+          }
+        } else {
+          try {
+            await uiActions.focusLead(ctx, selection.session);
+            return;
+          } catch (error) {
+            ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error");
+          }
+        }
+        await refresh(ctx);
+        if (generation(ctx) !== expectedGeneration) return;
+        continue;
+      }
+      const actions = [
+        ...(selection.status === "paused"
+          ? [{ value: "resume", label: "Resume" }]
+          : selection.liveLead
+            ? [
+                { value: "focus", label: "Focus Lead" },
+                { value: "stop", label: "Stop Lead" },
+              ]
+            : []),
+        { value: "remove", label: "Remove worktree…" },
+      ];
+      const action = await uiActions.selectMenu(ctx, selection.branch, actions);
+      if (generation(ctx) !== expectedGeneration) return;
+      if (!action) continue;
+      try {
+        if (action === "focus") {
+          await uiActions.focusLead(ctx, selection.session);
+          return;
+        }
+        if (action === "stop")
+          await uiActions.stopProjectLead(selection.session, ctx, ctx.signal);
+        else if (action === "resume")
+          await uiActions.activateProjectLead(
+            { action: "resume", branch: selection.branch },
+            ctx,
+            ctx.signal,
+          );
+        else if (action === "remove") {
+          const result = await uiActions.removeWorktree(
+            selection.branch,
+            ctx,
+            ctx.signal,
+          );
+          ctx.ui.notify(
+            result.content[0]?.text ?? "Removal finished.",
+            result.details.ok
+              ? "info"
+              : result.details.cancelled
+                ? "info"
+                : "warning",
+          );
+        }
+      } catch (error) {
+        ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error");
+      }
+      await refresh(ctx);
+      if (generation(ctx) !== expectedGeneration) return;
+    }
   };
 
   return {

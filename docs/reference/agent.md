@@ -373,7 +373,7 @@ evidence files remain attachable.
 {
   "agent": "implementer-1",
   "message": "Also update the focused regression.",
-  "files": [".pi-herdsman/review.md", "result:reviewer#1"]
+  "files": ["review.md", "result:reviewer#1"]
 }
 ```
 

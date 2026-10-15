@@ -2799,9 +2799,9 @@ async function runManagerStartupScenario(
   const repoKey = realFs.mkdtempSync(join(tmpdir(), "herdsman-repo-key-"));
   const reconciliationId = randomUUID();
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
-  const childPath = "/tmp/manager-fresh-child";
-  const reconciliationBranch = "smoke/orphan";
   const existingGitWorktree = join(tmpdir(), `git-worktree-${randomUUID()}`);
+  const childPath = existingGitWorktree;
+  const reconciliationBranch = "smoke/orphan";
   const attachmentPath = join(tmpdir(), `assignment-${randomUUID()}.md`);
   if (largeEvidence) writeFileSync(attachmentPath, "evidence\n".repeat(4096));
   let recipientIdle = true;
@@ -2857,6 +2857,9 @@ async function runManagerStartupScenario(
     resumeInspection = resolve;
   });
   let duplicateWorktree = false;
+  let hideActiveLead = false;
+  let uiSessionId: string | undefined;
+  let removalCommands: string[][] = [];
   const respond = (result: any) => ({
     stdout: JSON.stringify({
       id: AGENT_ID,
@@ -2879,13 +2882,22 @@ async function runManagerStartupScenario(
     pane_id: "root-pane",
     tab_id: "root-tab",
   };
-  const exec = async (command: string, args: string[]) => {
+  const exec = async (
+    command: string,
+    args: string[],
+    options?: { cwd?: string },
+  ) => {
     if (command === "git") {
       gitInventoryCalls++;
+      if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
+        return { stdout: `${options?.cwd ?? gitCwd}\n`, stderr: "", code: 0 };
+      if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
+        return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse")
         return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
       if (args[0] === "symbolic-ref")
         return { stdout: `${gitBranchOutput}\n`, stderr: "", code: 0 };
+      if (args[0] === "status") return { stdout: "", stderr: "", code: 0 };
       if (args[0] === "worktree" && mode === "reconcile-unknown")
         return { stdout: "incomplete", stderr: "", code: 0 };
       if (args[0] === "worktree" && mode === "reconcile-replacement") {
@@ -2951,6 +2963,10 @@ async function runManagerStartupScenario(
         return { stdout: gitListOutput, stderr: "", code: 0 };
       }
     }
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "remove") {
+      removalCommands.push(args);
+      return respond({});
+    }
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -3004,6 +3020,7 @@ async function runManagerStartupScenario(
               ).map((assignment) => ({
                 branch: assignment.branch,
                 path: childPath,
+                is_linked_worktree: true,
                 ...(mode === "active-closed" && !openCalls
                   ? {}
                   : { open_workspace_id: childWorkspace }),
@@ -3583,7 +3600,7 @@ async function runManagerStartupScenario(
                 },
               ]
             : []),
-          ...(mode === "active-live" ||
+          ...((mode === "active-live" && !hideActiveLead) ||
           mode.startsWith("active-live-inspect-") ||
           mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
@@ -4135,6 +4152,8 @@ async function runManagerStartupScenario(
         return;
       }
       if (mode === "active-live") {
+        uiSessionId = ctx.sessionManager.getSessionId();
+        ctx.sessionManager.getSessionId = () => uiSessionId;
         const running = await execute();
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
@@ -4534,6 +4553,21 @@ async function runManagerStartupScenario(
         1,
       );
       if (mode === "active-live") {
+        const assignment = listProjectAssignments(
+          supervisionRuntime(),
+          repoKey,
+        )[0]!;
+        writeProjectAssignment(supervisionRuntime(), {
+          ...assignment,
+          piSessionFile: childSessionPath,
+        });
+        writeProjectAssignment(supervisionRuntime(), {
+          version: 2,
+          id: randomUUID(),
+          repoKey,
+          branch: "smoke/selection",
+          text: "selection test project",
+        });
         const { SelectList } = await import("@earendil-works/pi-tui");
         let renderedList: any;
         t!.mock.method(SelectList.prototype, "render", function (this: any) {
@@ -4543,29 +4577,83 @@ async function runManagerStartupScenario(
           );
         });
         const components: any[] = [];
+        const customCompletions: ((value?: unknown) => void)[] = [];
+        const removalNotices: string[] = [];
+        let removalPrompt: string | undefined;
         ctx.hasUI = true;
-        ctx.ui.custom = async (factory: any) => {
-          components.push(
-            factory(
-              { requestRender: () => undefined },
-              {
-                fg: (_color: string, text: string) => text,
-                bold: (text: string) => text,
-              },
-              {},
-              () => undefined,
-            ),
-          );
+        ctx.ui.notify = (message: string) => removalNotices.push(message);
+        ctx.ui.input = async (prompt: string) => {
+          removalPrompt = prompt;
+          return undefined;
         };
+        ctx.ui.custom = (factory: any) =>
+          new Promise((resolve) => {
+            customCompletions.push(resolve);
+            components.push(
+              factory(
+                { requestRender: () => undefined },
+                {
+                  fg: (_color: string, text: string) => text,
+                  bold: (text: string) => text,
+                },
+                {},
+                resolve,
+              ),
+            );
+          });
         await pi.events.get("before_agent_start")![0](
           { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
           ctx,
         );
-        await pi.commandOptions.get("manager").handler("", ctx);
+        const overviewPromise = pi.commandOptions
+          .get("manager")
+          .handler("", ctx);
+        await t!.waitFor(() => assert.equal(components.length, 1));
         const overview = components[0];
         const initial = overview.render(120).join("\n");
         assert.match(initial, /smoke\/recover · active · unknown/);
-        duplicateWorktree = true;
+        assert.deepEqual(
+          renderedList.items.map((item: any) => item.label),
+          ["smoke/recover", "smoke/selection"],
+        );
+        overview.handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 2));
+        const actionMenu = components[1];
+        assert.match(actionMenu.render(120).join("\n"), /Remove worktree…/);
+        assert.equal(customCompletions.length, 2);
+        const removeIndex = renderedList.items.findIndex(
+          (item: any) => item.label === "Remove worktree…",
+        );
+        assert.notEqual(removeIndex, -1);
+        renderedList.setSelectedIndex(removeIndex);
+        removalNotices.length = 0;
+        actionMenu.handleInput("\r");
+        await t!.waitFor(() => {
+          assert.match(
+            removalPrompt ?? "",
+            /Remove worktree for branch smoke\/recover/u,
+          );
+          assert.match(removalPrompt ?? "", /Type remove to confirm/u);
+        });
+        await t!.waitFor(() => {
+          assert.match(
+            removalNotices.join("\n"),
+            /Removal of smoke\/recover cancelled; no changes made\./u,
+          );
+        });
+        assert.equal(
+          removalCommands.length,
+          0,
+          "confirmation cancellation must not remove the worktree",
+        );
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), repoKey)[0]?.branch,
+          "smoke/recover",
+        );
+        await t!.waitFor(() => assert.equal(components.length, 3));
+
+        hideActiveLead = true;
+        started = false;
         await pi.events.get("before_agent_start")![0](
           {
             systemPrompt: "base",
@@ -4573,15 +4661,54 @@ async function runManagerStartupScenario(
           },
           ctx,
         );
+        const pausedOverview = components[2];
         assert.match(
-          overview.render(120).join("\n"),
-          /conflict · project runtime identity is ambiguous/,
+          pausedOverview.render(120).join("\n"),
+          /smoke\/recover · paused/u,
         );
-        overview.handleInput("\r");
-        await t!.waitFor(() => assert.equal(components.length, 2));
-        assert.doesNotMatch(
-          components[1].render(120).join("\n"),
-          /Discard work|Complete work/,
+        pausedOverview.handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 4));
+        const pausedActions = components[3];
+        const pausedMenu = pausedActions.render(120).join("\n");
+        assert.match(pausedMenu, /Resume/u);
+        assert.match(pausedMenu, /Remove worktree…/u);
+        pausedActions.handleInput("\x1b");
+        await t!.waitFor(() => assert.equal(components.length, 5));
+        components[4].handleInput("\x1b[B");
+        components[4].handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 6));
+        assert.match(components[5].render(120).join("\n"), /smoke\/selection/u);
+        components[5].handleInput("\x1b");
+        await t!.waitFor(() => assert.equal(components.length, 7));
+        components[6].render(120);
+        assert.equal(
+          renderedList.getSelectedItem()?.value,
+          "work:smoke/selection",
+          "cancelling the action menu must retain the selected project",
+        );
+        components[6].handleInput("\x1b[A");
+        components[6].handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 8));
+        let resolveRemovalInput!: (value: string | undefined) => void;
+        ctx.ui.input = async (prompt: string) => {
+          removalPrompt = prompt;
+          return new Promise<string | undefined>((resolve) => {
+            resolveRemovalInput = resolve;
+          });
+        };
+        removalPrompt = undefined;
+        components[7].handleInput("\x1b[B");
+        components[7].handleInput("\r");
+        await t!.waitFor(() =>
+          assert.match(removalPrompt ?? "", /Type remove to confirm/u),
+        );
+        uiSessionId = randomUUID();
+        resolveRemovalInput(undefined);
+        await overviewPromise;
+        assert.equal(
+          components.length,
+          8,
+          "a changed role generation must not reopen the overview",
         );
       }
       return;

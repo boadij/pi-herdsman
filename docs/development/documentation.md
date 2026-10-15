@@ -127,7 +127,7 @@ aligned.
 - Current behavior only in product and maintainer guidance; ADRs retain history
 - Progressive disclosure from outcome to exact contract
 - Prefer a diagram or table only when it removes prose
-- Spell the visible product `Pi Herdsman`, package/repository `pi-herdsman`, local coordination directory `.pi-herdsman`, configuration file `config.json`, and upstream dependency `herdr`
+- Spell the visible product `Pi Herdsman`, package/repository `pi-herdsman`, configuration file `config.json`, and upstream dependency `herdr`
 - No backlog task numbers in product docs
 - Examples must match current accepted schemas
 - Do not document unshipped backlog behavior as available
