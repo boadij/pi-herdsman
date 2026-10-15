@@ -112,16 +112,26 @@ test("package read identity accepts equivalent paths and rejects other files", (
   assert.equal(isPackageReadPath("package.json", undefined), false);
 });
 
-test("parent Herdr environment removes inherited routing and agent identity", () => {
+test("parent Herdr environment retains nesting context and clears caller routing", () => {
   const base = {
     HERDR_ENV: "1",
     HERDR_SESSION: "unrelated-session",
     HERDR_WORKSPACE_ID: "w2",
+    HERDR_TAB_ID: "t2",
+    HERDR_PANE_ID: "p2",
     HERDR_SOCKET_PATH: "/wrong/server.sock",
     HERDR_CLIENT_SOCKET_PATH: "/wrong/client.sock",
     HERDR_STARTUP_CWD: "/wrong/cwd",
     HERDR_MACOS_SERVER_CONTEXT: "wrong-context",
     PI_HERDSMAN_RUN_ID: "wrong-agent",
+    PI_HERDSMAN_MAILBOX: "wrong-mailbox",
+    PI_HERDSMAN_OWNER_SESSION_ID: "wrong-owner",
+    PI_HERDSMAN_OWNER_DISPLAY: "wrong-display",
+    PI_HERDSMAN_LABEL: "wrong-label",
+    PI_HERDSMAN_WORKSPACE_ID: "wrong-agent-workspace",
+    PI_HERDSMAN_AGENT_DEFINITION: "wrong-definition",
+    PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS: "wrong-allowlist",
+    PI_SUBAGENT_PARENT_SESSION: "wrong-parent",
     PI_SUBAGENT_CHILD: "wrong-child",
     XDG_CONFIG_HOME: "/tmp/smoke-parent",
   };
@@ -135,11 +145,21 @@ test("parent Herdr environment removes inherited routing and agent identity", ()
   const env = parentControlEnv(base, paths, "phs-owned");
   assert.equal(env.HERDR_SESSION, "phs-owned");
   assert.equal(env.HERDR_WORKSPACE_ID, undefined);
-  assert.equal(env.HERDR_ENV, undefined);
+  assert.equal(env.HERDR_TAB_ID, undefined);
+  assert.equal(env.HERDR_PANE_ID, undefined);
+  assert.equal(env.HERDR_ENV, "1");
   assert.equal(env.HERDR_STARTUP_CWD, undefined);
   assert.equal(env.HERDR_MACOS_SERVER_CONTEXT, undefined);
   assert.equal(env.HERDR_SOCKET_PATH, undefined);
   assert.equal(env.PI_HERDSMAN_RUN_ID, undefined);
+  assert.equal(env.PI_HERDSMAN_MAILBOX, undefined);
+  assert.equal(env.PI_HERDSMAN_OWNER_SESSION_ID, undefined);
+  assert.equal(env.PI_HERDSMAN_OWNER_DISPLAY, undefined);
+  assert.equal(env.PI_HERDSMAN_LABEL, undefined);
+  assert.equal(env.PI_HERDSMAN_WORKSPACE_ID, undefined);
+  assert.equal(env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
+  assert.equal(env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS, undefined);
+  assert.equal(env.PI_SUBAGENT_PARENT_SESSION, undefined);
   assert.equal(env.PI_SUBAGENT_CHILD, undefined);
   assert.equal(env.HERDR_CONFIG_PATH, paths.herdrConfig);
   assert.equal(env.XDG_CONFIG_HOME, paths.xdgConfig);
@@ -2328,9 +2348,16 @@ test("owned parent setup verifies readiness and workspace identity", async () =>
   const owned: Record<string, any> = {};
   const parent = await startParent(paths, owned, {
     spawnProcess: () => server,
-    tryHerdrCommand: async () => ({
+    tryHerdrCommand: async (_args: unknown, options: any) => ({
       ok: true,
-      value: { server: { running: true, compatible: true } },
+      value: {
+        server: {
+          running: true,
+          compatible: true,
+          session: options.env.HERDR_SESSION,
+          socket: `/tmp/isolated/config/herdr/sessions/${options.env.HERDR_SESSION}/herdr.sock`,
+        },
+      },
     }),
     wait: async (
       _ctx: unknown,

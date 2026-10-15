@@ -415,7 +415,6 @@ export function nestedControlEnv(base, paths, sessionName) {
 
 export function parentControlEnv(base, paths, sessionName) {
   const env = isolatedEnv(base, paths);
-  delete env.HERDR_ENV;
   delete env.HERDR_STARTUP_CWD;
   delete env.HERDR_MACOS_SERVER_CONTEXT;
   for (const key of MANAGED_AGENT_IDENTITY_KEYS) delete env[key];
@@ -1703,6 +1702,12 @@ export async function startParent(
         };
       if (!result.value.server.compatible)
         throw new Error("owned Herdr client/server are incompatible");
+      assert.equal(result.value.server.session, name);
+      assert.equal(
+        resolve(result.value.server.socket),
+        resolve(nestedHerdrApiSocketPath(paths, name)),
+        "owned Herdr server selected an unexpected socket",
+      );
       return { done: true, value: result.value };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 150 },
@@ -5506,6 +5511,7 @@ async function main() {
     if (scenario === "manager-recovery" || scenario === "terminal-failure") {
       ctx.primaryCheckoutPath = ctx.rootCwd;
     }
+    await prepareHerdr(paths);
     const parent = await startParent(paths, owned);
     ctx.parentEnv = parent.env;
     ctx.parentName = parent.name;
@@ -5530,7 +5536,6 @@ async function main() {
     }
     if (args.simulated) ctx.authMechanism = "not required (simulated)";
     else ctx.authMechanism = await preparePi(paths, model);
-    await prepareHerdr(paths);
     if (ctx.chiefTreeProbeExtension)
       await writeFile(
         ctx.chiefTreeProbeExtension,
