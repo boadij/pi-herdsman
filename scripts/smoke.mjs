@@ -1995,6 +1995,28 @@ async function waitForNestedHerdr(ctx) {
   );
 }
 
+export function requireNestedHerdrServer(status, sessionName, baseline) {
+  assert.equal(
+    status?.server?.running,
+    true,
+    "nested Herdr server is not running",
+  );
+  assert.equal(
+    status.server.session,
+    sessionName,
+    "nested Herdr session mismatch",
+  );
+  assert.equal(
+    status.server.compatible,
+    true,
+    "nested Herdr client/server incompatible",
+  );
+
+  requireTestedBaseline("Herdr server", status.server.version, baseline);
+
+  return status.server.version;
+}
+
 async function startCandidate(ctx) {
   assert.equal(ctx.candidateExtension, join(ctx.repoRoot, "dist", "index.js"));
   assert.equal(
@@ -5551,9 +5573,15 @@ async function main() {
     );
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
+    ctx.nestedServerVersion = requireNestedHerdrServer(
+      await nestedCommand(ctx, ["status", "--json"]),
+      ctx.sessionName,
+      pkg.piHerdsman.runtime.herdr.version,
+    );
     ctx.rootPaneId = await startCandidate(ctx);
     phase = "scenario";
     await runScenario(ctx, scenario);
+    console.log(`herdr server: ${ctx.nestedServerVersion}`);
     console.log(`model: ${ctx.model}`);
     console.log(`candidate: ${ctx.candidateExtension}`);
     if (scenario === "core") {

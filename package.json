@@ -51,12 +51,12 @@
     "runtime": {
       "pi": "1.2.0",
       "herdr": {
-        "version": "0.9.3",
+        "version": "0.9.5",
         "sha256": {
-          "linux-x86_64": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7",
-          "linux-aarch64": "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0",
-          "macos-x86_64": "db62d548ff3e832b087a96b1894a08d26be3905f1830309cd556783f215d4054",
-          "macos-aarch64": "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157"
+          "linux-x86_64": "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d",
+          "linux-aarch64": "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c",
+          "macos-x86_64": "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369",
+          "macos-aarch64": "fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2"
         }
       }
     }

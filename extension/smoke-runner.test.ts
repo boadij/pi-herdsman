@@ -87,6 +87,7 @@ import {
   preparePi,
   prepareContinuationFaux,
   requireTestedBaseline,
+  requireNestedHerdrServer,
   resolveSmokeModel,
   selectSmokeModel,
   runScenario,
@@ -403,6 +404,37 @@ test("smoke runtime baseline accepts matching and newer stable versions", () => 
     () => requireTestedBaseline("Pi", "1.0.1", undefined),
     /invalid Pi tested baseline/,
   );
+});
+
+test("smoke verifies the isolated Herdr server", () => {
+  const status = {
+    client: { version: "0.9.5" },
+    server: {
+      running: true,
+      compatible: true,
+      session: "smoke-test",
+      version: "0.9.5",
+    },
+  };
+
+  const verify = (server) =>
+    requireNestedHerdrServer(
+      { ...status, server: { ...status.server, ...server } },
+      "smoke-test",
+      "0.9.5",
+    );
+
+  assert.equal(verify({}), "0.9.5");
+  assert.equal(verify({ version: "0.9.6" }), "0.9.6");
+
+  assert.throws(() => verify({ version: "0.9.3" }), /below tested baseline/);
+  assert.throws(
+    () => verify({ version: undefined }),
+    /invalid Herdr server version/,
+  );
+  assert.throws(() => verify({ session: "default" }), /session mismatch/);
+  assert.throws(() => verify({ compatible: false }), /incompatible/);
+  assert.throws(() => verify({ running: false }), /not running/);
 });
 
 test("missing managed session file is not ready yet", async () => {
