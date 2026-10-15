@@ -73,7 +73,7 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
-const { statusBreadcrumb, visibleAgentSnapshots } =
+const { SHARED_AGENT_INSTRUCTIONS, statusBreadcrumb, visibleAgentSnapshots } =
   await import("./agent-controller.ts");
 
 function emitAgentTurn(
@@ -3160,6 +3160,10 @@ test("agent registers native activity events and coalesces activity writes", asy
   assert.equal(readAgentState(mailbox)!.lastActivityAt, 1_012_000);
   Date.now = realNow;
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("shared Agent instructions do not advertise optional shell tools", () => {
+  assert.doesNotMatch(SHARED_AGENT_INSTRUCTIONS, /\b(?:bash|powershell)\b/u);
 });
 
 test("managed agents cap direct built-in shell calls without explicit timeouts", async () => {
