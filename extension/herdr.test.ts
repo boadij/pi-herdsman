@@ -4410,6 +4410,116 @@ test("completed agent shell transition closes the pane without stop keys", async
   );
 });
 
+test("post-completion cleanup accepts only a complete shell-only initial snapshot", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi" as const,
+    agent: "pi" as const,
+    kind: "id" as const,
+    value: "session-1",
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+
+  try {
+    for (const initial of ["complete", "incomplete", "multiprocess"] as const) {
+      const shellOnly = {
+        pane_id: "pane-1",
+        shell_pid: 10,
+        foreground_process_group_id: 10,
+        ...(initial === "incomplete"
+          ? {}
+          : { foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }] }),
+      };
+      const afterCompletion =
+        initial === "multiprocess"
+          ? {
+              ...shellOnly,
+              foreground_processes: [
+                { pid: 10, argv0: "/bin/zsh" },
+                { pid: 13, argv0: "prompt-helper" },
+              ],
+            }
+          : shellOnly;
+      const calls: string[][] = [];
+      let closed = false;
+      let processInfoCalls = 0;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent get")
+            return response({
+              agent: {
+                name: "agent-1",
+                pane_id: "pane-1",
+                workspace_id: "workspace-1",
+                tab_id: "tab-1",
+                cwd: "/tmp",
+                agent_session: session,
+              },
+            });
+          if (key === "pane get")
+            return response({
+              pane: {
+                pane_id: "pane-1",
+                workspace_id: "workspace-1",
+                tab_id: "tab-1",
+                cwd: "/tmp",
+                agent_session: session,
+              },
+            });
+          if (key === "tab list")
+            return response({
+              tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+            });
+          if (key === "pane process-info")
+            return response({
+              process_info:
+                processInfoCalls++ === 0 ? shellOnly : afterCompletion,
+            });
+          if (key === "pane run" || key === "pane wait-output")
+            return { code: 0, stdout: "", stderr: "" };
+          if (key === "pane close") {
+            closed = true;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (key === "agent list")
+            return response({ agents: closed ? [] : [{ name: "agent-1" }] });
+          if (key === "pane list")
+            return response({ panes: closed ? [] : [{ pane_id: "pane-1" }] });
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+
+      const close = closeHerdrPane(pi, { cwd: "/tmp" } as any, "agent-1", {
+        paneId: "pane-1",
+        tabId: "tab-1",
+        workspaceId: "workspace-1",
+        cwd: "/tmp",
+        session: { id: "session-1" },
+        allowPostCompletionTransition: true,
+      });
+      if (initial === "complete") await close;
+      else await assert.rejects(close, /process ownership is unproven/);
+      assert.equal(closed, initial === "complete");
+      assert.equal(
+        calls.some((args) => args[0] === "pane" && args[1] === "run"),
+        initial === "complete",
+        "incomplete and multiprocess transition observations fail before readiness",
+      );
+    }
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("shared process-group equality cannot hide a completed shell transition", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;

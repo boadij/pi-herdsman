@@ -2485,6 +2485,18 @@ async function proveExactRunningAgent(
       true &&
     capturedPids.length > 0 &&
     capturedPidStillObserved;
+  const alreadyAtShell =
+    processOwner !== undefined &&
+    (processOwner as PaneProcessWithCompleteness)[
+      foregroundProcessesComplete
+    ] === true &&
+    capturedPids.length === 0 &&
+    settledShell(processOwner, processOwner);
+  const recoveryProven =
+    processOwner !== undefined &&
+    (capturedPids.length > 0
+      ? terminalOccupierGone(processOwner, observed)
+      : alreadyAtShell && settledShell(processOwner, observed));
   const postCompletionShellTransition =
     allowPostCompletionTransition &&
     runningOwnerMatches &&
@@ -2496,7 +2508,7 @@ async function proveExactRunningAgent(
     if (
       !allowPostCompletionTransition ||
       !sameShellProcessOwner(processOwner, observed) ||
-      !terminalOccupierGone(processOwner, observed)
+      !recoveryProven
     )
       error(operation, `pane ${paneId} process ownership is unproven`);
     await proveShellReady(
@@ -2507,7 +2519,7 @@ async function proveExactRunningAgent(
       Date.now() + SETTLE_TIMEOUT,
       operation,
       signal,
-      processOwner,
+      capturedPids.length > 0 ? processOwner : undefined,
     );
   }
   return {
