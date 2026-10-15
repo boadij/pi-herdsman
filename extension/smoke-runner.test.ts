@@ -187,6 +187,65 @@ test("failure result projection allowlists only bounded nonsensitive fields", ()
   assert.equal(JSON.stringify(result).includes("secret"), false);
 });
 
+test("terminal failure stall artifact retains only allowlisted report progress", async () => {
+  const progress = {
+    requestCount: 2,
+    settledCount: 1,
+    settledNonAborted: true,
+    finalError: true,
+    partialObserved: true,
+    leadToolCalls: 0,
+    reportCount: 0,
+    logicalReports: 0,
+    actionable: false,
+    managerResponded: false,
+    prompt: "private prompt",
+    transcript: "private transcript",
+    mailbox: "private mailbox",
+  };
+  const evidence = sanitizedFailureEvidence(
+    {
+      scenario: "terminal-failure",
+      simulated: true,
+      stage: "terminal-failure-settlement-and-report",
+    },
+    {
+      error: {
+        code: "SMOKE_STALLED",
+        smoke: { stage: "terminal-failure-report", lastProgress: progress },
+      },
+    },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  const artifactPath = await preserveFailureEvidence(evidence);
+  const persisted = await readFile(artifactPath, "utf8");
+  assert.deepEqual(JSON.parse(persisted).terminalFailureProgress, {
+    requestCount: 2,
+    settledCount: 1,
+    settledNonAborted: true,
+    finalError: true,
+    partialObserved: true,
+    leadToolCalls: 0,
+    reportCount: 0,
+    logicalReports: 0,
+    actionable: false,
+    managerResponded: false,
+  });
+  assert.doesNotMatch(
+    persisted,
+    /private prompt|private transcript|private mailbox/,
+  );
+  const unrelated = sanitizedFailureEvidence(
+    { scenario: "core", simulated: true },
+    { error: { smoke: { stage: "core-delegation", lastProgress: progress } } },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.equal("terminalFailureProgress" in unrelated, false);
+  await rm(dirname(artifactPath), { recursive: true, force: true });
+});
+
 test("failure artifact retains allowlisted parent routing identity across cleanup update", async () => {
   const paths = {
     root: "/tmp/phs-owned",
@@ -2205,6 +2264,49 @@ test("cleanup artifact records false child signal results", async () => {
     recursive: true,
     force: true,
   });
+  await rm(root, { recursive: true, force: true });
+});
+
+test("cleanup does not SIGKILL when owned child exits after SIGTERM", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-term-cleanup-"));
+  const signals: string[] = [];
+  const parent = {
+    name: "phs-term-test",
+    env: {},
+    server: {
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill(signal: string) {
+        signals.push(signal);
+        if (signal === "SIGTERM") this.exitCode = 0;
+        return true;
+      },
+    },
+  };
+  const ctx = {
+    scenario: "core",
+    simulated: true,
+    paths: { root },
+    owned: { parent },
+  };
+  await cleanup(
+    { root, authLink: join(root, "missing-auth-link") },
+    { parent },
+    ctx,
+    {
+      runCommand: async () => ({}),
+      tryHerdrCommand: async () => ({
+        ok: true,
+        value: { server: { running: false } },
+      }),
+      sleepFor: async () => {
+        throw new Error("initial exit wait timed out");
+      },
+    },
+  );
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(ctx.parentCleanupDiagnostics.child.waitAfterSigterm, "exited");
+  assert.equal("sigkillSent" in ctx.parentCleanupDiagnostics.child, false);
   await rm(root, { recursive: true, force: true });
 });
 

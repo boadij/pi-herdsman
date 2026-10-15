@@ -2421,6 +2421,8 @@ async function runTerminalFailureSmoke(ctx) {
           actionable: !!reports?.actionable,
           managerResponded,
           settledCount: settledRows.length,
+          settledNonAborted:
+            settledRows.length === 1 && settledRows[0].aborted === false,
           finalError: !!finalError,
           partialObserved: !!partialObserved,
           leadToolCalls,
@@ -5231,17 +5233,20 @@ export async function cleanup(
                 parent.exit,
               );
             }
-            parentDiagnostics.child.sigkillSent = parent.server.kill("SIGKILL");
-            try {
-              await waitForParentExit(2_000);
-              parentDiagnostics.child.waitAfterSigkill = "exited";
-            } catch (error) {
-              parentDiagnostics.child.waitAfterSigkill = "timeout";
-              throw error;
-            } finally {
-              parentDiagnostics.child.exitObservedAfterSigkill = Boolean(
-                parent.exit,
-              );
+            if (parentDiagnostics.child.waitAfterSigterm !== "exited") {
+              parentDiagnostics.child.sigkillSent =
+                parent.server.kill("SIGKILL");
+              try {
+                await waitForParentExit(2_000);
+                parentDiagnostics.child.waitAfterSigkill = "exited";
+              } catch (error) {
+                parentDiagnostics.child.waitAfterSigkill = "timeout";
+                throw error;
+              } finally {
+                parentDiagnostics.child.exitObservedAfterSigkill = Boolean(
+                  parent.exit,
+                );
+              }
             }
           }
         },
@@ -5283,6 +5288,45 @@ export async function cleanup(
 
 export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
   const parent = ctx.owned?.parent;
+  const progress =
+    failure?.error?.smoke?.stage === "terminal-failure-report"
+      ? failure.error.smoke.lastProgress
+      : null;
+  const terminalFailureProgress = progress
+    ? {
+        requestCount: Number.isSafeInteger(progress.requestCount)
+          ? progress.requestCount
+          : null,
+        settledCount: Number.isSafeInteger(progress.settledCount)
+          ? progress.settledCount
+          : null,
+        settledNonAborted:
+          typeof progress.settledNonAborted === "boolean"
+            ? progress.settledNonAborted
+            : null,
+        finalError:
+          typeof progress.finalError === "boolean" ? progress.finalError : null,
+        partialObserved:
+          typeof progress.partialObserved === "boolean"
+            ? progress.partialObserved
+            : null,
+        leadToolCalls: Number.isSafeInteger(progress.leadToolCalls)
+          ? progress.leadToolCalls
+          : null,
+        reportCount: Number.isSafeInteger(progress.reportCount)
+          ? progress.reportCount
+          : null,
+        logicalReports: Number.isSafeInteger(progress.logicalReports)
+          ? progress.logicalReports
+          : null,
+        actionable:
+          typeof progress.actionable === "boolean" ? progress.actionable : null,
+        managerResponded:
+          typeof progress.managerResponded === "boolean"
+            ? progress.managerResponded
+            : null,
+      }
+    : null;
   return {
     scenario: ctx.scenario,
     mode: ctx.simulated ? "simulated" : "live",
@@ -5292,6 +5336,7 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
       typeof failure?.error?.code === "string"
         ? failure.error.code.slice(0, 80)
         : undefined,
+    ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
