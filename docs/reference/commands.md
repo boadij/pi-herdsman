@@ -243,7 +243,11 @@ Lead; successful automatic startup does not persist Manager intent. Changing
 the setting affects only a later `session_start`, not the running role.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
-live assigned Lead. Manager staff reports contain only live exact Leads named
+live assigned Lead, plus `Remove worktree…` for assigned projects including
+paused work. This uses the same explicitly confirmed removal operation as
+`/manager remove <branch>`; it preserves the Git branch and Pi conversation.
+Running managed execution may be stopped, and assignment retirement is
+reported separately from checkout removal. Manager staff reports contain only live exact Leads named
 by current project assignments; physical worktree scope alone grants no
 authority. Project assignments survive Manager replacement and manual
 continuation of the exact assigned Pi session. `managed-lead` is launch policy,
