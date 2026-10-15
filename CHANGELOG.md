@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.27.0](https://github.com/boadij/pi-herdsman/compare/v0.26.0...v0.27.0) (2026-10-15)
+
+
+### Features
+
+* **agents:** clarify internal review and roster-agnostic guidance ([#384](https://github.com/boadij/pi-herdsman/issues/384)) ([0dc62d3](https://github.com/boadij/pi-herdsman/commit/0dc62d39b63afe2d273d687b9e49e7114f2fcfa3))
+* **agents:** streamline runtime capability discovery ([#380](https://github.com/boadij/pi-herdsman/issues/380)) ([a422c80](https://github.com/boadij/pi-herdsman/commit/a422c804b5fdf2f2bf631695bb12d8539e053071))
+
+
+### Fixes
+
+* **agents:** follow symlinked agent definitions ([#392](https://github.com/boadij/pi-herdsman/issues/392)) ([d919eae](https://github.com/boadij/pi-herdsman/commit/d919eaed8383fc56a2e8a9eeabfaa9cb21470e26))
+* **agents:** remove misleading shared shell guidance ([#396](https://github.com/boadij/pi-herdsman/issues/396)) ([c373f45](https://github.com/boadij/pi-herdsman/commit/c373f458ca3cb7cc5f487acd7d1d034f56082c3d))
+* **runtime:** adopt Pi 1.2.0 and validate custom-message startup ([#385](https://github.com/boadij/pi-herdsman/issues/385)) ([24e085b](https://github.com/boadij/pi-herdsman/commit/24e085b14598dc3990c36a4c83cc7715735cee62))
+
+
+### Tests
+
+* **smoke:** own Herdr bootstrap and preserve failure evidence ([#394](https://github.com/boadij/pi-herdsman/issues/394)) ([1a7c90d](https://github.com/boadij/pi-herdsman/commit/1a7c90d66cf961659d419a79f292d35d486c6b5c))
+
+
+### Other Changes
+
+* **runtime:** adopt Herdr 0.9.5 ([#397](https://github.com/boadij/pi-herdsman/issues/397)) ([0562c43](https://github.com/boadij/pi-herdsman/commit/0562c4392c1e64b35e962a26e68c5ca115090cd6))
+
 ## [0.26.0](https://github.com/boadij/pi-herdsman/compare/v0.25.1...v0.26.0) (2026-10-12)
 
 
