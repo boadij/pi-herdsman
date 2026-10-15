@@ -1295,7 +1295,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         pid: process.pid,
         sessionId: "faux-test-session",
         packageName: "@earendil-works/pi-coding-agent",
-        piVersion: "1.2.0",
+        piVersion: "1.3.0",
         model: "chief-tree",
         hasAgentDefinitions: false,
       },
@@ -1826,7 +1826,7 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
     pid: 42,
     sessionId: "session",
     packageName: "@earendil-works/pi-coding-agent",
-    piVersion: "1.2.0",
+    piVersion: "1.3.0",
     model: "terminal-error",
     hasAgentDefinitions: true,
   };
@@ -1839,13 +1839,13 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
       processes,
       "terminal-error",
       true,
-      "1.2.0",
+      "1.3.0",
     ),
     {
       paneId: "lead-pane",
       pid: 42,
       sessionId: "session",
-      piVersion: "1.2.0",
+      piVersion: "1.3.0",
     },
   );
   assert.throws(
@@ -1857,7 +1857,7 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
         [{ pid: 43 }],
         "terminal-error",
         true,
-        "1.2.0",
+        "1.3.0",
       ),
     (error: Error & { code?: string }) =>
       error.message.includes("foreground PID match") &&
@@ -1872,14 +1872,15 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
         processes,
         "terminal-error",
         true,
-        "1.2.0",
+        "1.3.0",
       ),
     /provenance row/,
   );
   for (const [observedVersion, accepted] of [
-    ["1.1.9", false],
-    ["1.2.0", true],
+    ["1.2.9", false],
     ["1.3.0", true],
+    ["1.3.1", true],
+    ["1.4.0", true],
   ] as const) {
     const attempt = () =>
       matchPiProvenance(
@@ -1889,9 +1890,9 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
         processes,
         "terminal-error",
         true,
-        "1.2.0",
+        "1.3.0",
       );
-    if (!accepted) assert.throws(attempt, /1\.2\.0/);
+    if (!accepted) assert.throws(attempt, /1\.3\.0/);
     else assert.equal(attempt().piVersion, observedVersion);
   }
   assert.throws(
@@ -1903,7 +1904,7 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
         processes,
         "terminal-error",
         true,
-        "1.2.0",
+        "1.3.0",
       ),
     /expected one provenance row/,
   );
