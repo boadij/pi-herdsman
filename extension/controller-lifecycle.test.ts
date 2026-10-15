@@ -4497,6 +4497,42 @@ test("recovery cleanup keeps an idle restored herd open when failure reporting i
     false,
     true,
   );
+  let processInfoCount = 0;
+  const execWithSettlement = async (
+    command: string,
+    args: string[],
+    options?: any,
+  ) => {
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "process-info"
+    ) {
+      processInfoCount++;
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            process_info: {
+              pane_id: "startup-pane",
+              shell_pid: 123,
+              foreground_process_group_id: 123,
+              foreground_processes:
+                processInfoCount === 1
+                  ? [
+                      { pid: 123, argv0: "/bin/zsh" },
+                      { pid: 999, argv0: "/usr/local/bin/pi" },
+                    ]
+                  : [{ pid: 123, argv0: "/bin/zsh" }],
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    }
+    return startup.exec(command, args, options);
+  };
   resetAgentMailbox(startup.mailbox);
   writeAgentState(startup.mailbox, state);
   writeResult(startup.mailbox, {
@@ -4523,7 +4559,7 @@ test("recovery cleanup keeps an idle restored herd open when failure reporting i
       details: resultEntryDetails(state, requestId),
     },
   ];
-  const pi = fakePi({ entries, exec: startup.exec });
+  const pi = fakePi({ entries, exec: execWithSettlement });
   const context = fakeContext(entries);
   const herdEntries = () =>
     entries.filter(
@@ -7264,8 +7300,35 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
     false,
     true,
   );
+  let stopped = false;
   const pi = fakePi({
     exec: async (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: 123,
+                foreground_processes: stopped
+                  ? [{ pid: 123, argv0: "/bin/zsh" }]
+                  : [
+                      { pid: 123, argv0: "/bin/zsh" },
+                      { pid: 999, argv0: "/usr/local/bin/pi" },
+                    ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       const result = await startup.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         const state = readAgentState(startup.mailbox)!;
@@ -7693,7 +7756,38 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     true,
     true,
   );
-  const pi = fakePi({ exec: startup.exec });
+  let stopped = false;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: 123,
+                foreground_processes: stopped
+                  ? [{ pid: 123, argv0: "/bin/zsh" }]
+                  : [
+                      { pid: 123, argv0: "/bin/zsh" },
+                      { pid: 999, argv0: "/usr/local/bin/pi" },
+                    ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args, options);
+    },
+  });
   registerExtension!(pi.pi as never);
   const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
@@ -7738,9 +7832,36 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     false,
     true,
   );
+  let stopped = false;
   const pi = fakePi({
     exec: (command, args, options) => {
       if (options?.signal?.aborted) throw new Error("aborted executor signal");
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: 123,
+                foreground_processes: stopped
+                  ? [{ pid: 123, argv0: "/bin/zsh" }]
+                  : [
+                      { pid: 123, argv0: "/bin/zsh" },
+                      { pid: 999, argv0: "/usr/local/bin/pi" },
+                    ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return startup.exec(command, args, options);
     },
   });

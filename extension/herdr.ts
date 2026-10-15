@@ -132,6 +132,10 @@ export type PaneProcess = Readonly<{
     state?: string;
   }>[];
 }>;
+const foregroundProcessesComplete: unique symbol = Symbol();
+type PaneProcessWithCompleteness = PaneProcess & {
+  [foregroundProcessesComplete]?: boolean;
+};
 export type ExpectedSession = {
   id?: string;
   path?: string;
@@ -692,8 +696,8 @@ export function sameShellProcessOwner(
   // group. No process-group separation by the agent is assumed here: a
   // still-listed or replacement Herdr agent is rejected by the agent-list,
   // session, pane and lifecycle-lock proofs around this call. Settlement
-  // separately rejects pids captured from the terminal occupier through
-  // terminalOccupierSurvived; this predicate alone accepts any other untracked
+  // separately proves pids captured from the terminal occupier through
+  // terminalOccupierGone; this predicate alone accepts any other untracked
   // process sharing the shell's group. Without a reported group the stricter
   // singleton observation remains the only proof.
   const foregroundShell =
@@ -745,6 +749,43 @@ export function terminalOccupierSurvived(
   if (captured.length === 0 || foreground === undefined) return false;
   return foreground.some(
     (process) => process.pid !== undefined && captured.includes(process.pid),
+  );
+}
+
+function terminalOccupierGone(
+  occupier: PaneProcess | undefined,
+  observed: PaneProcess,
+): boolean {
+  if (
+    !occupier ||
+    (occupier as PaneProcessWithCompleteness)[foregroundProcessesComplete] !==
+      true ||
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] !==
+      true
+  )
+    return false;
+  const captured = (occupier.foreground_processes ?? [])
+    .map((process) => process.pid)
+    .filter(
+      (pid): pid is number => pid !== undefined && pid !== occupier.shell_pid,
+    );
+  const foreground = observed.foreground_processes;
+  if (captured.length === 0 || foreground === undefined) return false;
+  return !terminalOccupierSurvived(occupier, observed);
+}
+
+function settledShell(
+  expected: PaneProcess,
+  observed: PaneProcess,
+  occupier?: PaneProcess,
+): boolean {
+  if (!sameShellProcessOwner(expected, observed)) return false;
+  if (occupier) return terminalOccupierGone(occupier, observed);
+  return (
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] ===
+      true &&
+    observed.foreground_processes?.length === 1 &&
+    observed.foreground_processes[0]?.pid === observed.shell_pid
   );
 }
 
@@ -1989,7 +2030,17 @@ function normalizePaneProcess(
           return Object.freeze(process);
         })
     : undefined;
-  return Object.freeze({
+  const foregroundComplete =
+    Array.isArray(candidate.foreground_processes) &&
+    candidate.foreground_processes.length <= MAX_FOREGROUND_PROCESSES &&
+    candidate.foreground_processes.every(
+      (item) =>
+        !!item &&
+        typeof item === "object" &&
+        Number.isInteger((item as Record<string, unknown>).pid) &&
+        ((item as Record<string, unknown>).pid as number) > 0,
+    );
+  const normalized = {
     ...(hasExactPane ? { pane_id: paneId } : {}),
     shell_pid: candidate.shell_pid as number,
     ...(candidate.foreground_process_group_id !== undefined
@@ -2001,7 +2052,11 @@ function normalizePaneProcess(
     ...(foreground !== undefined
       ? { foreground_processes: Object.freeze(foreground) }
       : {}),
+  } as PaneProcessWithCompleteness;
+  Object.defineProperty(normalized, foregroundProcessesComplete, {
+    value: foregroundComplete,
   });
+  return Object.freeze(normalized);
 }
 
 async function waitForShellMarker(
@@ -2071,11 +2126,7 @@ async function proveShellReady(
   );
   const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
-  if (
-    !shell ||
-    !sameShellProcessOwner(expected ?? shell, shell) ||
-    terminalOccupierSurvived(terminalOccupier, shell)
-  )
+  if (!shell || !settledShell(expected ?? shell, shell, terminalOccupier))
     error(operation, `pane ${paneId} did not become an available shell`);
   return shell;
 }
@@ -2124,8 +2175,7 @@ async function settlePreservedPane(
       const observed = await paneProcess(pi, ctx, expected.paneId, signal);
       if (
         observed &&
-        sameShellProcessOwner(processIdentity, observed) &&
-        !terminalOccupierSurvived(terminalOccupier, observed)
+        settledShell(processIdentity, observed, terminalOccupier)
       ) {
         if (safeObservation) {
           if (!capturedShellProcess(processIdentity))
@@ -2412,14 +2462,41 @@ async function proveExactRunningAgent(
   const observed = await paneProcess(pi, ctx, paneId, signal);
   if (!observed || observed.pane_id !== paneId)
     error(operation, `pane ${paneId} process ownership is unproven`);
+  const runningOwnerMatches =
+    processOwner !== undefined &&
+    sameRunningProcessOwner(processOwner, observed);
+  const capturedPids = (processOwner?.foreground_processes ?? [])
+    .map((process) => process.pid)
+    .filter(
+      (pid): pid is number =>
+        pid !== undefined && pid !== processOwner?.shell_pid,
+    );
+  const capturedPidStillObserved =
+    observed.foreground_processes?.some(
+      (process) =>
+        process.pid !== undefined && capturedPids.includes(process.pid),
+    ) ?? false;
+  const capturedPidContinuity =
+    processOwner !== undefined &&
+    (processOwner as PaneProcessWithCompleteness)[
+      foregroundProcessesComplete
+    ] === true &&
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] ===
+      true &&
+    capturedPids.length > 0 &&
+    capturedPidStillObserved;
+  const postCompletionShellTransition =
+    allowPostCompletionTransition &&
+    runningOwnerMatches &&
+    !capturedPidContinuity;
   if (
     processOwner !== undefined &&
-    !sameRunningProcessOwner(processOwner, observed)
+    (!runningOwnerMatches || postCompletionShellTransition)
   ) {
     if (
       !allowPostCompletionTransition ||
       !sameShellProcessOwner(processOwner, observed) ||
-      terminalOccupierSurvived(processOwner, observed)
+      !terminalOccupierGone(processOwner, observed)
     )
       error(operation, `pane ${paneId} process ownership is unproven`);
     await proveShellReady(
@@ -2624,6 +2701,7 @@ export async function rollbackHerdrStart(
     const managed = agents.find(
       (item: any) => item.name === started.herdrAgent,
     );
+    let runningOccupier: PaneProcess | undefined;
     const replacement = agents.find(
       (item: any) =>
         item.pane_id === started.paneId && item.name !== started.herdrAgent,
@@ -2673,6 +2751,7 @@ export async function rollbackHerdrStart(
         false,
         signal,
       );
+      runningOccupier = proved.process;
       await runHerdr(
         pi,
         ctx,
@@ -2692,6 +2771,7 @@ export async function rollbackHerdrStart(
         expectedShell,
         "rollback",
         signal,
+        runningOccupier,
       );
     }
     const listedTabs = await runHerdr(
@@ -2744,21 +2824,83 @@ export async function rollbackHerdrStart(
           `pane ${started.paneId} process ownership is unproven`,
         );
     }
-    if (!managed) {
-      const listedAgents = await runHerdr(pi, ctx, ["agent", "list"], {
-        signal,
-      });
-      if (!Array.isArray(listedAgents?.agents))
-        error("rollback", "agent list ownership proof is unavailable");
-      const currentAgents = listedAgents.agents;
-      if (
-        currentAgents.some(
-          (item: any) =>
-            item.name === started.herdrAgent || item.pane_id === started.paneId,
-        )
+    const currentAgents = await runHerdr(pi, ctx, ["agent", "list"], {
+      signal,
+    });
+    if (!Array.isArray(currentAgents?.agents))
+      error("rollback", "agent list ownership proof is unavailable");
+    if (
+      currentAgents.agents.some(
+        (item: any) =>
+          item.name === started.herdrAgent || item.pane_id === started.paneId,
       )
-        error("rollback", `pane ${started.paneId} agent ownership changed`);
+    )
+      error("rollback", `pane ${started.paneId} agent ownership changed`);
+
+    const finalPane = (
+      await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
+    ).pane;
+    if (!matchesAttemptTerminal(finalPane, started))
+      error("rollback", `pane ${started.paneId} ownership is unproven`);
+    if (started.launchMayHaveStarted || !sameCwd(finalPane.cwd, started.cwd)) {
+      const finalProcess = await paneProcess(pi, ctx, started.paneId, signal);
+      if (
+        !expectedShell ||
+        !finalProcess ||
+        (started.launchMayHaveStarted
+          ? !settledShell(expectedShell, finalProcess, runningOccupier)
+          : !sameShellProcessOwner(expectedShell, finalProcess))
+      )
+        error(
+          "rollback",
+          `pane ${started.paneId} process ownership is unproven`,
+        );
     }
+    const finalTabs = await runHerdr(
+      pi,
+      ctx,
+      ["tab", "list", "--workspace", started.workspaceId],
+      { signal },
+    );
+    if (
+      !Array.isArray(finalTabs?.tabs) ||
+      !finalTabs.tabs.some(
+        (item: any) =>
+          item.tab_id === started.tabId &&
+          (item.workspace_id === undefined ||
+            item.workspace_id === started.workspaceId),
+      )
+    )
+      error("rollback", `tab ${started.tabId} ownership is unproven`);
+    if (started.createdTab) {
+      const finalPanes = await runHerdr(
+        pi,
+        ctx,
+        ["pane", "list", "--workspace", started.workspaceId],
+        { signal },
+      );
+      if (!Array.isArray(finalPanes?.panes))
+        error("rollback", "pane list ownership proof is unavailable");
+      const tabPanes = finalPanes.panes.filter(
+        (item: any) => item.tab_id === started.tabId,
+      );
+      if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== started.paneId)
+        error("rollback", `tab ${started.tabId} pane ownership is unproven`);
+    }
+    // Recheck after other Herdr reads so a replacement cannot race cleanup.
+    const finalAgents = await runHerdr(pi, ctx, ["agent", "list"], {
+      signal,
+    });
+    if (!Array.isArray(finalAgents?.agents))
+      error("rollback", "agent list ownership proof is unavailable");
+    if (
+      finalAgents.agents.some(
+        (item: any) =>
+          item.name === started.herdrAgent || item.pane_id === started.paneId,
+      )
+    )
+      error("rollback", `pane ${started.paneId} agent ownership changed`);
+
     if (started.createdTab)
       await runHerdr(pi, ctx, ["tab", "close", started.tabId], {
         signal,
