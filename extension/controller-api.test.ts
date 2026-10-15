@@ -2858,6 +2858,7 @@ async function runManagerStartupScenario(
   });
   let duplicateWorktree = false;
   let hideActiveLead = false;
+  let uiSessionId: string | undefined;
   let removalCommands: string[][] = [];
   const respond = (result: any) => ({
     stdout: JSON.stringify({
@@ -4151,6 +4152,8 @@ async function runManagerStartupScenario(
         return;
       }
       if (mode === "active-live") {
+        uiSessionId = ctx.sessionManager.getSessionId();
+        ctx.sessionManager.getSessionId = () => uiSessionId;
         const running = await execute();
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
@@ -4558,6 +4561,13 @@ async function runManagerStartupScenario(
           ...assignment,
           piSessionFile: childSessionPath,
         });
+        writeProjectAssignment(supervisionRuntime(), {
+          version: 2,
+          id: randomUUID(),
+          repoKey,
+          branch: "smoke/selection",
+          text: "selection test project",
+        });
         const { SelectList } = await import("@earendil-works/pi-tui");
         let renderedList: any;
         t!.mock.method(SelectList.prototype, "render", function (this: any) {
@@ -4602,6 +4612,10 @@ async function runManagerStartupScenario(
         const overview = components[0];
         const initial = overview.render(120).join("\n");
         assert.match(initial, /smoke\/recover · active · unknown/);
+        assert.deepEqual(
+          renderedList.items.map((item: any) => item.label),
+          ["smoke/recover", "smoke/selection"],
+        );
         overview.handleInput("\r");
         await t!.waitFor(() => assert.equal(components.length, 2));
         const actionMenu = components[1];
@@ -4614,13 +4628,19 @@ async function runManagerStartupScenario(
         renderedList.setSelectedIndex(removeIndex);
         removalNotices.length = 0;
         actionMenu.handleInput("\r");
-        await t!.waitFor(() =>
-          assert.ok(removalPrompt || removalNotices.length),
-        );
-        assert.match(
-          removalPrompt ?? removalNotices.join("\n"),
-          /smoke\/recover/u,
-        );
+        await t!.waitFor(() => {
+          assert.match(
+            removalPrompt ?? "",
+            /Remove worktree for branch smoke\/recover/u,
+          );
+          assert.match(removalPrompt ?? "", /Type remove to confirm/u);
+        });
+        await t!.waitFor(() => {
+          assert.match(
+            removalNotices.join("\n"),
+            /Removal of smoke\/recover cancelled; no changes made\./u,
+          );
+        });
         assert.equal(
           removalCommands.length,
           0,
@@ -4654,8 +4674,42 @@ async function runManagerStartupScenario(
         assert.match(pausedMenu, /Remove worktree…/u);
         pausedActions.handleInput("\x1b");
         await t!.waitFor(() => assert.equal(components.length, 5));
-        components[4].handleInput("\x1b");
+        components[4].handleInput("\x1b[B");
+        components[4].handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 6));
+        assert.match(components[5].render(120).join("\n"), /smoke\/selection/u);
+        components[5].handleInput("\x1b");
+        await t!.waitFor(() => assert.equal(components.length, 7));
+        components[6].render(120);
+        assert.equal(
+          renderedList.getSelectedItem()?.value,
+          "work:smoke/selection",
+          "cancelling the action menu must retain the selected project",
+        );
+        components[6].handleInput("\x1b[A");
+        components[6].handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 8));
+        let resolveRemovalInput!: (value: string | undefined) => void;
+        ctx.ui.input = async (prompt: string) => {
+          removalPrompt = prompt;
+          return new Promise<string | undefined>((resolve) => {
+            resolveRemovalInput = resolve;
+          });
+        };
+        removalPrompt = undefined;
+        components[7].handleInput("\x1b[B");
+        components[7].handleInput("\r");
+        await t!.waitFor(() =>
+          assert.match(removalPrompt ?? "", /Type remove to confirm/u),
+        );
+        uiSessionId = randomUUID();
+        resolveRemovalInput(undefined);
         await overviewPromise;
+        assert.equal(
+          components.length,
+          8,
+          "a changed role generation must not reopen the overview",
+        );
       }
       return;
     }

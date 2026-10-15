@@ -4594,6 +4594,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           liveLead: boolean;
         }
       | { kind: "lead"; session: string; label: string };
+    let selected: string | undefined;
     while (true) {
       const expectedGeneration = generation(ctx);
       const selection = await ctx.ui.custom<Selection | undefined>(
@@ -4601,7 +4602,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           const viewGeneration = nextOverviewGeneration();
           const supervisionGeneration = generation(ctx);
           const sessionId = ctx.sessionManager.getSessionId();
-          let selected: string | undefined;
           let mode: "overview" | "peek" = "overview";
           let peekLead:
             ReturnType<typeof host.presentationReports>[number] | undefined;
@@ -4946,6 +4946,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           }
         }
         await refresh(ctx);
+        if (generation(ctx) !== expectedGeneration) return;
         continue;
       }
       const actions = [
@@ -4994,6 +4995,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error");
       }
       await refresh(ctx);
+      if (generation(ctx) !== expectedGeneration) return;
     }
   };
 
