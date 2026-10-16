@@ -6230,6 +6230,151 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   }
 });
 
+test("peer delivery preserves queued sender assignment context", async (t) => {
+  for (const scenario of [
+    {
+      name: "managed sender takeover",
+      queuedManaged: true,
+      assignSender: false,
+    },
+    {
+      name: "ordinary sender assigned later",
+      queuedManaged: false,
+      assignSender: true,
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      setLeadEnvironment();
+      const socket = join(tmpdir(), `peer-sender-context-${randomUUID()}.sock`);
+      const receiverId = randomUUID();
+      const senderId = randomUUID();
+      const group = {
+        repoKey: "peer-test-repo",
+        primaryWorkspaceId: WORKSPACE,
+      };
+      process.env.HERDR_SOCKET_PATH = socket;
+      process.env.HERDR_PANE_ID = "receiver-pane";
+      process.env.HERDR_TAB_ID = "receiver-tab";
+      const runtime = peerRuntime();
+      const branch = `peer-${randomUUID()}`;
+      const senderLease = acquireProcessLock(
+        peerLeadLockPath(runtime, senderId),
+        {
+          name: "Lead peer presence",
+        },
+      );
+      writePeerLeadRecord(runtime, {
+        version: 2,
+        build: HERDSMAN_BUILD,
+        role: "lead",
+        piSessionId: senderId,
+        paneId: "sender-pane",
+        tabId: "sender-tab",
+        workspaceId: WORKSPACE,
+        socket,
+        group,
+        claim: senderLease.claim,
+        updatedAt: Date.now(),
+      });
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id: receiverId,
+        repoKey: group.repoKey,
+        branch: `receiver-${branch}`,
+        text: "managed peer receiver",
+      });
+      if (scenario.queuedManaged)
+        writeProjectAssignment(supervisionRuntime(), {
+          version: 2,
+          id: senderId,
+          repoKey: group.repoKey,
+          branch,
+          text: "sender before takeover",
+        });
+
+      const entries: unknown[] = [];
+      const receiver = fakeChiefPi({
+        entries,
+        exec: peerTopologyExec,
+        sendMessage: (message) => entries.push(message),
+        activeTools: ["read", "bash"],
+      });
+      const context = fakeContext(entries) as any;
+      context.sessionManager = {
+        ...context.sessionManager,
+        getSessionId: () => receiverId,
+      };
+      registerExtension!(receiver.pi as never);
+      try {
+        await receiver.events.get("session_start")![0](undefined, context);
+        await t.waitFor(() =>
+          assert.ok(readPeerLeadRecord(runtime, receiverId)),
+        );
+        const record = {
+          version: 2 as const,
+          build: HERDSMAN_BUILD,
+          id: randomUUID(),
+          leaseId: senderLease.claim.id,
+          kind: "peer_message" as const,
+          fromSessionId: senderId,
+          toSessionId: receiverId,
+          leadSessionId: senderId,
+          peerSource: {
+            role: "lead" as const,
+            socket,
+            group,
+            managed: scenario.queuedManaged,
+          },
+          text: `sender context ${scenario.name}`,
+          createdAt: Date.now(),
+        };
+        writeCoordinationMessage(record, runtime);
+        if (scenario.assignSender)
+          writeProjectAssignment(supervisionRuntime(), {
+            version: 2,
+            id: senderId,
+            repoKey: group.repoKey,
+            branch,
+            text: "sender assigned after queueing",
+          });
+        else
+          removeProjectAssignment(supervisionRuntime(), group.repoKey, branch);
+        await receiver.commandOptions.get("chief").handler("", context);
+        await receiver.commandOptions.get("chief").handler("leave", context);
+        await t.waitFor(
+          () => {
+            assert.deepEqual(
+              listCoordinationMessagePaths(runtime, receiverId),
+              [],
+            );
+          },
+          { timeout: 5000 },
+        );
+        assert.equal(
+          receiver.sentMessageCalls.filter((call) =>
+            String((call.message as any)?.content ?? "").includes(record.text),
+          ).length,
+          1,
+        );
+      } finally {
+        await receiver.events.get("session_shutdown")?.[0]();
+        removeProjectAssignment(supervisionRuntime(), group.repoKey, branch);
+        removeProjectAssignment(
+          supervisionRuntime(),
+          group.repoKey,
+          `receiver-${branch}`,
+        );
+        removePeerLeadRecord(runtime, senderId);
+        senderLease.release();
+        delete process.env.HERDR_SOCKET_PATH;
+        delete process.env.HERDR_PANE_ID;
+        delete process.env.HERDR_TAB_ID;
+        setLeadEnvironment();
+      }
+    });
+  }
+});
+
 test("peer delivery rejects same-generation recipient provenance changes before send", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `peer-authority-delivery-${randomUUID()}.sock`);

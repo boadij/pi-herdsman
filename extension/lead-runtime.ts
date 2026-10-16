@@ -8225,7 +8225,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (scope && !scope.workspaceIds.includes(record.workspaceId))
       return undefined;
     if (
-      !requireFreshGroup &&
       record.group &&
       (!group ||
         group.repoKey !== record.group.repoKey ||
@@ -9658,16 +9657,12 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     peerRuntime(),
                     recipient.piSessionId,
                   );
-                  const senderMatches =
-                    snapshot?.get(record.fromSessionId) ?? [];
                   const matches = snapshot?.get(recipient.piSessionId) ?? [];
                   const assignment = matches[0];
                   const contextCurrent =
                     recipientContext.role === "manager"
                       ? !snapshot
                       : !!snapshot &&
-                        senderMatches.length <= 1 &&
-                        !!senderMatches.length === source.managed &&
                         matches.length <= 1 &&
                         !!matches.length === recipientContext.managed &&
                         (!assignment ||
@@ -9681,6 +9676,9 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   if (
                     !current ||
                     !samePeerLeadAuthority(current, recipient) ||
+                    current.group?.repoKey !== recipient.group?.repoKey ||
+                    current.group?.primaryWorkspaceId !==
+                      recipient.group?.primaryWorkspaceId ||
                     !contextCurrent ||
                     !canMessagePeer(source, recipientContext)
                   )
@@ -9693,18 +9691,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   recipientContext.role === "manager"
                 )
                   submit();
-                else
-                  withProjectAssignmentAuthority((snapshot) => {
-                    if (
-                      source.role === "lead" &&
-                      !!(snapshot.get(record.fromSessionId)?.length ?? 0) !==
-                        source.managed
-                    )
-                      throw new Error(
-                        "Peer eligibility changed before delivery",
-                      );
-                    submit(snapshot);
-                  });
+                else withProjectAssignmentAuthority(submit);
                 result = submitted;
               } else {
                 importResultBindings(pi, ctx, resultBindings, record.kind);
