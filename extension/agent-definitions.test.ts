@@ -737,13 +737,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
     /chief definition: project overrides are not supported; configure chief globally instead/,
   );
   for (const name of ["manager", "chief"] as const)
-    for (const field of [
-      "model",
-      "thinking",
-      "systemPromptMode",
-      "skills",
-      "agents",
-    ]) {
+    for (const field of ["model", "thinking", "systemPromptMode", "skills"]) {
       writeFileSync(
         join(globalAgents, `${name}.md`),
         `---\nname: ${name}\n${field}: ${field === "skills" || field === "agents" ? '["scout"]' : field === "systemPromptMode" ? '"append"' : '"low"'}\n---\n`,
@@ -753,6 +747,98 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
         new RegExp(`${name} field ${field}: is not supported`),
       );
     }
+});
+
+test("Manager and Chief agent allowlists validate effective targets", () => {
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-agents-"));
+  const agents = join(global, "agents");
+  mkdirSync(agents);
+  writeFileSync(
+    join(agents, "manager.md"),
+    "---\nname: manager\nagents: [scout, disabled-helper]\n---\n",
+  );
+  writeFileSync(
+    join(agents, "chief.md"),
+    "---\nname: chief\nagents: [reviewer]\n---\n",
+  );
+  writeFileSync(
+    join(agents, "disabled-helper.md"),
+    "---\nname: disabled-helper\nenabled: false\n---\n",
+  );
+
+  withPiAgentDir(global, () => {
+    assert.deepEqual(discoverRoleDefinition("manager").frontmatter.agents, [
+      "scout",
+      "disabled-helper",
+    ]);
+    assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, [
+      "reviewer",
+    ]);
+
+    writeFileSync(
+      join(agents, "manager.md"),
+      "---\nname: manager\nagents: [missing]\n---\n",
+    );
+    assert.throws(
+      () => discoverRoleDefinition("manager"),
+      /agent manager references missing agent definition missing/,
+    );
+    writeFileSync(
+      join(agents, "manager.md"),
+      "---\nname: manager\nagents: [chief]\n---\n",
+    );
+    assert.throws(
+      () => discoverRoleDefinition("manager"),
+      /agent manager references reserved agent definition chief/,
+    );
+    writeFileSync(
+      join(agents, "orchestrator-lead.md"),
+      "---\nname: orchestrator-lead\nagents: [scout]\n---\n",
+    );
+    assert.throws(
+      () => discoverRoleDefinition("manager"),
+      /orchestrator-lead field agents: is not supported/,
+    );
+  });
+});
+
+test("supervisor allowlists use effective overlays and layered Agent targets", () => {
+  const project = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-supervisor-project-"),
+  );
+  const projectAgents = join(project, ".pi", "agents");
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-global-"));
+  const globalAgents = join(global, "agents");
+  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(globalAgents);
+  writeFileSync(
+    join(projectAgents, "manager.md"),
+    "---\nname: manager\nagents: [missing-project-target]\n---\n",
+  );
+  writeFileSync(
+    join(globalAgents, "manager.md"),
+    "---\nname: manager\nagents: [project-helper]\n---\n",
+  );
+  writeFileSync(
+    join(globalAgents, "chief.md"),
+    "---\nname: chief\nagents: [project-helper]\n---\n",
+  );
+  const projectHelperPath = join(projectAgents, "project-helper.md");
+  writeFileSync(
+    projectHelperPath,
+    "---\nname: project-helper\n---\nProject helper",
+  );
+
+  withPiAgentDir(global, () => {
+    const manager = discoverRoleDefinition("manager", { projectRoot: project });
+    const chief = discoverRoleDefinition("chief", { projectRoot: project });
+    assert.deepEqual(manager.frontmatter.agents, ["project-helper"]);
+    assert.deepEqual(chief.frontmatter.agents, ["project-helper"]);
+    const helper = discoverAgentDefinitions({ projectRoot: project }).find(
+      ({ name }) => name === "project-helper",
+    );
+    assert.equal(helper?.projectSource, projectHelperPath);
+  });
 });
 
 test("bundled definitions carry portable capabilities and role contracts", () => {

@@ -157,6 +157,8 @@ export type StopOwnedAgentsResult = { complete: boolean; summary: string };
 
 export type AgentStatusSnapshotHost = {
   scope: ControllerScope;
+  /** Verified current root role for display only; undefined uses a neutral label. */
+  activeRootRoleForPresentation?(): "lead" | "manager" | "chief" | undefined;
   listedAgentRecord: ReturnType<
     typeof createAgentController
   >["listedAgentRecord"];
@@ -167,6 +169,13 @@ export type AgentStatusSnapshotHost = {
   sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
   ownToolsSnapshot(): { ownTools?: string[] };
 };
+
+export function rootStatusBreadcrumb(
+  role: "lead" | "manager" | "chief" | undefined,
+): BreadcrumbSegment[] {
+  return [{ text: role ?? "owner/controller" }];
+}
+
 export function buildAgentStatusSnapshot(
   view: ManagedAgentSnapshotView,
   ctx: ExtensionContext,
@@ -174,7 +183,7 @@ export function buildAgentStatusSnapshot(
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
-    host.scope.kind === "lead" && view.stateIssues.length > 0;
+    host.scope.kind === "root" && view.stateIssues.length > 0;
   const listed = view.visible.map((snapshot: VisibleManagedAgentSnapshot) =>
     host.listedAgentRecord(
       view,
@@ -223,15 +232,15 @@ export function buildAgentStatusSnapshot(
     };
   });
   const herdStartedAt =
-    host.scope.kind === "lead" ? host.herdStartedAt() : undefined;
+    host.scope.kind === "root" ? host.herdStartedAt() : undefined;
   return {
     agents,
     stale: false,
     unavailable: false,
     ...(herdStartedAt !== undefined ? { herdRunStartedAt: herdStartedAt } : {}),
     breadcrumb:
-      host.scope.kind === "lead"
-        ? [{ text: "lead" }]
+      host.scope.kind === "root"
+        ? rootStatusBreadcrumb(host.activeRootRoleForPresentation?.())
         : statusBreadcrumb(
             view,
             host.environmentIdentity(ctx),
@@ -1734,15 +1743,46 @@ export function resolveAssignmentSession(
 }
 
 export type ControllerScope =
-  | { kind: "lead" }
+  | { kind: "root" }
   | {
       kind: "managed-agent";
       allowedAgentDefinitions: ReadonlySet<string>;
     };
 
+export type RootDelegationPolicy = "all" | ReadonlySet<string>;
+export type RootDelegationGeneration = {
+  sessionId: string;
+  roleGeneration: number;
+  role: string | undefined;
+  authority: object | undefined;
+  profile: object | undefined;
+};
+
+function sameRootDelegationGeneration(
+  a: RootDelegationGeneration,
+  b: RootDelegationGeneration | undefined,
+): boolean {
+  return (
+    !!b &&
+    a.sessionId === b.sessionId &&
+    a.roleGeneration === b.roleGeneration &&
+    a.role === b.role &&
+    a.authority === b.authority &&
+    a.profile === b.profile
+  );
+}
+
+function permitsRootDelegation(
+  policy: RootDelegationPolicy,
+  definition: string,
+): boolean {
+  return policy === "all" || policy.has(definition);
+}
+
 export function visibleAgentCapabilities(
   definitions: AgentDefinition[],
   scope: ControllerScope,
+  rootPolicy: RootDelegationPolicy = "all",
 ) {
   const availableNames = new Set(
     definitions.filter(agentDefinitionEnabled).map(({ name }) => name),
@@ -1761,8 +1801,10 @@ export function visibleAgentCapabilities(
   const available = definitions.filter(
     (definition) =>
       availableNames.has(definition.name) &&
-      (scope.kind === "lead" ||
-        scope.allowedAgentDefinitions.has(definition.name)),
+      (scope.kind === "root" ||
+        scope.allowedAgentDefinitions.has(definition.name)) &&
+      (scope.kind !== "root" ||
+        permitsRootDelegation(rootPolicy, definition.name)),
   );
   return available.map((definition) => {
     const metadata: Record<string, unknown> = agentDefinitionMetadata(
@@ -1776,7 +1818,7 @@ export function visibleAgentCapabilities(
         : {}),
       tools: formatTools(metadata),
       skills: formatSkills(metadata),
-      ...(scope.kind === "lead" &&
+      ...(scope.kind === "root" &&
       agentDefinitionDelegationEnabled(definition) &&
       definition.frontmatter.agents?.length
         ? { agents: [...definition.frontmatter.agents] }
@@ -2416,7 +2458,7 @@ export function listedAgentRecord(
   let closeAvailable = false;
   if (direct && (presence.kind === "live" || presence.kind === "lost")) {
     try {
-      if (scope?.kind === "lead") {
+      if (scope?.kind === "root") {
         if (!unresolvedMailboxState) {
           const plan = dependencies.cascadePlan(view, state);
           dependencies.assertCascadeSafe([plan.parent, ...plan.descendants]);
@@ -2481,6 +2523,10 @@ export function listedAgentRecord(
 
 export type AgentControllerOptions = {
   scope: ControllerScope | undefined;
+  /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
+  rootDelegationPolicy?(): RootDelegationPolicy;
+  /** Stable authority/profile generation captured across assignment preflight. */
+  rootDelegationGeneration?(): RootDelegationGeneration;
   build: RuntimeBuild;
   extensionPath: string;
   isContextRetired(
@@ -3744,7 +3790,7 @@ export function createAgentController(
       context.sessionManager.getSessionId(),
     );
     const unknown =
-      scope?.kind === "lead"
+      scope?.kind === "root"
         ? snapshot.stateIssues.map(({ diagnostic }) => ({
             state: "unknown",
             available_tools: [],
@@ -3769,6 +3815,7 @@ export function createAgentController(
         ? visibleAgentCapabilities(
             await options.agentDefinitions(context),
             scope,
+            options.rootDelegationPolicy?.() ?? "all",
           )
         : [],
     };
@@ -3809,7 +3856,7 @@ export function createAgentController(
       onCleanupFailure: (label, message) => warnings.set(label, message),
     };
     try {
-      if (scope?.kind === "lead")
+      if (scope?.kind === "root")
         await closeCascade(context, state, signal, undefined, report);
       else await closeSnapshot(context, candidate, signal, report);
     } catch (error) {
@@ -3875,7 +3922,7 @@ export function createAgentController(
         "Agent belongs to another owner session",
         "transcript",
       );
-    const unresolved = scope?.kind === "lead" && view.stateIssues.length > 0;
+    const unresolved = scope?.kind === "root" && view.stateIssues.length > 0;
     const actions = listedAgentRecord(
       view,
       candidate,
@@ -4312,7 +4359,7 @@ export function createAgentController(
       );
     const visible = visibleAgentSnapshots(
       snapshot,
-      { kind: "lead" },
+      { kind: "root" },
       owner,
     ).filter(({ state }) => state.workspaceId === workspaceId);
     if (
@@ -4430,7 +4477,7 @@ export function createAgentController(
     const finalSnapshot = await snapshots(context, signal, true);
     const remaining = visibleAgentSnapshots(
       finalSnapshot,
-      { kind: "lead" },
+      { kind: "root" },
       owner,
     ).filter(({ state }) => state.workspaceId === workspaceId);
     const trustworthy =
@@ -5349,6 +5396,11 @@ export function createAgentController(
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
     validateAssignmentRequest(p);
+    const initiatingRootGeneration =
+      (p.action === "delegate" || p.action === "continue") &&
+      scope?.kind === "root"
+        ? options.rootDelegationGeneration?.()
+        : undefined;
     const limits = await messageLimits(ctx);
     const assignment =
       p.action === "delegate" || p.action === "continue"
@@ -5399,6 +5451,34 @@ export function createAgentController(
           `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
           p.action,
         );
+      const assertRootDelegationAllowed = (): void => {
+        if (
+          scope.kind === "root" &&
+          initiatingRootGeneration &&
+          !sameRootDelegationGeneration(
+            initiatingRootGeneration,
+            options.rootDelegationGeneration?.(),
+          )
+        )
+          fail(
+            "invalid_request",
+            "Root role or authority changed during Agent assignment preflight",
+            p.action,
+          );
+        if (
+          scope.kind === "root" &&
+          !permitsRootDelegation(
+            options.rootDelegationPolicy?.() ?? "all",
+            agentDefinition,
+          )
+        )
+          fail(
+            "invalid_request",
+            `Agent definition ${agentDefinition} is not allowed`,
+            p.action,
+          );
+      };
+      assertRootDelegationAllowed();
       validateAssignmentCwd(definition, agentCwd, ctx.cwd, scope, p.action);
       if (resumed && resumed.id === ctx.sessionManager.getSessionId())
         fail(
@@ -5801,6 +5881,8 @@ export function createAgentController(
           ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
           modelDecision: childModel,
         });
+        // Role/profile preflight may have changed while this assignment was prepared.
+        assertRootDelegationAllowed();
         started = await startHerdrAgent(pi, ctx, {
           label,
           runId,
@@ -6247,11 +6329,11 @@ export function createAgentController(
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
-        ...(controllerScope.kind === "lead" ? [] : [AGENT_DELEGATION_GUIDANCE]),
+        ...(controllerScope.kind === "root" ? [] : [AGENT_DELEGATION_GUIDANCE]),
         AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,
-        controllerScope.kind === "lead"
+        controllerScope.kind === "root"
           ? LEAD_SCOPE_DESCRIPTION
           : DELEGATING_AGENT_SCOPE_DESCRIPTION,
       ],
@@ -6279,7 +6361,7 @@ export function createAgentController(
           const value = await action(ctx, p, signal);
           options.onChanged();
           if (
-            controllerScope.kind === "lead" &&
+            controllerScope.kind === "root" &&
             (p.action === "delegate" || p.action === "continue") &&
             value.ok === true
           )
@@ -6630,7 +6712,7 @@ export function createAgentController(
             "Run this action from the lead controller or an authorized delegation-enabled agent controller",
         },
       );
-    if (scope.kind === "lead") {
+    if (scope.kind === "root") {
       if (params.action === "list") return listAction(ctx, signal);
       if (params.action === "close")
         return closeAction(ctx, params.agent, signal);
@@ -6872,7 +6954,7 @@ export function createAgentController(
       visible: visibleAgentSnapshots(snapshot, options.scope, ownerSessionId),
     };
     const unresolvedMailboxState =
-      options.scope?.kind === "lead" && snapshot.stateIssues.length > 0;
+      options.scope?.kind === "root" && snapshot.stateIssues.length > 0;
     const now = Date.now();
     const ownedRuns = new Set(
       snapshot.agents

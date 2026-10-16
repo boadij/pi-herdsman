@@ -388,7 +388,9 @@ Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 Target a Lead by the exact full Pi session ID in a fresh snapshot or
 `list_staff`, never by `display_name`.
 `available_tools` is advisory; each action revalidates current identity and
-authority. Chief supervises direct reports but does not own their Agent trees.
+authority. Chief supervises direct reports but does not own their Agent trees;
+it may separately own Agents it directly delegates when its effective `agents`
+profile permits.
 
 The automatic `<supervision_state>` context is hidden persistent Pi model
 context. It is bounded, state-only observation and cannot change role, tool
@@ -414,8 +416,9 @@ Pi Herdsman uses one durable vocabulary:
 - a **project** is the Herdsman coordination scope corresponding to one Herdr
   worktree group: its primary workspace and linked-worktree workspaces;
 - a **Manager** explicitly assumes dedicated project coordination from that
-  group's primary workspace, has no `agent` capability, and does not own Leads'
-  Agents. Manager controls only Leads named by current project assignments;
+  group's primary workspace and does not own supervised Leads' Agents. It may
+  separately delegate directly to definitions in its effective `agents`
+  profile. Manager controls only Leads named by current project assignments;
   project scope alone does not make a Lead a Manager report. Leads own technical
   decisions and orchestrate execution through their Agent trees;
 - project work belongs to the project, not a Manager session. The project
@@ -450,7 +453,10 @@ Pi Herdsman uses one durable vocabulary:
 - `/manager leave` preserves project work; a later Manager can resume the same
   branch-based assignment;
 - a **herd** is one Lead and the complete Agent tree it owns;
-- a **Lead** owns its Agents. A managed project Lead uses
+- a **Lead** owns its Agents. Manager and Chief may own Agents they directly
+  delegate when their effective `agents` profile permits; that is separate
+  from supervising a Lead and never gives them control over the Lead's tree. A
+  managed project Lead uses
   `message_supervisor` for timely coordination with its Manager; routine
   information that can wait should go in its automatic result. An unassigned
   Lead
@@ -462,10 +468,14 @@ Pi Herdsman uses one durable vocabulary:
   definition allows it;
 - the **chief** supervises direct reports through `list_staff`,
   `inspect_staff`, `read_staff_transcript`, and `message_staff`, and never
-  owns their agents.
+  owns their Agents.
 
-The `agents` frontmatter field names the direct agent definitions an agent may
-delegate to. A delegation-capable session remains an agent at every depth.
+The `agents` frontmatter field names permitted direct Agent definitions for a
+delegating Agent, or the fresh-delegation allowlist for Manager/Chief. For
+supervisors it is independent of ordinary `tools`: `tools: []` does not disable
+authorized Agent coordination, and an absent or empty list disables fresh
+delegation only, not management of existing owned work. A delegation-capable
+managed session remains an Agent at every depth.
 Every managed agent receives `ask_owner`. A non-empty effective `agents` list
 is necessary but not sufficient to enable the nine Agent ownership tools:
 `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,

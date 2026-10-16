@@ -2,11 +2,13 @@
 
 ## Decision
 
-Pi Herdsman will use its durable ownership graph to determine which managed Agents belong to a Lead and which operations that Lead may perform on them.
+Pi Herdsman will use its durable ownership graph to determine which managed Agents belong to an exact Pi session and which operations that owner may perform on them.
 
-Physical visibility in Pi or Herdr does not establish ownership. A Lead sees and controls only Agents reachable through valid durable ownership from that Lead, including recursively owned descendants.
+Physical visibility in Pi or Herdr does not establish ownership. A root controller (Lead, Manager, or Chief) sees and controls only Agents reachable through valid durable ownership from its exact Pi session, including recursively owned descendants. A managed Agent sees and controls only its own descendants. Supervising a Lead does not grant access to that Lead's Agent tree.
 
-Missing, foreign, ambiguous, cyclic, or otherwise unproven ancestry must not be projected into an unrelated Lead's herd.
+The active role and effective configuration determine permission to start new Agent work. Durable ownership determines access to existing work; removing fresh-delegation permission does not remove ownership or recovery access.
+
+Missing, foreign, ambiguous, cyclic, or otherwise unproven ancestry must not be projected into an unrelated owner's herd.
 
 ## Rationale
 

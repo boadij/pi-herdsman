@@ -219,6 +219,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
     ),
   });
   registerExtension!(duplicatePi.pi as never);
+  await duplicatePi.events.get("session_start")![0](undefined, fakeContext());
   const duplicateResult = await duplicatePi.tools
     .find((tool) => tool.name === "delegate_agent")!
     .execute(

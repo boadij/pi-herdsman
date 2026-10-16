@@ -108,6 +108,10 @@ const RUNTIME_LEAD_FIELDS = new Set([
   "tools",
   "excludeTools",
 ]);
+const SUPERVISOR_AGENT_FIELDS = new Set([
+  MANAGER_DEFINITION_NAME,
+  CHIEF_DEFINITION_NAME,
+]);
 
 export type FrontmatterValue =
   string | boolean | string[] | { [key: string]: unknown };
@@ -427,6 +431,21 @@ function validateEffectiveAgentReferences(
         throw new Error(
           `agent ${definition.name} references missing agent definition ${reference}`,
         );
+  const byName = new Map(
+    definitions.map((definition) => [definition.name, definition]),
+  );
+  for (const definition of definitions)
+    if (SUPERVISOR_AGENT_FIELDS.has(definition.name))
+      for (const reference of definition.frontmatter.agents ?? []) {
+        if (isReservedRoleDefinition(reference))
+          throw new Error(
+            `agent ${definition.name} references reserved agent definition ${reference}`,
+          );
+        if (!byName.has(reference))
+          throw new Error(
+            `agent ${definition.name} references missing agent definition ${reference}`,
+          );
+      }
 }
 
 function validateManagedLeadLayer(definition: AgentDefinition): void {
@@ -444,8 +463,11 @@ function validateManagedLeadLayer(definition: AgentDefinition): void {
 
 function validateRuntimeRoleLayer(definition: AgentDefinition): void {
   if (!isRuntimeRoleDefinition(definition.name)) return;
+  const allowed = SUPERVISOR_AGENT_FIELDS.has(definition.name)
+    ? new Set([...RUNTIME_LEAD_FIELDS, "agents"])
+    : RUNTIME_LEAD_FIELDS;
   for (const field of Object.keys(definition.frontmatter))
-    if (!RUNTIME_LEAD_FIELDS.has(field))
+    if (!allowed.has(field))
       throw new Error(
         `${definition.path} ${definition.name} field ${field}: is not supported`,
       );

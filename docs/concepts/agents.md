@@ -68,20 +68,24 @@ They are not public alternatives to the `agent` identity.
 
 ## Ownership
 
-A lead and its recursively owned agent hierarchy form a **herd**, Herdsman's term for an agent fleet.
+A root session and its recursively owned agent hierarchy form an ownership
+tree. A Lead's tree is its **herd**, Herdsman's term for an Agent team.
 
 Each agent has one exact direct owner Pi session.
 
-A lead Pi session owns its direct agents.
+A root Lead, Manager, or Chief Pi session owns its directly delegated Agents.
+Manager and Chief can start direct Agents only when their effective role
+profile lists the definition in `agents`. Supervising a Lead does not confer
+ownership of that Lead's Agents.
 
 A delegating agent may own direct agents when its effective definition has
 allowed `agents`.
 
-Public list visibility follows this ownership boundary. A lead sees only
-generations whose durable owner chain resolves to that lead. Durable descendants
-remain attached to their recorded parent even when that parent is lost or
-physically unresolved. Missing, ambiguous, or cyclic durable ancestry is not
-attributed to a herd.
+Public list visibility follows this ownership boundary. A root session sees
+only generations whose durable owner chain resolves to that exact session.
+Durable descendants remain attached to their recorded parent even when that
+parent is lost or physically unresolved. Missing, ambiguous, or cyclic durable
+ancestry is not attributed to an owner.
 
 ## Authority boundaries
 

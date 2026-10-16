@@ -24,6 +24,8 @@ supervision: Chief -> Manager -> assigned Lead
              Manager ---------> ordinary Lead in project group
              Chief ------------> ordinary Lead without project Manager
 ownership:          Lead -> Agent -> Agent
+                    Manager -> Agent (when configured)
+                    Chief -> Agent (when configured)
 ```
 
 An ordinary Lead in a verified project worktree group has the active project
@@ -32,8 +34,9 @@ is managed for project execution only when exactly one current
 `ProjectAssignment` for the repository names its exact Pi session. Manager
 supervision of an ordinary Lead permits bounded discovery and communication
 only, not execution control, private inspection, Agent ownership, or automatic
-project-result delivery. A Chief never gains Agent ownership through
-supervision.
+project-result delivery. Supervision does not grant Agent ownership: Manager
+and Chief can own only Agents they directly start from their own exact Pi
+session, when their effective `agents` profile permits it.
 
 ### Lead
 
@@ -44,7 +47,9 @@ its definition permits.
 A Lead and its recursively owned Agent hierarchy form a **herd**, its internal
 team. Reviews by any member of the herd are internal, regardless of which Agent
 definitions are available. They inform the Lead's decisions, not user or
-supervisor review or approval.
+supervisor review or approval. Manager and Chief may separately own their own
+direct Agent trees when explicitly enabled; those trees do not become part of
+a supervised Lead's herd.
 
 Lead execution configuration is separate from role and authority. An ordinary
 Lead uses its session's `Flexible` or `Orchestrate` preference, selecting
@@ -61,8 +66,11 @@ Manager is a dedicated project-coordination mode. It controls only Leads named
 by current `ProjectAssignment` records for its repository, and additionally
 supervises eligible ordinary Leads throughout its verified worktree group for
 bounded discovery and communication. Ordinary Leads allow message-only staff
-access. Manager has no `agent` capability of its own. Its reserved `manager` definition customizes
-instructions and ordinary tool selection, not project assignments or authority.
+access. Manager may optionally start its own Agents using definitions in its
+effective `agents` profile. This does not grant control over supervised Leads'
+Agents or alter project assignments or authority. Its reserved `manager`
+definition customizes instructions, ordinary tool selection, and this
+direct-delegation allowlist.
 
 Project execution belongs to assigned Leads and their Agent trees. Manager can
 inspect assigned Leads and communicate with all direct Leads, but it does not
@@ -74,7 +82,10 @@ Chief is an optional workspace-neutral supervision mode for one Herdr runtime.
 It acts on current Managers and ordinary Leads without an active project
 Manager. Ordinary Leads with a verified active project Manager are nested
 under that Manager, not actionable Chief reports. Assigned Leads remain under
-the Manager role even if its process is unavailable.
+the Manager role even if its process is unavailable. Chief may optionally
+start its own Agents using definitions in its effective `agents` profile; that
+direct ownership is separate from supervision and does not include staff
+Agents.
 
 Chief can observe bounded descendant summaries but acts only on direct reports.
 Its reserved `chief` definition customizes instructions and ordinary tool

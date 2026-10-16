@@ -658,6 +658,7 @@ test("Herdr preflight gates minimum client version and server compatibility", as
     });
     registerExtension!(pi.pi as never);
     try {
+      await pi.events.get("session_start")![0](undefined, fakeContext());
       return await pi.tools
         .find((tool) => tool.name === "delegate_agent")!
         .execute(
@@ -2651,6 +2652,11 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
 test("chief activation reports unresolved mailbox state instead of owned work", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-activation-${randomUUID()}.sock`,
+  );
   const mailbox = agentMailboxPath(
     WORKSPACE,
     `chief-activation-invalid-state-${randomUUID()}`,
@@ -2670,18 +2676,24 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
 
     await command.handler("", context);
 
-    assert.equal(notices.length, 1);
-    assert.match(notices[0]!, /managed mailbox state is unresolved/);
-    assert.doesNotMatch(notices[0]!, /owned agent work exists/);
-    assert.notDeepEqual(pi.pi.getActiveTools(), [
-      "list_staff",
-      "inspect_staff",
-      "read_staff_transcript",
-      "message_staff",
-    ]);
+    assert.doesNotMatch(
+      notices.join("\n"),
+      /cannot activate|owned agent work exists/,
+    );
+    assert.equal(
+      realFs.readFileSync(join(mailbox, "state.json"), "utf8"),
+      "not json",
+    );
+    assert.deepEqual(
+      pi.pi.getActiveTools(),
+      ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
+      JSON.stringify(notices),
+    );
   } finally {
     realFs.rmSync(mailbox, { recursive: true, force: true });
     delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
 });
@@ -5273,6 +5285,7 @@ test("registered delegate embeds text and references binary evidence", async () 
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(

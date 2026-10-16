@@ -478,6 +478,7 @@ test("lead direct placement modes use real controller delegation", async () => {
     );
     const pi = fakePi({ exec: lifecycle.exec });
     registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     const childMailboxes: string[] = [];
     try {
       const start = async (label: string) => {
@@ -568,6 +569,7 @@ test("lead split-to-tab placement creates a dedicated agents tab", async () => {
   const lifecycle = delegatedLifecycleExecutor(parent, [], "/tmp", callerPane);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailboxes: string[] = [];
   try {
     const placements = ["split", "split", "tab"] as const;
@@ -643,6 +645,7 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-current-child");
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
@@ -714,6 +717,7 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-foreign-child");
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
@@ -772,6 +776,7 @@ test("lead tab placement rejects old shared tabs and only changes future starts"
   const lifecycle = delegatedLifecycleExecutor(parent, [sibling]);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailboxes: string[] = [];
   try {
     const start = async (label: string) => {
@@ -856,6 +861,7 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailbox = agentMailboxPath(WORKSPACE, "revalidation-child");
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
@@ -2153,6 +2159,7 @@ test("aborted Lead settlement waits for active child work before finishing the h
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2202,6 +2209,7 @@ test("failed active Lead reports before child completion and does not hand off s
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2263,6 +2271,7 @@ test("unassigned Lead and Manager failure reports replay the exact Chief payload
     const herd = createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => role,
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => role === "manager",
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -2345,6 +2354,7 @@ test("Lead failure report keeps its assigned-project destination across takeover
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => role,
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => managed,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -2469,6 +2479,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => false,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -2554,6 +2565,7 @@ test("restored sent Lead failure report retains its herd-run linkage", async (t)
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => false,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -2622,6 +2634,7 @@ test("concurrent herd finalization publishes and finishes only once", async () =
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2702,6 +2715,7 @@ test("concurrent idle recovery publishes and finishes only once", async (t) => {
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2783,6 +2797,7 @@ test("Chief-directed failure stays pending across a new Manager assignment", asy
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2825,6 +2840,7 @@ test("Chief-directed failure stays pending across a new Manager assignment", asy
   const recovered = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2869,6 +2885,7 @@ test("failed successful-handoff publication keeps herd finalization retryable", 
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -2927,6 +2944,7 @@ test("managed success waits for its exact assignment after persisting the report
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3009,6 +3027,7 @@ test("successful unassigned Lead herd finishes without a project handoff", async
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => false,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3055,6 +3074,7 @@ test("managed Lead herd fails closed when its worktree scope is unavailable", as
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3125,6 +3145,7 @@ test("direct assigned Lead success records and replays a failed handoff", async 
   const herdRun = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3209,6 +3230,7 @@ test("direct managed Lead preserves success before authority verification and re
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => true,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -3264,6 +3286,84 @@ test("direct managed Lead preserves success before authority verification and re
   );
 });
 
+test("only active Lead assignments begin Lead herd-run tracking and an existing run settles after a role switch", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  let role: "lead" | "manager" = "manager";
+  let verifiedActiveLead = false;
+  const herdRun = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => role,
+    isVerifiedActiveLead: () => verifiedActiveLead,
+    isManagedLead: () => false,
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentProjectAssignment: async () => undefined,
+    publishProjectMessage: async () => false as any,
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+
+  herdRun.begin(context);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "started"),
+    false,
+    "supervisor-owned work must not start Lead tracking",
+  );
+
+  role = "lead";
+  herdRun.begin(context);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "started"),
+    false,
+    "a suspended or unverified Lead must not start tracking",
+  );
+
+  verifiedActiveLead = true;
+  herdRun.agentStarted();
+  herdRun.begin(context);
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "started").length,
+    1,
+    "active Lead work still starts tracking",
+  );
+  herdRun.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Lead run completed" },
+    messageEntryId: "role-switch-completed-response",
+  });
+  herdRun.beforeSettle({ outcome: "completed" });
+
+  role = "manager";
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "started").length,
+    1,
+    "a later role switch does not discard the already-started Lead run",
+  );
+  await herdRun.agentSettled(context, false);
+
+  assert.equal(
+    pi.entries.some(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.kind === "execution_failure",
+    ),
+    false,
+    "the completed response is preserved as a successful Lead outcome",
+  );
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "finished").length,
+    1,
+    "the original Lead run still settles after switching to Manager",
+  );
+});
+
 test("managed Lead herd preserves success before authority verification and replays after restart", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
@@ -3276,6 +3376,7 @@ test("managed Lead herd preserves success before authority verification and repl
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => true,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -3354,6 +3455,7 @@ test("direct unassigned Lead success creates no report intent", async () => {
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => false,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3423,6 +3525,7 @@ test("newer unsent herd handoff blocks restoration after older report was sent",
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3482,6 +3585,7 @@ test("assigned completed Lead without summary publishes factual handoff", async 
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3523,6 +3627,55 @@ test("assigned completed Lead without summary publishes factual handoff", async 
   );
 });
 
+test("supervisor turns do not enter Lead herd-run tracking", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+  let herdEvents = 0;
+  let settledResults = 0;
+  const events = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    setActiveTools: () => {},
+    chiefTools: [],
+    leadInboxRuntime: { holdStartPreflight: () => {}, agentSettled: () => {} },
+    prepareSupervisionMessage: async () => undefined,
+    sendMessage: () => {},
+    chiefSystemPrompt: (_options, body) => body,
+    isActiveManager: () => true,
+    roleCharter: () => "",
+    currentChiefAllowedTools: () => undefined,
+    supervisoryProfileBody: () => "",
+    isActiveLead: () => false,
+    executionPrompt: () => undefined,
+    prepareLeadSupervisorStateMessage: async () => undefined,
+    definitionRoster: () => undefined,
+    consumeChiefStartPreflight: () => {},
+    herdRun: {
+      agentStarted: () => herdEvents++,
+      agentSettled: async () => {
+        herdEvents++;
+      },
+      turnEnd: () => {
+        herdEvents++;
+      },
+      beforeSettle: () => {
+        herdEvents++;
+      },
+      hasActiveTurn: () => false,
+    },
+    controller: {
+      settleAsks: () => {},
+      sessionSignal: () => new AbortController().signal,
+      settleResults: async () => {
+        settledResults++;
+      },
+    },
+  });
+  const context = fakeContext() as any;
+  events.agentStart(context);
+  await events.agentSettled(context, false);
+  assert.equal(herdEvents, 0);
+  assert.equal(settledResults, 1);
+});
+
 test("cancellation report failure is diagnosed before result reconciliation", async () => {
   const { createLeadAgentEventRuntime, createLeadHerdRunRuntime } =
     await import("./lead-runtime.ts");
@@ -3533,6 +3686,7 @@ test("cancellation report failure is diagnosed before result reconciliation", as
   const herdRun = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3606,6 +3760,7 @@ test("failed active-Lead report publication blocks herd finish until retry", asy
   const herd = createLeadHerdRunRuntime({
     pi: pi.pi as never,
     activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
     isManagedLead: () => true,
     entryName: "pi-herdsman-herd-run",
     hasPendingStarts: () => false,
@@ -3671,6 +3826,7 @@ test("cancelled Lead sent marker retains herd link across restoration", async (t
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
       isManagedLead: () => true,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
@@ -5425,6 +5581,18 @@ test("historical session with its inherited label rejects an active managed repr
   const name = `active-session-${randomUUID().slice(0, 8)}`;
   const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
+  const chiefDefinitionPath = join(PI_AGENTS_DIR, "chief.md");
+  const previousChiefDefinition = realFs.existsSync(chiefDefinitionPath)
+    ? realFs.readFileSync(chiefDefinitionPath, "utf8")
+    : undefined;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousTab = process.env.HERDR_TAB_ID;
+  process.env.HERDR_PANE_ID = "active-session-pane";
+  process.env.HERDR_TAB_ID = "active-session-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `active-session-${randomUUID()}.sock`,
+  );
   const identity = {
     ...recoveryIdentity(label),
     piSessionFile: join(testTmpRoot, `${label}-session.jsonl`),
@@ -5448,6 +5616,10 @@ test("historical session with its inherited label rejects an active managed repr
     definitionPath,
     `---\nname: ${name}\n---\nenabled active session test\n`,
   );
+  realFs.writeFileSync(
+    chiefDefinitionPath,
+    `---\nname: chief\nagents: [${name}]\n---\n`,
+  );
   realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
   realFs.symlinkSync(identity.piSessionFile, aliasPath);
   nativeSessions.set(session.id, session);
@@ -5470,6 +5642,9 @@ test("historical session with its inherited label rejects an active managed repr
   });
   registerExtension!(pi.pi as never);
   try {
+    const activationContext = fakeContext();
+    await pi.events.get("session_start")?.[0](undefined, activationContext);
+    await pi.commandOptions.get("chief")!.handler("", activationContext);
     const controllerContext = fakeContext();
     controllerContext.sessionManager.getSessionId = () => session.id;
     const ownSession = await pi.tools
@@ -5514,6 +5689,13 @@ test("historical session with its inherited label rejects an active managed repr
     realFs.rmSync(definitionPath, { force: true });
     realFs.rmSync(aliasPath, { force: true });
     realFs.rmSync(identity.piSessionFile, { force: true });
+    if (previousChiefDefinition === undefined)
+      realFs.rmSync(chiefDefinitionPath, { force: true });
+    else realFs.writeFileSync(chiefDefinitionPath, previousChiefDefinition);
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousTab === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTab;
   }
 });
 
@@ -5555,6 +5737,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   const startup = startupExecutor(`${name}-agent`, () => session.id);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -5622,6 +5805,7 @@ test("concurrent session activation permits one generation", async () => {
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const first = registeredAgentTool(pi, "continue").execute(
       "first",
@@ -5838,6 +6022,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
     },
   });
   registerExtension!(lead.pi as never);
+  await lead.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(lead, "continue").execute(
       "id",
@@ -5888,6 +6073,7 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -5964,6 +6150,7 @@ test("startup failure cleans private prompt snapshots", async () => {
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const context = fakeContext();
     await pi.events.get("agent_start")![0](undefined, context);
@@ -6023,6 +6210,7 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -6232,6 +6420,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
             },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -6320,6 +6509,7 @@ test("session continuation starts a new agent generation with current prompt con
     if (event.phase === "prepare") bootstrapPrepares++;
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -6439,6 +6629,7 @@ test("session continuation ignores an unrelated missing live session path", asyn
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -6527,6 +6718,7 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -6618,6 +6810,7 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -6719,6 +6912,7 @@ test("session continuation ignores removed secondary session fields", async () =
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -6799,6 +6993,7 @@ test("session continuation fails closed on an unrelated malformed persisted mail
     exec: leadExec(label, "idle", session.id, undefined, session.id, identity),
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     await assert.rejects(
       registeredAgentTool(pi, "continue").execute(
@@ -6952,6 +7147,7 @@ test("lost mailbox labels remain reserved until explicit close", async () => {
   writeAgentState(mailbox, state);
   const pi = fakePi({ exec: cascadeExecutor([]).exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -6970,6 +7166,7 @@ test("lost mailbox labels remain reserved until explicit close", async () => {
 
 test("rolls back fresh assignment when the authoritative pane makes the request too large", async () => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
   const label = "agent";
   const startup = startupExecutor(
     label,
@@ -6987,6 +7184,8 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
   realFs.rmSync(startup.mailbox, { recursive: true, force: true });
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries);
+  await pi.events.get("session_start")![0](undefined, context);
   const preflightEnvelope = requestRecordBytes(label, "", "");
   const task = "x".repeat(131072 - preflightEnvelope);
   assert.equal(requestRecordBytes(label, "", task) <= 131072, true);
@@ -6997,7 +7196,7 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
       { definition: "agent", label, task },
       undefined,
       undefined,
-      fakeContext(),
+      context,
     );
     assert.equal(result.details.error.category, "rollback_failure");
     assert.equal(result.details.error.rollbackOccurred, true);
@@ -7016,7 +7215,9 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
   const reuse = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const reusePi = fakePi({ exec: reuse.exec });
   registerExtension!(reusePi.pi as never);
+  const reuseContext = fakeContext(reusePi.entries);
   try {
+    await reusePi.events.get("session_start")![0](undefined, reuseContext);
     const result = await registeredAgentTool(reusePi, "delegate").execute(
       "id",
       {
@@ -7025,7 +7226,7 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
       },
       undefined,
       undefined,
-      fakeContext(),
+      reuseContext,
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
@@ -7038,6 +7239,8 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  const callsAfterActivation = pi.calls.length;
   const cases = [
     {
       operation: "delegate",
@@ -7078,11 +7281,14 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.message, message);
     assert.ok(
-      pi.calls.every(
-        (args) =>
-          (args[0] === "status" && args[1] === "--json") || isApiSnapshot(args),
-      ),
-      `invalid assignment prerequisite made unexpected calls: ${JSON.stringify(pi.calls)}`,
+      pi.calls
+        .slice(callsAfterActivation)
+        .every(
+          (args) =>
+            (args[0] === "status" && args[1] === "--json") ||
+            isApiSnapshot(args),
+        ),
+      `invalid assignment prerequisite made unexpected calls: ${JSON.stringify(pi.calls.slice(callsAfterActivation))}`,
     );
   }
 });
@@ -7093,6 +7299,7 @@ test("delegate keeps an explicit human-readable label", async () => {
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7155,6 +7362,7 @@ test("rejects an invalid generated collision label after releasing its claim", a
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const context = fakeContext();
   context.isProjectTrusted = () => {
     // Simulate the mailbox becoming visible after the assignment snapshot.
@@ -7221,6 +7429,7 @@ test("assignment launch handles delayed official Pi session identity", async () 
     );
     const pi = fakePi({ exec: startup.exec });
     registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
@@ -7265,6 +7474,7 @@ test("managed startup accepts matching mailbox state after five seconds", async 
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const resultPromise = registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7344,6 +7554,7 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7456,6 +7667,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
@@ -7545,6 +7757,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
@@ -7685,6 +7898,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const tool = registeredAgentTool(pi, "delegate");
   const context = fakeContext();
   const failed = await tool.execute(
@@ -7797,6 +8011,7 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
     {
@@ -7879,6 +8094,7 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const startedAt = Date.now();
   const result = await registeredAgentTool(pi, "delegate").execute(
     "id",

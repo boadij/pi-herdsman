@@ -18,8 +18,12 @@ read_agent_transcript
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
 and reject unrelated properties; runtime authorization and fresh lifecycle
-checks remain authoritative. These tools are registered only for the lead
-controller and authorized delegating-agent controllers.
+checks remain authoritative. These tools are registered for root controllers
+and authorized delegating-agent controllers. Root fresh-delegation eligibility
+follows the active role: Leads retain their existing policy, while Manager and
+Chief are limited to their effective `agents` allowlist. Existing ownership
+controls remain available for the root session's own Agents when fresh
+delegation is disabled.
 
 ## `delegate_agent`
 
@@ -175,7 +179,7 @@ Each actionable live agent record includes:
 `available_tools` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`.
 `close_agent` is listed only when the current snapshot passes the applicable close
-preflight. For a Lead-owned delegating agent, that preflight covers the complete
+preflight. For a root-owned delegating agent, that preflight covers the complete
 owned descendant cascade because closing the parent closes that cascade
 child-first. Invocation always reacquires current evidence and revalidates
 identity, ownership, mailbox state, durable results, and lifecycle before
@@ -204,8 +208,10 @@ definition identity, never a filename. Disabled definitions, definitions with
 unavailable required children, and reserved role profiles require direct
 configuration inspection.
 
-Lead controllers see enabled definitions available to them and agents whose
-durable ownership chain resolves to that lead. Delegating agents see only
+Root controllers see enabled definitions available under their current
+delegation policy and agents whose durable ownership chain resolves to their
+exact Pi session. Manager/Chief definition discovery is filtered by the
+effective `agents` allowlist. Delegating agents see only
 allowed enabled leaf definitions and their direct agents. Live records are
 separate from definition availability: an already-active Agent may still appear
 after its definition is disabled, with its current ownership, lifecycle,
@@ -431,7 +437,7 @@ See [`ask_owner` API](ask-owner.md).
 ```
 
 Call `close_agent` with `agent`. Close requires exact direct ownership
-and a current applicable close preflight. For a Lead-owned parent, that
+and a current applicable close preflight. For a root-owned parent, that
 preflight covers the complete owned descendant cascade because closing the
 parent closes that cascade child-first. Invocation always reacquires current
 evidence and revalidates identity, ownership, mailbox state, durable results,

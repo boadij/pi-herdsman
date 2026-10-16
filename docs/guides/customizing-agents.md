@@ -62,7 +62,22 @@ runtime-profile fields described in the [schema](../reference/agent-definition-s
 Manager preserves the ordinary Lead tool baseline when `tools` is omitted;
 Chief defaults to `tools: []`, leaving only required staff coordination tools.
 Explicit ordinary tool policies cannot activate Herdsman-owned tools or remove
-the role's mandatory coordination tools.
+the role's mandatory coordination tools. Manager and Chief can separately
+opt in to fresh direct Agent delegation with `agents`; omitting it or setting
+`agents: []` disables new direct work. For example:
+
+```yaml
+---
+name: manager
+agents: [scout, reviewer]
+---
+```
+
+This field is independent of `tools` and `excludeTools`, so `tools: []` does
+not disable authorized Agent coordination. It grants neither project/staff
+authority nor access to Agents owned by supervised Leads. Removing the
+allowlist prevents new delegation but does not abandon Agents already owned by
+that exact session; their applicable ownership and recovery controls remain.
 
 Manager accepts trusted project overlays at `<project>/.pi/agents/manager.md`
 and global overlays at `$PI_CODING_AGENT_DIR/agents/manager.md` (or

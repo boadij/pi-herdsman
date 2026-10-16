@@ -58,6 +58,8 @@ import {
   type PendingStart,
   type Runtime,
   type ControllerScope,
+  type RootDelegationPolicy,
+  type RootDelegationGeneration,
   type ManagedAgentSnapshotCollection,
   type ManagedAgentSnapshotView,
 } from "./agent-controller.ts";
@@ -70,6 +72,7 @@ import type {
 } from "./herdr.ts";
 import type { RuntimeBuild } from "./compatibility.ts";
 import {
+  AGENT_COORDINATION_TOOLS,
   agentLaunchArgs,
   configuredToolPolicy,
   configuredModel,
@@ -201,6 +204,10 @@ type LeadTransitionHost = {
 };
 
 type LeadRoleTransitionHost = LeadTransitionHost & {
+  supervisoryTools(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): string[] | undefined;
   prepareSupervisoryProfile(
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -416,6 +423,7 @@ type LeadCommandBaseHost = Omit<
 
 type LeadHerdRunHost = {
   activeRole(): "lead" | "manager" | "chief";
+  isVerifiedActiveLead(): boolean;
   isManagedLead(): boolean;
   pi: ExtensionAPI;
   entryName: string;
@@ -570,7 +578,7 @@ type LeadCoordinationHost = LeadCoordinationBaseHost & {
   pi: ExtensionAPI;
   leadRuntime: LeadRuntimeState;
   processRole: "lead";
-  controllerScope: { kind: "lead" };
+  controllerScope: { kind: "root" };
   activeRole(): SessionRole;
   HERDSMAN_BUILD: RuntimeBuild;
   leadInstanceId(): string;
@@ -907,9 +915,11 @@ export function createLeadShutdownRuntime(host: {
   >;
   leadStatusRuntime: Pick<LeadStatusRuntime, "shutdown">;
   clearSupervisionUI(): void;
-  isLead(): boolean;
+  isRoot?(): boolean;
+  isLead?(): boolean;
   herdRun: Pick<LeadHerdRunRuntime, "shutdown">;
 }) {
+  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
   let shutDown = false;
   return {
     shutdown(_ctx: ExtensionContext): void {
@@ -928,7 +938,7 @@ export function createLeadShutdownRuntime(host: {
       host.controller.stopHealthScanner();
       host.clearSupervisionUI();
       host.roleTransitions.clearLeadContext();
-      if (host.isLead()) host.herdRun.shutdown();
+      if (isRoot()) host.herdRun.shutdown();
       host.controller.shutdown();
     },
   };
@@ -945,9 +955,11 @@ export function createLeadSessionTreeRuntime(host: {
   >;
   reconcileBranchExecution(ctx: ExtensionContext): Promise<void>;
   failClosedBranchExecution(ctx: ExtensionContext): void;
-  isLead(): boolean;
+  isRoot?(): boolean;
+  isLead?(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
 }) {
+  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
   return {
     async sessionTree(ctx: ExtensionContext): Promise<void> {
       if (!host.controller.sessionActive()) return;
@@ -960,7 +972,7 @@ export function createLeadSessionTreeRuntime(host: {
       // Ordinary Lead tree changes need synchronous ask watching before reconciliation.
       const roleAtTreeChange = host.roleTransitions.branchRoleObservation();
       if (roleAtTreeChange.watchBeforeReconcile) watchActiveAsks();
-      if (host.isLead()) {
+      if (isRoot()) {
         try {
           await host.reconcileBranchExecution(ctx);
         } catch (error) {
@@ -1006,7 +1018,8 @@ export function createLeadSessionStartRuntime(host: {
   clearDefinitionRoster(): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
-  isLead(): boolean;
+  isRoot?(): boolean;
+  isLead?(): boolean;
   isManagedAgent(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
   sessionLeadRoleState(
@@ -1050,9 +1063,12 @@ export function createLeadSessionStartRuntime(host: {
   visibleAgentCapabilities(
     ctx: ExtensionContext,
     definitions?: AgentDefinition[],
+    rootPolicy?: RootDelegationPolicy,
   ): Promise<Record<string, unknown>[]>;
+  rootDelegationPolicy?(): RootDelegationPolicy;
   appendDefinitionError(ctx: ExtensionContext, error: unknown): void;
 }) {
+  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
   return {
     async sessionStart(ctx: ExtensionContext): Promise<void> {
       host.diagnostic();
@@ -1060,7 +1076,7 @@ export function createLeadSessionStartRuntime(host: {
       host.leadInboxRuntime.beginSession();
       host.controller.clearPendingStarts();
       host.leadStatusRuntime.prepareSession(ctx);
-      if (host.isLead()) {
+      if (isRoot()) {
         host.clearLeadExecution();
         host.setLeadExecutionPending(true);
         // Start the first inventory read before delegation can race it.
@@ -1082,7 +1098,7 @@ export function createLeadSessionStartRuntime(host: {
       if (lifecycleError) host.appendRoleError(ctx, lifecycleError);
       let skipLeadExecutionProfileResolution = false;
       let malformedRole = false;
-      if (host.isLead()) {
+      if (isRoot()) {
         const sessionId = ctx.sessionManager.getSessionId();
         host.herdRun.restoreSession(ctx.sessionManager.getEntries(), sessionId);
         let persistedRole: SessionRole = "lead";
@@ -1183,13 +1199,13 @@ export function createLeadSessionStartRuntime(host: {
         if (sessionSignal.aborted) return;
       }
       if (
-        host.isLead() &&
+        isRoot() &&
         process.env.HERDR_SOCKET_PATH &&
         host.roleTransitions.canStartChiefInbox()
       )
         host.leadInboxRuntime.start(ctx);
       if (
-        host.isLead() &&
+        isRoot() &&
         process.env.HERDR_PANE_ID &&
         host.roleTransitions.chiefModeInactive()
       )
@@ -1202,8 +1218,7 @@ export function createLeadSessionStartRuntime(host: {
         breadcrumb: host.initialStatusBreadcrumb(),
         ...host.ownToolsSnapshot(),
       });
-      const activeManager =
-        host.isLead() && host.roleTransitions.activeManager();
+      const activeManager = isRoot() && host.roleTransitions.activeManager();
       if (activeManager && !sessionSignal.aborted) {
         try {
           await host.roleTransitions.reconcileCurrentManagerAssignments(ctx);
@@ -1212,7 +1227,7 @@ export function createLeadSessionStartRuntime(host: {
         }
       }
       if (
-        host.isLead() &&
+        isRoot() &&
         (host.roleTransitions.chiefModeActive() || activeManager)
       ) {
         host.startSupervisionUI(ctx);
@@ -1224,14 +1239,10 @@ export function createLeadSessionStartRuntime(host: {
           }
         | undefined;
       const needsLeadRoster = !(
-        host.isLead() &&
+        isRoot() &&
         (host.roleTransitions.chiefModeActive() || activeManager)
       );
-      if (
-        host.isLead() &&
-        needsLeadRoster &&
-        !skipLeadExecutionProfileResolution
-      ) {
+      if (isRoot() && needsLeadRoster && !skipLeadExecutionProfileResolution) {
         try {
           definitionSnapshot = await host.discoverSessionDefinitions(ctx);
         } catch (error) {
@@ -1241,7 +1252,7 @@ export function createLeadSessionStartRuntime(host: {
         }
       }
       if (sessionSignal.aborted) return;
-      if (host.isLead()) {
+      if (isRoot()) {
         try {
           await host.prepareLeadExecution(
             ctx,
@@ -1262,7 +1273,7 @@ export function createLeadSessionStartRuntime(host: {
         }
       }
       if (sessionSignal.aborted) return;
-      if (host.isLead() && host.roleTransitions.chiefModeInactive())
+      if (isRoot() && host.roleTransitions.chiefModeInactive())
         await host.publishLeadRole(
           ctx,
           "inactive",
@@ -1273,6 +1284,9 @@ export function createLeadSessionStartRuntime(host: {
           const definitions = await host.visibleAgentCapabilities(
             ctx,
             definitionSnapshot?.definitions,
+            isRoot()
+              ? (host.rootDelegationPolicy?.() ?? new Set<string>())
+              : "all",
           );
           if (sessionSignal.aborted) return;
           host.setDefinitionRoster({
@@ -1293,7 +1307,7 @@ export function createLeadSessionStartRuntime(host: {
       if (!activeManager)
         await host.controller.recoverRuntimes(ctx, sessionSignal);
       if (sessionSignal.aborted) return;
-      if (host.isLead()) host.herdRun.finishIfIdle(ctx);
+      if (isRoot()) host.herdRun.finishIfIdle(ctx);
       host.controller.startHealthScanner(ctx, sessionSignal);
     },
   };
@@ -1339,7 +1353,11 @@ export function createLeadAgentEventRuntime(host: {
   consumeChiefStartPreflight(ctx: ExtensionContext): void;
   herdRun: Pick<
     LeadHerdRunRuntime,
-    "agentStarted" | "agentSettled" | "turnEnd" | "beforeSettle"
+    | "agentStarted"
+    | "agentSettled"
+    | "turnEnd"
+    | "beforeSettle"
+    | "hasActiveTurn"
   >;
   controller: Pick<
     LeadController,
@@ -1393,13 +1411,14 @@ export function createLeadAgentEventRuntime(host: {
     },
     agentStart(ctx: ExtensionContext): void {
       host.consumeChiefStartPreflight(ctx);
-      host.herdRun.agentStarted();
+      if (host.isActiveLead()) host.herdRun.agentStarted();
     },
     async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
       host.leadInboxRuntime.agentSettled();
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
       try {
-        await host.herdRun.agentSettled(ctx, aborted);
+        if (host.isActiveLead() || host.herdRun.hasActiveTurn())
+          await host.herdRun.agentSettled(ctx, aborted);
       } finally {
         await host.controller
           .settleResults(ctx, host.controller.sessionSignal())
@@ -1999,7 +2018,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       } finally {
         release();
       }
-      if (host.isLead()) host.maybeFinishHerdRun(ctx);
+      if (activeLeadRole(options.leadRuntime) === "lead")
+        host.maybeFinishHerdRun(ctx);
     },
     async openExecutionMenu(ctx: ExtensionCommandContext): Promise<void> {
       const execution = host.leadExecutionPresentation();
@@ -2380,13 +2400,12 @@ export function registerLeadRuntime(
     return {
       role,
       definition: prepared,
-      tools: leadToolState.projectRoleTools(
-        baseline,
-        prepared,
-        role === "manager"
+      tools: leadToolState.projectRoleTools(baseline, prepared, [
+        ...(role === "manager"
           ? options.roleTransitionHost.managerTools
-          : options.roleTransitionHost.chiefTools,
-      ),
+          : options.roleTransitionHost.chiefTools),
+        ...supervisoryAgentTools(ctx, prepared),
+      ]),
       sessionId: ctx.sessionManager.getSessionId(),
       valid: true,
     };
@@ -2425,6 +2444,144 @@ export function registerLeadRuntime(
     supervisoryProfile.sessionId === ctx.sessionManager.getSessionId()
       ? supervisoryProfile
       : undefined;
+  const hasOwnedRootAgents = (ctx: ExtensionContext): boolean => {
+    try {
+      const { states } = roleHost.scanAgentStates();
+      return states.some(
+        ({ state }) =>
+          state.ownerSessionId === ctx.sessionManager.getSessionId(),
+      );
+    } catch {
+      return true;
+    }
+  };
+  const verifiedActiveRootRole = (role?: SessionRole) => {
+    const state = options.leadRuntime!;
+    const currentRole = activeLeadRole(state);
+    if (
+      state.roleSuspended ||
+      !state.leadContext ||
+      (role !== undefined && role !== currentRole)
+    )
+      return undefined;
+    const sessionId = state.leadContext.sessionManager.getSessionId();
+    if (currentRole === "lead" && state.controllerRole === "lead")
+      return "lead" as const;
+    if (currentRole === "manager" && state.managerLease) {
+      try {
+        const descriptor = roleHost.readManagerDescriptor(
+          roleHost.supervisionRuntime(),
+          state.managerLease.descriptor.workspaceId,
+        );
+        if (
+          roleHost.sameManagerDescriptor(
+            descriptor,
+            state.managerLease.descriptor,
+          ) &&
+          descriptor.piSessionId === sessionId
+        ) {
+          const profile = currentSupervisoryProfile(
+            state.leadContext,
+            "manager",
+          );
+          if (profile?.valid) return "manager" as const;
+        }
+      } catch {}
+    }
+    if (
+      currentRole === "chief" &&
+      state.chiefMode === "active" &&
+      state.chiefLease
+    ) {
+      try {
+        const descriptor = roleHost.readChiefDescriptor(
+          roleHost.supervisionRuntime().descriptor,
+        );
+        if (
+          roleHost.sameChiefDescriptor(
+            descriptor,
+            state.chiefLease.descriptor,
+          ) &&
+          roleHost.chiefLeaseIsHeld(roleHost.supervisionRuntime()) &&
+          descriptor.piSessionId === sessionId
+        ) {
+          const profile = currentSupervisoryProfile(state.leadContext, "chief");
+          if (profile?.valid) return "chief" as const;
+        }
+      } catch {}
+    }
+    return undefined;
+  };
+  const activeRootRoleForPresentation = () =>
+    verifiedActiveRootRole() as "lead" | "manager" | "chief" | undefined;
+  const rootDelegationPolicy = (): RootDelegationPolicy => {
+    const role = verifiedActiveRootRole();
+    if (role === "lead") return "all";
+    if (role === "manager" || role === "chief") {
+      const profile = currentSupervisoryProfile(
+        options.leadRuntime!.leadContext!,
+        role,
+      );
+      if (profile?.valid)
+        return new Set(profile.definition.frontmatter.agents ?? []);
+    }
+    return new Set<string>();
+  };
+  const rootDelegationGeneration = (): RootDelegationGeneration => {
+    const state = options.leadRuntime!;
+    const ctx = state.leadContext;
+    const role = verifiedActiveRootRole();
+    return {
+      sessionId: ctx?.sessionManager.getSessionId() ?? "",
+      roleGeneration: state.chiefModeGeneration,
+      role,
+      authority:
+        role === "manager"
+          ? state.managerLease
+          : role === "chief"
+            ? state.chiefLease
+            : undefined,
+      profile:
+        role === "manager" || role === "chief"
+          ? currentSupervisoryProfile(ctx!, role)
+          : undefined,
+    };
+  };
+  const supervisoryAgentTools = (
+    ctx: ExtensionContext,
+    definition: AgentDefinition,
+  ): string[] => {
+    const discovery = definition.frontmatter.agents?.length
+      ? ["list_agents", "delegate_agent", "continue_agent"]
+      : [];
+    const management = hasOwnedRootAgents(ctx)
+      ? options.leadCoordinationToolNames.filter(
+          (name) => name !== "delegate_agent" && name !== "continue_agent",
+        )
+      : [];
+    return [...new Set([...discovery, ...management])];
+  };
+  const supervisoryTools = (
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): string[] | undefined => {
+    const profile = currentSupervisoryProfile(ctx, role);
+    if (!profile) return undefined;
+    const permitted = new Set(
+      supervisoryAgentTools(ctx, profile.definition).filter((name) => {
+        if (name !== "delegate_agent" && name !== "continue_agent") return true;
+        const policy = rootDelegationPolicy();
+        return policy === "all" || policy.size > 0;
+      }),
+    );
+    const tools = profile.tools.filter(
+      (name) =>
+        !(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
+        permitted.has(name),
+    );
+    for (const name of permitted) if (!tools.includes(name)) tools.push(name);
+    return tools;
+  };
   const persistLeadExecution = (
     mode: LeadExecutionMode,
     tools: readonly string[],
@@ -2473,7 +2630,7 @@ export function registerLeadRuntime(
     pi,
     leadRuntime: options.leadRuntime,
     processRole: "lead",
-    controllerScope: { kind: "lead" },
+    controllerScope: { kind: "root" },
     activeRole: () => activeLeadRole(options.leadRuntime),
     HERDSMAN_BUILD: options.build,
     leadInstanceId: () => options.leadRuntime.instanceId,
@@ -2903,27 +3060,21 @@ export function registerLeadRuntime(
     return leadToolState.projectLeadTools(baseline, leadExecution.definition);
   };
   const activationGuard = (
-    sessionId: string,
-    role: "Chief" | "Manager",
+    _sessionId: string,
+    _role: "Chief" | "Manager",
   ): void => {
     if (!coordinationRuntime.coordinationHealthy())
       throw new Error("Lead coordination state is unavailable");
-    const { states, issues } = roleHost.scanAgentStates();
-    if (issues.length)
-      throw new Error(
-        `Cannot activate ${role} while managed mailbox state is unresolved`,
-      );
-    if (states.some(({ state }) => state.ownerSessionId === sessionId))
-      throw new Error(`Cannot activate ${role} while owned agent work exists`);
   };
   const roleTransitionServices = {
     ...roleHost,
     prepareSupervisoryProfile,
     commitSupervisoryProfile,
     currentSupervisoryProfile,
+    supervisoryTools,
     fallbackSupervisoryProfile,
     removeProjectAssignment,
-    controllerScope: { kind: "lead" },
+    controllerScope: { kind: "root" },
     activationGuard,
     advancePeerPresenceGeneration: () =>
       coordinationRuntime.advancePresenceGeneration(),
@@ -2986,7 +3137,7 @@ export function registerLeadRuntime(
     projectAssignmentInstruction,
     leadRuntime: options.leadRuntime,
     leadInstanceId: () => options.leadRuntime.instanceId,
-    controllerScope: { kind: "lead" },
+    controllerScope: { kind: "root" },
     activeRole: () => activeLeadRole(options.leadRuntime),
     pi,
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
@@ -3058,11 +3209,14 @@ export function registerLeadRuntime(
     { sessionId: string; workspaceId: string } | undefined;
   const controller = createAgentController(pi, {
     ...options.controllerServices,
-    scope: { kind: "lead" },
+    scope: { kind: "root" },
+    rootDelegationPolicy,
+    rootDelegationGeneration,
     build: options.build,
     onChanged: () => {
       statusRuntime.requestRefresh();
       supervisionUiRuntime.requestRefresh();
+      roleTransitions?.reconcileRoleTools();
     },
     onWorkChanged: (ctx: ExtensionContext) => herdRunRuntime?.maybeFinish(ctx),
     onWorktreeRemoved: (
@@ -3170,7 +3324,8 @@ export function registerLeadRuntime(
     }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
-      scope: { kind: "lead" },
+      scope: { kind: "root" },
+      activeRootRoleForPresentation,
       listedAgentRecord: controller.listedAgentRecord,
       runtimeForLabel,
       herdStartedAt: () => herdRunRuntime?.startedAt(),
@@ -3297,6 +3452,7 @@ export function registerLeadRuntime(
   };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
+    activeRootRoleForPresentation,
     pendingStartEntries: () => controller.pendingStartEntries(),
     hasPendingStart: (label: string) => controller.hasPendingStart(label),
     clearPendingStart: (label: string, expected: PendingStart) =>
@@ -3362,6 +3518,7 @@ export function registerLeadRuntime(
     pi,
     entryName: options.herdRunEntryName,
     activeRole: () => activeLeadRole(options.leadRuntime),
+    isVerifiedActiveLead: () => verifiedActiveRootRole("lead") === "lead",
     isManagedLead: () => !!leadExecution?.managed,
     hasPendingStarts: () => controller.hasPendingStarts(),
     listAgentStates: () => controller.listAgentStates(),
@@ -3407,7 +3564,7 @@ export function registerLeadRuntime(
         assignments.map(({ id, piSessionFile }) => ({ id, piSessionFile })),
       );
     },
-    isLead: () => true,
+    isLead: () => activeLeadRole(options.leadRuntime) === "lead",
     buildStatusRows,
     renderRunningOptions,
     formatStatusCounts,
@@ -3753,6 +3910,12 @@ export function registerLeadRuntime(
   });
   const sessionStart = createLeadSessionStartRuntime({
     ...options.sessionStartOptions,
+    rootDelegationPolicy,
+    isRoot: () => options.roleTransitionHost.processRole === "lead",
+    isLead: () => activeLeadRole(leadRuntime) === "lead",
+    initialStatusBreadcrumb: () => [
+      { text: activeRootRoleForPresentation() ?? "controller" },
+    ],
     diagnostic: () => managerDiagnostic("session_start_reached"),
     clearSupervisionUI,
     startSupervisionUI,
@@ -3777,6 +3940,8 @@ export function registerLeadRuntime(
   });
   const sessionTree = createLeadSessionTreeRuntime({
     ...options.sessionTreeOptions,
+    isRoot: () => options.roleTransitionHost.processRole === "lead",
+    isLead: () => activeLeadRole(leadRuntime) === "lead",
     roleTransitions,
     reconcileBranchExecution,
     failClosedBranchExecution: () => {
@@ -3793,6 +3958,8 @@ export function registerLeadRuntime(
   });
   const shutdown = createLeadShutdownRuntime({
     ...options.shutdownOptions,
+    isRoot: () => options.roleTransitionHost.processRole === "lead",
+    isLead: () => activeLeadRole(leadRuntime) === "lead",
     clearSupervisionUI: () => clearSupervisionUI(),
     roleTransitions,
     controller,
@@ -3807,9 +3974,13 @@ export function registerLeadRuntime(
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentStart(ctx),
   );
-  pi.on("agent_before_settle", (event: any) =>
-    herdRunRuntime!.beforeSettle(event),
-  );
+  pi.on("agent_before_settle", (event: any) => {
+    if (
+      activeLeadRole(leadRuntime) === "lead" ||
+      herdRunRuntime!.hasActiveTurn()
+    )
+      herdRunRuntime!.beforeSettle(event);
+  });
   pi.on("agent_settled", (event: { aborted: boolean }, ctx: ExtensionContext) =>
     agentEvents.agentSettled(ctx, event.aborted),
   );
@@ -3825,7 +3996,11 @@ export function registerLeadRuntime(
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
   pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
-    herdRunRuntime!.turnEnd(event);
+    if (
+      activeLeadRole(leadRuntime) === "lead" ||
+      herdRunRuntime!.hasActiveTurn()
+    )
+      herdRunRuntime!.turnEnd(event);
     options.queueLeadPresentation(ctx);
   });
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
@@ -3869,7 +4044,7 @@ export function registerLeadRuntime(
         ? currentSupervisoryProfile(ctx, role)!.definition.body
         : "",
     currentChiefAllowedTools: (ctx: ExtensionContext) =>
-      currentSupervisoryProfile(ctx, "chief")?.tools,
+      supervisoryTools(ctx, "chief"),
   };
 }
 
@@ -5473,7 +5648,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     return finishing;
   };
   const begin = (ctx: ExtensionContext): void => {
-    if (herdRunStartedAt !== undefined) return;
+    // Root ownership is structural; only Lead-origin assignments start tracking.
+    if (!host.isVerifiedActiveLead() || herdRunStartedAt !== undefined) return;
     const startedAt = leadAgentStartedAt ?? Date.now();
     herdRunStartedAt = startedAt;
     herdReportId = randomUUID();
@@ -5568,6 +5744,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   return {
     begin,
     maybeFinish,
+    hasActiveTurn: () => leadAgentStartedAt !== undefined,
     agentStarted: () => {
       leadAgentStartedAt = Date.now();
       leadReportId = randomUUID();
@@ -7886,7 +8063,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   };
   const persistLeadCoordination = (): boolean => {
     if (
-      controllerScope?.kind !== "lead" ||
+      controllerScope?.kind !== "root" ||
       leadRuntime.chiefMode !== "inactive" ||
       leadRuntime.roleSuspended
     )
@@ -8300,7 +8477,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     resultBindings: readonly ResultBinding[] = [],
   ): Promise<ChiefMessageRecord> => {
     if (
-      controllerScope?.kind !== "lead" ||
+      controllerScope?.kind !== "root" ||
       leadRuntime.chiefMode !== "inactive" ||
       leadRuntime.roleSuspended
     )
@@ -8585,7 +8762,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     _update: unknown,
     ctx: ExtensionContext,
   ) => {
-    if (controllerScope.kind !== "lead" || leadRuntime.chiefMode !== "inactive")
+    if (controllerScope.kind !== "root" || leadRuntime.chiefMode !== "inactive")
       throw new Error("Chief is available only to ordinary leads");
     const params = raw as { message: string; files?: readonly string[] };
     if (typeof params.message !== "string" || !params.message.trim())
@@ -8715,7 +8892,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     ctx: ExtensionContext,
   ) => {
     if (
-      controllerScope.kind !== "lead" ||
+      controllerScope.kind !== "root" ||
       leadRuntime.chiefMode !== "inactive" ||
       leadRuntime.roleSuspended
     )
@@ -9822,7 +9999,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       });
       if (!current || recheckHeld) return complete(0);
       if (
-        controllerScope?.kind === "lead" &&
+        controllerScope?.kind === "root" &&
         process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS === "1" &&
         !managerDiagnosticEvents.has("inbox_candidates")
       ) {
@@ -11036,7 +11213,7 @@ export function createLeadRoleTransitions(
   };
   const shutdownRole = (): void => {
     state.chiefModeGeneration++;
-    if (host.controllerScope?.kind !== "lead") return;
+    if (host.controllerScope?.kind !== "root") return;
     if (state.chiefMode === "active") {
       host.enterSuspended(state.leadContext);
     } else if (state.controllerRole === "manager") {
@@ -11347,7 +11524,7 @@ export function createLeadRoleTransitions(
     }
     if (
       host.processRole !== "lead" ||
-      host.controllerScope?.kind !== "lead" ||
+      host.controllerScope?.kind !== "root" ||
       state.chiefMode !== "inactive" ||
       state.controllerRole !== "lead" ||
       state.roleSuspended
@@ -11576,7 +11753,7 @@ export function createLeadRoleTransitions(
     else host.reconcileRoleTools();
   };
   const reconcileRoleTools = (): void => {
-    if (host.controllerScope?.kind !== "lead") return;
+    if (host.controllerScope?.kind !== "root") return;
     if (state.controllerRole === "manager" && !state.roleSuspended) {
       let held = false;
       try {
@@ -11613,10 +11790,10 @@ export function createLeadRoleTransitions(
     }
     if (activeLeadRole(state) === "chief") {
       host.pi.setActiveTools(
-        (
-          state.leadContext &&
-          host.currentSupervisoryProfile(state.leadContext, "chief")
-        )?.tools ?? [...host.chiefTools],
+        (state.leadContext &&
+          host.supervisoryTools(state.leadContext, "chief")) ?? [
+          ...host.chiefTools,
+        ],
       );
       return;
     }
@@ -11626,10 +11803,10 @@ export function createLeadRoleTransitions(
       : host.normalizeBaseTools(current);
     host.pi.setActiveTools(
       activeLeadRole(state) === "manager"
-        ? ((
-            state.leadContext &&
-            host.currentSupervisoryProfile(state.leadContext, "manager")
-          )?.tools ?? [...host.managerTools])
+        ? ((state.leadContext &&
+            host.supervisoryTools(state.leadContext, "manager")) ?? [
+            ...host.managerTools,
+          ])
         : (host.executionTools?.() ?? host.normalizeLeadTools(source)),
     );
   };

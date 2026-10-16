@@ -86,7 +86,10 @@ revalidated for control actions.
 The widget is installed only when the current session has a valid supported
 herdr/Pi identity and Pi is in TUI mode.
 
-A lead Pi session gets its exact owned subtree view.
+A root Lead, Manager, or Chief session gets its exact owned subtree view when
+the ordinary Agent projection is applicable. Manager/Chief ownership rows, if
+shown, are only for Agents directly owned by that exact session; staff
+supervision never adds a Lead's Agent tree.
 
 A valid managed leaf can receive an identity-only header.
 
@@ -156,7 +159,10 @@ Example:
 ● lead → implementer → scout
 ```
 
-The breadcrumb uses validated definition/agent ancestry. The root is `lead` when the ownership boundary resolves to a validated Lead session; if that boundary cannot be proven, it is `?`.
+The breadcrumb uses validated definition/agent ancestry. Its root uses the
+verified current owner role (for example, `lead`, `manager`, or `chief`); when
+role evidence is unavailable, it uses a neutral owner/controller label rather
+than guessing.
 
 Delegating-agent and leaf panes can append a compact summary of their current
 Pi active tools as muted bracketed metadata after the current identity.

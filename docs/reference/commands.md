@@ -100,8 +100,10 @@ Project definitions are included when Pi considers the
 project trusted. Each definition shows its contributing source or sources as
 `bundled`, `project`, and/or `global`. Edits write global overrides only.
 
-All five reserved role definitions are not Agents and remain excluded from
-Agent discovery and delegation. Runtime profiles support `Details` only;
+All five reserved role definitions are not Agents and remain excluded as
+delegation targets. Manager/Chief profiles may nevertheless list ordinary
+Agent definitions in `agents` to authorize their own direct delegation.
+Runtime profiles support `Details` only;
 `managed-lead` supports `Model`, `Thinking`, and `Details`, but has no `Enabled`
 action. Repeating `/manager` or `/chief` refreshes the active profile after
 successful validation. Definition files are not watched while a profile is
@@ -221,10 +223,10 @@ existing linked worktree is required; the first project delegation can create
 the first linked worktree. Leads in linked-worktree workspaces cannot enter
 Manager mode. If another live Manager
 holds the lease, activation fails and the
-caller remains an ordinary Lead. Manager activation also refuses while the
-session owns unresolved Agent work. A restored Manager uses the same profile,
-supervision UI, and context as explicit activation, without the Lead Agent
-roster or Lead-owned Agent recovery. `/manager leave` preserves project work
+caller remains an ordinary Lead. Role activation does not abandon the session's
+directly owned Agent work. A restored Manager uses the same profile,
+supervision UI, context, and applicable ownership/recovery access as explicit
+activation. `/manager leave` preserves project work
 and is refused only when a Lead is waiting for this Manager's answer or the
 Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
@@ -232,7 +234,8 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 re-resolves the Manager definition, applies it after the current turn becomes
 idle, then opens the overview; a failed refresh keeps the previous profile.
 Manager definitions accept trusted project and global overlays and preserve
-the ordinary Lead tool baseline when `tools` is omitted. See
+the ordinary Lead tool baseline when `tools` is omitted. Their `agents`
+allowlist independently controls fresh direct delegation. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
 The `Manager auto-start` setting optionally makes a new session attempt

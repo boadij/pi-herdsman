@@ -768,6 +768,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const result = await agentTool(pi, "delegate").execute(
     "id",
     {
@@ -932,6 +933,7 @@ test("rollback requires disappearance proof after a successful close", async () 
   });
   registerExtension!(pi.pi as never);
   try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
     const result = await agentTool(pi, "delegate").execute(
       "id",
       {
@@ -1274,6 +1276,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
     },
   });
   registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
   const result = await agentTool(pi, "delegate").execute(
     "id",
     {

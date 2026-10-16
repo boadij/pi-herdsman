@@ -70,8 +70,10 @@ every `agents` reference.
 
 `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
 are reserved role definitions, not Agents. They are excluded from the Agent
-roster and cannot be selected by `delegate_agent`, referenced from `agents`, or
-disabled. The Definitions UI lists them first in that order. Runtime profiles
+roster and cannot be selected by `delegate_agent`, referenced as delegation
+targets from `agents`, or disabled. Manager and Chief may themselves declare
+`agents` to allowlist ordinary Agent targets. The Definitions UI lists reserved
+roles first in that order. Runtime profiles
 provide `Details` only; `managed-lead` additionally provides `Model` and
 `Thinking`.
 
@@ -85,8 +87,10 @@ choice is separate from Manager authority: only the current exact
 The ordinary Lead profiles and the Manager and Chief definitions are runtime
 profiles, not Pi launch definitions. They may configure only `name`,
 `description`, `body`, `bodyMode` on matching overlays, `tools`, and
-`excludeTools`. They reject `model`, `thinking`,
-`systemPromptMode`, `enabled`, `permission`, `agents`, `noTools`,
+`excludeTools`; Manager and Chief may additionally configure `agents` as their
+direct-delegation allowlist. Ordinary Lead profiles reject `agents`. These
+profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`,
+`noTools`,
 `noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
 `noExtensions`, `inheritGlobalContext`, and `inheritProjectContext`.
 `bodyMode` is valid only on a matching overlay as described below.
@@ -186,7 +190,7 @@ the fallback.
 | `skills`                | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                                                                                                               |
 | `noExtensions`          | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains.                                                 |
 | `extensions`            | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                                                                                                     |
-| `agents`                | array of unique non-empty definition names                            | no direct agents                                                       | Names direct definitions this agent may delegate to; every name must exist.                                                                                                               |
+| `agents`                | array of unique non-empty definition names                            | no direct agents                                                       | Names permitted direct children for managed Agents, or the fresh-delegation allowlist for Manager/Chief.                                                                                  |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls project context-file inheritance.                                                                                                                                                |
 | `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                              | Controls global context-file inheritance.                                                                                                                                                 |
 
@@ -197,11 +201,14 @@ schema or make authorization decisions from it.
 Arrays supplied by an override replace the complete inherited array, including
 an explicit `[]`.
 
-When a delegating agent declares an agent definition in `agents`, that definition must
-be enabled. A delegating agent referencing a disabled agent definition is omitted
-from runtime definition discovery and is rejected during assignment or fresh agent
-startup with an explicit disabled-agent error rather than silently dropping the
-reference.
+Managed-Agent child references must be enabled: a delegating Agent that
+references a disabled child is omitted from runtime definition discovery and
+rejected during assignment or fresh startup with an explicit disabled-agent
+error. Manager/Chief allowlists reject missing or reserved target names; a
+listed disabled Agent simply remains unavailable for discovery or assignment
+until enabled. Removing or emptying a supervisor allowlist disables new direct
+delegation, not management of Agents that session already owns. This policy is
+independent of `tools` and `excludeTools`.
 
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.

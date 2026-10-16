@@ -73,8 +73,21 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
-const { SHARED_AGENT_INSTRUCTIONS, statusBreadcrumb, visibleAgentSnapshots } =
-  await import("./agent-controller.ts");
+const {
+  SHARED_AGENT_INSTRUCTIONS,
+  rootStatusBreadcrumb,
+  statusBreadcrumb,
+  visibleAgentSnapshots,
+} = await import("./agent-controller.ts");
+
+test("root status breadcrumb uses only the supplied verified role", () => {
+  assert.deepEqual(rootStatusBreadcrumb("manager"), [{ text: "manager" }]);
+  assert.deepEqual(rootStatusBreadcrumb("chief"), [{ text: "chief" }]);
+  assert.deepEqual(rootStatusBreadcrumb("lead"), [{ text: "lead" }]);
+  assert.deepEqual(rootStatusBreadcrumb(undefined), [
+    { text: "owner/controller" },
+  ]);
+});
 
 function emitAgentTurn(
   agent: ReturnType<typeof fakePi>,
@@ -365,7 +378,8 @@ test("managed requests pump through Pi semantic input", async (t) => {
 });
 
 test("imported semantic result refs remain usable in the next handoff", async () => {
-  const mailbox = setAgentEnvironment("forwarding-child");
+  const mailbox = setAgentEnvironment("forwarding-child", ["agent"]);
+  process.env.HERDR_PANE_ID = "startup-pane";
   const requestId = randomUUID();
   const canonicalRef = resultRef(requestId);
   const artifact = resultPath(requestId);
@@ -383,7 +397,16 @@ test("imported semantic result refs remain usable in the next handoff", async ()
       grandchildRequest = request;
     },
   );
-  const agent = fakePi({ exec: startup.exec });
+  const startupExec = (command: string, args: string[]) => {
+    const result = startup.exec(command, args);
+    if (command === "herdr" && args[0] === "pane" && args[1] === "split") {
+      const response = JSON.parse(result.stdout);
+      response.result.pane.terminal_id = "startup-terminal";
+      return { ...result, stdout: JSON.stringify(response) };
+    }
+    return result;
+  };
+  const agent = fakePi({ exec: startupExec });
   let forwardingChild: ReturnType<typeof fakePi> | undefined;
   registerExtension!(agent.pi as never);
   const context = fakeAgentContext(agent.entries);
@@ -424,9 +447,14 @@ test("imported semantic result refs remain usable in the next handoff", async ()
     );
 
     agent.events.get("session_shutdown")?.[0]();
-    setLeadEnvironment();
-    forwardingChild = fakePi({ exec: startup.exec });
+    setAgentEnvironment("forwarding-child", ["agent"]);
+    process.env.HERDR_PANE_ID = "startup-pane";
+    forwardingChild = fakePi({ exec: startupExec });
     registerExtension!(forwardingChild.pi as never);
+    await forwardingChild.events.get("session_start")![0](
+      undefined,
+      fakeAgentContext(agent.entries),
+    );
     const result = await agentTool(forwardingChild, "delegate").execute(
       "forward-result",
       { definition: "agent", task: "Continue review.", files: [semanticRef] },

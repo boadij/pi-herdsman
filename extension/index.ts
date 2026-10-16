@@ -164,6 +164,7 @@ import {
   resolveMessageFiles as controllerResolveMessageFiles,
   type ManagedAgentPresence,
   type ControllerScope,
+  type RootDelegationPolicy,
   type Params,
   requestRecordBytesFor,
   prospectiveAssignmentFits,
@@ -804,7 +805,7 @@ export default function (pi: ExtensionAPI): void {
     return;
   }
   const controllerScope: ControllerScope | undefined =
-    processRole === "lead" ? { kind: "lead" } : undefined;
+    processRole === "lead" ? { kind: "root" } : undefined;
   const controllerServices = {
     extensionPath: HERDSMAN_EXTENSION_PATH,
     isContextRetired: (manager) => retiredManagedSession(manager),
@@ -1233,7 +1234,7 @@ export default function (pi: ExtensionAPI): void {
       name = pi.getSessionName(),
     ): void => {
       if (
-        controllerScope.kind !== "lead" ||
+        controllerScope.kind !== "root" ||
         !roleTransitions.leadPresentationAllowed()
       )
         return;
@@ -1344,8 +1345,8 @@ export default function (pi: ExtensionAPI): void {
       definitionRoster: () => startupDefinitionRoster,
     };
     const initialStatusBreadcrumb =
-      controllerScope.kind === "lead"
-        ? [{ text: "lead" }]
+      controllerScope.kind === "root"
+        ? [{ text: "owner/controller" }]
         : [
             { text: "?" },
             {
@@ -1613,7 +1614,7 @@ export default function (pi: ExtensionAPI): void {
       collectOwnedSessionUsage,
       formatSessionUsage,
     };
-    if (controllerScope.kind === "lead") {
+    if (controllerScope.kind === "root") {
       pi.registerCommand("lead", {
         description: "Choose the ordinary Lead execution profile",
         getArgumentCompletions: (prefix: string) =>
@@ -2012,10 +2013,10 @@ export default function (pi: ExtensionAPI): void {
         clearStartupDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
         },
-        isLead: () => controllerScope.kind === "lead",
+        isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
       };
       const sessionTreeOptions = {
-        isLead: () => controllerScope.kind === "lead",
+        isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
         appendRoleError: (ctx: ExtensionContext, error: unknown) =>
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
@@ -2027,7 +2028,7 @@ export default function (pi: ExtensionAPI): void {
         setDefinitionRoster: (roster: typeof startupDefinitionRoster) => {
           startupDefinitionRoster = roster;
         },
-        isLead: () => controllerScope.kind === "lead",
+        isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
         isManagedAgent: () => controllerScope.kind === "managed-agent",
         sessionLeadRoleState,
         normalizeLeadTools,
@@ -2051,10 +2052,12 @@ export default function (pi: ExtensionAPI): void {
         visibleAgentCapabilities: async (
           ctx: ExtensionContext,
           definitions?: AgentDefinition[],
+          rootPolicy?: RootDelegationPolicy,
         ) =>
           visibleAgentCapabilities(
             definitions ?? (await contextAgentDefinitions(ctx)).definitions,
             controllerScope,
+            rootPolicy ?? (controllerScope.kind === "root" ? new Set() : "all"),
           ),
         appendDefinitionError: (ctx: ExtensionContext, error: unknown) =>
           appendDurableError(pi, ctx, "pi_herdsman_definition_error", error),
@@ -2182,9 +2185,9 @@ export default function (pi: ExtensionAPI): void {
       projectRuntime = leadRuntimes.projectRuntime!;
       leadHerdRunRuntime = leadRuntimes.herdRunRuntime!;
       leadRuntimes.controller!.registerTools(
-        controllerScope.kind === "lead" ? leadHerdRunRuntime.begin : undefined,
+        controllerScope.kind === "root" ? leadHerdRunRuntime.begin : undefined,
       );
-      if (controllerScope.kind === "lead") {
+      if (controllerScope.kind === "root") {
         pi.registerTool({
           ...supervisorTool,
           name: "message_supervisor",
