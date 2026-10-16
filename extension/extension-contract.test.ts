@@ -1012,7 +1012,7 @@ test("list peers and message use global peer presence, not caller inventory", as
     `peer-target-race-${randomUUID()}.sock`,
   );
   const senderId = randomUUID();
-  const targetId = `lead-b-${randomUUID()}`;
+  const targetId = randomUUID();
   const unenrichedTargetId = `lead-c-${randomUUID()}`;
   const unverifiedTargetId = `lead-d-${randomUUID()}`;
   const resultRequestId = randomUUID();
@@ -1432,19 +1432,27 @@ test("peer publication rejects sender and target generation replacement during a
   realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
   writeFileSync(configPath, "{}", "utf8");
   const senderId = `lead-a-${randomUUID()}`;
-  const targetId = `lead-b-${randomUUID()}`;
+  const targetId = randomUUID();
   const runtime = peerRuntime();
   let primaryWorkspaceId = WORKSPACE;
-  const topology = () => ({
+  let rewriteTargetDuringTopology = false;
+  let ordinaryLeadMoved = false;
+  const topology = (workspaceId = WORKSPACE) => ({
     stdout: JSON.stringify({
       id: AGENT_ID,
       result: {
         source: {
-          repo_key: "peer-test-repo",
+          repo_key:
+            ordinaryLeadMoved && workspaceId === "ordinary-new"
+              ? "peer-other-repo"
+              : "peer-test-repo",
           repo_name: "peer-test-repo",
-          source_workspace_id: primaryWorkspaceId,
+          source_workspace_id:
+            ordinaryLeadMoved && workspaceId === "ordinary-new"
+              ? "other-primary"
+              : primaryWorkspaceId,
         },
-        worktrees: [{ open_workspace_id: WORKSPACE }],
+        worktrees: [{ open_workspace_id: workspaceId }],
       },
     }),
     stderr: "",
@@ -1470,10 +1478,23 @@ test("peer publication rejects sender and target generation replacement during a
     return { lease, record };
   };
   const pi = fakePi({
-    exec: (_command, args) =>
-      args[0] === "worktree" && args[1] === "list"
-        ? topology()
-        : { stdout: "{}", stderr: "", code: 0 },
+    exec: (_command, args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        if (rewriteTargetDuringTopology) {
+          rewriteTargetDuringTopology = false;
+          const current = readPeerLeadRecord(runtime, targetId)!;
+          writePeerLeadRecord(runtime, {
+            ...current,
+            group: {
+              repoKey: "peer-other-repo",
+              primaryWorkspaceId: WORKSPACE,
+            },
+          });
+        }
+        return topology(args.at(-1));
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
@@ -1535,6 +1556,78 @@ test("peer publication rejects sender and target generation replacement during a
       removePeerLeadRecord(runtime, senderId);
       removePeerLeadRecord(runtime, targetId);
       support.configReadHook = undefined;
+    }
+
+    {
+      const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      const branch = `managed-target-${randomUUID()}`;
+      writePeerLeadRecord(runtime, {
+        ...target.record,
+        workspaceId: "managed-target",
+      });
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id: targetId,
+        repoKey: "peer-test-repo",
+        branch,
+        text: "managed target",
+      });
+      process.env.HERDR_WORKSPACE_ID = "ordinary-new";
+      ordinaryLeadMoved = true;
+      await assert.rejects(
+        peer.execute(
+          "message",
+          { session: targetId, message: "ordinary Lead changed groups" },
+          undefined,
+          undefined,
+          context,
+        ),
+        /outside the permitted project scope/,
+      );
+      assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+      ordinaryLeadMoved = false;
+      delete process.env.HERDR_WORKSPACE_ID;
+      removeProjectAssignment(supervisionRuntime(), "peer-test-repo", branch);
+      sender.lease.release();
+      target.lease.release();
+      removePeerLeadRecord(runtime, senderId);
+      removePeerLeadRecord(runtime, targetId);
+    }
+
+    {
+      const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      const branch = `authority-race-${randomUUID()}`;
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id: targetId,
+        repoKey: "peer-test-repo",
+        branch,
+        text: "managed target",
+      });
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+      rewriteTargetDuringTopology = true;
+      await assert.rejects(
+        peer.execute(
+          "message",
+          {
+            session: targetId,
+            message: "same generation but changed authority",
+          },
+          undefined,
+          undefined,
+          context,
+        ),
+        /Peer assignment changed before the message was queued/,
+      );
+      assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+      removeProjectAssignment(supervisionRuntime(), "peer-test-repo", branch);
+      delete process.env.HERDR_WORKSPACE_ID;
+      sender.lease.release();
+      target.lease.release();
+      removePeerLeadRecord(runtime, senderId);
+      removePeerLeadRecord(runtime, targetId);
     }
 
     const sender = claim(senderId, "lead-a-pane", "lead-a-tab");

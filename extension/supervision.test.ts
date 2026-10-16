@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { PI_AGENT_ROOT, realFs } from "./support.ts";
 import { acquireProcessLock } from "./lock.ts";
@@ -45,6 +47,8 @@ import {
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
+  projectAssignmentAuthorityLockPath,
+  samePeerLeadAuthority,
   canMessagePeer,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   projectAssignmentBytes,
@@ -381,6 +385,33 @@ test("peer lead presence rejects a changed or missing process-lock generation", 
       `${createHash("sha256").update("lead-generation").digest("hex")}.json`,
     ),
   );
+});
+
+test("peer authority comparison rejects provenance changes but ignores presentation metadata", () => {
+  const fixture = peerRecord(peerRuntime(socket()), "peer-authority");
+  try {
+    const expected = fixture.record;
+    assert.equal(samePeerLeadAuthority(expected, expected), true);
+    for (const changed of [
+      { role: "manager" as const },
+      { socket: `${expected.socket}-other` },
+      { workspaceId: `${expected.workspaceId}-other` },
+      { group: { repoKey: "other-repo", primaryWorkspaceId: "other" } },
+    ])
+      assert.equal(
+        samePeerLeadAuthority({ ...expected, ...changed }, expected),
+        false,
+      );
+    assert.equal(
+      samePeerLeadAuthority(
+        { ...expected, name: "renamed", cwd: "/other", branch: "other" },
+        expected,
+      ),
+      true,
+    );
+  } finally {
+    fixture.release();
+  }
 });
 
 test("record publication failures remove temporary files", () => {
@@ -2697,6 +2728,26 @@ test("global assignment authority finds cross-socket matches and serializes the 
             ...assignment("repo-two", "racing"),
             id: id(),
           }),
+        /project assignment authority is in progress/i,
+      );
+      const lockPath = projectAssignmentAuthorityLockPath();
+      const lockModule = pathToFileURL(
+        join(process.cwd(), "extension/lock.ts"),
+      );
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          "--input-type=module",
+          "-e",
+          `import { acquireProcessLock } from ${JSON.stringify(lockModule.href)}; try { const lease = acquireProcessLock(process.argv[1], { name: "project assignment authority" }); lease.release(); console.log("acquired"); } catch (error) { console.log(error.message); }`,
+          lockPath,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(child.status, 0, child.stderr);
+      assert.match(
+        child.stdout,
         /project assignment authority is in progress/i,
       );
       return 42;

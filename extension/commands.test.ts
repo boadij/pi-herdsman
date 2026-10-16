@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -42,6 +42,7 @@ import {
   sessionLeadRoleState,
   writeLeadCoordinationState as writeLeadCoordinationStateRaw,
   writeProjectAssignment,
+  removeProjectAssignment,
   writeChiefMessage as writeChiefMessageRaw,
   writeCoordinationMessage as writeCoordinationMessageRaw,
   writePeerLeadRecord as writePeerLeadRecordRaw,
@@ -540,9 +541,19 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   }
 });
 
-test("Manager peer messages deliver to a live Manager without changing its role", async () => {
+test("Manager peer messages deliver to a live Manager without changing its role", async (t) => {
   setLeadEnvironment();
   const runtime = peerRuntime();
+  const malformedRuntime = supervisionRuntime(
+    join(tmpdir(), `unrelated-${randomUUID()}.sock`),
+  );
+  const malformedAssignment = projectAssignmentPath(
+    malformedRuntime,
+    `unrelated-${randomUUID()}`,
+    "main",
+  );
+  mkdirSync(dirname(malformedAssignment), { recursive: true });
+  writeFileSync(malformedAssignment, "{broken", "utf8");
   const managers = [
     {
       sessionId: `manager-sender-${randomUUID()}`,
@@ -560,7 +571,6 @@ test("Manager peer messages deliver to a live Manager without changing its role"
     },
   ];
   const recipientEntries: unknown[] = [];
-  const delivered = testGate<void>();
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -595,6 +605,7 @@ test("Manager peer messages deliver to a live Manager without changing its role"
                   source_workspace_id: manager.workspaceId,
                   repo_key: manager.workspaceId,
                   repo_name: manager.workspaceId,
+                  source_checkout_path: manager.workspaceId,
                 },
                 worktrees: [],
               })
@@ -607,21 +618,7 @@ test("Manager peer messages deliver to a live Manager without changing its role"
                   : respond({}),
       ...(recipient
         ? {
-            sendMessage: (message: unknown) => {
-              if (
-                String((message as any)?.content ?? "").includes(
-                  "manager queued",
-                )
-              ) {
-                recipientEntries.push(message);
-                const waitForRemoval = () =>
-                  listCoordinationMessagePaths(runtime, manager.sessionId)
-                    .length === 0
-                    ? delivered.resolve()
-                    : queueMicrotask(waitForRemoval);
-                queueMicrotask(waitForRemoval);
-              }
-            },
+            sendMessage: (message: unknown) => recipientEntries.push(message),
           }
         : {}),
     });
@@ -706,12 +703,22 @@ test("Manager peer messages deliver to a live Manager without changing its role"
     process.env.HERDR_TAB_ID = recipientManager!.tabId;
     process.env.HERDR_SOCKET_PATH = recipientManager!.socket;
     process.env.HERDR_WORKSPACE_ID = recipientManager!.workspaceId;
-    await delivered.promise;
-    assert.equal(
-      recipient.pi.sentMessageCalls.filter((call) =>
-        String((call.message as any)?.content ?? "").includes("manager queued"),
-      ).length,
-      1,
+    await t.waitFor(
+      () => {
+        assert.equal(
+          recipient.pi.sentMessageCalls.filter((call) =>
+            String((call.message as any)?.content ?? "").includes(
+              "manager queued",
+            ),
+          ).length,
+          1,
+        );
+        assert.deepEqual(
+          listCoordinationMessagePaths(runtime, recipientManager!.sessionId),
+          [],
+        );
+      },
+      { timeout: 5000 },
     );
     assert.ok(recipient.pi.pi.getActiveTools().includes("list_staff"));
     assert.deepEqual(
@@ -732,6 +739,7 @@ test("Manager peer messages deliver to a live Manager without changing its role"
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
+    rmSync(malformedAssignment, { force: true });
     setLeadEnvironment();
   }
 });
@@ -6119,6 +6127,98 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   }
 });
 
+test("peer delivery rejects same-generation recipient provenance changes before send", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `peer-authority-delivery-${randomUUID()}.sock`);
+  const targetId = randomUUID();
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_PANE_ID = "target-pane";
+  process.env.HERDR_TAB_ID = "target-tab";
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  const runtime = peerRuntime();
+  const entries: unknown[] = [];
+  const releaseTopology = testGate<void>();
+  let topologyCalls = 0;
+  let gateSecondTopology = false;
+  let secondTopologyStarted = false;
+  const receiver = fakeChiefPi({
+    entries,
+    exec: async (command, args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        topologyCalls++;
+        if (gateSecondTopology && topologyCalls === 2) {
+          secondTopologyStarted = true;
+          await releaseTopology.promise;
+        }
+        return peerTopologyExec(command, args);
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+    activeTools: ["read", "bash"],
+  });
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => targetId,
+  };
+  const senderId = randomUUID();
+  const group = { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE };
+  const message = {
+    version: 2 as const,
+    build: HERDSMAN_BUILD,
+    id: randomUUID(),
+    leaseId: randomUUID(),
+    kind: "peer_message" as const,
+    fromSessionId: senderId,
+    toSessionId: targetId,
+    leadSessionId: senderId,
+    peerSource: { role: "lead" as const, socket, group, managed: true },
+    text: "must not deliver after recipient authority changes",
+    createdAt: Date.now(),
+  };
+  registerExtension!(receiver.pi as never);
+  try {
+    await receiver.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() => {
+      assert.ok(readPeerLeadRecord(runtime, targetId));
+    });
+    topologyCalls = 0;
+    gateSecondTopology = true;
+    writeCoordinationMessageRaw(message, runtime);
+    await t.waitFor(() => assert.equal(secondTopologyStarted, true), {
+      timeout: 5000,
+    });
+    const before = readPeerLeadRecord(runtime, targetId);
+    assert.ok(before);
+    const beforeClaim = before.claim;
+    writePeerLeadRecordRaw(runtime, {
+      ...before,
+      group: { repoKey: "peer-other-repo", primaryWorkspaceId: "other" },
+      updatedAt: Date.now(),
+    });
+    assert.deepEqual(readPeerLeadRecord(runtime, targetId)?.claim, beforeClaim);
+    releaseTopology.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
+    assert.equal(
+      receiver.sentMessageCalls.some((call) =>
+        String((call.message as any)?.content ?? "").includes(
+          "must not deliver after recipient authority changes",
+        ),
+      ),
+      false,
+    );
+  } finally {
+    releaseTopology.resolve();
+    await receiver.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_WORKSPACE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("managed peer scope loss rejects stale local group and defers transient failure", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `peer-current-group-${randomUUID()}.sock`);
@@ -6127,7 +6227,7 @@ test("managed peer scope loss rejects stale local group and defers transient fai
   process.env.HERDR_PANE_ID = "receiver-pane";
   process.env.HERDR_TAB_ID = "receiver-tab";
   const entries: unknown[] = [];
-  let topology: "available" | "not-git" | "unavailable" = "available";
+  let topology: "available" | "not-git" | "unavailable" | "moved" = "available";
   const receiver = fakeChiefPi({
     entries,
     exec: (_command, args) =>
@@ -6137,15 +6237,15 @@ test("managed peer scope loss rejects stale local group and defers transient fai
             args[1] === "list" &&
             topology === "unavailable"
           ? { stdout: "", stderr: "temporary Herdr outage", code: 1 }
-          : args[0] === "worktree" && args[1] === "list"
+          : args[0] === "worktree" && args[1] === "list" && topology === "moved"
             ? {
                 stdout: JSON.stringify({
                   id: AGENT_ID,
                   result: {
                     source: {
-                      repo_key: "peer-test-repo",
-                      repo_name: "peer-test-repo",
-                      source_workspace_id: "new-primary",
+                      repo_key: "peer-other-repo",
+                      repo_name: "peer-other-repo",
+                      source_workspace_id: "other-primary",
                     },
                     worktrees: [{ open_workspace_id: WORKSPACE }],
                   },
@@ -6153,7 +6253,23 @@ test("managed peer scope loss rejects stale local group and defers transient fai
                 stderr: "",
                 code: 0,
               }
-            : { stdout: "{}", stderr: "", code: 0 },
+            : args[0] === "worktree" && args[1] === "list"
+              ? {
+                  stdout: JSON.stringify({
+                    id: AGENT_ID,
+                    result: {
+                      source: {
+                        repo_key: "peer-test-repo",
+                        repo_name: "peer-test-repo",
+                        source_workspace_id: "new-primary",
+                      },
+                      worktrees: [{ open_workspace_id: WORKSPACE }],
+                    },
+                  }),
+                  stderr: "",
+                  code: 0,
+                }
+              : { stdout: "{}", stderr: "", code: 0 },
     activeTools: ["read", "bash"],
   });
   const context = fakeContext(entries) as any;
@@ -6179,11 +6295,12 @@ test("managed peer scope loss rejects stale local group and defers transient fai
     claim: senderTargetLease.claim,
     updatedAt: Date.now(),
   });
+  const managedBranch = `peer-${randomUUID()}`;
   writeProjectAssignment(supervisionRuntime(), {
     version: 2,
     id: receiverId,
     repoKey: "peer-test-repo",
-    branch: `peer-${randomUUID()}`,
+    branch: managedBranch,
     text: "managed peer scope test",
   });
   const record = {
@@ -6201,6 +6318,9 @@ test("managed peer scope loss rejects stale local group and defers transient fai
       group: { repoKey: "peer-test-repo", primaryWorkspaceId: "new-primary" },
       managed: true,
     },
+    resultBindings: [
+      { ref: "result:peer-review#1", canonicalRef: `result:${randomUUID()}` },
+    ],
     text: "must not cross the changed worktree group",
     createdAt: Date.now(),
   };
@@ -6208,8 +6328,8 @@ test("managed peer scope loss rejects stale local group and defers transient fai
   writeCoordinationMessageRaw(record, runtime);
   registerExtension!(receiver.pi as never);
   try {
-    await receiver.events.get("session_start")![0](undefined, context);
     topology = "not-git";
+    await receiver.events.get("session_start")![0](undefined, context);
     await assert.rejects(
       receiver.tools
         .find((tool) => tool.name === "list_peers")!
@@ -6228,8 +6348,10 @@ test("managed peer scope loss rejects stale local group and defers transient fai
         ),
       /outside the permitted project scope/,
     );
-    await t.waitFor(() =>
-      assert.deepEqual(listCoordinationMessagePaths(runtime, receiverId), []),
+    await t.waitFor(
+      () =>
+        assert.deepEqual(listCoordinationMessagePaths(runtime, receiverId), []),
+      { timeout: 5000 },
     );
     assert.equal(
       receiver.sentMessageCalls.some((call) =>
@@ -6240,6 +6362,42 @@ test("managed peer scope loss rejects stale local group and defers transient fai
       false,
     );
 
+    topology = "moved";
+    removeProjectAssignment(
+      supervisionRuntime(),
+      "peer-test-repo",
+      managedBranch,
+    );
+    writeCoordinationMessageRaw(
+      {
+        ...record,
+        id: randomUUID(),
+        text: "ordinary recipient moved to another group",
+        createdAt: Date.now(),
+      },
+      runtime,
+    );
+    await t.waitFor(
+      () =>
+        assert.deepEqual(listCoordinationMessagePaths(runtime, receiverId), []),
+      { timeout: 5000 },
+    );
+    assert.equal(
+      receiver.sentMessageCalls.some((call) =>
+        String((call.message as any)?.content ?? "").includes(
+          "ordinary recipient moved to another group",
+        ),
+      ),
+      false,
+    );
+    assert.equal(
+      entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-result-ref" &&
+          entry?.data?.ref === "result:peer-review#1",
+      ),
+      false,
+    );
     topology = "unavailable";
     writeCoordinationMessageRaw(
       {

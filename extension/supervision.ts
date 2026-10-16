@@ -1076,6 +1076,10 @@ const projectAuthorityLock = join(
   "project-assignment-authority.lock",
 );
 
+export function projectAssignmentAuthorityLockPath(): string {
+  return projectAuthorityLock;
+}
+
 function withProjectAssignmentLock<T>(operation: () => T): T {
   const lease = acquireProcessLock(projectAuthorityLock, {
     name: "project assignment authority",
@@ -1265,6 +1269,20 @@ export function samePeerLeadGeneration(
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id
+  );
+}
+
+/** Authorization provenance, excluding presentation metadata. */
+export function samePeerLeadAuthority(
+  actual: PeerLeadRecord,
+  expected: PeerLeadRecord,
+): boolean {
+  return (
+    samePeerLeadGeneration(actual, expected) &&
+    (actual.role ?? "lead") === (expected.role ?? "lead") &&
+    actual.socket === expected.socket &&
+    actual.workspaceId === expected.workspaceId &&
+    isDeepStrictEqual(actual.group, expected.group)
   );
 }
 
