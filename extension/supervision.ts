@@ -833,9 +833,15 @@ export async function drainCoordinationInbox(
       await clearTransaction();
       continue;
     }
-    const deliverAs = options.deliveryMode
-      ? await options.deliveryMode(record)
-      : "followUp";
+    let deliverAs: "steer" | "followUp" | "passive" | undefined;
+    try {
+      deliverAs = options.deliveryMode
+        ? await options.deliveryMode(record)
+        : "followUp";
+    } catch {
+      await clearTransaction();
+      continue;
+    }
     const wasAlreadyDelivered = options.isDelivered(record.id);
     if (!deliverAs && !wasAlreadyDelivered) {
       await clearTransaction();

@@ -4832,6 +4832,360 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   }
 });
 
+test("ordinary Leads message their Manager and receive Manager messages passively", async (t) => {
+  setLeadEnvironment();
+  const socketPath = join(tmpdir(), `manager-lead-inbox-${randomUUID()}.sock`);
+  const leadSession = randomUUID();
+  const leadWorkspace = `workspace-${randomUUID()}`;
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "manager-inbox-pane",
+    tab_id: "manager-inbox-tab",
+    cwd: "/tmp/project-root",
+  };
+  const leadAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadSession,
+    },
+    workspace_id: leadWorkspace,
+    pane_id: "ordinary-inbox-pane",
+    tab_id: "ordinary-inbox-tab",
+    cwd: "/tmp/ordinary-worktree",
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const exec = (_command: string, args: string[]) => {
+    if (args[0] === "workspace" && args[1] === "get")
+      return respond({
+        workspace:
+          args[2] === WORKSPACE
+            ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
+            : args[2] === leadWorkspace
+              ? { worktree: { repo_key: "repo-key", is_linked_worktree: true } }
+              : {},
+      });
+    if (args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_checkout_path: "/tmp/project-root",
+        },
+        worktrees: [{ open_workspace_id: leadWorkspace }],
+      });
+    if (isAgentList(args))
+      return respond({ agents: [managerAgent, leadAgent] });
+    if (args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgent });
+    if (isApiSnapshot(args))
+      return respond({
+        snapshot: { agents: [managerAgent, leadAgent], panes: [] },
+      });
+    return respond({});
+  };
+  const managerExec = (command: string, args: string[]) => exec(command, args);
+  const leadExec = (command: string, args: string[]) => exec(command, args);
+  const useManagerIdentity = () => {
+    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+    process.env.HERDR_PANE_ID = managerAgent.pane_id;
+    process.env.HERDR_TAB_ID = managerAgent.tab_id;
+    process.env.HERDR_SOCKET_PATH = socketPath;
+  };
+  const useLeadIdentity = () => {
+    process.env.HERDR_WORKSPACE_ID = leadWorkspace;
+    process.env.HERDR_PANE_ID = leadAgent.pane_id;
+    process.env.HERDR_TAB_ID = leadAgent.tab_id;
+    process.env.HERDR_SOCKET_PATH = socketPath;
+  };
+  let manager: ReturnType<typeof fakeChiefPi> | undefined;
+  let lead: ReturnType<typeof fakeChiefPi> | undefined;
+  try {
+    useManagerIdentity();
+    manager = fakeChiefPi({
+      activeTools: ["read"],
+      exec: managerExec,
+      persistMessages: true,
+    });
+    registerExtension!(manager.pi as never);
+    const managerCtx = fakeContext(manager.entries) as any;
+    managerCtx.isIdle = () => false;
+    await manager.events.get("session_start")![0](undefined, managerCtx);
+    await manager.commandOptions.get("manager").handler("", managerCtx);
+
+    useLeadIdentity();
+    lead = fakeChiefPi({
+      activeTools: ["read"],
+      exec: leadExec,
+      persistMessages: true,
+    });
+    registerExtension!(lead.pi as never);
+    const leadCtx = fakeContext(lead.entries) as any;
+    leadCtx.sessionManager.getSessionId = () => leadSession;
+    leadCtx.isIdle = () => false;
+    await lead.events.get("session_start")![0](undefined, leadCtx);
+
+    useManagerIdentity();
+    const reports = await manager.tools
+      .find((tool) => tool.name === "list_staff")!
+      .execute("list", {}, undefined, undefined, managerCtx);
+    assert.equal(
+      reports.details.reports.find(
+        (report: any) => report.session === leadSession,
+      )?.relationship,
+      "supervised",
+    );
+    useLeadIdentity();
+    await lead.tools
+      .find((tool) => tool.name === "message_supervisor")!
+      .execute(
+        "message",
+        { message: "Ordinary Lead to Manager" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
+    useManagerIdentity();
+    managerCtx.isIdle = () => true;
+    await t.waitFor(() =>
+      assert.ok(
+        manager!.sent.some(
+          (message: any) =>
+            message?.customType === "pi-herdsman-lead_message" &&
+            message?.details?.fromSessionId === leadSession &&
+            message?.details?.toSessionId === LEAD_SESSION_ID,
+        ),
+      ),
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
+      [],
+    );
+
+    await manager.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        {
+          session: leadSession,
+          message: "Manager to ordinary Lead",
+        },
+        undefined,
+        undefined,
+        managerCtx,
+      );
+    useLeadIdentity();
+    leadCtx.isIdle = () => true;
+    await t.waitFor(() =>
+      assert.ok(
+        lead!.sent.some(
+          (message: any) =>
+            message?.customType === "pi-herdsman-manager_message" &&
+            message?.details?.fromSessionId === LEAD_SESSION_ID &&
+            message?.details?.toSessionId === leadSession,
+        ),
+      ),
+    );
+    assert.deepEqual(
+      lead.sentMessageCalls.find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-manager_message",
+      )?.options,
+      { triggerTurn: false },
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+      [],
+    );
+  } finally {
+    if (lead) {
+      useLeadIdentity();
+      await lead.events.get("session_shutdown")?.[0]();
+    }
+    if (manager) {
+      useManagerIdentity();
+      await manager.events.get("session_shutdown")?.[0]();
+    }
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager-to-ordinary-Lead inbox rechecks authority before importing result refs", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.HERDR_PANE_ID = "ordinary-lead-pane";
+  process.env.HERDR_TAB_ID = "ordinary-lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-inbox-authority-${randomUUID()}.sock`,
+  );
+  const leadSession = randomUUID();
+  const managerSession = randomUUID();
+  const managerPane = "manager-inbox-pane";
+  const managerTab = "manager-inbox-tab";
+  const managerLease = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: managerSession,
+    paneId: managerPane,
+    tabId: managerTab,
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerSession,
+    updatedAt: Date.now(),
+  });
+  const managerPeerLease = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), managerSession),
+    { name: "Manager peer presence" },
+  );
+  writePeerLeadRecord(peerRuntime(), {
+    version: 1,
+    role: "manager",
+    piSessionId: managerSession,
+    paneId: managerPane,
+    tabId: managerTab,
+    workspaceId: WORKSPACE,
+    claim: managerPeerLease.claim,
+    updatedAt: Date.now(),
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerSession,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: managerPane,
+    tab_id: managerTab,
+    cwd: "/tmp",
+  };
+  const leadAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadSession,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "ordinary-lead-pane",
+    tab_id: "ordinary-lead-tab",
+    cwd: "/tmp",
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+            source_checkout_path: "/tmp/project-root",
+          },
+          worktrees: [{ open_workspace_id: WORKSPACE }],
+        });
+      if (isAgentList(args))
+        return respond({ agents: [managerAgent, leadAgent] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: managerAgent });
+      if (isApiSnapshot(args))
+        return respond({
+          snapshot: { agents: [managerAgent, leadAgent], panes: [] },
+        });
+      return respond({});
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager.getSessionId = () => leadSession;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const incoming = {
+      version: 2 as const,
+      id: randomUUID(),
+      leaseId: managerLease.descriptor.leaseId,
+      kind: "manager_message" as const,
+      fromSessionId: managerSession,
+      toSessionId: leadSession,
+      leadSessionId: leadSession,
+      text: "Do not import this after authority changes",
+      resultBindings: [
+        {
+          ref: "result:researcher#1",
+          canonicalRef: `result:${randomUUID()}`,
+        },
+      ],
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(incoming, supervisionRuntime());
+    removePeerLeadRecord(peerRuntime(), leadSession);
+    const originalGetSessionName = pi.pi.getSessionName;
+    let revoked = false;
+    pi.pi.getSessionName = () => {
+      if (!revoked) {
+        revoked = true;
+        managerLease.release();
+      }
+      return originalGetSessionName();
+    };
+    let appendCalls = 0;
+    const originalAppendEntry = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      appendCalls++;
+      originalAppendEntry(type, data);
+    };
+    const sentBefore = pi.sentMessageCalls.length;
+    await t.waitFor(() => assert.equal(revoked, true));
+    assert.equal(pi.sentMessageCalls.length, sentBefore);
+    assert.equal(appendCalls, 0);
+    assert.ok(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession).some(
+        (path) => readChiefMessage(path).id === incoming.id,
+      ),
+      "rejected Manager message remains pending for retry",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    managerPeerLease.release();
+    managerLease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("a Lead without a Manager routes upward to Chief and keeps peer presence", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -4860,6 +5214,31 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     cwd: "/tmp",
   };
   const lease = claimChiefLease(descriptorIdentity);
+  const managerLease = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: `dead-manager-${randomUUID()}`,
+    paneId: "dead-manager-pane",
+    tabId: "dead-manager-tab",
+    workspaceId: "root-workspace",
+    repoKey: "repo-key",
+  });
+  const managerDescriptor = managerDescriptorPath(
+    supervisionRuntime(),
+    "root-workspace",
+  );
+  const managerLock = `${managerDescriptor}.lock`;
+  const deadPid = 2147483647;
+  const deadClaim = { ...managerLease.descriptor.claim, pid: deadPid };
+  writeFileSync(
+    managerDescriptor,
+    JSON.stringify({ ...managerLease.descriptor, claim: deadClaim }),
+  );
+  rmSync(managerLock, { recursive: true, force: true });
+  mkdirSync(managerLock, { mode: 0o700 });
+  writeFileSync(
+    join(managerLock, `${deadPid}-${deadClaim.id}`),
+    JSON.stringify(deadClaim),
+  );
   const entries: unknown[] = [];
   const pi = fakeChiefPi({
     entries,
@@ -4943,6 +5322,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     lease.release();
+    managerLease.release();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;

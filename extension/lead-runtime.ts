@@ -8985,7 +8985,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       if (
         !manager ||
         record.leaseId !== manager.leaseId ||
-        record.fromSessionId !== manager.piSessionId ||
         record.kind !== "lead_message" ||
         record.leadSessionId !== record.fromSessionId
       )
@@ -9326,8 +9325,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 },
               };
             }
-            importResultBindings(pi, ctx, resultBindings, record.kind);
-            if (messageDelivered(ctx, record)) return;
             if (
               record.kind === "chief_message" ||
               record.kind === "manager_message" ||
@@ -9340,6 +9337,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   "Coordination authority changed before delivery",
                 );
             }
+            importResultBindings(pi, ctx, resultBindings, record.kind);
+            if (messageDelivered(ctx, record)) return;
             let result: void;
             try {
               result = pi.sendMessage(payload, options);
@@ -10154,9 +10153,7 @@ export function createLeadRoleTransitions(
       host.supervisionRuntime(),
       scope.primaryWorkspaceId,
     );
-    if (!status) return undefined;
-    if (!status.live)
-      throw new Error("Unable to verify Manager supervision lease");
+    if (!status || !status.live) return undefined;
     if (status.descriptor.repoKey !== scope.repoKey)
       throw new Error("Manager authority does not match project");
     return status.descriptor;

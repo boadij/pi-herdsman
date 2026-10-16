@@ -1563,6 +1563,39 @@ test("deferred inbox records remain pending without authorization", async () => 
   assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
 });
 
+test("a rejected delivery policy leaves its record pending and drains later records", async () => {
+  const runtime = supervisionRuntime(socket());
+  const rejected = message({ text: "reject policy", createdAt: 1 });
+  const accepted = message({ text: "deliver normally", createdAt: 2 });
+  const rejectedPath = writeChiefMessage(rejected, runtime);
+  writeChiefMessage(accepted, runtime);
+  const delivered = new Set<string>();
+
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: rejected.toSessionId,
+      deliveryMode: async (record) => {
+        if (record.id === rejected.id)
+          throw new Error("authority changed during delivery policy");
+        return "followUp";
+      },
+      isAuthorized: () => true,
+      isDelivered: (id) => delivered.has(id),
+      sendMessage: (_payload, _options, record) => {
+        delivered.add(record.id);
+      },
+    }),
+    1,
+  );
+
+  assert.equal(delivered.has(accepted.id), true);
+  assert.equal(existsSync(rejectedPath), true);
+  assert.deepEqual(listChiefMessagePaths(runtime, rejected.toSessionId), [
+    rejectedPath,
+  ]);
+});
+
 test("passive inbox delivery does not trigger a Pi turn", async () => {
   const runtime = supervisionRuntime(socket());
   const record = message();
