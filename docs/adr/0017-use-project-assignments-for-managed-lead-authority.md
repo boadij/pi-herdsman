@@ -20,6 +20,11 @@ supervision grants no project assignment, lifecycle, Agent ownership,
 automatic result delivery, or execution-control authority. Missing or
 ambiguous assignment or topology evidence fails closed.
 
+Authorized Manager messages may start a normal turn in an idle ordinary Lead.
+Messages do not steer an active ordinary Lead or grant project execution
+authority. Ordinary Leads retain their own execution and Agent ownership, and
+responses are not automatically handed off as project results.
+
 The relationship belongs to the project Manager role, not an individual
 Manager process, so it survives Manager replacement. Lead ownership of its
 Agent tree remains separate from Manager supervision: Managers never own Lead

@@ -34,7 +34,9 @@ is managed for project execution only when exactly one current
 `ProjectAssignment` for the repository names its exact Pi session. Manager
 supervision of an ordinary Lead permits bounded discovery and communication
 only, not execution control, private inspection, Agent ownership, or automatic
-project-result delivery. Supervision does not grant Agent ownership: Manager
+project-result delivery. Authorized messages may start a normal turn in an idle
+ordinary Lead, but do not steer active work; the Lead may reply explicitly with
+`message_supervisor`. Supervision does not grant Agent ownership: Manager
 and Chief can own only Agents they directly start from their own exact Pi
 session, when their effective `agents` profile permits it.
 
@@ -185,7 +187,7 @@ Coordination crosses one authority edge at a time:
 | Up        | `message_supervisor` / automatic results    | Assigned Lead -> Manager                            |
 | Down      | `message_staff` / project operations        | Manager -> assigned Lead                            |
 | Up        | `message_supervisor`                        | Ordinary Lead -> Manager or Chief; Manager -> Chief |
-| Down      | `message_staff`                             | Manager -> ordinary Lead (passive)                  |
+| Down      | `message_staff`                             | Manager -> ordinary Lead (idle turn; active queued) |
 | Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager                |
 | Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent                      |
 

@@ -9626,7 +9626,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
             } catch {
               return undefined;
             }
-            if (!authorized) return "passive";
+            if (!authorized) return "followUp";
             const workspaceId = host.workspaceId();
             if (!workspaceId) return undefined;
             const relation = await host.resolveEffectiveSupervisor(
@@ -9635,7 +9635,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               workspaceId,
             );
             const assigned = relation.kind === "assigned";
-            if (!assigned) return ctx.isIdle() ? "passive" : undefined;
+            if (!assigned) return ctx.isIdle() ? "followUp" : undefined;
             return "steer";
           }
           const supervisorDownlink =

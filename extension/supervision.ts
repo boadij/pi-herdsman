@@ -179,9 +179,8 @@ export type ChiefInboxDrainOptions = {
   ) =>
     | "steer"
     | "followUp"
-    | "passive"
     | undefined
-    | Promise<"steer" | "followUp" | "passive" | undefined>;
+    | Promise<"steer" | "followUp" | undefined>;
   sendMessage: (
     message: unknown,
     options: {
@@ -883,7 +882,7 @@ export async function drainCoordinationInbox(
       await clearTransaction();
       continue;
     }
-    let deliverAs: "steer" | "followUp" | "passive" | undefined;
+    let deliverAs: "steer" | "followUp" | undefined;
     try {
       deliverAs = options.deliveryMode
         ? await options.deliveryMode(record)
@@ -960,9 +959,7 @@ export async function drainCoordinationInbox(
                 ...(record.branch ? { branch: record.branch } : {}),
               },
             },
-            deliverAs === "passive"
-              ? { triggerTurn: false }
-              : { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
             record,
           );
           await options.transaction?.revalidate(token, "after-send");

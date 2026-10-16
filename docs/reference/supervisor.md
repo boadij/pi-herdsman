@@ -54,9 +54,10 @@ recipient to forward them.
 
 Direct-supervisor messages are queued for the exact current recipient and
 validated against current authority before delivery. A Manager message to an
-ordinary Lead is appended passively when the Lead is idle and remains queued
-while it is active; it does not steer or start a model turn. Assigned Lead
-delivery retains existing steering/follow-up behavior.
+ordinary Lead starts a normal turn when the Lead is idle and remains queued
+while it is active; it does not steer active work. Ordinary Leads can reply
+explicitly with `message_supervisor`; a triggered turn does not guarantee a
+reply. Assigned Lead delivery retains existing steering/follow-up behavior.
 
 ## See also
 

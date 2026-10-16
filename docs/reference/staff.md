@@ -90,9 +90,9 @@ Sends an asynchronous durable message to the exact current direct report. The
 message is queued by Herdsman before submission. If an assigned report is
 actively running, supervisor direction uses Pi's cooperative steering lane;
 steering does not abort the current operation or interrupt an in-flight tool
-call. Messages to ordinary Manager-supervised Leads are passive: they are
-appended without starting a turn when idle and remain queued while the Lead is
-active.
+call. A Manager message to an ordinary Lead starts a turn when the Lead is idle;
+while active, the message remains queued and does not steer the Lead's current
+work.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
 result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden

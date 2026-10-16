@@ -1770,27 +1770,6 @@ test("a rejected delivery policy leaves its record pending and drains later reco
   ]);
 });
 
-test("passive inbox delivery does not trigger a Pi turn", async () => {
-  const runtime = supervisionRuntime(socket());
-  const record = message();
-  writeChiefMessage(record, runtime);
-  let delivered = false;
-  let sendOptions: unknown;
-  await drainCoordinationInbox({
-    runtime,
-    sessionId: record.toSessionId,
-    deliveryMode: () => "passive",
-    isAuthorized: () => true,
-    isDelivered: () => delivered,
-    sendMessage: (_payload, options) => {
-      sendOptions = options;
-      delivered = true;
-    },
-  });
-  assert.deepEqual(sendOptions, { triggerTurn: false });
-  assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), []);
-});
-
 test("Pi send return is not a receipt; later exact receipt enables safe cleanup", async () => {
   const runtime = supervisionRuntime(socket());
   const record = message();

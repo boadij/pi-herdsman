@@ -5336,7 +5336,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   }
 });
 
-test("ordinary Leads message their Manager and receive Manager messages passively", async (t) => {
+test("ordinary Leads exchange turn-triggering messages with their Manager", async (t) => {
   setLeadEnvironment();
   const socketPath = join(tmpdir(), `manager-lead-inbox-${randomUUID()}.sock`);
   const leadSession = randomUUID();
@@ -5491,6 +5491,19 @@ test("ordinary Leads message their Manager and receive Manager messages passivel
         managerCtx,
       );
     useLeadIdentity();
+    assert.equal(
+      lead.sent.some(
+        (message: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.details?.fromSessionId === LEAD_SESSION_ID &&
+          message?.details?.toSessionId === leadSession,
+      ),
+      false,
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
+      1,
+    );
     leadCtx.isIdle = () => true;
     await t.waitFor(() =>
       assert.ok(
@@ -5507,7 +5520,7 @@ test("ordinary Leads message their Manager and receive Manager messages passivel
         ({ message }: any) =>
           message?.customType === "pi-herdsman-manager_message",
       )?.options,
-      { triggerTurn: false },
+      { deliverAs: "followUp", triggerTurn: true },
     );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), leadSession),
