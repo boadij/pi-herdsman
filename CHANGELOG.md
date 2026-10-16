@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.28.0](https://github.com/boadij/pi-herdsman/compare/v0.27.0...v0.28.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **manager:** default to coordination-only tools ([#411](https://github.com/boadij/pi-herdsman/issues/411))
+
+### Features
+
+* **agents:** enable optional Manager and Chief delegation ([#409](https://github.com/boadij/pi-herdsman/issues/409)) ([9fd51d8](https://github.com/boadij/pi-herdsman/commit/9fd51d81038cf1265ea2864ff52ab9059bef99e9))
+* **peer:** scope managed Leads to verified worktree groups ([#406](https://github.com/boadij/pi-herdsman/issues/406)) ([3e45a1b](https://github.com/boadij/pi-herdsman/commit/3e45a1b47b96a571e685cd9e5d5ae3f7244f92e7))
+* **supervision:** include ordinary Leads in project supervision ([#405](https://github.com/boadij/pi-herdsman/issues/405)) ([1d0a407](https://github.com/boadij/pi-herdsman/commit/1d0a4073bd0ae2114b9bf132e20661b248658a8a))
+* **ui:** expose worktree removal in Manager overview ([#401](https://github.com/boadij/pi-herdsman/issues/401)) ([f2064d9](https://github.com/boadij/pi-herdsman/commit/f2064d9536b7fe25ad053371bed9517ff121abf4))
+
+
+### Fixes
+
+* **lifecycle:** settle prompt-hook shells safely ([#388](https://github.com/boadij/pi-herdsman/issues/388)) ([6f9706d](https://github.com/boadij/pi-herdsman/commit/6f9706d01a06d8d8d924796e1aed30699c01d299))
+* **supervision:** wake ordinary Leads on Manager messages ([#413](https://github.com/boadij/pi-herdsman/issues/413)) ([a47b2d9](https://github.com/boadij/pi-herdsman/commit/a47b2d942977fe6662f47d41f1877c7694a2fb25))
+
+
+### Refactoring
+
+* **instructions:** remove prescribed coordination workspace ([#399](https://github.com/boadij/pi-herdsman/issues/399)) ([f0267ac](https://github.com/boadij/pi-herdsman/commit/f0267ac823c6aa8c9679a3c4074fbc45c723ac7d))
+* **manager:** default to coordination-only tools ([#411](https://github.com/boadij/pi-herdsman/issues/411)) ([4c3ca87](https://github.com/boadij/pi-herdsman/commit/4c3ca8764e9e69b7219da7881a423237ba1d01a5))
+
+
+### Documentation
+
+* **principles:** minimize model decision burden ([#407](https://github.com/boadij/pi-herdsman/issues/407)) ([7caebe4](https://github.com/boadij/pi-herdsman/commit/7caebe48896390ee739e8ea98ee46456c74d3da3))
+
+
+### Other Changes
+
+* **runtime:** adopt Pi 1.3.0 ([#404](https://github.com/boadij/pi-herdsman/issues/404)) ([ec4a0bf](https://github.com/boadij/pi-herdsman/commit/ec4a0bf1e19fa3541a17bc2470a151e7f7c093dc))
+
 ## [0.27.0](https://github.com/boadij/pi-herdsman/compare/v0.26.0...v0.27.0) (2026-10-15)
 
 
