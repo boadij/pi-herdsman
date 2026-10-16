@@ -206,10 +206,13 @@ the same repository and branch-based work.
 ## Use Chief only for the next supervision layer
 
 Chief is separate from project orchestration. It supervises Managers across
-the current Herdr runtime and directly supervises ordinary unassigned Leads,
-including Leads sharing project scope with an active Manager. Managers control
-only Leads named by current project assignments; their authority survives
-Manager process replacement. A Manager does not become Chief and does not
+the current Herdr runtime and directly supervises ordinary Leads only when they
+have no active project Manager. An active Manager supervises every eligible
+Lead in its verified project worktree group, but controls project execution
+only for Leads named by exact current project assignments. Ordinary Leads
+remain independent and receive message-only Manager supervision; ambiguous
+Manager evidence does not trigger Chief fallback. Assignment authority
+survives Manager process replacement. A Manager does not become Chief or
 forward assigned Leads into a parallel Chief control path.
 
 Manually continuing the exact assigned Pi session within valid project scope

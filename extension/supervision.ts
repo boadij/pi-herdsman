@@ -151,12 +151,17 @@ export type ChiefInboxDrainOptions = {
   isDelivered: (id: string) => boolean;
   deliveryMode?: (
     record: ChiefMessageRecord,
-  ) => "steer" | "followUp" | undefined;
+  ) =>
+    | "steer"
+    | "followUp"
+    | "passive"
+    | undefined
+    | Promise<"steer" | "followUp" | "passive" | undefined>;
   sendMessage: (
     message: unknown,
     options: {
-      deliverAs: "steer" | "followUp";
-      triggerTurn: true;
+      deliverAs?: "steer" | "followUp";
+      triggerTurn: boolean;
     },
     record: ChiefMessageRecord,
   ) => void | Promise<void>;
@@ -225,7 +230,9 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   if (
     projectMessage
       ? !validNativeIdentity(record.branch)
-      : record.branch !== undefined
+      : record.branch !== undefined &&
+        (record.kind !== "manager_message" ||
+          !validNativeIdentity(record.branch))
   ) {
     return false;
   }
@@ -827,7 +834,7 @@ export async function drainCoordinationInbox(
       continue;
     }
     const deliverAs = options.deliveryMode
-      ? options.deliveryMode(record)
+      ? await options.deliveryMode(record)
       : "followUp";
     const wasAlreadyDelivered = options.isDelivered(record.id);
     if (!deliverAs && !wasAlreadyDelivered) {
@@ -897,7 +904,9 @@ export async function drainCoordinationInbox(
                 ...(record.branch ? { branch: record.branch } : {}),
               },
             },
-            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            deliverAs === "passive"
+              ? { triggerTurn: false }
+              : { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
             record,
           );
           await options.transaction?.revalidate(token, "after-send");
@@ -2172,37 +2181,43 @@ export async function verifyRemoteChiefAuthority(
   return true;
 }
 
-export async function leadSupervisorState<S, A>(
+export async function leadSupervisorState(
   ctx: ExtensionContext,
   host: {
-    currentWorktreeScope(ctx: ExtensionContext): Promise<S | undefined>;
-    projectAssignmentForScope(scope: S, sessionId: string): A | undefined;
-    currentManager(
+    workspaceId(): string | undefined;
+    resolveEffectiveSupervisor(
       ctx: ExtensionContext,
-      scope?: S | null,
-    ): Promise<unknown | undefined>;
-    currentChiefAuthority(
-      ctx: ExtensionContext,
-      failOnVerificationError?: boolean,
-    ): Promise<unknown | undefined>;
+      sessionId: string,
+      workspaceId: string,
+    ): Promise<
+      | { kind: "assigned" }
+      | { kind: "manager" }
+      | { kind: "chief" }
+      | { kind: "none" }
+    >;
+    currentManager(ctx: ExtensionContext): Promise<unknown | undefined>;
   },
 ): Promise<string> {
   try {
-    const scope = await host.currentWorktreeScope(ctx);
-    const assignment = scope
-      ? host.projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
-      : undefined;
-    if (assignment) {
+    const workspaceId = host.workspaceId();
+    if (!workspaceId) throw new Error("Lead workspace is unavailable");
+    const supervisor = await host.resolveEffectiveSupervisor(
+      ctx,
+      ctx.sessionManager.getSessionId(),
+      workspaceId,
+    );
+    if (supervisor.kind === "assigned") {
       try {
-        if (await host.currentManager(ctx, scope))
+        if (await host.currentManager(ctx))
           return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
       } catch {
         return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
       }
       return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
     }
-    const chief = await host.currentChiefAuthority(ctx, true);
-    if (chief)
+    if (supervisor.kind === "manager")
+      return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
+    if (supervisor.kind === "chief")
       return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
     return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use message_supervisor until a supervisor is available\n</supervisor_state>`;
   } catch {
@@ -2221,6 +2236,7 @@ export function supervisorStateMessage(
 }
 
 export type SupervisedLead = {
+  relationship?: "assigned" | "supervised";
   lead: string;
   branch?: string;
   herdRunStartedAt?: number;

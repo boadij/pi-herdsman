@@ -10,8 +10,8 @@ Those relationships intentionally do not collapse into one global Agent tree.
 ```mermaid
 flowchart TD
     C[Chief] -->|supervises| M[Manager]
-    M -->|controls assigned Lead| L1[Lead]
-    C -->|supervises unassigned Lead| L2[Lead]
+    M -->|controls assigned Lead; supervises ordinary Lead| L1[Lead]
+    C -->|supervises ordinary Lead without project Manager| L2[Lead]
     L1 -->|owns| A1[Agent]
     A1 -->|may own| A2[Agent]
     L2 -->|owns| A3[Agent]
@@ -21,14 +21,19 @@ The same model in text:
 
 ```text
 supervision: Chief -> Manager -> assigned Lead
-             Chief ------------> ordinary Lead
+             Manager ---------> ordinary Lead in project group
+             Chief ------------> ordinary Lead without project Manager
 ownership:          Lead -> Agent -> Agent
 ```
 
-Chief directly supervises ordinary, unassigned Leads even when an active
-Manager shares their project scope. A Lead is managed by the Manager role only
-when exactly one current `ProjectAssignment` for the repository names its exact
-Pi session. A Chief never gains Agent ownership through supervision.
+An ordinary Lead in a verified project worktree group has the active project
+Manager as its supervisor; otherwise Chief supervises it when eligible. A Lead
+is managed for project execution only when exactly one current
+`ProjectAssignment` for the repository names its exact Pi session. Manager
+supervision of an ordinary Lead permits bounded discovery and communication
+only, not execution control, private inspection, Agent ownership, or automatic
+project-result delivery. A Chief never gains Agent ownership through
+supervision.
 
 ### Lead
 
@@ -53,21 +58,23 @@ the session as ordinary `Orchestrate` execution.
 ### Manager
 
 Manager is a dedicated project-coordination mode. It controls only Leads named
-by current `ProjectAssignment` records for its repository and has no `agent`
-capability of its own. Physical scope or worktree membership alone does not
-make a Lead a Manager report. Its reserved `manager` definition customizes
+by current `ProjectAssignment` records for its repository, and additionally
+supervises eligible ordinary Leads throughout its verified worktree group for
+bounded discovery and communication. Ordinary Leads allow message-only staff
+access. Manager has no `agent` capability of its own. Its reserved `manager` definition customizes
 instructions and ordinary tool selection, not project assignments or authority.
 
-Project execution belongs to Leads and their Agent trees. Manager can inspect
-and communicate with direct Leads, but it does not acquire ownership of their
-Agents.
+Project execution belongs to assigned Leads and their Agent trees. Manager can
+inspect assigned Leads and communicate with all direct Leads, but it does not
+acquire ownership of their Agents.
 
 ### Chief
 
 Chief is an optional workspace-neutral supervision mode for one Herdr runtime.
-It acts on current Managers and on ordinary unassigned Leads, including those
-whose project scope has an active Manager. Assigned Leads remain under the
-Manager role even if its process is unavailable.
+It acts on current Managers and ordinary Leads without an active project
+Manager. Ordinary Leads with a verified active project Manager are nested
+under that Manager, not actionable Chief reports. Assigned Leads remain under
+the Manager role even if its process is unavailable.
 
 Chief can observe bounded descendant summaries but acts only on direct reports.
 Its reserved `chief` definition customizes instructions and ordinary tool
@@ -162,20 +169,21 @@ live in [Staff tools](../reference/staff.md).
 
 Coordination crosses one authority edge at a time:
 
-| Direction | Interface                                   | Boundary                             |
-| --------- | ------------------------------------------- | ------------------------------------ |
-| Up        | `message_supervisor` / automatic results    | Lead -> Manager                      |
-| Down      | `message_staff` / project operations        | Manager -> Lead                      |
-| Up        | `message_supervisor`                        | Lead -> Chief; Manager -> Chief      |
-| Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager |
-| Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent       |
+| Direction | Interface                                   | Boundary                                            |
+| --------- | ------------------------------------------- | --------------------------------------------------- |
+| Up        | `message_supervisor` / automatic results    | Assigned Lead -> Manager                            |
+| Down      | `message_staff` / project operations        | Manager -> assigned Lead                            |
+| Up        | `message_supervisor`                        | Ordinary Lead -> Manager or Chief; Manager -> Chief |
+| Down      | `message_staff`                             | Manager -> ordinary Lead (passive)                  |
+| Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager                |
+| Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent                      |
 
 A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through
 intermediate coordinators.
 
-Managed Leads use nonblocking `message_supervisor` for timely coordination
-with Manager; Manager uses nonblocking `message_staff` for requests,
+Leads use nonblocking `message_supervisor` for timely coordination with their
+effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait
 belongs in the automatic result. Legitimate messages and later results are not
 deduplicated. Manager has direct-report and project tools; Chief has
@@ -189,7 +197,8 @@ Agents whose exact persisted identities can be verified.
 
 When the current session is an active Manager, stats additionally cover the
 Lead sessions named by its current durable project assignments, along with each
-included Lead's transitively owned managed-Agent sessions. The Manager's own
+included Lead's transitively owned managed-Agent sessions. Ordinary supervised
+Leads are not included. The Manager's own
 directly owned Agents remain included as well. Durable assignment identity
 selects managed Leads; live herdr topology is not required, so a paused Lead or
 missing worktree does not by itself exclude a still-assigned project. Retired

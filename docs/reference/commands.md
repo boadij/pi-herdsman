@@ -278,9 +278,10 @@ becomes idle and then opens the overview; a failed refresh keeps the previous
 profile. Chief accepts global definition overrides only and defaults to staff
 coordination tools. `/chief leave` exits the mode.
 A Manager cannot activate Chief. Chief's staff roster contains active
-Managers and ordinary unassigned Leads, including those in a project scope
-with an active Manager. A Manager's roster contains only live exact Leads named
-by its current project assignments.
+Managers and ordinary Leads without an active project Manager. Ordinary Leads
+in a Manager's verified worktree group appear under that Manager instead. A
+Manager's roster contains eligible project-group Leads; exact current
+assignments alone grant project execution authority.
 
 In Herdr, Herdsman best-effort names an eligible Lead controller's tab by its
 current role: `Lead`, `Managed Lead`, `Manager`, or `Chief`. `Managed Lead`

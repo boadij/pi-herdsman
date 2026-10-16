@@ -347,10 +347,13 @@ delegating parent that is merely waiting for its direct children.
 ## Supervisor and staff tools
 
 Ordinary leads own their complete herd, including every agent beneath them. The
-Chief supervises ordinary unassigned Leads and never changes ownership.
-Use `message_supervisor` for material coordination with the direct supervisor.
-Managed Leads contact their assigned Manager; ordinary Leads and Managers
-contact Chief. It is nonblocking and supports timely questions, clarifications,
+Chief supervises ordinary Leads only when they have no active project Manager
+and never changes ownership. An active project Manager supervises eligible
+ordinary Leads throughout its verified worktree group for message-only
+coordination; project execution remains assignment-bound. Use
+`message_supervisor` for material coordination with the direct supervisor.
+Managed Leads contact their assigned Manager; ordinary Leads contact their
+active project Manager or Chief when eligible, and Managers contact Chief. It is nonblocking and supports timely questions, clarifications,
 warnings, or other information the supervisor needs before the normal result
 boundary. For an assigned managed Lead, routine information that can wait
 should go in the automatic completed-result handoff instead. The Lead may choose

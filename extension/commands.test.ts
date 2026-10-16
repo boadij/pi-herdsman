@@ -4554,7 +4554,7 @@ for (const projectTrusted of [true, false])
   test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
     managerDelegateAssignmentTest(t, projectTrusted));
 
-test("Manager reports only assignments and Chief keeps unassigned Leads in scope", async () => {
+test("Manager supervises project Leads while Chief keeps only unclaimed Leads in scope", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -4683,9 +4683,32 @@ test("Manager reports only assignments and Chief keeps unassigned Leads in scope
     );
     assert.deepEqual(
       managerListing.details.reports.map((report: any) => report.session),
-      [assignedLeadSession],
-      "shared project scope does not make an unassigned Lead a Manager report",
+      [assignedLeadSession, ordinaryLeadSession],
+      "all eligible Leads in the verified project group are Manager reports",
     );
+    assert.equal(managerListing.details.reports[0].relationship, "assigned");
+    assert.deepEqual(managerListing.details.reports[0].available_tools, [
+      "inspect_staff",
+      "message_staff",
+    ]);
+    assert.equal(managerListing.details.reports[1].relationship, "supervised");
+    assert.deepEqual(managerListing.details.reports[1].available_tools, [
+      "message_staff",
+    ]);
+    for (const toolName of ["inspect_staff", "read_staff_transcript"]) {
+      await assert.rejects(
+        manager.tools
+          .find((tool) => tool.name === toolName)!
+          .execute(
+            "ordinary",
+            { session: ordinaryLeadSession },
+            undefined,
+            undefined,
+            fakeContext(),
+          ),
+        /does not currently allow/,
+      );
+    }
     const duplicatePath = projectAssignmentPath(
       supervisionRuntime(),
       "repo-key",
@@ -4761,15 +4784,18 @@ test("Manager reports only assignments and Chief keeps unassigned Leads in scope
         chiefCtx,
       );
       assert.equal(listed.details.self.role, "chief");
-      assert.equal(listed.details.reports.length, 2);
+      assert.equal(listed.details.reports.length, 1);
       assert.equal(listed.details.reports[0].role, "manager");
       assert.equal(listed.details.reports[0].session, LEAD_SESSION_ID);
       assert.deepEqual(
         listed.details.reports[0].leads.map((lead: any) => lead.session),
-        [assignedLeadSession],
+        [assignedLeadSession, ordinaryLeadSession],
       );
-      assert.equal(listed.details.reports[1].role, "lead");
-      assert.equal(listed.details.reports[1].session, ordinaryLeadSession);
+      assert.deepEqual(listed.details.reports[0].lead_counts, {
+        active: 0,
+        blocked: 0,
+        total: 2,
+      });
       await assert.rejects(
         chief.tools
           .find((tool) => tool.name === "message_staff")!

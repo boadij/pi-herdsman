@@ -2,14 +2,15 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`message_supervisor` is the coordination operation for ordinary Leads and
-Managers. A managed project Lead contacts its assigned Manager; an ordinary
-Lead and a Manager contact Chief. Managed Agents use `ask_owner` to contact
-their exact owner.
+`message_supervisor` is the coordination operation for Leads and Managers. An
+assigned project Lead contacts its Manager through project messaging. An
+ordinary Lead in a verified project worktree group contacts its active project
+Manager; otherwise it contacts Chief when available. A Manager contacts Chief.
+Managed Agents use `ask_owner` to contact their exact owner.
 
-An ordinary Lead without a verified Chief continues independently. A managed
-Lead's assigned Manager remains its authority even when no Manager process is
-active. Messages are nonblocking coordination and do not alter project
+An ordinary Lead without a verified supervisor continues independently. An
+assigned Lead's Manager role remains its authority even when no Manager process
+is active. Messages are nonblocking coordination and do not alter project
 assignment state.
 
 Direct-supervisor delivery validates the current authority. Ambiguous or
@@ -39,8 +40,8 @@ completed-result handoff should go there instead. Do not message solely to
 duplicate that result. Ordinary Leads and Managers have no automatic result
 handoff to Chief. Separate messages and results are not deduplicated.
 
-An ordinary Lead without a verified Chief should continue independently until
-a supervisor is available. Manually continuing the exact assigned Pi session
+An ordinary Lead without a verified active project Manager or Chief should
+continue independently until a supervisor is available. Manually continuing the exact assigned Pi session
 does not release management; `managed-lead` is launch policy, not authority.
 
 Messages are bounded. `files` accepts ordinary
@@ -52,7 +53,10 @@ recipient to forward them.
 ## Delivery
 
 Direct-supervisor messages are queued for the exact current recipient and
-validated against current authority before delivery.
+validated against current authority before delivery. A Manager message to an
+ordinary Lead is appended passively when the Lead is idle and remains queued
+while it is active; it does not steer or start a model turn. Assigned Lead
+delivery retains existing steering/follow-up behavior.
 
 ## See also
 

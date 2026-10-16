@@ -11,20 +11,22 @@ Accepted
 
 ## Decision
 
-`ProjectAssignment` is the durable Manager-to-Lead authority edge. A Lead is
-managed by the project Manager role only when exactly one current assignment
-for the repository names that exact Pi session. Manager staff operations target
-only exact, live assigned Leads; physical Herdr visibility, workspace or
-worktree membership, and the Lead's launch definition do not establish
-authority. Missing or ambiguous assignment evidence fails closed.
+`ProjectAssignment` is the sole durable source of Manager authority over
+managed project execution. A Lead is assigned only when exactly one current
+assignment for the repository names that exact Pi session. Active Managers
+also supervise eligible ordinary Leads throughout their verified Herdr
+worktree group for bounded discovery and communication. This derived
+supervision grants no project assignment, lifecycle, Agent ownership,
+automatic result delivery, or execution-control authority. Missing or
+ambiguous assignment or topology evidence fails closed.
 
 The relationship belongs to the project Manager role, not an individual
 Manager process, so it survives Manager replacement. Lead ownership of its
 Agent tree remains separate from Manager supervision: Managers never own Lead
-Agents; `stop_lead` may stop the assigned Lead's owned Agent tree as part of
-stopping project execution. Chief supervises unassigned ordinary Leads,
-including those in the same project scope as an active Manager; assigned Leads
-do not fall back to Chief when Manager is unavailable.
+Agents; `stop_lead` may stop only an assigned Lead's owned Agent tree as part
+of stopping project execution. An ordinary Lead has one effective
+supervisor: its verified active project Manager, otherwise Chief when eligible.
+Assigned Leads do not fall back to Chief when Manager is unavailable.
 
 Every completed direct turn by an assigned Lead automatically returns its
 meaningful assistant response to the Manager role as a nonterminal project
@@ -72,8 +74,11 @@ state.
 
 ## Consequences
 
-- Manager reports and staff actions are assignment-only; an unassigned Lead in
-  the same physical scope remains a Chief report.
+- Manager reports include assigned Leads and eligible ordinary Leads in its
+  verified project worktree group. Ordinary reports allow communication only;
+  private inspection and project lifecycle actions remain assignment-bound.
+- An ordinary Lead with a verified active project Manager is not a Chief direct
+  report; Chief fallback applies only when Manager absence is verified.
 - An assigned Lead remains managed across Manager absence, replacement, user
   interaction, and manual continuation until takeover or successful Herdr
   worktree removal.

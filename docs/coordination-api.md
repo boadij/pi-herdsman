@@ -76,9 +76,9 @@ preserves it. A retired assignment cannot be resumed, but new work may reuse
 its remaining branch.
 
 An assigned project Lead uses `message_supervisor` for timely Manager
-coordination; an ordinary Lead and a Manager use it to contact Chief. An
-unassigned Lead routes only to Chief when verified, never to a same-scope
-Manager.
+coordination; an ordinary Lead in a verified project worktree group routes to
+its active Manager, otherwise to Chief when verified. A Manager uses the tool
+to contact Chief. An assigned Lead never falls back to Chief.
 
 ## Same-role peers
 

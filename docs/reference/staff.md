@@ -3,10 +3,11 @@
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
 Staff tools are available to active Chief and Manager sessions. Both roles can
-use `list_staff`, `inspect_staff`, `read_staff_transcript`, and
-`message_staff`. Manager additionally has the branch-based project operations
-`delegate_project`, `resume_project`, `stop_lead`, and `remove_worktree`.
-Chief has no project-operation tools.
+use `list_staff` and `message_staff`. `inspect_staff` and
+`read_staff_transcript` are available for Chief direct reports and Manager's
+assigned Leads, not ordinary Manager-supervised Leads. Manager additionally has
+the branch-based project operations `delegate_project`, `resume_project`,
+`stop_lead`, and `remove_worktree`. Chief has no project-operation tools.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `list_staff`. Project actions use the Git branch.
@@ -15,18 +16,22 @@ and direct-report authority.
 
 ## Direct-report projection
 
-Chief sees active Managers and ordinary unassigned Leads, even when an active
-Manager shares their project scope. A Manager's nested assigned Leads may be
-summarized for Chief but are not Chief targets. Manager sees only live exact
-Leads named by current `ProjectAssignment` records for its repository; physical
-scope, worktree membership, or which Manager created a Lead does not establish
-authority. It may observe descendant Agent counts but cannot target another
-Lead's Agents. Ambiguous duplicate assignments do not produce an actionable
-report.
+Chief sees active Managers and ordinary Leads without an active project
+Manager. Assigned Leads are never Chief targets. A Manager's nested assigned
+and ordinary supervised Leads may be summarized for Chief but are not Chief
+targets. Manager sees eligible Leads throughout its verified project worktree
+group. A current `ProjectAssignment` marks an assigned report; an ordinary
+report is derived supervision only and permits `message_staff`, not inspection,
+transcript access, steering, stopping, or project lifecycle operations.
+Ordinary Manager-supervised Leads are excluded from Chief's actionable roster.
+Ambiguous duplicate assignments or unverified topology do not produce an
+actionable report.
 
 A direct-report record can expose the exact `session`, presentation-only
 `display_name`, runtime state, Agent counts, `available_tools`, and optional
-branch provenance. Use `session` as the target, never `display_name`. The
+branch provenance. Manager reports also include a derived `relationship`
+value of `assigned` or `supervised`. Use `session` as the target, never
+`display_name`. The
 automatic supervision snapshot is bounded state, not terminal or transcript
 evidence. Use `list_staff` when a fresh complete roster is materially needed.
 
@@ -82,9 +87,12 @@ are excluded; the internal session-file path is not returned.
 ```
 
 Sends an asynchronous durable message to the exact current direct report. The
-message is queued by Herdsman before submission. If the report is actively
-running, supervisor direction uses Pi's cooperative steering lane; steering
-does not abort the current operation or interrupt an in-flight tool call.
+message is queued by Herdsman before submission. If an assigned report is
+actively running, supervisor direction uses Pi's cooperative steering lane;
+steering does not abort the current operation or interrupt an in-flight tool
+call. Messages to ordinary Manager-supervised Leads are passive: they are
+appended without starting a turn when idle and remain queued while the Lead is
+active.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
 result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden

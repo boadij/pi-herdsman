@@ -566,9 +566,11 @@ type LeadCoordinationHost = LeadCoordinationBaseHost & {
   activeRole(): SessionRole;
   HERDSMAN_BUILD: RuntimeBuild;
   leadInstanceId(): string;
+  workspaceId(): string | undefined;
   currentManager: LeadRoleTransitionRuntime["currentManager"];
   currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
   projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
+  resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
   publishProjectMessage: LeadRoleTransitionRuntime["publishProjectMessage"];
   currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
   currentSupervisor: LeadRoleTransitionRuntime["currentSupervisor"];
@@ -636,9 +638,11 @@ type LeadInboxHost = LeadInboxBaseHost & {
   assertCurrentLeadCoordination(ctx: ExtensionContext): void;
   currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
   currentManager: LeadRoleTransitionRuntime["currentManager"];
+  workspaceId(): string | undefined;
   managerForScope: LeadRoleTransitionRuntime["managerForScope"];
   currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
   projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
+  resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
   currentPeerPresenceValid(ctx: ExtensionContext): Promise<boolean>;
   drainProjectMessages(ctx: ExtensionContext): Promise<number>;
 };
@@ -655,6 +659,7 @@ type LeadSupervisionHost = {
   currentChief: LeadRoleTransitionRuntime["currentChief"];
   currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
   currentManager: LeadRoleTransitionRuntime["currentManager"];
+  resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
   formatContext: typeof import("./presentation.ts").formatSupervisionContext;
   formatSupervisionNotification: typeof import("./presentation.ts").formatSupervisionNotification;
   herdrSessionId: typeof import("./herdr.ts").herdrSessionId;
@@ -2422,6 +2427,7 @@ export function registerLeadRuntime(
     identityRuntime.liveLead(...args);
   const coordinationServices = {
     ...options.coordinationHost,
+    workspaceId: () => options.roleTransitionHost.workspaceId(),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
@@ -2432,6 +2438,9 @@ export function registerLeadRuntime(
     projectAssignmentForScope: (
       ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
     ) => roleTransitions.projectAssignmentForScope(...args),
+    resolveEffectiveSupervisor: (
+      ...args: Parameters<typeof roleTransitions.resolveEffectiveSupervisor>
+    ) => roleTransitions.resolveEffectiveSupervisor(...args),
     publishProjectMessage: (
       ...args: Parameters<typeof roleTransitions.publishProjectMessage>
     ) => roleTransitions.publishProjectMessage(...args),
@@ -2465,6 +2474,9 @@ export function registerLeadRuntime(
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
+    resolveEffectiveSupervisor: (
+      ...args: Parameters<typeof roleTransitions.resolveEffectiveSupervisor>
+    ) => roleTransitions.resolveEffectiveSupervisor(...args),
     reconcileProjectAssignments: (
       ...args: Parameters<typeof roleTransitions.reconcileProjectAssignments>
     ) => roleTransitions.reconcileProjectAssignments(...args),
@@ -2984,6 +2996,7 @@ export function registerLeadRuntime(
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
+    workspaceId: () => options.roleTransitionHost.workspaceId(),
     managerForScope: (
       ...args: Parameters<typeof roleTransitions.managerForScope>
     ) => roleTransitions.managerForScope(...args),
@@ -2992,6 +3005,9 @@ export function registerLeadRuntime(
     projectAssignmentForScope: (
       ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
     ) => roleTransitions.projectAssignmentForScope(...args),
+    resolveEffectiveSupervisor: (
+      ...args: Parameters<typeof roleTransitions.resolveEffectiveSupervisor>
+    ) => roleTransitions.resolveEffectiveSupervisor(...args),
     currentPeerPresenceValid: (ctx: ExtensionContext) =>
       coordinationRuntime.currentPeerPresenceValid(ctx),
     drainProjectMessages: (ctx: ExtensionContext) =>
@@ -4098,11 +4114,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const sessions = new Set(assignments.map((assignment) => assignment.id));
       if (sessions.size !== assignments.length)
         throw new Error("Multiple project assignments match a Lead session");
-      return snapshot.leads.filter(
-        (lead) =>
-          sessions.has(lead.lead) &&
-          scope.workspaceIds.includes(lead.workspaceId),
-      );
+      return snapshot.leads
+        .filter((lead) => scope.workspaceIds.includes(lead.workspaceId))
+        .map((lead) => ({
+          ...lead,
+          relationship: sessions.has(lead.lead)
+            ? ("assigned" as const)
+            : ("supervised" as const),
+          availableActions: sessions.has(lead.lead)
+            ? lead.availableActions
+            : (["message"] as const),
+        }));
     }
     if (host.activeRole() !== "chief")
       throw new Error("Staff is available only to an active supervisor");
@@ -4139,11 +4161,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           lead.workspaceId,
           ctx.signal,
         );
-        for (const assignment of host.listProjectAssignments(
-          host.supervisionRuntime(),
-          scope.repoKey,
-        ))
-          managerLeadSessions.add(assignment.id);
+        const supervisor = await host.resolveEffectiveSupervisor(
+          ctx,
+          lead.lead,
+          lead.workspaceId,
+          scope,
+        );
+        if (supervisor.kind !== "chief") managerLeadSessions.add(lead.lead);
       } catch {
         // Unverifiable worktree scope cannot produce Chief direct authority.
         managerLeadSessions.add(lead.lead);
@@ -4185,10 +4209,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         scope.primaryWorkspaceId !== descriptor.workspaceId
       )
         continue;
-      const leads = allLeads.filter(
-        (lead) =>
-          assignedSessions.has(lead.lead) &&
-          scope.workspaceIds.includes(lead.workspaceId),
+      const effectiveManager = await host.currentManager(ctx, scope);
+      if (
+        !effectiveManager ||
+        !host.sameManagerDescriptor(effectiveManager, descriptor)
+      )
+        continue;
+      const leads = allLeads.filter((lead) =>
+        scope.workspaceIds.includes(lead.workspaceId),
       );
       for (const lead of leads) managerLeadSessions.add(lead.lead);
       const ownerSessions = new Set([descriptor.piSessionId]);
@@ -4593,7 +4621,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           status: string;
           liveLead: boolean;
         }
-      | { kind: "lead"; session: string; label: string };
+      | {
+          kind: "lead";
+          session: string;
+          label: string;
+          relationship?: "assigned" | "supervised";
+        };
     let selected: string | undefined;
     while (true) {
       const expectedGeneration = generation(ctx);
@@ -4652,8 +4685,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                         }
                       : {
                           value: `lead:${entry.lead.lead}`,
-                          label: entry.lead.branch ?? entry.lead.displayName,
-                          description: entry.lead.runtimeState,
+                          label:
+                            entry.lead.relationship === "supervised"
+                              ? entry.lead.displayName
+                              : (entry.lead.branch ?? entry.lead.displayName),
+                          description:
+                            entry.lead.relationship === "supervised"
+                              ? `${entry.lead.runtimeState} · supervised`
+                              : entry.lead.runtimeState,
                         },
                   )
                 : leads.map((lead) => ({
@@ -4701,12 +4740,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 });
                 return;
               }
+              const leadSession = item.value.startsWith("lead:")
+                ? item.value.slice("lead:".length)
+                : item.value;
+              const report = host
+                .presentationReports(snapshot)
+                .find((candidate) => candidate.lead === leadSession);
               finish({
                 kind: "lead",
-                session: item.value.startsWith("lead:")
-                  ? item.value.slice("lead:".length)
-                  : item.value,
+                session: leadSession,
                 label: item.label,
+                ...(report?.relationship
+                  ? { relationship: report.relationship }
+                  : {}),
               });
             };
             list.onCancel = finish;
@@ -4870,6 +4916,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 mode = "peek";
                 showPeek();
                 tui.requestRender();
+                if (
+                  host.activeRole() === "manager" &&
+                  lead.relationship === "supervised"
+                )
+                  return;
                 void host
                   .inspectHerdrAgent(
                     host.pi,
@@ -4924,7 +4975,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         if (host.activeRole() === "manager") {
           const action = await uiActions.selectMenu(ctx, selection.label, [
             { value: "focus", label: "Focus" },
-            { value: "stop", label: "Stop Lead" },
+            ...(selection.relationship === "supervised"
+              ? []
+              : [{ value: "stop", label: "Stop Lead" }]),
           ]);
           if (generation(ctx) !== expectedGeneration) return;
           if (!action) continue;
@@ -7351,6 +7404,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         reports: reports.map((report: any) => ({
           role: activeRole() === "chief" ? report.role : "lead",
           session: reportSession(report),
+          ...(activeRole() === "manager"
+            ? { relationship: report.relationship ?? "assigned" }
+            : {}),
           display_name: report.displayName,
           runtime_state: report.runtimeState,
           agent_counts: report.agentCounts,
@@ -7512,6 +7568,23 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Chief lease is no longer active");
     const recordId = randomUUID();
     const createdAt = Date.now();
+    const assignmentMatches = (candidate: typeof lead) => {
+      if (activeRole() !== "manager") return undefined;
+      const assignments = host.findProjectAssignmentBySession(
+        supervisionRuntime(),
+        host.managerLease()!.descriptor.repoKey,
+        reportSession(candidate),
+      );
+      if (assignments.length > 1)
+        throw new Error("Multiple project assignments match a Lead session");
+      return assignments[0];
+    };
+    const initialAssignment = assignmentMatches(lead);
+    if (
+      activeRole() === "manager" &&
+      (lead.relationship === "assigned") !== !!initialAssignment
+    )
+      throw new Error("Lead assignment changed before the message was queued");
     const prepared = await prepareCoordinationInput(
       ctx,
       params.message,
@@ -7527,6 +7600,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         fromSessionId: finalChief.piSessionId,
         toSessionId: reportSession(lead),
         leadSessionId: reportSession(lead),
+        ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
         text: candidate,
         ...(resultBindings.length
           ? { resultBindings: [...resultBindings] }
@@ -7543,6 +7617,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const writeLead = (await directReports(ctx)).find(
       (candidate: any) => reportSession(candidate) === params.session,
     );
+    const writeAssignment = writeLead
+      ? assignmentMatches(writeLead)
+      : undefined;
     if (
       !writeChief ||
       writeChief.leaseId !== finalChief.leaseId ||
@@ -7551,6 +7628,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       !writeLead.availableActions.includes(params.action)
     )
       throw new Error("Lead or Chief changed before the message was queued");
+    if (
+      (writeLead.relationship === "assigned") !== !!writeAssignment ||
+      writeAssignment?.branch !== initialAssignment?.branch
+    )
+      throw new Error("Lead assignment changed before the message was queued");
     const targetState = readLeadCoordinationState(
       supervisionRuntime(),
       reportSession(writeLead),
@@ -7570,6 +7652,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       fromSessionId: finalChief.piSessionId,
       toSessionId: reportSession(lead),
       leadSessionId: reportSession(lead),
+      ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
       text: prepared.text,
       ...(prepared.resultBindings.length
         ? { resultBindings: prepared.resultBindings }
@@ -7692,8 +7775,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     runHerdr,
     leadInstanceId,
     currentManager,
+    workspaceId,
     currentWorktreeScope,
     projectAssignmentForScope,
+    resolveEffectiveSupervisor,
     currentChiefAuthority,
     currentSupervisor,
     sameManagerDescriptor,
@@ -7989,10 +8074,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
 
   const leadSupervisorState = (ctx: ExtensionContext): Promise<string> =>
     resolveLeadSupervisorState(ctx, {
-      currentWorktreeScope,
-      projectAssignmentForScope,
+      workspaceId,
+      resolveEffectiveSupervisor,
       currentManager,
-      currentChiefAuthority,
     });
 
   const livePeerLead = async (
@@ -8850,12 +8934,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           supervisionRuntime(),
           record.leadSessionId,
         );
+        const supervisor = await host.resolveEffectiveSupervisor(
+          ctx,
+          record.fromSessionId,
+          leads[0].workspace_id,
+          scope,
+        );
         return (
           !!state &&
           (state.role ?? "lead") === "lead" &&
-          !(
-            scope && host.projectAssignmentForScope(scope, record.fromSessionId)
-          )
+          supervisor.kind === "chief" &&
+          supervisor.chief.piSessionId === chief.piSessionId &&
+          supervisor.chief.leaseId === chief.leaseId
         );
       }
       if (record.kind !== "manager_message") return false;
@@ -8895,11 +8985,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       if (
         !manager ||
         record.leaseId !== manager.leaseId ||
+        record.fromSessionId !== manager.piSessionId ||
         record.kind !== "lead_message" ||
         record.leadSessionId !== record.fromSessionId
       )
         return false;
       const leads = await liveLead(ctx, record.fromSessionId);
+      if (leads.length !== 1) return false;
       const scope = await worktreeGroupScope(
         pi,
         ctx,
@@ -8910,10 +9002,19 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         supervisionRuntime(),
         record.leadSessionId,
       );
+      const supervisor = await host.resolveEffectiveSupervisor(
+        ctx,
+        record.fromSessionId,
+        leads[0].workspace_id,
+        scope,
+      );
       return (
-        leads.filter((item: any) =>
-          scope.workspaceIds.includes(item.workspace_id),
-        ).length === 1 &&
+        scope.workspaceIds.includes(leads[0].workspace_id) &&
+        supervisor.kind === "manager" &&
+        supervisor.manager.piSessionId === manager.piSessionId &&
+        supervisor.manager.leaseId === manager.leaseId &&
+        scope.primaryWorkspaceId === manager.workspaceId &&
+        scope.repoKey === manager.repoKey &&
         !!state &&
         (state.role ?? "lead") === "lead"
       );
@@ -8921,19 +9022,45 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     if (activeRole() !== "lead" || leadRuntime.roleSuspended) return false;
     if (record.kind === "chief_message") {
       const chief = await currentChiefAuthority(ctx);
+      const workspaceId = host.workspaceId();
+      if (!workspaceId) return false;
+      const supervisor = await host.resolveEffectiveSupervisor(
+        ctx,
+        sessionId,
+        workspaceId,
+      );
       const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
       return (
         !!chief &&
+        supervisor.kind === "chief" &&
+        supervisor.chief.piSessionId === chief.piSessionId &&
+        supervisor.chief.leaseId === chief.leaseId &&
         !!state &&
         chief.piSessionId === record.fromSessionId &&
         chief.leaseId === record.leaseId &&
         record.leadSessionId === sessionId
       );
     }
-    const scope = await host.currentWorktreeScope(ctx);
-    if (!scope) throw new Error("Project scope cannot be verified");
-    if (!host.projectAssignmentForScope(scope, sessionId)) return false;
-    const manager = await currentManager(ctx, scope);
+    if (record.kind !== "manager_message") return false;
+    const workspaceId = host.workspaceId();
+    if (!workspaceId) throw new Error("Project scope cannot be verified");
+    const supervisor = await host.resolveEffectiveSupervisor(
+      ctx,
+      sessionId,
+      workspaceId,
+    );
+    const manager =
+      supervisor.kind === "assigned"
+        ? await currentManager(ctx, supervisor.scope)
+        : supervisor.kind === "manager"
+          ? supervisor.manager
+          : undefined;
+    if (
+      supervisor.kind === "assigned"
+        ? supervisor.assignment.branch !== record.branch
+        : record.branch !== undefined || supervisor.kind !== "manager"
+    )
+      return false;
     let state: ReturnType<typeof readLeadCoordinationState>;
     try {
       state = readLeadCoordinationState(supervisionRuntime(), sessionId);
@@ -9024,7 +9151,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
-        deliveryMode: (record: ChiefMessageRecord) => {
+        deliveryMode: async (record: ChiefMessageRecord) => {
           const attempted = submittedAt.get(record.id);
           if (attempted !== undefined && !messageDelivered(ctx, record)) {
             const elapsed = Date.now() - attempted;
@@ -9038,10 +9165,31 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
           }
           const role = activeRole();
+          if (role === "lead" && record.kind === "manager_message") {
+            let authorized: boolean;
+            try {
+              authorized = await authorizeChiefRecord(
+                record,
+                ctx,
+                verifyLiveChief,
+              );
+            } catch {
+              return undefined;
+            }
+            if (!authorized) return "passive";
+            const workspaceId = host.workspaceId();
+            if (!workspaceId) return undefined;
+            const relation = await host.resolveEffectiveSupervisor(
+              ctx,
+              ctx.sessionManager.getSessionId(),
+              workspaceId,
+            );
+            const assigned = relation.kind === "assigned";
+            if (!assigned) return ctx.isIdle() ? "passive" : undefined;
+            return "steer";
+          }
           const supervisorDownlink =
-            (role === "lead" &&
-              (record.kind === "chief_message" ||
-                record.kind === "manager_message")) ||
+            (role === "lead" && record.kind === "chief_message") ||
             (role === "manager" && record.kind === "chief_message");
 
           if (supervisorDownlink) return "steer";
@@ -9180,6 +9328,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
             }
             importResultBindings(pi, ctx, resultBindings, record.kind);
             if (messageDelivered(ctx, record)) return;
+            if (
+              record.kind === "chief_message" ||
+              record.kind === "manager_message" ||
+              record.kind === "lead_message"
+            ) {
+              // Presentation lookups above may yield; authorize again at the
+              // submission boundary so changed relationships cannot deliver.
+              if (!(await authorizeChiefRecord(record, ctx, verifyLiveChief)))
+                throw new Error(
+                  "Coordination authority changed before delivery",
+                );
+            }
             let result: void;
             try {
               result = pi.sendMessage(payload, options);
@@ -9994,7 +10154,9 @@ export function createLeadRoleTransitions(
       host.supervisionRuntime(),
       scope.primaryWorkspaceId,
     );
-    if (!status || !status.live) return undefined;
+    if (!status) return undefined;
+    if (!status.live)
+      throw new Error("Unable to verify Manager supervision lease");
     if (status.descriptor.repoKey !== scope.repoKey)
       throw new Error("Manager authority does not match project");
     return status.descriptor;
@@ -10129,17 +10291,55 @@ export function createLeadRoleTransitions(
       return undefined;
     }
   };
+  const resolveEffectiveSupervisor = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    workspaceId: string,
+    verifiedScope?: WorktreeGroupScope,
+  ) => {
+    let scope = verifiedScope;
+    if (!scope) {
+      try {
+        scope = await host.worktreeGroupScope(ctx, workspaceId, ctx.signal);
+      } catch (error) {
+        if (!(
+          error instanceof OperationError &&
+          error.detail.details?.herdrCode === "not_git_worktree"
+        ))
+          throw error;
+        const chief = await currentChiefAuthority(ctx, true);
+        return chief
+          ? { kind: "chief" as const, chief, scope: undefined }
+          : { kind: "none" as const, scope: undefined };
+      }
+    }
+    const assignment = projectAssignmentForScope(scope, sessionId);
+    if (assignment) return { kind: "assigned" as const, assignment, scope };
+    const manager = await currentManager(ctx, scope);
+    if (manager) return { kind: "manager" as const, manager, scope };
+    const chief = await currentChiefAuthority(ctx, true);
+    return chief
+      ? { kind: "chief" as const, chief, scope }
+      : { kind: "none" as const, scope };
+  };
   const currentSupervisor = async (ctx: ExtensionContext) => {
     if (activeLeadRole(state) === "manager")
       return host.currentChiefAuthority(ctx);
     if (activeLeadRole(state) !== "lead") return undefined;
     const scope = await currentWorktreeScope(ctx);
-    const assignment = scope
-      ? projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
-      : undefined;
-    return assignment
-      ? currentManager(ctx, scope)
-      : host.currentChiefAuthority(ctx);
+    if (!scope) return host.currentChiefAuthority(ctx);
+    const workspaceId = host.workspaceId();
+    if (!workspaceId) return host.currentChiefAuthority(ctx);
+    const supervisor = await resolveEffectiveSupervisor(
+      ctx,
+      ctx.sessionManager.getSessionId(),
+      workspaceId,
+      scope,
+    );
+    if (supervisor.kind === "assigned")
+      return currentManager(ctx, supervisor.scope);
+    if (supervisor.kind === "manager") return supervisor.manager;
+    return supervisor.kind === "chief" ? supervisor.chief : undefined;
   };
   const removeProjectAssignmentState = (
     assignment: ProjectAssignment,
@@ -11270,6 +11470,7 @@ export function createLeadRoleTransitions(
     currentChief,
     currentChiefAuthority,
     currentSupervisor,
+    resolveEffectiveSupervisor,
     takeover,
     retireRemovedProjectWork,
     reconcileProjectAssignments,

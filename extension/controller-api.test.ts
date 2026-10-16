@@ -353,6 +353,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       fromSessionId: managerId,
       toSessionId: leadId,
       leadSessionId: leadId,
+      branch: "smoke/routing",
       text: "change direction now",
       createdAt: Date.now(),
     } as const;
@@ -485,6 +486,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
         fromSessionId: managerId,
         toSessionId: leadId,
         leadSessionId: leadId,
+        branch: "smoke/routing",
         text: staleText,
         createdAt: Date.now(),
       },
@@ -1400,7 +1402,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
           undefined,
           ctx,
         ),
-      /No active supervisor is available/,
+      /simulated Chief discovery failure/,
     );
     chiefDiscoveryFailure = false;
     writeFileSync(runtime.descriptor, "invalid Chief descriptor");
@@ -1425,7 +1427,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
           undefined,
           ctx,
         ),
-      /No active supervisor is available/,
+      /Unable to verify Chief descriptor/,
     );
     chief.release();
     assert.equal((await observe())?.message, undefined);

@@ -8,8 +8,7 @@ agents plus controller-local transient starting assignments.
 It does not replace mailbox assignment/result authority.
 
 An active Chief receives a separate supervision widget for its current direct
-reports (Managers and ordinary unassigned Leads, including those sharing
-project scope with an active Manager). It
+reports (Managers and ordinary Leads without an active project Manager). It
 shows both categories together when both exist, not managed Agent rows. An
 active Manager receives a work-centric branch projection rather than the
 ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
@@ -17,9 +16,9 @@ is documented in the [command reference](commands.md#project-manager-and-chief).
 Agent widgets are never combined.
 
 The Chief supervision tree uses `├─` for non-final visible reports and `└─` for the
-final visible report. A Manager's observational assigned Lead/project work
-appears as second-level children; these children do not become Chief control
-targets.
+final visible report. A Manager's observational assigned and ordinary
+supervised Leads appear as second-level children; these children do not become
+Chief control targets.
 Chief direct reports and their nested Manager work follow this shape:
 
 ```text
@@ -77,9 +76,10 @@ Manager work status is `active`, `paused`, or `conflict`.
 An active row uses the live Lead's lifecycle marker when an executor is present;
 otherwise it uses `●`. Paused uses `○` and conflict uses `!`. The row suffix is
 project status, not the Lead's runtime state.
-Unassigned live Leads are shown separately, not treated as managed work.
-Branches are display handles; exact session identity is revalidated for control
-actions.
+Ordinary Leads supervised by the Manager are shown separately from project
+work, with a supervised label and navigation only; they are not treated as
+managed work. Branches are display handles; exact session identity is
+revalidated for control actions.
 
 ## Installation
 
@@ -118,9 +118,10 @@ and the existing keyboard/menu alternatives such as the Running menu and
 `/chief` or `/manager` overview.
 
 Navigation does not grant coordination authority. Agent targets are checked
-against the caller's durable ownership ancestry; Manager targets require the
-Lead's current exact project assignment; Chief-visible nested Leads remain
-observational. Paused or conflicted project work, lost or unresolved sessions,
+against the caller's durable ownership ancestry; Manager targets for project
+control require the Lead's current exact project assignment. Ordinary
+Manager-supervised Leads permit focus/navigation only, and Chief-visible nested
+Leads remain observational. Paused or conflicted project work, lost or unresolved sessions,
 stale projections, truncated/omitted entries, and targets without a uniquely
 verified live Herdr pane are inert. Current placement is checked again when a
 click is handled; the status projection itself is never authorization.

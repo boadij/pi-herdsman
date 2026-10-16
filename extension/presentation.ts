@@ -657,6 +657,7 @@ export function formatStatusCounts(agents: readonly StatusAgent[]): string {
 /** A presentation-only snapshot supplied by the supervision runtime. */
 export type SupervisedLeadSnapshot = Readonly<{
   role?: "lead" | "manager";
+  relationship?: "assigned" | "supervised";
   lead: string;
   displayName: string;
   branch?: string;
