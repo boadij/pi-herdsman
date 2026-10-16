@@ -6,6 +6,26 @@ Herdsman should minimize cognitive complexity for agents, users, and maintainers
 
 These principles apply to the repository as a whole, including runtime behavior, agent orchestration, instructions, tools, schemas, state, validation, documentation, tests, and public interfaces.
 
+## Minimize model decision burden
+
+Models should spend their judgment on the user's task, not on interpreting
+Herdsman's interfaces, reconstructing known state, or choosing among redundant
+ways to act.
+
+Before exposing a choice, determine whether user intent, the effective role,
+authoritative state, or existing policy already settles it. If so, derive the
+value, supply the relevant context, apply a clear default, or narrow the
+available actions instead of requiring the model to decide. This applies across
+tools, schemas, instructions, context, and workflows, not just role definitions.
+
+Keep alternatives when choosing among them genuinely requires task judgment or
+user preference. Fewer tools, shorter prompts, and more restrictive roles are
+not ends in themselves; hiding evidence or useful actions, guessing when state
+is uncertain, or adding delegation overhead can increase the burden instead.
+
+For each model-facing change, ask: **Which decision does this leave to the
+model, and does that decision require its judgment?**
+
 ## One invariant, one meaning
 
 Every behavioral invariant should have one authoritative meaning. Runtime
