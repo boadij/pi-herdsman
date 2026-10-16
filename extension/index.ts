@@ -2093,6 +2093,7 @@ export default function (pi: ExtensionAPI): void {
           removePeerLeadRecord,
           acquireProcessLock,
           peerLeadLockPath,
+          worktreeGroupScope,
           workspacePresentationProvenance,
           basename,
           readPeerLeadRecord,

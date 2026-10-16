@@ -182,6 +182,25 @@ A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through
 intermediate coordinators.
 
+Peer reachability is distinct from supervision authority. Manager-to-Manager
+peers remain global. Ordinary Leads can peer globally, but when either Lead has
+an exact current `ProjectAssignment`, both must belong to the same verified
+Herdr worktree group on the same socket. Assignment state determines whether a
+Lead is managed; Herdr topology determines the group. A branch, checkout name,
+cwd, or presentation label alone establishes neither. Exact session targeting
+does not bypass eligibility, and queued delivery rechecks the recipient's
+current boundary while retaining the sender's submission-time scope.
+Assignment mutations and peer authorization share a short-lived user-global
+process lock. Herdsman scans and validates the existing branch-keyed assignment
+records across all socket namespaces while holding it; only a complete
+no-match proves a Lead ordinary. Thus an ordinary Lead with no Git worktree
+group remains globally reachable. Corrupt, ambiguous, or incomplete evidence
+fails closed. Assignment records remain the sole durable authority; no session
+index is maintained.
+For peers on another Herdr socket, Herdsman uses their live generation-bound
+published group and socket-scoped assignment evidence; it does not add a
+cross-socket topology RPC. Delivery always rechecks the recipient locally.
+
 Leads use nonblocking `message_supervisor` for timely coordination with their
 effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait

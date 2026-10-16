@@ -1706,13 +1706,15 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     });
     try {
       writePeerLeadRecord(peers, {
-        version: 1,
+        version: 2,
         build: HERDSMAN_BUILD,
         role: "lead",
         piSessionId: senderId,
         paneId: "sender-pane",
         tabId: "sender-tab",
         workspaceId: WORKSPACE,
+        socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+        group: null,
         name: "feature-auth",
         workspaceLabel: "pi-herdsman/feat-auth",
         cwd: "/tmp/feat-auth",

@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { PI_AGENT_ROOT, realFs } from "./support.ts";
 import { acquireProcessLock } from "./lock.ts";
 import { test } from "node:test";
 import {
@@ -42,6 +43,9 @@ import {
   listProjectMessages,
   removeProjectMessages,
   findProjectAssignmentBySession,
+  globalProjectAssignmentSnapshot,
+  withProjectAssignmentAuthority,
+  canMessagePeer,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   projectAssignmentBytes,
   coordinationMessageBytes,
@@ -84,6 +88,36 @@ const socket = () =>
   join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
+
+test("peer eligibility preserves global ordinary and Manager behavior while scoping managed Leads", () => {
+  const groupA = { repoKey: "repo", primaryWorkspaceId: "primary" };
+  const groupB = { repoKey: "repo", primaryWorkspaceId: "other-primary" };
+  const ordinaryA = {
+    role: "lead" as const,
+    socket: "/socket-a",
+    group: groupA,
+    managed: false,
+  };
+  const ordinaryOtherSocket = {
+    ...ordinaryA,
+    socket: "/socket-b",
+  };
+  const managedA = { ...ordinaryA, managed: true };
+  const managedB = { ...managedA, group: groupB };
+  const manager = { role: "manager" as const };
+  const cases = [
+    [ordinaryA, ordinaryOtherSocket, true],
+    [managedA, { ...managedA, group: { ...groupA } }, true],
+    [managedA, ordinaryA, true],
+    [ordinaryA, managedA, true],
+    [managedA, managedB, false],
+    [ordinaryOtherSocket, managedA, false],
+    [manager, manager, true],
+    [ordinaryA, manager, false],
+  ] as const;
+  for (const [sender, recipient, expected] of cases)
+    assert.equal(canMessagePeer(sender, recipient), expected);
+});
 const state = (
   piSessionId: string,
   extra: Partial<LeadCoordinationState> = {},
@@ -107,6 +141,16 @@ const message = (
   toSessionId: "chief",
   leadSessionId: "lead",
   text: "hello",
+  ...(extra.kind === "peer_message"
+    ? {
+        peerSource: {
+          role: "lead",
+          socket: "/sock",
+          group: { repoKey: "repo", primaryWorkspaceId: "workspace" },
+          managed: false,
+        },
+      }
+    : {}),
   createdAt: 1,
   ...extra,
 });
@@ -126,12 +170,13 @@ function peerRecord(
   });
   return {
     record: {
-      version: 1,
+      version: 2,
       build: BUILD,
       piSessionId,
       paneId: "pane",
       tabId: "tab",
       workspaceId: "workspace",
+      socket: socket(),
       claim: lease.claim,
       updatedAt: 1,
       ...extra,
@@ -490,6 +535,23 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
       ),
     /Invalid Chief message record/,
   );
+  const ordinaryNoGroup = {
+    ...record,
+    id: id(),
+    peerSource: {
+      role: "lead" as const,
+      socket: "/sock",
+      group: null,
+      managed: false,
+    },
+  };
+  writeCoordinationMessage(ordinaryNoGroup, runtime);
+  assert.deepEqual(
+    readCoordinationMessage(
+      coordinationMessagePath(runtime, record.toSessionId, ordinaryNoGroup.id),
+    ),
+    ordinaryNoGroup,
+  );
   assert.throws(
     () =>
       writeCoordinationMessage(
@@ -569,6 +631,87 @@ test("generic coordination transport orders and renders message peers", async ()
   assert.doesNotMatch(sent[0].content, /to lead lead-b/);
   assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
   assert.equal(removeCoordinationMessage, removeChiefMessage);
+});
+
+test("peer inbox defers transient topology failures and delivers after recovery", async () => {
+  const runtime = peerRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    fromSessionId: "lead-a",
+    toSessionId: "lead-b",
+    leadSessionId: "lead-a",
+    text: "retry after topology recovers",
+  });
+  writeCoordinationMessage(record, runtime);
+  const paths = () => listCoordinationMessagePaths(runtime, "lead-b");
+  const delivered: unknown[] = [];
+  let receipt = false;
+
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: "lead-b",
+    isAuthorized: () => {
+      throw new Error("Herdr topology temporarily unavailable");
+    },
+    isDelivered: () => receipt,
+    sendMessage: (payload) => {
+      delivered.push(payload);
+      receipt = true;
+    },
+  });
+  assert.equal(paths().length, 1);
+  assert.deepEqual(delivered, []);
+
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: "lead-b",
+    isAuthorized: (candidate) => candidate.peerSource?.managed === false,
+    isDelivered: () => receipt,
+    sendMessage: (payload) => {
+      delivered.push(payload);
+      receipt = true;
+    },
+  });
+  assert.equal(delivered.length, 1);
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: "lead-b",
+    isAuthorized: () => true,
+    isDelivered: () => receipt,
+    sendMessage: () => assert.fail("receipt must prevent replay"),
+  });
+  assert.deepEqual(paths(), []);
+});
+
+test("peer inbox removes a definitively ineligible message without replay", async () => {
+  const runtime = peerRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    fromSessionId: "lead-a",
+    toSessionId: "lead-b",
+    leadSessionId: "lead-a",
+    text: "recipient moved groups",
+  });
+  writeCoordinationMessage(record, runtime);
+  let sends = 0;
+
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: "lead-b",
+    isAuthorized: () => false,
+    isDelivered: () => false,
+    sendMessage: () => sends++,
+  });
+  assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
+
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: "lead-b",
+    isAuthorized: () => true,
+    isDelivered: () => false,
+    sendMessage: () => sends++,
+  });
+  assert.equal(sends, 0);
 });
 
 test("peer presence and inbox transport are shared across socket runtimes", async () => {
@@ -2468,11 +2611,13 @@ test("project assignments are scoped by repository and branch, strict, and remov
     second,
     assignment,
   ]);
-  writeFileSync(join(dirname(path), `${assignment.id}.json`), "draft");
+  const draftPath = join(dirname(path), `${assignment.id}.json`);
+  writeFileSync(draftPath, "draft");
   assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
     second,
     assignment,
   ]);
+  unlinkSync(draftPath);
   writeFileSync(
     projectAssignmentPath(runtime, assignment.repoKey, "wrong"),
     JSON.stringify(assignment),
@@ -2518,6 +2663,118 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
     assignment,
   ]);
+});
+
+test("global assignment authority finds cross-socket matches and serializes the final callback", () => {
+  const assignmentId = id();
+  const one = supervisionRuntime(socket());
+  const two = supervisionRuntime(socket());
+  const assignment = (repoKey: string, branch: string) => ({
+    version: 2 as const,
+    id: assignmentId,
+    repoKey,
+    branch,
+    text: "task",
+  });
+  writeProjectAssignment(one, assignment("repo-one", "main"));
+  try {
+    assert.equal(
+      globalProjectAssignmentSnapshot().get(assignmentId)?.length,
+      1,
+    );
+    writeProjectAssignment(two, assignment("repo-two", "main"));
+    assert.equal(
+      globalProjectAssignmentSnapshot().get(assignmentId)?.length,
+      2,
+    );
+    let called = false;
+    const observed = withProjectAssignmentAuthority((snapshot) => {
+      called = true;
+      assert.equal(snapshot.get(assignmentId)?.length, 2);
+      assert.throws(
+        () =>
+          writeProjectAssignment(two, {
+            ...assignment("repo-two", "racing"),
+            id: id(),
+          }),
+        /project assignment authority is in progress/i,
+      );
+      return 42;
+    });
+    assert.equal(called, true);
+    assert.equal(observed, 42);
+  } finally {
+    removeProjectAssignment(one, "repo-one", "main");
+    removeProjectAssignment(two, "repo-two", "main");
+    removeProjectAssignment(two, "repo-two", "racing");
+  }
+  assert.equal(globalProjectAssignmentSnapshot().get(assignmentId), undefined);
+});
+
+test("global assignment scans fail closed on a malformed canonical record", () => {
+  const runtime = supervisionRuntime(socket());
+  const path = projectAssignmentPath(runtime, "scan-repo", "main");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "{broken", "utf8");
+  try {
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Unable to read project assignment/,
+    );
+  } finally {
+    unlinkSync(path);
+  }
+});
+
+test("global assignment scan rejects a symlinked runtime ancestor", () => {
+  const dataRoot = join(PI_AGENT_ROOT, "pi-herdsman");
+  const backup = join(PI_AGENT_ROOT, `pi-herdsman-backup-${randomUUID()}`);
+  realFs.renameSync(dataRoot, backup);
+  realFs.symlinkSync(backup, dataRoot, "dir");
+  try {
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Invalid project assignment authority directory/,
+    );
+  } finally {
+    realFs.unlinkSync(dataRoot);
+    realFs.renameSync(backup, dataRoot);
+  }
+});
+
+test("global assignment scan ignores regular publication temporaries but rejects incomplete or unsafe entries", () => {
+  const runtime = supervisionRuntime(socket());
+  const path = projectAssignmentPath(runtime, "scan-repo", "main");
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true });
+  const temporaryId = id();
+  const temporary = join(directory, `.${temporaryId}.${randomUUID()}.tmp`);
+  writeFileSync(temporary, "partial", "utf8");
+  try {
+    assert.equal(globalProjectAssignmentSnapshot().get(temporaryId), undefined);
+    unlinkSync(temporary);
+
+    const unexpected = join(directory, "incomplete-publication");
+    writeFileSync(unexpected, "partial", "utf8");
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Unexpected project assignment record/,
+    );
+    unlinkSync(unexpected);
+
+    const target = join(directory, "target");
+    writeFileSync(target, "partial", "utf8");
+    const unsafeTemporary = join(directory, `.${id()}.${randomUUID()}.tmp`);
+    realFs.symlinkSync(target, unsafeTemporary);
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Invalid project assignment publication temporary/,
+    );
+    unlinkSync(unsafeTemporary);
+    unlinkSync(target);
+  } finally {
+    if (realFs.existsSync(temporary)) unlinkSync(temporary);
+  }
 });
 
 test("project work derives active, paused, or conflict from runtime placement", () => {

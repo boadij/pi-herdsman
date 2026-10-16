@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   fsyncSync,
+  lstatSync,
   readdirSync,
   rmSync,
   mkdirSync,
@@ -138,8 +139,32 @@ export type ChiefMessageRecord = {
   branch?: string;
   text: string;
   resultBindings?: ResultBinding[];
+  peerSource?: PeerSource;
   createdAt: number;
 };
+
+export type PeerGroup = Readonly<{
+  repoKey: string;
+  primaryWorkspaceId: string;
+}>;
+export type PeerSource =
+  | { role: "manager" }
+  | { role: "lead"; socket: string; group: PeerGroup | null; managed: boolean };
+export type PeerContext = PeerSource;
+
+export function canMessagePeer(a: PeerContext, b: PeerContext): boolean {
+  if (a.role !== b.role) return false;
+  if (a.role === "manager") return true;
+  if (b.role !== "lead") return false;
+  if (!a.managed && !b.managed) return true;
+  return (
+    !!a.group &&
+    !!b.group &&
+    a.socket === b.socket &&
+    a.group.repoKey === b.group.repoKey &&
+    a.group.primaryWorkspaceId === b.group.primaryWorkspaceId
+  );
+}
 
 export type CoordinationMessageRecord = ChiefMessageRecord;
 
@@ -217,7 +242,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["branch", "resultBindings", "build"];
+  const optional = ["branch", "resultBindings", "build", "peerSource"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -227,6 +252,30 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   )
     return false;
   const projectMessage = record.kind === "project_assignment";
+  const peerMessage = record.kind === "peer_message";
+  const source = record.peerSource as Record<string, unknown> | undefined;
+  const validPeerSource =
+    source &&
+    typeof source === "object" &&
+    (source.role === "manager"
+      ? Object.keys(source).length === 1
+      : source.role === "lead" &&
+        Object.keys(source).length === 4 &&
+        typeof source.socket === "string" &&
+        source.socket.length > 0 &&
+        source.socket.length <= 4096 &&
+        typeof source.managed === "boolean" &&
+        (source.group === null
+          ? !source.managed
+          : !!source.group &&
+            typeof source.group === "object" &&
+            Object.keys(source.group).length === 2 &&
+            validNativeIdentity(
+              (source.group as Record<string, unknown>).repoKey,
+            ) &&
+            validNativeIdentity(
+              (source.group as Record<string, unknown>).primaryWorkspaceId,
+            )));
   if (
     projectMessage
       ? !validNativeIdentity(record.branch)
@@ -238,6 +287,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   }
   return (
     record.version === 2 &&
+    (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
@@ -1020,18 +1070,42 @@ export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   };
 }
 
+const projectAuthorityLock = join(
+  herdsmanDataRoot(),
+  "runtime",
+  "project-assignment-authority.lock",
+);
+
+function withProjectAssignmentLock<T>(operation: () => T): T {
+  const lease = acquireProcessLock(projectAuthorityLock, {
+    name: "project assignment authority",
+  });
+  try {
+    const result = operation();
+    if (result && typeof (result as { then?: unknown }).then === "function")
+      throw new Error(
+        "Project assignment authority operation must be synchronous",
+      );
+    return result;
+  } finally {
+    lease.release();
+  }
+}
+
 export type PeerRuntime = SupervisionRuntime & {
   peers: string;
 };
 
 export type PeerRecord = Readonly<{
-  version: 1;
+  version: 2;
   build?: RuntimeBuild;
   role?: PeerRole;
   piSessionId: string;
   paneId: string;
   tabId: string;
   workspaceId: string;
+  socket: string;
+  group?: PeerGroup | null;
   name?: string;
   cwd?: string;
   repo?: string;
@@ -1101,6 +1175,8 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
         "paneId",
         "tabId",
         "workspaceId",
+        "socket",
+        "group",
         "claim",
         "updatedAt",
         ...metadata,
@@ -1112,10 +1188,11 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       "paneId",
       "tabId",
       "workspaceId",
+      "socket",
       "claim",
       "updatedAt",
     ].every((key) => Object.hasOwn(record, key)) &&
-    record.version === 1 &&
+    record.version === 2 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
     (record.role === undefined ||
       record.role === "lead" ||
@@ -1124,6 +1201,20 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     validNativeIdentity(record.paneId) &&
     validNativeIdentity(record.tabId) &&
     validNativeIdentity(record.workspaceId) &&
+    typeof record.socket === "string" &&
+    record.socket.length > 0 &&
+    record.socket.length <= 4096 &&
+    (record.group === undefined ||
+      record.group === null ||
+      (!!record.group &&
+        typeof record.group === "object" &&
+        Object.keys(record.group).length === 2 &&
+        validNativeIdentity(
+          (record.group as Record<string, unknown>).repoKey,
+        ) &&
+        validNativeIdentity(
+          (record.group as Record<string, unknown>).primaryWorkspaceId,
+        ))) &&
     metadata.every(
       (key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
     ) &&
@@ -1152,6 +1243,8 @@ export function samePeerLeadRecord(
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
+    actual.socket === expected.socket &&
+    JSON.stringify(actual.group) === JSON.stringify(expected.group) &&
     actual.name === expected.name &&
     actual.cwd === expected.cwd &&
     actual.repo === expected.repo &&
@@ -1789,6 +1882,15 @@ export function writeProjectAssignment(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
 ): void {
+  withProjectAssignmentLock(() =>
+    writeProjectAssignmentUnlocked(runtime, assignment),
+  );
+}
+
+function writeProjectAssignmentUnlocked(
+  runtime: SupervisionRuntime,
+  assignment: ProjectAssignment,
+): void {
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
@@ -1839,7 +1941,7 @@ export function readProjectAssignment(
 
 function readProjectAssignmentFile(
   path: string,
-  repoKey: string,
+  repoKey: string | undefined,
   branch?: string,
 ): ProjectAssignment | undefined {
   let value: unknown;
@@ -1862,9 +1964,9 @@ function readProjectAssignmentFile(
   if (projectAssignmentBytes(value) > PROJECT_ASSIGNMENT_MAX_BYTES)
     throw projectAssignmentReadError(path, "assignment payload is too large");
   if (
-    value.repoKey !== repoKey ||
+    (repoKey !== undefined && value.repoKey !== repoKey) ||
     basename(dirname(path)) !==
-      createHash("sha256").update(repoKey).digest("hex") ||
+      createHash("sha256").update(value.repoKey).digest("hex") ||
     (branch !== undefined && value.branch !== branch) ||
     basename(path) !==
       `${createHash("sha256").update(value.branch).digest("hex")}.json`
@@ -1928,6 +2030,16 @@ export function removeProjectAssignment(
   repoKey: string,
   branch: string,
 ): void {
+  withProjectAssignmentLock(() =>
+    removeProjectAssignmentUnlocked(runtime, repoKey, branch),
+  );
+}
+
+function removeProjectAssignmentUnlocked(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+): void {
   const path = projectAssignmentPath(runtime, repoKey, branch);
   try {
     unlinkSync(path);
@@ -1935,6 +2047,123 @@ export function removeProjectAssignment(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+export type GlobalProjectAssignment = Readonly<{
+  socketHash: string;
+  assignment: ProjectAssignment;
+}>;
+
+function assignmentDirectory(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    throw new Error(`Invalid project assignment authority directory ${path}`);
+}
+
+function scanGlobalProjectAssignments(): Map<
+  string,
+  GlobalProjectAssignment[]
+> {
+  const dataRoot = herdsmanDataRoot();
+  const runtimeRoot = join(dataRoot, "runtime");
+  const root = join(runtimeRoot, "supervision-v2");
+  let sockets: import("node:fs").Dirent[];
+  try {
+    // lstat every authority path component: checking supervision-v2 alone
+    // would still follow a symlinked runtime directory.
+    assignmentDirectory(dataRoot);
+    assignmentDirectory(runtimeRoot);
+    assignmentDirectory(root);
+    sockets = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+  const bySession = new Map<string, GlobalProjectAssignment[]>();
+  for (const socket of sockets) {
+    if (!/^[a-f0-9]{64}$/.test(socket.name))
+      throw new Error(
+        `Unexpected project assignment socket entry ${socket.name}`,
+      );
+    if (!socket.isDirectory() || socket.isSymbolicLink())
+      throw new Error(
+        `Invalid project assignment socket directory ${socket.name}`,
+      );
+    const socketRoot = join(root, socket.name);
+    assignmentDirectory(socketRoot);
+    const assignmentsRoot = join(socketRoot, "assignments");
+    let repositories: import("node:fs").Dirent[];
+    try {
+      assignmentDirectory(assignmentsRoot);
+      repositories = readdirSync(assignmentsRoot, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    assignmentDirectory(assignmentsRoot);
+    for (const repository of repositories) {
+      if (!/^[a-f0-9]{64}$/.test(repository.name))
+        throw new Error(
+          `Unexpected project assignment repository entry ${repository.name}`,
+        );
+      if (!repository.isDirectory() || repository.isSymbolicLink())
+        throw new Error(
+          `Invalid project assignment repository directory ${repository.name}`,
+        );
+      const directory = join(assignmentsRoot, repository.name);
+      assignmentDirectory(directory);
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        // Atomic writer temporaries are not committed authority records.
+        if (/^\..+\.[a-f0-9-]{36}\.tmp$/.test(entry.name)) {
+          if (!entry.isFile() || entry.isSymbolicLink())
+            throw new Error(
+              `Invalid project assignment publication temporary ${entry.name}`,
+            );
+          continue;
+        }
+        if (!/^[a-f0-9]{64}\.json$/.test(entry.name))
+          throw new Error(`Unexpected project assignment record ${entry.name}`);
+        if (!entry.isFile() || entry.isSymbolicLink())
+          throw new Error(`Invalid project assignment record ${entry.name}`);
+        const path = join(directory, entry.name);
+        const assignment = readProjectAssignmentFile(
+          path,
+          undefined,
+          undefined,
+        );
+        if (
+          !assignment ||
+          createHash("sha256").update(assignment.repoKey).digest("hex") !==
+            repository.name
+        )
+          throw projectAssignmentReadError(
+            path,
+            "assignment repository hash mismatch",
+          );
+        const matches = bySession.get(assignment.id) ?? [];
+        matches.push({ socketHash: socket.name, assignment });
+        bySession.set(assignment.id, matches);
+      }
+    }
+  }
+  return bySession;
+}
+
+/** The full O(N) scan and caller's final synchronous action share the authority lock. */
+// ponytail: global lock + full assignment scan. Add session-keyed indexing only if measured contention warrants it.
+export function withProjectAssignmentAuthority<T>(
+  operation: (assignments: Map<string, GlobalProjectAssignment[]>) => T,
+): T {
+  return withProjectAssignmentLock(() =>
+    operation(scanGlobalProjectAssignments()),
+  );
+}
+
+export function globalProjectAssignmentSnapshot(): Map<
+  string,
+  GlobalProjectAssignment[]
+> {
+  return withProjectAssignmentAuthority((snapshot) => snapshot);
 }
 
 export type ProjectMessage = Readonly<{

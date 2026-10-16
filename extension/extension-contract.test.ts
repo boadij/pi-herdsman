@@ -90,12 +90,30 @@ import support, {
 } from "./support.ts";
 import { parseHerdrVersion } from "./herdr.ts";
 
+const peerTopology = () => ({
+  stdout: JSON.stringify({
+    id: AGENT_ID,
+    result: {
+      source: {
+        repo_key: "peer-test-repo",
+        repo_name: "peer-test-repo",
+        source_workspace_id: WORKSPACE,
+      },
+      worktrees: [],
+    },
+  }),
+  stderr: "",
+  code: 0,
+});
+
 test("new project worktree creation gets an extended Herdr timeout", async () => {
   const { createLeadProjectRuntime } = await import("./lead-runtime.ts");
   const repoKey = realFs.realpathSync(process.cwd());
   const manager = {
     repoKey,
     workspaceId: WORKSPACE,
+    socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+    group: null,
     leaseId: randomUUID(),
     piSessionId: randomUUID(),
   };
@@ -993,9 +1011,10 @@ test("list peers and message use global peer presence, not caller inventory", as
     tmpdir(),
     `peer-target-race-${randomUUID()}.sock`,
   );
-  const senderId = `lead-a-${randomUUID()}`;
+  const senderId = randomUUID();
   const targetId = `lead-b-${randomUUID()}`;
   const unenrichedTargetId = `lead-c-${randomUUID()}`;
+  const unverifiedTargetId = `lead-d-${randomUUID()}`;
   const resultRequestId = randomUUID();
   const resultReference = resultRef(resultRequestId);
   const resultFile = resultPath(resultRequestId);
@@ -1017,12 +1036,14 @@ test("list peers and message use global peer presence, not caller inventory", as
       name: "Lead peer presence",
     });
     const record = {
-      version: 1 as const,
+      version: 2 as const,
       build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
       workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+      group: { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE },
       ...(sessionId === targetId
         ? {
             name: "Target Lead",
@@ -1045,18 +1066,26 @@ test("list peers and message use global peer presence, not caller inventory", as
     "lead-c-pane",
     "lead-c-tab",
   );
+  const unverifiedTarget = claim(
+    unverifiedTargetId,
+    "lead-d-pane",
+    "lead-d-tab",
+  );
+  writePeerLeadRecord(runtime, { ...unverifiedTarget.record, group: null });
   const pi = fakePi({
     exec: (_command, args) =>
-      isAgentList(args) || isApiSnapshot(args)
-        ? {
-            stdout: JSON.stringify({
-              id: AGENT_ID,
-              result: { agents: [], snapshot: { agents: [], panes: [] } },
-            }),
-            stderr: "",
-            code: 0,
-          }
-        : { stdout: "{}", stderr: "", code: 0 },
+      args[0] === "worktree" && args[1] === "list"
+        ? peerTopology()
+        : isAgentList(args) || isApiSnapshot(args)
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { agents: [], snapshot: { agents: [], panes: [] } },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext([resultEntry]) as any;
@@ -1069,6 +1098,21 @@ test("list peers and message use global peer presence, not caller inventory", as
     const peerMessage = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peerList);
     assert.ok(peerMessage);
+    const assignments = supervisionRuntime(process.env.HERDR_SOCKET_PATH);
+    for (const branch of ["peer-ambiguous-a", "peer-ambiguous-b"])
+      writeProjectAssignment(assignments, {
+        version: 2,
+        id: senderId,
+        repoKey: "peer-test-repo",
+        branch,
+        text: "ambiguous assignment fixture",
+      });
+    await assert.rejects(
+      peerList.execute("list", {}, undefined, undefined, context),
+      /eligibility could not be verified/,
+    );
+    for (const branch of ["peer-ambiguous-a", "peer-ambiguous-b"])
+      removeProjectAssignment(assignments, "peer-test-repo", branch);
     const listed = await peerList.execute(
       "list",
       {},
@@ -1104,10 +1148,24 @@ test("list peers and message use global peer presence, not caller inventory", as
             branch: "",
             workspace_label: "",
           },
+          {
+            session: unverifiedTargetId,
+            name: `lead-${unverifiedTargetId.slice(0, 8)}`,
+            cwd: "",
+            repo: "",
+            branch: "",
+            workspace_label: "",
+          },
         ].sort((a, b) => a.session.localeCompare(b.session)),
       },
     );
     assert.equal(modelJson.includes(WORKSPACE), false);
+    assert.equal(
+      payload.peers.some(
+        (peer: { session: string }) => peer.session === unverifiedTargetId,
+      ),
+      true,
+    );
     assert.equal(
       payload.peers.some(
         (peer: { session: string }) => peer.session === senderId,
@@ -1124,6 +1182,35 @@ test("list peers and message use global peer presence, not caller inventory", as
         true,
       );
     }
+    // Ordinary peers do not need a worktree group; the exact ID is still
+    // authorized only after the complete global no-assignment proof.
+    writePeerLeadRecord(runtime, {
+      ...target.record,
+      group: {
+        repoKey: "peer-test-repo",
+        primaryWorkspaceId: "another-worktree-group",
+      },
+    });
+    await peerMessage.execute(
+      "message",
+      { session: targetId, message: "ordinary peers are global" },
+      undefined,
+      undefined,
+      context,
+    );
+    const ordinaryMessage = readChiefMessage(
+      listCoordinationMessagePaths(runtime, targetId)[0],
+    );
+    removeChiefMessage(runtime, targetId, ordinaryMessage.id);
+    writePeerLeadRecord(runtime, target.record);
+    const sourceAssignmentBranch = "peer-managed-source";
+    writeProjectAssignment(assignments, {
+      version: 2,
+      id: senderId,
+      repoKey: "peer-test-repo",
+      branch: sourceAssignmentBranch,
+      text: "managed source fixture",
+    });
     const queued = await peerMessage.execute(
       "message",
       {
@@ -1148,11 +1235,24 @@ test("list peers and message use global peer presence, not caller inventory", as
         canonicalRef: resultReference,
       },
     ]);
+    assert.deepEqual(message.peerSource, {
+      role: "lead",
+      socket: process.env.HERDR_SOCKET_PATH,
+      group: { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE },
+      managed: true,
+    });
+    removeProjectAssignment(
+      assignments,
+      "peer-test-repo",
+      sourceAssignmentBranch,
+    );
+    assert.equal(readChiefMessage(messagePaths[0]).peerSource?.managed, true);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
     target.lease.release();
     unenrichedTarget.lease.release();
+    unverifiedTarget.lease.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
@@ -1204,6 +1304,7 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       "paneId",
       "piSessionId",
       "role",
+      "socket",
       "tabId",
       "updatedAt",
       "version",
@@ -1333,24 +1434,47 @@ test("peer publication rejects sender and target generation replacement during a
   const senderId = `lead-a-${randomUUID()}`;
   const targetId = `lead-b-${randomUUID()}`;
   const runtime = peerRuntime();
+  let primaryWorkspaceId = WORKSPACE;
+  const topology = () => ({
+    stdout: JSON.stringify({
+      id: AGENT_ID,
+      result: {
+        source: {
+          repo_key: "peer-test-repo",
+          repo_name: "peer-test-repo",
+          source_workspace_id: primaryWorkspaceId,
+        },
+        worktrees: [{ open_workspace_id: WORKSPACE }],
+      },
+    }),
+    stderr: "",
+    code: 0,
+  });
   const claim = (sessionId: string, paneId: string, tabId: string) => {
     const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
       name: "Lead peer presence",
     });
     const record = {
-      version: 1 as const,
+      version: 2 as const,
       build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
       workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+      group: { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE },
       claim: lease.claim,
       updatedAt: Date.now(),
     };
     writePeerLeadRecord(runtime, record);
     return { lease, record };
   };
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? topology()
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   context.sessionManager = {
@@ -1412,6 +1536,34 @@ test("peer publication rejects sender and target generation replacement during a
       removePeerLeadRecord(runtime, targetId);
       support.configReadHook = undefined;
     }
+
+    const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+    const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+    const preparationReached = testGate<void>();
+    let reached = false;
+    support.configReadHook = () => {
+      if (!reached) {
+        reached = true;
+        preparationReached.resolve();
+      }
+    };
+    const pending = peer.execute(
+      "message",
+      { session: targetId, message: "topology changed", files: [attachment] },
+      undefined,
+      undefined,
+      context,
+    );
+    await preparationReached.promise;
+    primaryWorkspaceId = "new-primary";
+    await pending;
+    const queued = listCoordinationMessagePaths(runtime, targetId);
+    assert.equal(queued.length, 1);
+    removeChiefMessage(runtime, targetId, readChiefMessage(queued[0]).id);
+    sender.lease.release();
+    target.lease.release();
+    removePeerLeadRecord(runtime, senderId);
+    removePeerLeadRecord(runtime, targetId);
   } finally {
     support.configReadHook = undefined;
     pi.events.get("session_shutdown")?.[0]();
@@ -1445,12 +1597,14 @@ test("peer publication tolerates sender and target presentation enrichment durin
       name: "Lead peer presence",
     });
     const record = {
-      version: 1 as const,
+      version: 2 as const,
       build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
       workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+      group: { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE },
       name: `${sessionId} Lead`,
       cwd: "/workspaces/peer",
       repo: "pi-herdsman",
@@ -1462,7 +1616,12 @@ test("peer publication tolerates sender and target presentation enrichment durin
     writePeerLeadRecord(runtime, record);
     return { lease, record };
   };
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? peerTopology()
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   context.sessionManager = {
@@ -1636,12 +1795,14 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
       },
     );
     const replacement = {
-      version: 1 as const,
+      version: 2 as const,
       build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId: "replacement-pane",
       tabId: "replacement-tab",
       workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+      group: null,
       claim: replacementLease.claim,
       updatedAt: Date.now(),
     };

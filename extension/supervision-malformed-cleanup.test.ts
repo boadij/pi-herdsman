@@ -50,6 +50,7 @@ mock.module("node:fs", {
       return realFs.fsyncSync(...args);
     },
     mkdirSync: realFs.mkdirSync,
+    lstatSync: realFs.lstatSync,
     openSync: (...args: Parameters<typeof realFs.openSync>) => {
       const fd = realFs.openSync(...args);
       if (typeof args[0] === "string" && args[0] === failureDirectory)

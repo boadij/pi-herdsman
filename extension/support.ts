@@ -139,6 +139,7 @@ mock.module("node:fs", {
     fstatSync: realFs.fstatSync,
     fsyncSync: realFs.fsyncSync,
     mkdirSync: realFs.mkdirSync,
+    lstatSync: realFs.lstatSync,
     openSync: (...args: any[]) => {
       return realFs.openSync(...args);
     },
