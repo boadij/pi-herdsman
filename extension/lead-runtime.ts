@@ -9667,7 +9667,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                       ? !snapshot
                       : !!snapshot &&
                         senderMatches.length <= 1 &&
-                        (!!senderMatches.length === source.managed) &&
+                        !!senderMatches.length === source.managed &&
                         matches.length <= 1 &&
                         !!matches.length === recipientContext.managed &&
                         (!assignment ||
@@ -9693,15 +9693,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   recipientContext.role === "manager"
                 )
                   submit();
-                else withProjectAssignmentAuthority((snapshot) => {
-                  if (
-                    source.role === "lead" &&
-                    (!!(snapshot.get(record.fromSessionId)?.length ?? 0) !==
-                      source.managed)
-                  )
-                    throw new Error("Peer eligibility changed before delivery");
-                  submit(snapshot);
-                });
+                else
+                  withProjectAssignmentAuthority((snapshot) => {
+                    if (
+                      source.role === "lead" &&
+                      !!(snapshot.get(record.fromSessionId)?.length ?? 0) !==
+                        source.managed
+                    )
+                      throw new Error(
+                        "Peer eligibility changed before delivery",
+                      );
+                    submit(snapshot);
+                  });
                 result = submitted;
               } else {
                 importResultBindings(pi, ctx, resultBindings, record.kind);

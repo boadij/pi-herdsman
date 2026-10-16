@@ -586,9 +586,10 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
         undefined,
         fixtures[index]!.context,
       );
-      await fixtures[index]!.pi.commandOptions
-        .get("lead")
-        .handler("orchestrate", fixtures[index]!.context);
+      await fixtures[index]!.pi.commandOptions.get("lead").handler(
+        "orchestrate",
+        fixtures[index]!.context,
+      );
     }
 
     for (const lead of leads) {
