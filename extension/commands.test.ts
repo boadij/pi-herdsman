@@ -5703,6 +5703,157 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
   }
 });
 
+test("active ordinary Lead rejects conclusively unauthorized Manager messages", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.HERDR_PANE_ID = "ordinary-lead-pane";
+  process.env.HERDR_TAB_ID = "ordinary-lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-inbox-invalid-authority-${randomUUID()}.sock`,
+  );
+  const leadSession = randomUUID();
+  const managerSession = randomUUID();
+  const managerPane = "manager-inbox-pane";
+  const managerTab = "manager-inbox-tab";
+  const managerLease = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: managerSession,
+    paneId: managerPane,
+    tabId: managerTab,
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerSession,
+    updatedAt: Date.now(),
+  });
+  const managerPeerLease = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), managerSession),
+    { name: "Manager peer presence" },
+  );
+  writePeerLeadRecord(peerRuntime(), {
+    version: 1,
+    role: "manager",
+    piSessionId: managerSession,
+    paneId: managerPane,
+    tabId: managerTab,
+    workspaceId: WORKSPACE,
+    claim: managerPeerLease.claim,
+    updatedAt: Date.now(),
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerSession,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: managerPane,
+    tab_id: managerTab,
+    cwd: "/tmp",
+  };
+  const leadAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadSession,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "ordinary-lead-pane",
+    tab_id: "ordinary-lead-tab",
+    cwd: "/tmp",
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+            source_checkout_path: "/tmp/project-root",
+          },
+          worktrees: [{ open_workspace_id: WORKSPACE }],
+        });
+      if (isAgentList(args))
+        return respond({ agents: [managerAgent, leadAgent] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: managerAgent });
+      if (isApiSnapshot(args))
+        return respond({
+          snapshot: { agents: [managerAgent, leadAgent], panes: [] },
+        });
+      return respond({});
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager.getSessionId = () => leadSession;
+  context.isIdle = () => false;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const incoming = {
+      version: 2 as const,
+      id: randomUUID(),
+      kind: "manager_message" as const,
+      fromSessionId: managerSession,
+      toSessionId: leadSession,
+      leadSessionId: leadSession,
+      text: "Do not import this unauthorized message",
+      leaseId: randomUUID(),
+      resultBindings: [
+        {
+          ref: "result:researcher#1",
+          canonicalRef: `result:${randomUUID()}`,
+        },
+      ],
+      build: HERDSMAN_BUILD,
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(incoming, supervisionRuntime());
+    let appendCalls = 0;
+    const originalAppendEntry = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      appendCalls++;
+      originalAppendEntry(type, data);
+    };
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+      ),
+    );
+    assert.equal(pi.sentMessageCalls.length, 0, "no Pi message is submitted");
+    assert.equal(appendCalls, 0, "result bindings are not imported");
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    managerPeerLease.release();
+    managerLease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("a Lead without a Manager routes upward to Chief and keeps peer presence", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
