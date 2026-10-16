@@ -7637,6 +7637,14 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       prompt?.systemPrompt ?? "",
       /verified workspace-neutral Chief/,
     );
+    assert.match(
+      prompt?.systemPrompt ?? "",
+      /Each unresolved unit of work has one executor/,
+    );
+    assert.match(
+      prompt?.systemPrompt ?? "",
+      /A proven lost Agent remains unresolved/,
+    );
     assert.match(prompt?.systemPrompt ?? "", /Configured chief body/);
     assert.ok(pi.pi.getActiveTools().includes("read"));
     assert.ok(pi.pi.getActiveTools().includes("list_staff"));
@@ -7891,6 +7899,16 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
     );
     assert.match(result.details.error.message, /role or authority changed/i);
     assert.equal(taskAccepted, false);
+    assert.equal(
+      stopped,
+      true,
+      "the unauthorized started Agent must be stopped",
+    );
+    assert.equal(
+      readAgentState(agentMailboxPath(WORKSPACE, label)),
+      undefined,
+      "rollback must leave no unresolved live Agent generation",
+    );
     assert.equal(
       realFs.existsSync(startup.mailbox) &&
         realFs

@@ -3841,7 +3841,7 @@ export function createAgentController(
         ? visibleAgentCapabilities(
             await options.agentDefinitions(context),
             scope,
-            options.rootDelegationPolicy?.() ?? "all",
+            options.rootDelegationPolicy?.() ?? new Set<string>(),
           )
         : [],
     };
@@ -6392,13 +6392,15 @@ export function createAgentController(
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
-        ...(controllerScope.kind === "root" ? [] : [AGENT_DELEGATION_GUIDANCE]),
+        ...(controllerScope.kind === "managed-agent"
+          ? [AGENT_DELEGATION_GUIDANCE]
+          : []),
         AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,
-        controllerScope.kind === "root"
-          ? LEAD_SCOPE_DESCRIPTION
-          : DELEGATING_AGENT_SCOPE_DESCRIPTION,
+        ...(controllerScope.kind === "managed-agent"
+          ? [DELEGATING_AGENT_SCOPE_DESCRIPTION]
+          : []),
       ],
       description:
         "List current owned Agent state and refresh the Agent-definition roster. Do not use for progress polling.",

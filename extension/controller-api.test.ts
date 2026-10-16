@@ -9745,6 +9745,59 @@ test("root assignments fail closed when delegation authority callbacks are missi
   );
 });
 
+test("root discovery fails closed without policy and preserves explicit unrestricted Lead policy", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const definition = {
+    name: "available",
+    path: "/tmp/available.md",
+    frontmatter: {},
+    body: "",
+  };
+  const context = fakeContext() as any;
+  const baseOptions = {
+    scope: { kind: "root" },
+    build: HERDSMAN_BUILD,
+    extensionPath: "test",
+    isContextRetired: () => false,
+    snapshotDependencies: {
+      runtimeForLabel: () => undefined,
+      readLeadSessionIds: () => [],
+      staleAfterMs: 60_000,
+    },
+    persistedTranscriptReady: () => false,
+    agentDefinitions: async () => [definition],
+    readTranscript: () => ({ transcript: "", truncated: false }),
+    workspaceId: () => WORKSPACE,
+    sendResultMessage: () => undefined,
+    sendAskMessage: () => undefined,
+    sessionRetired: () => false,
+    appendError: () => undefined,
+    onChanged: () => undefined,
+    onWorkChanged: () => undefined,
+    reportWatcherError: () => undefined,
+  };
+  const discover = async (rootDelegationPolicy?: () => "all") => {
+    const controller = createAgentController(
+      fakePi().pi as never,
+      {
+        ...baseOptions,
+        rootDelegationPolicy,
+      } as any,
+    );
+    return controller.action(context, { action: "list" } as any);
+  };
+  assert.deepEqual(
+    (await discover()).agent_definitions,
+    [],
+    "missing root policy must not advertise delegatable definitions",
+  );
+  assert.deepEqual(
+    (await discover(() => "all")).agent_definitions,
+    [{ name: "available", tools: "default", skills: "none" }],
+    "the verified Lead policy explicitly returns unrestricted access",
+  );
+});
+
 test("root assignments reject a generation owned by a different session", async () => {
   const { createAgentController } = await import("./agent-controller.ts");
   const context = fakeContext() as any;
