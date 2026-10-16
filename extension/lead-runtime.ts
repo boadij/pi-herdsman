@@ -204,6 +204,7 @@ type LeadTransitionHost = {
 };
 
 type LeadRoleTransitionHost = LeadTransitionHost & {
+  ownedAgentManagementTools(ctx: ExtensionContext): string[];
   supervisoryTools(
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -1304,8 +1305,7 @@ export function createLeadSessionStartRuntime(host: {
         return;
       }
       if (sessionSignal.aborted) return;
-      if (!activeManager)
-        await host.controller.recoverRuntimes(ctx, sessionSignal);
+      await host.controller.recoverRuntimes(ctx, sessionSignal);
       if (sessionSignal.aborted) return;
       if (isRoot()) host.herdRun.finishIfIdle(ctx);
       host.controller.startHealthScanner(ctx, sessionSignal);
@@ -2452,7 +2452,7 @@ export function registerLeadRuntime(
           state.ownerSessionId === ctx.sessionManager.getSessionId(),
       );
     } catch {
-      return true;
+      return false;
     }
   };
   const verifiedActiveRootRole = (role?: SessionRole) => {
@@ -2547,6 +2547,12 @@ export function registerLeadRuntime(
           : undefined,
     };
   };
+  const ownedAgentManagementTools = (ctx: ExtensionContext): string[] =>
+    hasOwnedRootAgents(ctx)
+      ? AGENT_COORDINATION_TOOLS.filter(
+          (name) => name !== "delegate_agent" && name !== "continue_agent",
+        )
+      : [];
   const supervisoryAgentTools = (
     ctx: ExtensionContext,
     definition: AgentDefinition,
@@ -2554,11 +2560,7 @@ export function registerLeadRuntime(
     const discovery = definition.frontmatter.agents?.length
       ? ["list_agents", "delegate_agent", "continue_agent"]
       : [];
-    const management = hasOwnedRootAgents(ctx)
-      ? options.leadCoordinationToolNames.filter(
-          (name) => name !== "delegate_agent" && name !== "continue_agent",
-        )
-      : [];
+    const management = ownedAgentManagementTools(ctx);
     return [...new Set([...discovery, ...management])];
   };
   const supervisoryTools = (
@@ -3122,6 +3124,7 @@ export function registerLeadRuntime(
   };
   roleTransitions = createLeadRoleTransitions(options.leadRuntime, {
     ...roleTransitionServices,
+    ownedAgentManagementTools,
     pi,
     leadInstanceId: () => options.leadRuntime.instanceId,
     setLeadInstanceId: (id: string) => {
@@ -11781,11 +11784,13 @@ export function createLeadRoleTransitions(
       }
     }
     if (state.roleSuspended || state.chiefMode === "suspended") {
-      host.pi.setActiveTools(
-        host.normalizeBaseTools(
-          host.getLeadTools() ?? host.pi.getActiveTools(),
-        ),
+      const baseline = host.normalizeBaseTools(
+        host.getLeadTools() ?? host.pi.getActiveTools(),
       );
+      const management = state.leadContext
+        ? host.ownedAgentManagementTools(state.leadContext)
+        : [];
+      host.pi.setActiveTools([...new Set([...baseline, ...management])]);
       return;
     }
     if (activeLeadRole(state) === "chief") {

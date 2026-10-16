@@ -11,6 +11,7 @@ const modelIds = [
   "core",
   "continuation",
   "chief-tree",
+  "supervisor-agent",
   "terminal-failure",
   "terminal-error",
 ];
@@ -101,6 +102,35 @@ function deliveredAgentResult(messages, toolName, label) {
       `Agent ${label} did not complete successfully: ${content.slice(0, 500)}`,
     );
   return content;
+}
+
+function supervisorAgentResult(messages) {
+  const matched = correlatedCall(messages, "delegate_agent");
+  if (!matched) return null;
+  const details = text(matched.result);
+  const sessionId = details.match(/^Session: ([^\n]+)$/m)?.[1];
+  const requestId = details.match(/^Request: ([^\n]+)$/m)?.[1];
+  if (!sessionId || !requestId)
+    throw new Error(
+      "Supervisor Agent assignment result omitted session/request identity",
+    );
+  const expectedHeader = `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${sessionId} · status=completed`;
+  const handoff = messages.find((message, index) => {
+    if (index <= matched.resultIndex || message.role !== "user") return false;
+    const metadata = message.details;
+    const content = text(message);
+    return (
+      content.startsWith(expectedHeader) &&
+      content.includes("SMOKE_SUPERVISOR_AGENT_COMPLETED") &&
+      (!metadata ||
+        (metadata.agentLabel === "smoke-supervisor-agent" &&
+          metadata.agentDefinition === "smoke-agent" &&
+          metadata.status === "completed" &&
+          metadata.piSessionId === sessionId &&
+          metadata.requestId === requestId))
+    );
+  });
+  return handoff ? { sessionId, requestId, content: text(handoff) } : null;
 }
 
 function completedResultBody(message) {
@@ -344,6 +374,44 @@ export function decide(model, context) {
     )?.[0];
     if (!marker) throw new Error("Unexpected chief-tree request");
     return fauxAssistantMessage(marker);
+  }
+  if (model === "supervisor-agent") {
+    const latest = messages.at(-1);
+    const task = messages.find(
+      (message) =>
+        message.role === "user" &&
+        text(message).includes("SMOKE_SUPERVISOR_AGENT_TASK"),
+    );
+    if (task) return fauxAssistantMessage("SMOKE_SUPERVISOR_AGENT_COMPLETED");
+    if (
+      messages.some(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("SMOKE_SUPERVISOR_AGENT_DELEGATE"),
+      )
+    ) {
+      const result = supervisorAgentResult(messages);
+      if (result)
+        return fauxAssistantMessage("PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED");
+      if (correlatedCall(messages, "delegate_agent"))
+        return waitForResult("Waiting for the completed Agent result.");
+      return call("delegate_agent", {
+        definition: "smoke-agent",
+        label: "smoke-supervisor-agent",
+        task: "SMOKE_SUPERVISOR_AGENT_TASK: return SMOKE_SUPERVISOR_AGENT_COMPLETED.",
+      });
+    }
+    if (
+      messages.some(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
+      )
+    )
+      return fauxAssistantMessage("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP");
+    throw new Error(
+      `Unexpected supervisor-agent transcript (${latest?.role ?? "empty"})`,
+    );
   }
   if (model === "core") return coreDecision(context);
   if (model === "continuation") return continuationDecision(messages);

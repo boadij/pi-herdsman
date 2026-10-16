@@ -57,13 +57,14 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for four bounded
+The harness also supports an opt-in Pi-native faux provider for five bounded
 scenarios:
 
 ```sh
 npm run smoke -- core --simulated
 npm run smoke -- continuation --simulated
 npm run smoke -- chief-tree --simulated
+npm run smoke -- supervisor-agent --simulated
 npm run smoke -- terminal-failure --simulated
 ```
 
@@ -94,7 +95,8 @@ scenario is explicitly simulated.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
-`manager-recovery` (Manager delegation, review messaging, `stop_lead`, verified
+`supervisor-agent` (Chief direct Agent delegation, completed result delivery,
+and role exit), `manager-recovery` (Manager delegation, review messaging, `stop_lead`, verified
 pause/resume with an intact checkout, Manager turnover with a pending project
 message, verified missing-worktree retirement without recreating the assignment,
 and refusal to resume retired work).

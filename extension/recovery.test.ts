@@ -88,6 +88,118 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
       )[name],
   )!;
 
+test("recovery delivers Manager-owned results and asks only to the exact owner", async () => {
+  setLeadEnvironment();
+  const managerSessionId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const managerResult = {
+    ...managedState(
+      "manager-recovery-result",
+      undefined,
+      recoveryIdentity("manager-recovery-result"),
+    ),
+    ownerSessionId: managerSessionId,
+    completedRequestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  };
+  const managerAsk = {
+    ...managedState(
+      "manager-recovery-ask",
+      REQUEST_ID,
+      recoveryIdentity("manager-recovery-ask"),
+    ),
+    ownerSessionId: managerSessionId,
+    pendingAskId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  };
+  const leadResult = {
+    ...managedState(
+      "lead-recovery-result",
+      undefined,
+      recoveryIdentity("lead-recovery-result"),
+    ),
+    ownerSessionId: LEAD_SESSION_ID,
+    completedRequestId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  };
+  const parent = {
+    ...managedState("manager-recovery-root"),
+    piSessionId: managerSessionId,
+  };
+  const states = [parent, managerResult, managerAsk, leadResult];
+  const mailboxes = states.map((state) =>
+    agentMailboxPath(WORKSPACE, state.agentLabel),
+  );
+  for (const [index, state] of states.entries()) {
+    resetAgentMailbox(mailboxes[index]);
+    writeAgentState(mailboxes[index], state);
+  }
+  for (const state of [managerResult, leadResult])
+    writeResult(agentMailboxPath(WORKSPACE, state.agentLabel), {
+      version: 5,
+      runId: state.runId,
+      requestId: state.completedRequestId!,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      status: "completed",
+      text: `result for ${state.agentLabel}`,
+      completedAt: Date.now(),
+    });
+  writeAsk(agentMailboxPath(WORKSPACE, managerAsk.agentLabel), {
+    version: 5,
+    askId: managerAsk.pendingAskId!,
+    requestId: REQUEST_ID,
+    runId: managerAsk.runId,
+    ownerSessionId: managerSessionId,
+    workspaceId: managerAsk.workspaceId,
+    agentLabel: managerAsk.agentLabel,
+    paneId: managerAsk.paneId,
+    piSessionId: managerAsk.piSessionId,
+    question: "Choose the Manager-owned option",
+    createdAt: Date.now(),
+  });
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    entries,
+    exec: agentControllerExecutor(parent, states.slice(1)),
+    sendMessage: (message) => entries.push(message),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext(entries);
+  context.sessionManager.getSessionId = () => managerSessionId;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const delivered = pi.sentMessageCalls.map(({ message }) => message as any);
+    assert.ok(
+      delivered.some(
+        (message) =>
+          message.customType === "pi-herdsman-agent-result" &&
+          message.details.agentLabel === managerResult.agentLabel,
+      ),
+    );
+    assert.ok(
+      delivered.some(
+        (message) =>
+          message.customType === "pi-herdsman-agent-ask" &&
+          message.details.agentLabel === managerAsk.agentLabel,
+      ),
+    );
+    assert.equal(
+      delivered.some(
+        (message) =>
+          message.customType === "pi-herdsman-agent-result" &&
+          message.details.agentLabel === leadResult.agentLabel,
+      ),
+      false,
+      "a Lead-owned result is not delivered to the Manager session",
+    );
+    assert.ok(readResult(mailboxes[1], managerResult.completedRequestId));
+    assert.ok(readResult(mailboxes[3], leadResult.completedRequestId));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
 test("combined status reports a completed agent as pending, not active", async () => {
   setAgentEnvironment("status-pending-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";

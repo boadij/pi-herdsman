@@ -27,6 +27,7 @@ const scenarioNames = [
   "core",
   "continuation",
   "chief-tree",
+  "supervisor-agent",
   "manager-recovery",
   "terminal-failure",
 ];
@@ -494,7 +495,7 @@ export default function (pi) {
   pi.registerCommand("smoke-tools", {
     description: "Record active tools for isolated smoke",
     handler: async (args) => {
-      if (args === "lead" || args === "chief") record(args);
+      if (["lead", "chief", "lead-after"].includes(args)) record(args);
     },
   });
   pi.on("session_tree", () => record("tree"));
@@ -509,7 +510,7 @@ export function parseToolSnapshots(contents) {
   const snapshots = new Map();
   for (const line of contents.trim().split("\n")) {
     const { label, tools } = JSON.parse(line);
-    assert.ok(["lead", "chief", "tree"].includes(label));
+    assert.ok(["lead", "chief", "tree", "lead-after"].includes(label));
     assert.ok(Array.isArray(tools));
     assert.ok(tools.every((tool) => typeof tool === "string"));
     const normalized = [...tools].sort();
@@ -2683,6 +2684,8 @@ export function initialPromptForScenario(scenario, ctx) {
       return continuationPrompt();
     case "chief-tree":
       return "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.";
+    case "supervisor-agent":
+      return "Reply exactly with PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP.";
     case "manager-recovery":
       return undefined;
     case "terminal-failure":
@@ -2701,6 +2704,8 @@ export async function runScenario(ctx, scenario) {
       return runContinuationSmoke(ctx);
     case "chief-tree":
       return runChiefTreeSmoke(ctx);
+    case "supervisor-agent":
+      return runSupervisorAgentSmoke(ctx);
     case "manager-recovery":
       return runManagerRecoverySmoke(ctx);
     case "terminal-failure":
@@ -4748,6 +4753,479 @@ async function runChiefTreeSmoke(ctx) {
   );
 }
 
+async function runSupervisorAgentSmoke(ctx) {
+  await waitForEvidence(
+    ctx,
+    "supervisor-agent-startup",
+    async () => {
+      const session = await rootSessionSnapshot(ctx);
+      return {
+        done:
+          !!session &&
+          session.contents.includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
+      };
+    },
+    { timeoutMs: 90_000, stallMs: MODEL_STALL_MS },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/smoke-tools lead");
+  const leadBeforeChief = await waitForEvidence(
+    ctx,
+    "supervisor-agent-lead-before-snapshot",
+    async () => {
+      try {
+        const snapshots = parseToolSnapshots(
+          await readFile(ctx.chiefTreeResultFile, "utf8"),
+        );
+        return { done: snapshots.has("lead"), value: snapshots.get("lead") };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: false };
+        throw error;
+      }
+    },
+    { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/chief");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Chief mode active.",
+    "--timeout",
+    "15000",
+  ]);
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/smoke-tools chief");
+  const chiefTools = await waitForEvidence(
+    ctx,
+    "supervisor-agent-chief-tool-snapshot",
+    async () => {
+      try {
+        const snapshots = parseToolSnapshots(
+          await readFile(ctx.chiefTreeResultFile, "utf8"),
+        );
+        return { done: snapshots.has("chief"), value: snapshots.get("chief") };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: false };
+        throw error;
+      }
+    },
+    { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+  );
+  for (const tool of [
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
+    "list_agents",
+    "delegate_agent",
+    "continue_agent",
+  ])
+    assert.ok(chiefTools.includes(tool), `Chief tool snapshot missing ${tool}`);
+  for (const tool of [
+    "delegate_project",
+    "resume_project",
+    "stop_lead",
+    "remove_worktree",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
+  ])
+    assert.ok(
+      !chiefTools.includes(tool),
+      `Chief tool snapshot unexpectedly includes ${tool}`,
+    );
+  assert.notDeepEqual(
+    chiefTools,
+    leadBeforeChief,
+    "Chief tool snapshot did not transition from ordinary Lead tools",
+  );
+  const prompt =
+    "SMOKE_SUPERVISOR_AGENT_DELEGATE: start the explicitly allowed Agent and wait for its result.";
+  await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
+  const mailboxRoot = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "mailboxes-v5",
+  );
+  const timelineStartedAt = Date.now();
+  const mailboxPreviouslySeen = new Map();
+  const sampleHandoffTimeline = async (
+    session,
+    requestId,
+    childSessionId,
+    listed,
+  ) => {
+    const entries = sessionEntries(session.contents);
+    const ownerSessionId = entries.find(
+      (entry) => entry.type === "session",
+    )?.id;
+    const now = Date.now();
+    const current = new Map();
+    try {
+      const dirs = await readdir(mailboxRoot, { withFileTypes: true });
+      for (const dir of dirs.slice(0, 256)) {
+        if (!dir.isDirectory() || !/^[0-9a-f]{32}$/.test(dir.name)) continue;
+        const mailbox = join(mailboxRoot, dir.name);
+        let state = null;
+        let statePresent = false;
+        try {
+          const path = join(mailbox, "state.json");
+          const stat = await lstat(path);
+          if (
+            stat.isFile() &&
+            !stat.isSymbolicLink() &&
+            stat.size <= 64 * 1024
+          ) {
+            state = JSON.parse(await readFile(path, "utf8"));
+            statePresent = true;
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        if (
+          state?.agentLabel !== "smoke-supervisor-agent" &&
+          !state?.completedRequestId &&
+          !state?.activeRequestId
+        )
+          continue;
+        let result = null;
+        let resultPresent = false;
+        try {
+          const path = join(mailbox, `result-${requestId}.json`);
+          const stat = await lstat(path);
+          if (
+            stat.isFile() &&
+            !stat.isSymbolicLink() &&
+            stat.size <= 64 * 1024
+          ) {
+            result = JSON.parse(await readFile(path, "utf8"));
+            resultPresent = true;
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        const matches =
+          !!state &&
+          state.ownerSessionId === ownerSessionId &&
+          state.agentLabel === "smoke-supervisor-agent" &&
+          state.piSessionId === childSessionId;
+        if (!matches && !resultPresent) continue;
+        const sample = {
+          mailbox: dir.name,
+          matchesOwnerAgentSession: matches,
+          statePresent,
+          state: state
+            ? {
+                version: state.version,
+                runId: state.runId,
+                ownerSessionId: state.ownerSessionId,
+                workspaceId: state.workspaceId,
+                agentLabel: state.agentLabel,
+                paneId: state.paneId,
+                piSessionId: state.piSessionId,
+                activeRequestId: state.activeRequestId,
+                completedRequestId: state.completedRequestId,
+                resultError: state.resultError,
+                lastAck: state.lastAck,
+                updatedAt: state.updatedAt,
+              }
+            : null,
+          resultPresent,
+          result: result
+            ? {
+                runId: result.runId,
+                requestId: result.requestId,
+                ownerSessionId: result.ownerSessionId,
+                workspaceId: result.workspaceId,
+                agentLabel: result.agentLabel,
+                paneId: result.paneId,
+                status: result.status,
+                text:
+                  typeof result.text === "string"
+                    ? result.text.slice(0, 1200)
+                    : null,
+                error: result.error,
+                completedAt: result.completedAt,
+              }
+            : null,
+        };
+        current.set(dir.name, sample);
+      }
+    } catch (error) {
+      ctx.supervisorAgentTimeline ??= {
+        startedAt: new Date(timelineStartedAt).toISOString(),
+        events: [],
+      };
+      ctx.supervisorAgentTimeline.mailboxScanError = String(
+        error?.message ?? error,
+      ).slice(0, 500);
+    }
+    ctx.supervisorAgentTimeline ??= {
+      startedAt: new Date(timelineStartedAt).toISOString(),
+      events: [],
+    };
+    const timeline = ctx.supervisorAgentTimeline;
+    for (const [dir, sample] of current) {
+      const previous = mailboxPreviouslySeen.get(dir);
+      const serialized = JSON.stringify(sample);
+      if (serialized !== previous?.serialized && timeline.events.length < 64)
+        timeline.events.push({
+          at: new Date(now).toISOString(),
+          elapsedMs: now - timelineStartedAt,
+          type: previous ? "mailbox-change" : "mailbox-first-seen",
+          ...sample,
+        });
+      mailboxPreviouslySeen.set(dir, { serialized });
+    }
+    for (const dir of mailboxPreviouslySeen.keys()) {
+      if (!current.has(dir) && timeline.events.length < 64) {
+        timeline.events.push({
+          at: new Date(now).toISOString(),
+          elapsedMs: now - timelineStartedAt,
+          type: "mailbox-disappeared",
+          mailbox: dir,
+        });
+        mailboxPreviouslySeen.delete(dir);
+      }
+    }
+    const delivered = entries.find((entry) => {
+      const message = entry.type === "custom_message" ? entry : entry.message;
+      const details = message?.details;
+      return (
+        message?.customType === "pi-herdsman-agent-result" &&
+        details?.requestId === requestId &&
+        details?.piSessionId === childSessionId &&
+        details?.agentLabel === "smoke-supervisor-agent" &&
+        details?.agentDefinition === "smoke-agent" &&
+        details?.status === "completed" &&
+        messageText(message.content).startsWith(
+          `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed`,
+        ) &&
+        messageText(message.content).includes(
+          "SMOKE_SUPERVISOR_AGENT_COMPLETED",
+        )
+      );
+    });
+    timeline.requestId = requestId;
+    timeline.childSessionId = childSessionId;
+    timeline.mailboxesPresent = [...current.values()];
+    timeline.rootSessionPath = session.path;
+    timeline.rootTail = entries
+      .filter((entry) => entry.type === "message")
+      .slice(-12)
+      .map(({ message = {} }) => ({
+        role: message.role ?? null,
+        toolName: message.toolName ?? null,
+        toolCallId: message.toolCallId ?? null,
+        isError: message.isError ?? null,
+        stopReason: message.stopReason ?? null,
+        errorMessage:
+          typeof message.errorMessage === "string"
+            ? message.errorMessage.slice(0, 500)
+            : null,
+        details: message.details
+          ? {
+              requestId: message.details.requestId,
+              agentLabel: message.details.agentLabel,
+              agentDefinition: message.details.agentDefinition,
+              piSessionId: message.details.piSessionId,
+              status: message.details.status,
+            }
+          : null,
+        text: messageText(message.content).slice(0, 1000),
+      }));
+    timeline.deliveredResultObserved = !!delivered;
+    timeline.currentAgents = (listed.agents ?? []).map((agent) => ({
+      paneId: agent.pane_id ?? null,
+      status: agent.agent_status ?? null,
+      session: agent.agent_session ?? null,
+    }));
+  };
+  const delivered = await waitForEvidence(
+    ctx,
+    "supervisor-agent-result-delivery",
+    async () => {
+      const session = await rootSessionSnapshot(ctx);
+      if (!session) return { done: false };
+      const listed = await tryNestedCommand(ctx, ["agent", "list"]);
+      if (!listed.ok) throw observationFailure(listed.error);
+      const entries = sessionEntries(session.contents);
+      const calls = entries.flatMap((entry, index) =>
+        entry.type === "message" && entry.message?.role === "assistant"
+          ? (entry.message.content ?? [])
+              .filter(
+                (part) =>
+                  part.type === "toolCall" &&
+                  part.name === "delegate_agent" &&
+                  part.arguments?.label === "smoke-supervisor-agent",
+              )
+              .map((call) => ({ call, index }))
+          : [],
+      );
+      for (const { call, index } of calls) {
+        const resultIndex = entries.findIndex(
+          (entry, i) =>
+            i > index &&
+            entry.type === "message" &&
+            entry.message?.role === "toolResult" &&
+            entry.message.toolName === "delegate_agent" &&
+            entry.message.toolCallId === call.id &&
+            !entry.message.isError,
+        );
+        const failed = entries.find(
+          (entry, i) =>
+            i > index &&
+            entry.type === "message" &&
+            entry.message?.role === "toolResult" &&
+            entry.message.toolName === "delegate_agent" &&
+            entry.message.toolCallId === call.id &&
+            entry.message.isError,
+        );
+        if (failed)
+          throw new Error(
+            `Supervisor Agent assignment failed: ${messageText(failed.message.content)}`,
+          );
+        if (resultIndex < 0) continue;
+        const assignmentResult = messageText(
+          entries[resultIndex].message.content,
+        );
+        const childSessionId =
+          assignmentResult.match(/^Session: ([^\n]+)$/m)?.[1];
+        const requestId = assignmentResult.match(/^Request: ([^\n]+)$/m)?.[1];
+        if (!childSessionId || !requestId)
+          throw new Error(
+            "Supervisor Agent assignment result omitted session/request identity",
+          );
+        const handoffIndex = entries.findIndex(
+          (entry, i) =>
+            i > resultIndex &&
+            entry.type === "custom_message" &&
+            entry.customType === "pi-herdsman-agent-result" &&
+            entry.details?.requestId === requestId &&
+            entry.details?.piSessionId === childSessionId &&
+            entry.details?.agentLabel === "smoke-supervisor-agent" &&
+            entry.details?.agentDefinition === "smoke-agent" &&
+            entry.details?.status === "completed",
+        );
+        await sampleHandoffTimeline(
+          session,
+          requestId,
+          childSessionId,
+          listed.value,
+        );
+        const expectedHeader = `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed`;
+        const handoff = handoffIndex >= 0 ? entries[handoffIndex] : null;
+        const completion =
+          handoffIndex >= 0 &&
+          entries
+            .slice(handoffIndex + 1)
+            .some(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message?.role === "assistant" &&
+                messageText(entry.message.content).includes(
+                  "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED",
+                ),
+            );
+        if (
+          handoff &&
+          messageText(handoff.content).startsWith(expectedHeader) &&
+          messageText(handoff.content).includes(
+            "SMOKE_SUPERVISOR_AGENT_COMPLETED",
+          ) &&
+          completion
+        ) {
+          ctx.supervisorAgentEvidence = {
+            session: session.path,
+            assignment: call.arguments,
+            requestId,
+            childSessionId,
+            result: messageText(handoff.content),
+          };
+          return { done: true, value: session };
+        }
+      }
+      return {
+        done: false,
+        progress: {
+          calls: calls.length,
+          agents: (listed.value.agents ?? []).map(
+            ({ pane_id, agent_status, agent_session }) => ({
+              pane_id,
+              agent_status,
+              sessionKind: agent_session?.kind,
+            }),
+          ),
+        },
+      };
+    },
+    { timeoutMs: 60_000, stallMs: 30_000 },
+  );
+  assert.ok(delivered);
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/chief leave");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Leave chief mode?",
+    "--timeout",
+    "15000",
+  ]);
+  await submitPaneCommand(ctx, ctx.rootPaneId, "y");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Chief mode left.",
+    "--timeout",
+    "15000",
+  ]);
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/smoke-tools lead-after");
+  const snapshots = await waitForEvidence(
+    ctx,
+    "supervisor-agent-lead-tool-snapshot",
+    async () => {
+      try {
+        const current = parseToolSnapshots(
+          await readFile(ctx.chiefTreeResultFile, "utf8"),
+        );
+        return { done: current.has("lead-after"), value: current };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: false };
+        throw error;
+      }
+    },
+    { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+  );
+  assert.ok(
+    snapshots.has("lead-after"),
+    "ordinary Lead tool snapshot missing after Chief transition",
+  );
+  assert.deepEqual(
+    snapshots.get("lead-after"),
+    leadBeforeChief,
+    "Chief leave did not restore the ordinary Lead tool snapshot",
+  );
+}
+
+async function prepareSupervisorAgent(ctx) {
+  const definitions = join(ctx.rootCwd, ".pi", "agents");
+  await mkdir(definitions, { recursive: true });
+  await writeFile(
+    join(definitions, "smoke-agent.md"),
+    `---\nname: smoke-agent\nmodel: smoke-faux/supervisor-agent\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\nReturn the requested completion marker.\n`,
+  );
+  const globalAgents = join(ctx.paths.piAgent, "agents");
+  await mkdir(globalAgents, { recursive: true });
+  await writeFile(
+    join(globalAgents, "chief.md"),
+    "---\nname: chief\nagents: [smoke-agent]\n---\n",
+  );
+}
+
 export function descendantCleanupStatus(
   inspection,
   previouslyVerified,
@@ -4972,6 +5450,244 @@ export async function collectDiagnostics(
   } catch (error) {
     diagnostics.rootSession = { error: error.message };
   }
+  if (ctx.scenario === "supervisor-agent") {
+    const session =
+      rootSession.status === "fulfilled" ? rootSession.value : null;
+    const entries = session ? sessionEntries(session.contents) : [];
+    const calls = entries.flatMap((entry, index) =>
+      entry.type === "message" && entry.message?.role === "assistant"
+        ? (entry.message.content ?? [])
+            .filter(
+              (part) =>
+                part.type === "toolCall" &&
+                part.name === "delegate_agent" &&
+                part.arguments?.label === "smoke-supervisor-agent",
+            )
+            .map((call) => ({ call, index }))
+        : [],
+    );
+    diagnostics.supervisorAgent = {
+      rootSessionPath: session?.path ?? null,
+      liveTimeline: ctx.supervisorAgentTimeline ?? null,
+      assignments: calls.map(({ call, index }) => {
+        const result = entries.find(
+          (entry, resultIndex) =>
+            resultIndex > index &&
+            entry.type === "message" &&
+            entry.message?.role === "toolResult" &&
+            entry.message.toolName === "delegate_agent" &&
+            entry.message.toolCallId === call.id,
+        )?.message;
+        return {
+          toolCallId: call.id,
+          arguments: call.arguments,
+          outcome: result ? (result.isError ? "error" : "success") : "pending",
+          result: result ? messageText(result.content).slice(0, 2000) : null,
+        };
+      }),
+    };
+    const latestAssignment = diagnostics.supervisorAgent.assignments.at(-1);
+    const childSessionId =
+      latestAssignment?.result?.match(/^Session: ([^\n]+)/m)?.[1];
+    const requestId =
+      latestAssignment?.result?.match(/^Request: ([^\n]+)/m)?.[1];
+    diagnostics.supervisorAgent.childSessionId = childSessionId ?? null;
+    diagnostics.supervisorAgent.requestId = requestId ?? null;
+    const rootEntries = entries.filter((entry) => entry.type === "message");
+    const assignmentEntryIndex = calls.at(-1)?.index ?? 0;
+    diagnostics.supervisorAgent.rootEntries = rootEntries
+      .filter((entry) => entries.indexOf(entry) >= assignmentEntryIndex)
+      .slice(-20)
+      .map((entry) => {
+        const message = entry.message ?? {};
+        return {
+          role: message.role ?? null,
+          toolName: message.toolName ?? null,
+          toolCallId: message.toolCallId ?? null,
+          isError: message.isError ?? null,
+          stopReason: message.stopReason ?? null,
+          errorMessage:
+            typeof message.errorMessage === "string"
+              ? message.errorMessage.slice(0, 1000)
+              : null,
+          calls: (Array.isArray(message.content) ? message.content : [])
+            .filter((part) => part.type === "toolCall")
+            .map((part) => ({
+              id: part.id,
+              name: part.name,
+              arguments: part.arguments,
+            })),
+          text: messageText(message.content).slice(0, 2000),
+        };
+      });
+    if (requestId && session) {
+      const mailboxRoot = join(
+        ctx.paths.piAgent,
+        "pi-herdsman",
+        "runtime",
+        "mailboxes-v5",
+      );
+      const mailboxEvidence = [];
+      let mailboxDirectoriesScanned = 0;
+      try {
+        const dirs = await readdir(mailboxRoot, { withFileTypes: true });
+        for (const dir of dirs.slice(0, 256)) {
+          if (!dir.isDirectory() || !/^[0-9a-f]{32}$/.test(dir.name)) continue;
+          mailboxDirectoriesScanned++;
+          const path = join(mailboxRoot, dir.name);
+          let state;
+          try {
+            const statePath = join(path, "state.json");
+            const details = await lstat(statePath);
+            if (
+              !details.isFile() ||
+              details.isSymbolicLink() ||
+              details.size > 64 * 1024
+            )
+              continue;
+            state = JSON.parse(await readFile(statePath, "utf8"));
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+            state = null;
+          }
+          let result = null;
+          try {
+            const resultPath = join(path, `result-${requestId}.json`);
+            const details = await lstat(resultPath);
+            if (
+              details.isFile() &&
+              !details.isSymbolicLink() &&
+              details.size <= 64 * 1024
+            )
+              result = JSON.parse(await readFile(resultPath, "utf8"));
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+          }
+          const ownerSessionId = sessionEntries(session.contents).find(
+            (entry) => entry.type === "session",
+          )?.id;
+          const stateMatches =
+            !!state &&
+            state.ownerSessionId === ownerSessionId &&
+            state.agentLabel === latestAssignment?.arguments?.label &&
+            [state.activeRequestId, state.completedRequestId].includes(
+              requestId,
+            );
+          if (
+            stateMatches ||
+            result ||
+            state?.agentLabel === latestAssignment?.arguments?.label
+          )
+            mailboxEvidence.push({
+              mailbox: dir.name,
+              stateMatches,
+              ownerMatches: state?.ownerSessionId === ownerSessionId,
+              requestMatches: [
+                state?.activeRequestId,
+                state?.completedRequestId,
+              ].includes(requestId),
+              state,
+              result,
+            });
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          diagnostics.supervisorAgent.mailboxError = String(
+            error?.message ?? error,
+          ).slice(0, 500);
+      }
+      diagnostics.supervisorAgent.mailboxDirectoriesScanned =
+        mailboxDirectoriesScanned;
+      diagnostics.supervisorAgent.mailboxes = mailboxEvidence;
+    }
+    if (childSessionId) {
+      const records = diagnostics.agents.ok
+        ? (diagnostics.agents.value?.agents ?? [])
+        : [];
+      let childRecord = records.find(
+        (agent) =>
+          agent.agent_session?.kind === "id" &&
+          agent.agent_session.value === childSessionId,
+      );
+      if (!childRecord) {
+        for (const agent of records) {
+          if (agent.agent_session?.kind !== "path") continue;
+          const details = await isolatedSessionDetails(ctx, agent);
+          if (details?.id === childSessionId) {
+            childRecord = agent;
+            break;
+          }
+        }
+      }
+      diagnostics.supervisorAgent.childAgent = childRecord
+        ? {
+            paneId: childRecord.pane_id ?? null,
+            status: childRecord.agent_status ?? null,
+            sessionIdentity: childRecord.agent_session ?? null,
+          }
+        : null;
+      let childSession;
+      try {
+        childSession = await exactIsolatedSession(ctx, childSessionId);
+      } catch (error) {
+        diagnostics.supervisorAgent.childSessionError = String(
+          error?.message ?? error,
+        ).slice(0, 500);
+      }
+      diagnostics.supervisorAgent.childSession = childSession
+        ? {
+            path: childSession.path,
+            ...summarizeSession(childSession.contents),
+          }
+        : null;
+      const childPaneId = childRecord?.pane_id;
+      if (childPaneId) {
+        const [terminal, processes] = await Promise.allSettled([
+          execute(
+            "herdr",
+            [
+              "pane",
+              "read",
+              childPaneId,
+              "--source",
+              "recent-unwrapped",
+              "--lines",
+              "100",
+            ],
+            { env, timeout: OBSERVATION_TIMEOUT_MS },
+          ),
+          observe(["pane", "process-info", "--pane", childPaneId], {
+            env,
+            timeout: OBSERVATION_TIMEOUT_MS,
+          }),
+        ]);
+        diagnostics.supervisorAgent.childTerminal =
+          terminal.status === "fulfilled"
+            ? terminal.value.stdout.slice(-12_000)
+            : String(terminal.reason?.message ?? terminal.reason).slice(0, 500);
+        diagnostics.supervisorAgent.childProcesses =
+          processes.status === "fulfilled" && processes.value.ok
+            ? await bestEffortProcessDiagnostics(
+                [childPaneId],
+                ctx.rootPaneId,
+                async () => processes.value.value,
+                ctx.candidateExtension,
+                ctx.herdrStateExtension,
+              )
+            : {
+                error:
+                  processes.status === "rejected"
+                    ? String(
+                        processes.reason?.message ?? processes.reason,
+                      ).slice(0, 500)
+                    : processes.value.error,
+              };
+      } else {
+        diagnostics.supervisorAgent.childTerminal = null;
+        diagnostics.supervisorAgent.childProcesses = null;
+      }
+    }
+  }
   diagnostics.root =
     rootPane.status === "fulfilled"
       ? rootPane.value.stdout.slice(-20_000)
@@ -5048,6 +5764,9 @@ export async function collectDiagnostics(
     candidateProcessesObserved: Array.isArray(diagnostics.processes)
       ? diagnostics.processes.filter((record) => record.processMatch).length
       : null,
+    ...(diagnostics.supervisorAgent
+      ? { supervisorAgent: diagnostics.supervisorAgent }
+      : {}),
   };
 }
 
@@ -5489,7 +6208,7 @@ async function main() {
     repoRoot,
     candidateExtension: join(repoRoot, "dist", "index.js"),
     herdrStateExtension: paths.herdrStateExtension,
-    ...(scenario === "chief-tree"
+    ...(scenario === "chief-tree" || scenario === "supervisor-agent"
       ? {
           chiefTreeProbeExtension: join(
             paths.piAgent,
@@ -5527,10 +6246,16 @@ async function main() {
   let evidence;
   try {
     ctx.rootCwd =
-      scenario === "manager-recovery" || scenario === "terminal-failure"
+      scenario === "manager-recovery" ||
+      scenario === "terminal-failure" ||
+      scenario === "supervisor-agent"
         ? await prepareManagerRepository(paths)
         : repoRoot;
-    if (scenario === "manager-recovery" || scenario === "terminal-failure") {
+    if (
+      scenario === "manager-recovery" ||
+      scenario === "terminal-failure" ||
+      scenario === "supervisor-agent"
+    ) {
       ctx.primaryCheckoutPath = ctx.rootCwd;
     }
     await prepareHerdr(paths);
@@ -5556,6 +6281,7 @@ async function main() {
       if (scenario === "continuation")
         await prepareContinuationFaux(paths, ctx.simulatedProviderExtension);
     }
+    if (scenario === "supervisor-agent") await prepareSupervisorAgent(ctx);
     if (args.simulated) ctx.authMechanism = "not required (simulated)";
     else ctx.authMechanism = await preparePi(paths, model);
     if (ctx.chiefTreeProbeExtension)
@@ -5608,6 +6334,10 @@ async function main() {
           snapshots: ctx.chiefTreeProbeDiagnostics,
           selectedBranch: ctx.chiefTreeBranchPlan,
         })}`,
+      );
+    if (scenario === "supervisor-agent")
+      console.log(
+        `supervisor-agent: ${JSON.stringify(ctx.supervisorAgentEvidence)}`,
       );
     if (scenario === "manager-recovery")
       console.log(`manager-recovery: ${JSON.stringify(ctx.managerRecovery)}`);

@@ -7492,6 +7492,43 @@ test("managed startup accepts matching mailbox state after five seconds", async 
   }
 });
 
+test("managed startup waits for the child assignment lock before first submit", async () => {
+  setLeadEnvironment();
+  const label = "startup-lock-held";
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  let releaseChildLock: (() => void) | undefined;
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        releaseChildLock = claimProcessLock(
+          assignmentLockPathForTest(startup.mailbox),
+        );
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  try {
+    const resultPromise = registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "wait for child startup lock" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    releaseChildLock?.();
+    releaseChildLock = undefined;
+    const result = await resultPromise;
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+  } finally {
+    releaseChildLock?.();
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
 test("managed startup rejects a mismatched Agent before its first task and rolls back", async () => {
   setLeadEnvironment();
   const label = "incompatible-startup";

@@ -9674,3 +9674,59 @@ test("listing and transcript action retain distinct transcript-readiness callbac
     realFs.rmSync(identity.piSessionFile, { force: true });
   }
 });
+
+test("root assignments fail closed when delegation authority callbacks are missing", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const context = fakeContext() as any;
+  const pi = fakePi();
+  const baseOptions = {
+    scope: { kind: "root" },
+    build: HERDSMAN_BUILD,
+    extensionPath: "test",
+    isContextRetired: () => false,
+    snapshotDependencies: {
+      runtimeForLabel: () => undefined,
+      readLeadSessionIds: () => [],
+      staleAfterMs: 60_000,
+    },
+    persistedTranscriptReady: () => false,
+    agentDefinitions: async () => [],
+    readTranscript: () => ({ transcript: "", truncated: false }),
+    workspaceId: () => WORKSPACE,
+    sendResultMessage: () => undefined,
+    sendAskMessage: () => undefined,
+    sessionRetired: () => false,
+    appendError: () => undefined,
+    onChanged: () => undefined,
+    onWorkChanged: () => undefined,
+    reportWatcherError: () => undefined,
+  };
+  for (const missing of ["rootDelegationPolicy", "rootDelegationGeneration"]) {
+    const options = {
+      ...baseOptions,
+      rootDelegationPolicy: () => "all",
+      rootDelegationGeneration: () => ({
+        sessionId: context.sessionManager.getSessionId(),
+        roleGeneration: 1,
+      }),
+    } as Record<string, unknown>;
+    delete options[missing];
+    const controller = createAgentController(pi.pi as never, options as any);
+    for (const params of [
+      { action: "delegate", definition: "agent", task: "must reject" },
+      {
+        action: "continue",
+        session: "/tmp/existing-session.jsonl",
+        task: "must reject",
+      },
+    ])
+      await assert.rejects(
+        controller.action(context, params as any),
+        /Root delegation authority is unavailable/,
+      );
+  }
+  assert.equal(
+    pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+  );
+});

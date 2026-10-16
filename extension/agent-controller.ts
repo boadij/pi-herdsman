@@ -77,6 +77,7 @@ import {
   claimProcessLock,
   claimSessionActivationLock as claimExactSessionActivationLock,
   ProcessLockOccupiedError,
+  tryClaimAssignmentLock,
 } from "./lock.ts";
 import type {
   SpawnPlacement,
@@ -2616,6 +2617,27 @@ export function createAgentController(
             "Let the current managed assignment transition finish, then retry.",
         });
       throw error;
+    }
+  };
+  const waitForAssignmentLock = async (
+    mailbox: string,
+    signal: AbortSignal,
+    operation: string,
+    label: string,
+  ) => {
+    const deadline = Date.now() + 30_000;
+    while (true) {
+      const release = tryClaimAssignmentLock(mailbox);
+      if (release) {
+        release();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        const finalRelease = claimAssignmentLock(mailbox, operation, { label });
+        finalRelease();
+        return;
+      }
+      await delay(10, undefined, { signal });
     }
   };
   const claimSessionActivationLock = (sessionPath: string): (() => void) => {
@@ -5190,7 +5212,7 @@ export function createAgentController(
     resultDeliveryInFlight.add(key);
     try {
       const expected = resultIdentity(runtime, result.requestId);
-      if (
+      const identityMismatch =
         runtimes.get(runtime.label) !== runtime ||
         result.runId !== runtime.runId ||
         result.ownerSessionId !== runtime.ownerSessionId ||
@@ -5198,9 +5220,8 @@ export function createAgentController(
         result.agentLabel !== runtime.label ||
         result.paneId !== runtime.paneId ||
         result.requestId !==
-          (runtime.activeRequestId ?? runtime.completedRequestId)
-      )
-        return;
+          (runtime.activeRequestId ?? runtime.completedRequestId);
+      if (identityMismatch) return;
       const entries = context.sessionManager.getEntries();
       const evidenceKey = JSON.stringify(Object.values(expected));
       if (
@@ -5396,11 +5417,27 @@ export function createAgentController(
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
     validateAssignmentRequest(p);
-    const initiatingRootGeneration =
+    const rootAssignment =
       (p.action === "delegate" || p.action === "continue") &&
-      scope?.kind === "root"
-        ? options.rootDelegationGeneration?.()
-        : undefined;
+      scope?.kind === "root";
+    if (
+      rootAssignment &&
+      (!options.rootDelegationPolicy || !options.rootDelegationGeneration)
+    )
+      fail(
+        "invalid_request",
+        "Root delegation authority is unavailable",
+        p.action,
+      );
+    const initiatingRootGeneration = rootAssignment
+      ? options.rootDelegationGeneration!()
+      : undefined;
+    if (rootAssignment && !initiatingRootGeneration)
+      fail(
+        "invalid_request",
+        "Root delegation authority is unavailable",
+        p.action,
+      );
     const limits = await messageLimits(ctx);
     const assignment =
       p.action === "delegate" || p.action === "continue"
@@ -5465,18 +5502,21 @@ export function createAgentController(
             "Root role or authority changed during Agent assignment preflight",
             p.action,
           );
-        if (
-          scope.kind === "root" &&
-          !permitsRootDelegation(
-            options.rootDelegationPolicy?.() ?? "all",
-            agentDefinition,
-          )
-        )
-          fail(
-            "invalid_request",
-            `Agent definition ${agentDefinition} is not allowed`,
-            p.action,
-          );
+        if (scope.kind === "root") {
+          const policy = options.rootDelegationPolicy!();
+          if (!policy)
+            fail(
+              "invalid_request",
+              "Root delegation authority is unavailable",
+              p.action,
+            );
+          if (!permitsRootDelegation(policy, agentDefinition))
+            fail(
+              "invalid_request",
+              `Agent definition ${agentDefinition} is not allowed`,
+              p.action,
+            );
+        }
       };
       assertRootDelegationAllowed();
       validateAssignmentCwd(definition, agentCwd, ctx.cwd, scope, p.action);
@@ -6051,6 +6091,7 @@ export function createAgentController(
         });
         for (const participant of preparedBootstrap)
           await participant.commit?.();
+        await waitForAssignmentLock(mailbox, signal, p.action, label);
         runtimes.set(label, runtime);
         options.onChanged();
         const requestId = await submit(
