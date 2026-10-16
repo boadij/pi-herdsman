@@ -646,6 +646,10 @@ type LeadInboxHost = LeadInboxBaseHost & {
   peerContext(
     record: PeerLeadRecord,
     ctx: ExtensionContext,
+    assignmentSnapshot?: Map<
+      string,
+      import("./supervision.ts").GlobalProjectAssignment[]
+    >,
     requireFreshGroup?: boolean,
   ): Promise<import("./supervision.ts").PeerContext | undefined>;
   assertCurrentLeadCoordination(ctx: ExtensionContext): void;
@@ -3003,8 +3007,18 @@ export function registerLeadRuntime(
     peerContext: (
       record: PeerLeadRecord,
       ctx: ExtensionContext,
-      fresh = false,
-    ) => coordinationRuntime.peerContext(record, ctx, undefined, fresh),
+      assignmentSnapshot?: Map<
+        string,
+        import("./supervision.ts").GlobalProjectAssignment[]
+      >,
+      requireFreshGroup = false,
+    ) =>
+      coordinationRuntime.peerContext(
+        record,
+        ctx,
+        assignmentSnapshot,
+        requireFreshGroup,
+      ),
     assertCurrentLeadCoordination: (ctx: ExtensionContext) =>
       coordinationRuntime.assertCurrentLeadCoordination(ctx),
     currentChiefAuthority: (
@@ -9614,11 +9628,19 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 const source = record.peerSource;
                 if (!recipient || !source)
                   throw new Error("Peer eligibility changed before delivery");
+                const assignmentSnapshot =
+                  source.role === "lead"
+                    ? globalProjectAssignmentSnapshot()
+                    : undefined;
+                const recipientManaged =
+                  (assignmentSnapshot?.get(recipient.piSessionId)?.length ??
+                    0) > 0;
                 const recipientContext = await peerContext(
                   recipient,
                   ctx,
-                  undefined,
-                  source.role === "lead",
+                  assignmentSnapshot,
+                  source.role === "lead" &&
+                    (source.managed || recipientManaged),
                 );
                 if (
                   !recipientContext ||
@@ -9636,12 +9658,16 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     peerRuntime(),
                     recipient.piSessionId,
                   );
+                  const senderMatches =
+                    snapshot?.get(record.fromSessionId) ?? [];
                   const matches = snapshot?.get(recipient.piSessionId) ?? [];
                   const assignment = matches[0];
                   const contextCurrent =
                     recipientContext.role === "manager"
                       ? !snapshot
                       : !!snapshot &&
+                        senderMatches.length <= 1 &&
+                        (!!senderMatches.length === source.managed) &&
                         matches.length <= 1 &&
                         !!matches.length === recipientContext.managed &&
                         (!assignment ||
@@ -9667,7 +9693,15 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   recipientContext.role === "manager"
                 )
                   submit();
-                else withProjectAssignmentAuthority(submit);
+                else withProjectAssignmentAuthority((snapshot) => {
+                  if (
+                    source.role === "lead" &&
+                    (!!(snapshot.get(record.fromSessionId)?.length ?? 0) !==
+                      source.managed)
+                  )
+                    throw new Error("Peer eligibility changed before delivery");
+                  submit(snapshot);
+                });
                 result = submitted;
               } else {
                 importResultBindings(pi, ctx, resultBindings, record.kind);

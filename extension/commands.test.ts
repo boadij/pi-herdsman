@@ -24,6 +24,7 @@ import type {
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
   claimChiefLease as claimChiefLeaseRaw,
+  globalProjectAssignmentSnapshot,
   listProjectAssignments,
   projectAssignmentPath,
   listCoordinationMessagePaths,
@@ -538,6 +539,107 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     rmSync(managerOverride, { force: true });
+  }
+});
+
+test("ordinary Leads deliver peer messages across non-Git sockets", async (t) => {
+  setLeadEnvironment();
+  const runtime = peerRuntime();
+  const leads = ["sender", "recipient"].map((name) => ({
+    sessionId: `${name}-${randomUUID()}`,
+    paneId: `${name}-pane-${randomUUID()}`,
+    tabId: `${name}-tab-${randomUUID()}`,
+    workspaceId: `${name}-workspace-${randomUUID()}`,
+    socket: join(tmpdir(), `${name}-${randomUUID()}.sock`),
+  }));
+  const recipientEntries: unknown[] = [];
+  const fixtures = leads.map((lead, index) => {
+    const pi = fakeChiefPi({
+      activeTools: ["read", "bash"],
+      ...(index === 1
+        ? {
+            entries: recipientEntries,
+            sendMessage: (message: unknown) => recipientEntries.push(message),
+          }
+        : {}),
+    });
+    const context = fakeContext(pi.entries) as any;
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    context.sessionManager = {
+      ...context.sessionManager,
+      getSessionId: () => lead.sessionId,
+    };
+    return { pi, context };
+  });
+  const setEnvironment = (lead: (typeof leads)[number]) => {
+    process.env.HERDR_PANE_ID = lead.paneId;
+    process.env.HERDR_TAB_ID = lead.tabId;
+    process.env.HERDR_SOCKET_PATH = lead.socket;
+    process.env.HERDR_WORKSPACE_ID = lead.workspaceId;
+  };
+  try {
+    for (let index = 0; index < leads.length; index++) {
+      setEnvironment(leads[index]!);
+      registerExtension!(fixtures[index]!.pi.pi as never);
+      await fixtures[index]!.pi.events.get("session_start")![0](
+        undefined,
+        fixtures[index]!.context,
+      );
+      await fixtures[index]!.pi.commandOptions
+        .get("lead")
+        .handler("orchestrate", fixtures[index]!.context);
+    }
+
+    for (const lead of leads) {
+      assert.equal(readPeerLeadRecord(runtime, lead.sessionId)?.group, null);
+    }
+    const assignmentSnapshot = globalProjectAssignmentSnapshot();
+    for (const lead of leads) {
+      assert.equal(assignmentSnapshot.get(lead.sessionId)?.length ?? 0, 0);
+    }
+    const sender = fixtures[0]!;
+    await sender.pi.tools
+      .find((tool) => tool.name === "message_peer")!
+      .execute(
+        "message",
+        { session: leads[1]!.sessionId, message: "ordinary non-Git message" },
+        undefined,
+        undefined,
+        sender.context,
+      );
+    assert.equal(
+      listCoordinationMessagePaths(runtime, leads[1]!.sessionId).length,
+      1,
+    );
+
+    setEnvironment(leads[1]!);
+    await t.waitFor(
+      () => {
+        assert.deepEqual(
+          listCoordinationMessagePaths(runtime, leads[1]!.sessionId),
+          [],
+        );
+        assert.equal(
+          fixtures[1]!.pi.sentMessageCalls.filter((call) =>
+            String((call.message as any)?.content ?? "").includes(
+              "ordinary non-Git message",
+            ),
+          ).length,
+          1,
+        );
+      },
+      { timeout: 5000 },
+    );
+  } finally {
+    for (let index = leads.length - 1; index >= 0; index--) {
+      setEnvironment(leads[index]!);
+      await fixtures[index]!.pi.events.get("session_shutdown")?.[0]();
+    }
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_WORKSPACE_ID;
   }
 });
 
