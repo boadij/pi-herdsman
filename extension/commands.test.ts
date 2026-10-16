@@ -453,7 +453,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     await pi.commandOptions.get("manager").handler("", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...managerTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     const targetId = `manager-peer-${randomUUID()}`;
     const targetLease = acquireProcessLock(
       peerLeadLockPath(peerRuntime(), targetId),
@@ -501,7 +501,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       removePeerLeadRecord(peerRuntime(), targetId);
     }
     await pi.commandOptions.get("lead").handler("flexible", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...managerTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
       leadTools: baseline,
@@ -512,6 +512,9 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       sessionLeadExecutionState(pi.entries)?.leadTools,
       baseline,
     );
+    writeFileSync(managerOverride, "---\nname: manager\ntools: [read]\n---\n");
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: []\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
@@ -2053,7 +2056,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     failManagerMetadata = true;
     failManagerRename = true;
     await first.commandOptions.get("manager").handler("", ctx1);
-    assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(first.pi.getActiveTools(), managerTools);
     assert.deepEqual(
       tabCommands.at(-1),
       ["tab", "rename", "root-tab", "Manager"],
@@ -2250,7 +2253,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         /Chief mode is unavailable to a project Manager/.test(message),
       ),
     );
-    assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(first.pi.getActiveTools(), managerTools);
     const collisionNotices: string[] = [];
     ctx2.ui.notify = (message: string) => collisionNotices.push(message);
     await second.events.get("session_start")![0](undefined, ctx2);
@@ -2556,7 +2559,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
         "manager",
       );
-      assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
+      assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     }
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(
@@ -2752,7 +2755,7 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     const sessionId = `manager-${randomUUID()}`;
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.ok(pi.tools.some((tool) => tool.name === "delegate_project"));
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
@@ -2958,7 +2961,7 @@ test("Manager auto-start activates after identity and coordination verification 
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(healthyLeadCoordinationBeforeIdentityCheck, true);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.workspaceId,
       WORKSPACE,

@@ -651,12 +651,12 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
   assert.deepEqual(orchestrator!.frontmatter.tools, []);
-  assert.equal(
+  assert.deepEqual(
     withPiAgentDir(
       global,
       () => discoverRoleDefinition("manager").frontmatter.tools,
     ),
-    undefined,
+    [],
   );
   assert.deepEqual(
     withPiAgentDir(
@@ -721,6 +721,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   const manager = withPiAgentDir(global, () =>
     discoverRoleDefinition("manager", { projectRoot: project }),
   );
+  assert.deepEqual(manager.frontmatter.tools, []);
   assert.match(manager.body, /Project manager guidance/);
   assert.match(manager.body, /Global manager guidance/);
   const chief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));

@@ -59,12 +59,24 @@ Leads use `managed-lead` instead.
 The reserved `manager` and `chief` definitions customize the existing
 supervisory roles without granting or changing authority. Both support the
 runtime-profile fields described in the [schema](../reference/agent-definition-schema.md).
-Manager preserves the ordinary Lead tool baseline when `tools` is omitted;
-Chief defaults to `tools: []`, leaving only required staff coordination tools.
-Explicit ordinary tool policies cannot activate Herdsman-owned tools or remove
-the role's mandatory coordination tools. Manager and Chief can separately
-opt in to fresh direct Agent delegation with `agents`; omitting it or setting
-`agents: []` disables new direct work. For example:
+Manager and Chief default to `tools: []`, exposing only their required
+coordination capabilities. Manager's saved ordinary Lead tool baseline remains
+intact and is restored when Manager mode ends. Explicit trusted-project or
+global Manager overrides can enable registered ordinary tools. Explicit
+ordinary tool policies cannot activate Herdsman-owned tools or remove the
+role's mandatory coordination tools. For example:
+
+```yaml
+---
+name: manager
+tools: [read, bash]
+---
+```
+
+This opt-in adds ordinary tools without removing mandatory coordination
+tools. Manager and Chief can separately opt in to fresh direct Agent
+delegation with `agents`; omitting it or setting `agents: []` disables new
+direct work. For example:
 
 ```yaml
 ---

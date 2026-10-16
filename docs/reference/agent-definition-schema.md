@@ -95,16 +95,18 @@ profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`
 `noExtensions`, `inheritGlobalContext`, and `inheritProjectContext`.
 `bodyMode` is valid only on a matching overlay as described below.
 
-For an ordinary Lead or Manager profile, omitted `tools` preserves the saved
-ordinary Lead tool baseline. Chief's bundled definition sets `tools: []`, so
-its default exposes only mandatory staff coordination tools. An explicit
-`tools` list selects matching registered ordinary tools, then `excludeTools` is
-applied. Herdsman-owned tools cannot be activated through this policy;
-role-required coordination tools are restored after filtering and cannot be
-excluded. Unregistered configured tools remain unavailable rather than
-widening the selected policy. Manager overlays can be trusted-project or global;
-Chief accepts global overlays only because Chief is workspace-neutral. A
-project-local `chief` definition is rejected with guidance to configure it
+An omitted `tools` field inherits the value from lower-precedence definition
+layers. The bundled Flexible Lead leaves this field unspecified, preserving the
+ordinary Lead baseline. Bundled Orchestrate Lead, Manager, and Chief definitions
+explicitly select `tools: []`, disabling ordinary tools by default. Explicit
+effective allowlists select matching registered ordinary tools; required
+coordination tools remain available independently. `excludeTools` is applied
+after the ordinary allowlist. Herdsman-owned tools cannot be activated through
+this policy; role-required coordination tools are restored after filtering and
+cannot be excluded. Unregistered configured tools remain unavailable rather
+than widening the selected policy. Manager overlays can be trusted-project or
+global; Chief accepts global overlays only because Chief is workspace-neutral.
+A project-local `chief` definition is rejected with guidance to configure it
 globally instead. Manager and Chief profiles resolve when activated or restored,
 and repeating `/manager` or `/chief` refreshes the active profile. Invalid
 configuration blocks explicit activation; an invalid profile during verified

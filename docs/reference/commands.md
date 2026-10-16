@@ -233,9 +233,12 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 re-resolves the Manager definition, applies it after the current turn becomes
 idle, then opens the overview; a failed refresh keeps the previous profile.
-Manager definitions accept trusted project and global overlays and preserve
-the ordinary Lead tool baseline when `tools` is omitted. Their `agents`
-allowlist independently controls fresh direct delegation. See
+Manager definitions accept trusted project and global overlays; omitted fields
+inherit from lower-precedence definitions, including the bundled empty ordinary
+tool allowlist. Manager defaults to coordination-only tools. Custom Manager
+definitions can explicitly enable ordinary tools. Leaving Manager restores the
+session's ordinary Lead tool baseline and selected execution profile. Their
+`agents` allowlist independently controls fresh direct delegation. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
 The `Manager auto-start` setting optionally makes a new session attempt

@@ -63,9 +63,12 @@ this skill does not define a second schema or management API.
      tools-default switches, skills, extensions, or context inheritance on
      these profiles. Their tool policy affects registered ordinary tools;
      Herdsman-owned tools cannot be activated through a profile and mandatory
-     required coordination tools remain available. Manager preserves the saved
-     ordinary Lead tool baseline when `tools` is omitted. Chief defaults to no
-     ordinary tools and accepts global overrides only.
+     required coordination tools remain available. Manager defaults to no
+     ordinary tools (`tools: []`); explicit overlays can select registered
+     ordinary tools. The saved ordinary Lead tool baseline is restored when
+     Manager mode ends. Chief also defaults to no ordinary tools and accepts
+     global overrides only. Inspect effective definition layers, validate
+     edits, and repeat `/manager` to refresh a running Manager.
 
 4. Validate through Herdsman's existing definition engine where available.
    - After an edit in a Lead session, call `list_agents` again. Treat any
