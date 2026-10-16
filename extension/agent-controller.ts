@@ -2619,23 +2619,18 @@ export function createAgentController(
       throw error;
     }
   };
-  const waitForAssignmentLock = async (
+  const acquireAssignmentLock = async (
     mailbox: string,
-    signal: AbortSignal,
+    signal: AbortSignal | undefined,
     operation: string,
     label: string,
   ) => {
     const deadline = Date.now() + 30_000;
     while (true) {
       const release = tryClaimAssignmentLock(mailbox);
-      if (release) {
-        release();
-        return;
-      }
+      if (release) return release;
       if (Date.now() >= deadline) {
-        const finalRelease = claimAssignmentLock(mailbox, operation, { label });
-        finalRelease();
-        return;
+        return claimAssignmentLock(mailbox, operation, { label });
       }
       await delay(10, undefined, { signal });
     }
@@ -3350,6 +3345,7 @@ export function createAgentController(
     requestId = randomUUID(),
     operation = kind === "task" ? "delegate" : kind,
     resultBindings: readonly ResultBinding[] = [],
+    submitOptions: { waitForLock?: boolean; beforeWrite?: () => void } = {},
   ): Promise<string> => {
     if (!text.trim())
       fail("invalid_request", "Message must not be empty", operation);
@@ -3379,10 +3375,17 @@ export function createAgentController(
         operation,
       );
     await validateRuntimeIntegration(runtime, context, signal);
-    const release = claimAssignmentLock(runtime.mailboxPath, operation, {
-      label: runtime.label,
-      paneId: runtime.paneId,
-    });
+    const release = submitOptions.waitForLock
+      ? await acquireAssignmentLock(
+          runtime.mailboxPath,
+          signal,
+          operation,
+          runtime.label,
+        )
+      : claimAssignmentLock(runtime.mailboxPath, operation, {
+          label: runtime.label,
+          paneId: runtime.paneId,
+        });
     try {
       const current = readAgentState(runtime.mailboxPath);
       if (!current)
@@ -3433,6 +3436,7 @@ export function createAgentController(
           fail("internal_failure", message, operation);
         }
       }
+      submitOptions.beforeWrite?.();
       writeRequest(runtime.mailboxPath, request);
     } catch (error) {
       if (String(error).toLowerCase().includes("too large"))
@@ -5432,12 +5436,20 @@ export function createAgentController(
     const initiatingRootGeneration = rootAssignment
       ? options.rootDelegationGeneration!()
       : undefined;
+    const initiatingSessionId = rootAssignment
+      ? ctx.sessionManager.getSessionId()
+      : undefined;
     if (rootAssignment && !initiatingRootGeneration)
       fail(
         "invalid_request",
         "Root delegation authority is unavailable",
         p.action,
       );
+    if (
+      rootAssignment &&
+      initiatingRootGeneration!.sessionId !== initiatingSessionId
+    )
+      fail("invalid_request", "Root delegation session changed", p.action);
     const limits = await messageLimits(ctx);
     const assignment =
       p.action === "delegate" || p.action === "continue"
@@ -5445,7 +5457,8 @@ export function createAgentController(
             createdAt: Date.now(),
             requestId: randomUUID(),
             runId: randomUUID(),
-            ownerSessionId: ctx.sessionManager.getSessionId(),
+            ownerSessionId:
+              initiatingSessionId ?? ctx.sessionManager.getSessionId(),
             workspaceId: process.env.HERDR_WORKSPACE_ID ?? "",
           }
         : undefined;
@@ -5489,6 +5502,12 @@ export function createAgentController(
           p.action,
         );
       const assertRootDelegationAllowed = (): void => {
+        if (
+          scope.kind === "root" &&
+          (ctx.sessionManager.getSessionId() !== initiatingSessionId ||
+            initiatingRootGeneration?.sessionId !== initiatingSessionId)
+        )
+          fail("invalid_request", "Root delegation session changed", p.action);
         if (
           scope.kind === "root" &&
           initiatingRootGeneration &&
@@ -6091,7 +6110,6 @@ export function createAgentController(
         });
         for (const participant of preparedBootstrap)
           await participant.commit?.();
-        await waitForAssignmentLock(mailbox, signal, p.action, label);
         runtimes.set(label, runtime);
         options.onChanged();
         const requestId = await submit(
@@ -6105,6 +6123,10 @@ export function createAgentController(
           assignment!.requestId,
           p.action,
           assignmentInput!.resultBindings,
+          {
+            waitForLock: true,
+            beforeWrite: assertRootDelegationAllowed,
+          },
         );
         accepted = true;
         options.onChanged();

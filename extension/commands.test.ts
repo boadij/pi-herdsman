@@ -100,6 +100,7 @@ import support, {
   herdrAlias,
   isApiSnapshot,
   isAgentList,
+  isPreservePaneStop,
   isPaneList,
   isTabList,
   listResponse,
@@ -7779,6 +7780,138 @@ test("root assignment rejects a role generation changed during preflight", async
   }
 });
 
+test("root assignment rechecks changed authority after Agent startup and rolls back", async () => {
+  setLeadEnvironment();
+  const previousEnvironment = new Map(
+    [
+      "HERDR_PANE_ID",
+      "HERDR_TAB_ID",
+      "HERDR_WORKSPACE_ID",
+      "HERDR_SOCKET_PATH",
+    ].map((key) => [key, process.env[key]]),
+  );
+  const chiefPath = join(PI_AGENTS_DIR, "chief.md");
+  const previousChief = realFs.existsSync(chiefPath)
+    ? readFileSync(chiefPath, "utf8")
+    : undefined;
+  writeFileSync(chiefPath, "---\nname: chief\nagents: []\n---\n");
+  process.env.HERDR_PANE_ID = "role-start-race-pane";
+  process.env.HERDR_TAB_ID = "role-start-race-tab";
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `role-start-race-${randomUUID()}.sock`,
+  );
+
+  const label = `role-start-race-${randomUUID().slice(0, 8)}`;
+  let taskAccepted = false;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    () => {
+      taskAccepted = true;
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  let enteredStart!: () => void;
+  let releaseStart!: () => void;
+  const startEntered = new Promise<void>((resolve) => (enteredStart = resolve));
+  const startRelease = new Promise<void>((resolve) => (releaseStart = resolve));
+  let paused = false;
+  let started = false;
+  let stopped = false;
+  const pi = fakeChiefPi({
+    exec: async (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        started = true;
+        paused = true;
+        enteredStart();
+        await startRelease;
+      }
+      return result;
+    },
+  });
+  const context = fakeContext() as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const pending = pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "role-start-race",
+        { definition: "agent", label, task: "must not be published" },
+        undefined,
+        undefined,
+        context,
+      );
+    await startEntered;
+    assert.equal(paused, true);
+    await pi.commandOptions.get("chief").handler("", context);
+    releaseStart();
+
+    const result = await pending;
+    assert.equal(
+      result.details.error.category,
+      "invalid_request",
+      JSON.stringify(result.details.error),
+    );
+    assert.match(result.details.error.message, /role or authority changed/i);
+    assert.equal(taskAccepted, false);
+    assert.equal(
+      realFs.existsSync(startup.mailbox) &&
+        realFs
+          .readdirSync(startup.mailbox)
+          .some((entry) => entry.startsWith("request-")),
+      false,
+      "no task request may remain committed",
+    );
+  } finally {
+    releaseStart();
+    startup.stopMailboxConsumer();
+    await pi.events.get("session_shutdown")?.[0](undefined, context);
+    resetAgentMailbox(startup.mailbox);
+    if (previousChief === undefined) rmSync(chiefPath, { force: true });
+    else writeFileSync(chiefPath, previousChief);
+    for (const [key, value] of previousEnvironment)
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+});
+
 test("Chief activation replaces the lead widget and overview selection is interactive", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -12653,7 +12786,7 @@ test("session-start roster uses current delegation policy and ignores superseded
       start() {},
       requestRefresh() {},
     },
-    isLead: () => true,
+    isRoot: () => true,
     rootDelegationPolicy: () => delegationPolicy,
     isManagedAgent: () => false,
     clearLeadExecution() {},

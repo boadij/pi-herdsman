@@ -7288,6 +7288,8 @@ test("public assignment normalizes invalid and unknown session sources", async (
     exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }),
   });
   registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  await pi.events.get("session_start")![0](undefined, context);
   try {
     for (const [value, diagnostic] of [
       ["11111111", /prefixes are not allowed/],
@@ -7301,7 +7303,7 @@ test("public assignment normalizes invalid and unknown session sources", async (
         },
         undefined,
         undefined,
-        fakeContext(),
+        context,
       );
       assert.equal(result.details.ok, false, JSON.stringify(result.details));
       assert.equal(result.details.error.category, "invalid_request");
@@ -7378,6 +7380,7 @@ test("public assignment preserves session source open failures", async () => {
   const context = fakeContext([
     ownershipResult(session.id, LEAD_SESSION_ID, { path: session.path }),
   ]);
+  await pi.events.get("session_start")![0](undefined, context);
   const openOperationError = new OperationError({
     category: "internal_failure",
     message: "session dependency failed",
@@ -7443,6 +7446,7 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     const context = fakeContext([
       ownershipResult(id, LEAD_SESSION_ID, { path }),
     ]);
+    await pi.events.get("session_start")![0](undefined, context);
     const result = await agentTool(pi, "continue").execute(
       "id",
       {
@@ -7456,9 +7460,19 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.rollbackOccurred, false);
     assert.match(result.details.error.message, /no non-empty cwd/);
-    assert.deepEqual(pi.calls, []);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
     assert.equal(realFs.existsSync(mailbox), false);
-    assert.deepEqual(pi.entries, []);
+    assert.equal(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-result" ||
+          entry.message?.customType === "pi-herdsman-agent-result",
+      ),
+      false,
+    );
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(path, { force: true });
   }
@@ -7700,10 +7714,10 @@ test("historical continuation re-parenting preserves every valid ownership path"
     const startup = startupExecutor("child", () => childId);
     const pi = fakePi({ exec: startup.exec });
     registerExtension!(pi.pi as never);
-    await pi.events.get("session_start")![0](undefined, fakeContext());
+    const context = fakeContext(entries) as any;
+    context.sessionManager.getSessionId = () => callerId;
+    await pi.events.get("session_start")![0](undefined, context);
     try {
-      const context = fakeContext(entries) as any;
-      context.sessionManager.getSessionId = () => callerId;
       const result = await agentTool(pi, "continue").execute(
         "id",
         { session: childId, task: "continue child" },
@@ -9725,6 +9739,61 @@ test("root assignments fail closed when delegation authority callbacks are missi
         /Root delegation authority is unavailable/,
       );
   }
+  assert.equal(
+    pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+  );
+});
+
+test("root assignments reject a generation owned by a different session", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const context = fakeContext() as any;
+  const pi = fakePi();
+  const controller = createAgentController(
+    pi.pi as never,
+    {
+      scope: { kind: "root" },
+      rootDelegationPolicy: () => "all",
+      rootDelegationGeneration: () => ({
+        sessionId: "stale-root-session",
+        roleGeneration: 1,
+        role: "chief",
+        authority: undefined,
+        profile: undefined,
+      }),
+      build: HERDSMAN_BUILD,
+      extensionPath: "test",
+      isContextRetired: () => false,
+      snapshotDependencies: {
+        runtimeForLabel: () => undefined,
+        readLeadSessionIds: () => [],
+        staleAfterMs: 60_000,
+      },
+      persistedTranscriptReady: () => false,
+      agentDefinitions: async () => [],
+      readTranscript: () => ({ transcript: "", truncated: false }),
+      workspaceId: () => WORKSPACE,
+      sendResultMessage: () => undefined,
+      sendAskMessage: () => undefined,
+      sessionRetired: () => false,
+      appendError: () => undefined,
+      onChanged: () => undefined,
+      onWorkChanged: () => undefined,
+      reportWatcherError: () => undefined,
+    } as any,
+  );
+  for (const params of [
+    { action: "delegate", definition: "agent", task: "must reject" },
+    {
+      action: "continue",
+      session: "/tmp/existing-session.jsonl",
+      task: "must reject",
+    },
+  ])
+    await assert.rejects(
+      controller.action(context, params as any),
+      /Root delegation session changed/,
+    );
   assert.equal(
     pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
     false,

@@ -6315,6 +6315,8 @@ test("fresh and non-live historical assignments reject disabled definitions", as
   const freshStartup = startupExecutor(freshLabel, () => DEFAULT_PI_SESSION_ID);
   const freshPi = fakePi({ exec: freshStartup.exec });
   registerExtension!(freshPi.pi as never);
+  const freshContext = fakeContext();
+  await freshPi.events.get("session_start")![0](undefined, freshContext);
   try {
     const result = await registeredAgentTool(freshPi, "delegate").execute(
       "id",
@@ -6324,7 +6326,7 @@ test("fresh and non-live historical assignments reject disabled definitions", as
       },
       undefined,
       undefined,
-      fakeContext(),
+      freshContext,
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.match(result.details.error.message, /disabled/);
@@ -6366,6 +6368,14 @@ test("fresh and non-live historical assignments reject disabled definitions", as
   );
   const historicalPi = fakePi({ exec: historicalStartup.exec });
   registerExtension!(historicalPi.pi as never);
+  const historicalContext = ownedSessionContext(
+    session.id,
+    `${historicalName}-agent`,
+  );
+  await historicalPi.events.get("session_start")![0](
+    undefined,
+    historicalContext,
+  );
   try {
     const result = await registeredAgentTool(historicalPi, "continue").execute(
       "id",
@@ -6375,7 +6385,7 @@ test("fresh and non-live historical assignments reject disabled definitions", as
       },
       undefined,
       undefined,
-      ownedSessionContext(session.id, `${historicalName}-agent`),
+      historicalContext,
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.match(result.details.error.message, /disabled/);
@@ -7492,11 +7502,12 @@ test("managed startup accepts matching mailbox state after five seconds", async 
   }
 });
 
-test("managed startup waits for the child assignment lock before first submit", async () => {
+test("managed startup waits for the child assignment lock before first submit", async (t) => {
   setLeadEnvironment();
   const label = "startup-lock-held";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   let releaseChildLock: (() => void) | undefined;
+  let agentGetCount = 0;
   const pi = fakePi({
     exec: async (command, args, options) => {
       const result = await startup.exec(command, args, options);
@@ -7504,6 +7515,8 @@ test("managed startup waits for the child assignment lock before first submit", 
         releaseChildLock = claimProcessLock(
           assignmentLockPathForTest(startup.mailbox),
         );
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+        agentGetCount++;
       return result;
     },
   });
@@ -7517,7 +7530,13 @@ test("managed startup waits for the child assignment lock before first submit", 
       undefined,
       fakeContext(),
     );
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await t.waitFor(() => {
+      assert.ok(releaseChildLock, "child did not hold its startup lock");
+      assert.ok(
+        agentGetCount >= 2,
+        "initial submit must finish integration validation before acquiring the held lock",
+      );
+    });
     releaseChildLock?.();
     releaseChildLock = undefined;
     const result = await resultPromise;

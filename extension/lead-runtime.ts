@@ -916,11 +916,10 @@ export function createLeadShutdownRuntime(host: {
   >;
   leadStatusRuntime: Pick<LeadStatusRuntime, "shutdown">;
   clearSupervisionUI(): void;
-  isRoot?(): boolean;
-  isLead?(): boolean;
+  isRoot(): boolean;
   herdRun: Pick<LeadHerdRunRuntime, "shutdown">;
 }) {
-  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
+  const isRoot = () => host.isRoot();
   let shutDown = false;
   return {
     shutdown(_ctx: ExtensionContext): void {
@@ -956,11 +955,10 @@ export function createLeadSessionTreeRuntime(host: {
   >;
   reconcileBranchExecution(ctx: ExtensionContext): Promise<void>;
   failClosedBranchExecution(ctx: ExtensionContext): void;
-  isRoot?(): boolean;
-  isLead?(): boolean;
+  isRoot(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
 }) {
-  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
+  const isRoot = () => host.isRoot();
   return {
     async sessionTree(ctx: ExtensionContext): Promise<void> {
       if (!host.controller.sessionActive()) return;
@@ -1019,8 +1017,7 @@ export function createLeadSessionStartRuntime(host: {
   clearDefinitionRoster(): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
-  isRoot?(): boolean;
-  isLead?(): boolean;
+  isRoot(): boolean;
   isManagedAgent(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
   sessionLeadRoleState(
@@ -1069,7 +1066,7 @@ export function createLeadSessionStartRuntime(host: {
   rootDelegationPolicy?(): RootDelegationPolicy;
   appendDefinitionError(ctx: ExtensionContext, error: unknown): void;
 }) {
-  const isRoot = () => host.isRoot?.() ?? host.isLead?.() ?? false;
+  const isRoot = () => host.isRoot();
   return {
     async sessionStart(ctx: ExtensionContext): Promise<void> {
       host.diagnostic();
@@ -3915,7 +3912,6 @@ export function registerLeadRuntime(
     ...options.sessionStartOptions,
     rootDelegationPolicy,
     isRoot: () => options.roleTransitionHost.processRole === "lead",
-    isLead: () => activeLeadRole(leadRuntime) === "lead",
     initialStatusBreadcrumb: () => [
       { text: activeRootRoleForPresentation() ?? "controller" },
     ],
@@ -3944,7 +3940,6 @@ export function registerLeadRuntime(
   const sessionTree = createLeadSessionTreeRuntime({
     ...options.sessionTreeOptions,
     isRoot: () => options.roleTransitionHost.processRole === "lead",
-    isLead: () => activeLeadRole(leadRuntime) === "lead",
     roleTransitions,
     reconcileBranchExecution,
     failClosedBranchExecution: () => {
@@ -3962,7 +3957,6 @@ export function registerLeadRuntime(
   const shutdown = createLeadShutdownRuntime({
     ...options.shutdownOptions,
     isRoot: () => options.roleTransitionHost.processRole === "lead",
-    isLead: () => activeLeadRole(leadRuntime) === "lead",
     clearSupervisionUI: () => clearSupervisionUI(),
     roleTransitions,
     controller,
