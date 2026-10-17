@@ -3574,3 +3574,140 @@ test("retirement rename and post-commit sync failures preserve recoverable state
     }
   }
 });
+test("project message recovery rejects symlinked ancestors without touching external records", () => {
+  for (const ancestor of ["root", "assignments", "repository"] as const) {
+    const runtime = supervisionRuntime(socket());
+    const assignment = {
+      version: 2 as const,
+      id: id(),
+      repoKey: "symlink-recovery",
+      branch: "feature",
+      text: "unrelated authority",
+    };
+    writeProjectAssignment(runtime, assignment);
+    const pending = {
+      version: 2 as const,
+      id: id(),
+      repoKey: assignment.repoKey,
+      branch: "orphan",
+      fromSessionId: id(),
+      text: "external pending handoff",
+      createdAt: 1,
+    };
+    writeProjectMessage(pending, runtime);
+    const repository = dirname(
+      projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+    );
+    const original = ancestor === "repository" ? repository : runtime[ancestor];
+    const outside = join(
+      mkdtempSync(join(tmpdir(), "recovery-outside-")),
+      "records",
+    );
+    const relativeMessage = join(
+      repository,
+      `${createHash("sha256").update(pending.branch).digest("hex")}.messages`,
+      `${pending.id}.json`,
+    ).slice(original.length + 1);
+    const relativeAssignment = projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).slice(original.length + 1);
+    realFs.renameSync(original, outside);
+    realFs.symlinkSync(
+      outside,
+      original,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    try {
+      assert.throws(
+        () => recoverStaleProjectMessages(runtime, assignment.repoKey),
+        /Invalid project assignment authority directory/,
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(outside, relativeMessage), "utf8")),
+        pending,
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(outside, relativeAssignment), "utf8")),
+        assignment,
+      );
+      assert.equal(
+        readdirSync(join(outside, dirname(relativeAssignment))).filter((name) =>
+          name.endsWith(".json"),
+        ).length,
+        1,
+      );
+    } finally {
+      realFs.rmSync(original, { force: true });
+      realFs.renameSync(outside, original);
+    }
+  }
+});
+
+test("current handoff survives stale-message deletion between enumeration and read", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import { mock } from "node:test";
+import { randomUUID } from "node:crypto";
+const { default: ignored, ...namedExports } = fs;
+let afterEnumeration;
+mock.module("node:fs", {
+  namedExports: {
+    ...namedExports,
+    readdirSync: (...args) => {
+      const entries = fs.readdirSync(...args);
+      afterEnumeration?.(args[0], entries);
+      return entries;
+    },
+  },
+  defaultExport: { ...fs.default },
+});
+const storage = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)});
+const { createLeadRoleTransitions } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lead-runtime.ts")).href)});
+const { acquireProcessLock } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lock.ts")).href)});
+const assignment = { version: 2, id: randomUUID(), repoKey: "race", branch: "feature", text: "task" };
+const runtime = storage.supervisionRuntime("/tmp/race-" + randomUUID() + ".sock");
+storage.writeProjectAssignment(runtime, assignment);
+const stale = { version: 2, id: randomUUID(), repoKey: assignment.repoKey, branch: assignment.branch, fromSessionId: randomUUID(), text: "old", createdAt: 1 };
+storage.writeProjectMessage(stale, runtime);
+let recoveredDuringListing = false;
+afterEnumeration = (path, entries) => {
+  if (!path.endsWith(".messages")) return;
+  afterEnumeration = undefined;
+  assert.ok(entries.includes(stale.id + ".json"));
+  storage.recoverStaleProjectMessages(runtime, assignment.repoKey);
+  recoveredDuringListing = true;
+};
+const transitions = createLeadRoleTransitions({}, {
+  ...storage,
+  supervisionRuntime: () => runtime,
+  acquireProcessLock,
+  prepareCoordinationInput: async (_ctx, text) => ({ text, resultBindings: [] }),
+});
+const record = await transitions.publishProjectMessage(
+  { sessionManager: { getSessionId: () => assignment.id } }, assignment, "new",
+);
+assert.ok(recoveredDuringListing);
+assert.ok(record);
+assert.deepEqual(storage.listProjectMessages(runtime, assignment.repoKey, assignment.branch), [record]);
+`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), "publication-race-")),
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});

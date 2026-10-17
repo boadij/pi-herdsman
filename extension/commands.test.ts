@@ -3296,6 +3296,16 @@ test("takeover cancellation preserves assignment and confirmation releases only 
       assert.equal(current, assignment);
       assert.equal(pending, true);
       assert.equal(removedMessages, 0);
+      assert.deepEqual(
+        notices,
+        [],
+        "assignment-removal failure must not report takeover success",
+      );
+      assert.deepEqual(
+        errors,
+        [],
+        "pre-commit failure is not a post-commit cleanup diagnostic",
+      );
       continue;
     }
     assert.equal(await transitions.takeover(ctx), confirmed);
@@ -14195,4 +14205,83 @@ test("Manager initialization cannot recover messages under stale or invalid loca
     else await transitions.reconcileCurrentManagerAssignments(ctx);
     assert.equal(recovered, false, scenario);
   }
+});
+
+test("current project handoff publishes despite unrelated global authority contention and survives recovery", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const {
+    writeProjectMessage,
+    readProjectAssignment,
+    listProjectMessages,
+    recoverStaleProjectMessages,
+    projectAssignmentAuthorityLockPath,
+  } = await import("./supervision.ts");
+  const runtime = supervisionRuntime(`/tmp/publication-${randomUUID()}.sock`);
+  const assignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: "publication",
+    branch: "feature",
+    text: "task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const stale = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: randomUUID(),
+    text: "retired handoff",
+    createdAt: 1,
+  };
+  writeProjectMessage(stale, runtime);
+  let branchLocks = 0;
+  const transitions = createLeadRoleTransitions(
+    { controllerRole: "lead" } as any,
+    {
+      supervisionRuntime: () => runtime,
+      readProjectAssignment,
+      projectAssignmentPath,
+      acquireProcessLock: (...args: Parameters<typeof acquireProcessLock>) => {
+        branchLocks++;
+        return acquireProcessLock(...args);
+      },
+      prepareCoordinationInput: async (_ctx: unknown, text: string) => ({
+        text,
+        resultBindings: [],
+      }),
+      writeProjectMessage,
+    } as any,
+  );
+  const ctx: any = fakeContext();
+  ctx.sessionManager.getSessionId = () => assignment.id;
+  const global = acquireProcessLock(projectAssignmentAuthorityLockPath(), {
+    name: "unrelated authority operation",
+  });
+  let published;
+  try {
+    published = await transitions.publishProjectMessage(
+      ctx,
+      assignment,
+      "handoff",
+    );
+    assert.ok(published);
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [stale, published],
+    );
+    assert.equal(branchLocks, 1);
+  } finally {
+    global.release();
+  }
+  recoverStaleProjectMessages(runtime, assignment.repoKey);
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [published],
+  );
+  assert.equal(
+    published.fromSessionId,
+    assignment.id,
+    "the existing exact-assignment delivery predicate accepts the handoff",
+  );
 });
