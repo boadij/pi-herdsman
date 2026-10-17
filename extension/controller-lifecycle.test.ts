@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
@@ -24,7 +24,6 @@ import {
   managerDescriptorPath,
   readManagerDescriptor,
   removeProjectAssignment,
-  removeProjectMessages,
   supervisionRuntime,
   writeProjectAssignment,
   writeProjectMessage,
@@ -2025,7 +2024,13 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
-    removeProjectMessages(runtime, "repo-key", branch);
+    rmSync(
+      projectAssignmentPath(runtime, "repo-key", branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
+      { recursive: true, force: true },
+    );
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -4264,7 +4269,13 @@ test("each direct managed Lead turn returns its response", async () => {
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     removeProjectAssignment(runtime, "repo-key", branch);
-    removeProjectMessages(runtime, "repo-key", branch);
+    rmSync(
+      projectAssignmentPath(runtime, "repo-key", branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
+      { recursive: true, force: true },
+    );
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -4393,7 +4404,13 @@ test("assigned project handoff remains pending when assignment resolution is loc
       // Contention is fail-fast: settling cannot leave a publication retry
       // waiting to recreate messages after assignment resolution.
       removeProjectAssignment(runtime, "repo-key", branch);
-      removeProjectMessages(runtime, "repo-key", branch);
+      rmSync(
+        projectAssignmentPath(runtime, "repo-key", branch).replace(
+          /\.json$/,
+          ".messages",
+        ),
+        { recursive: true, force: true },
+      );
       releaseResolutionLock();
     } finally {
       releaseResolutionLock();
@@ -4414,7 +4431,13 @@ test("assigned project handoff remains pending when assignment resolution is loc
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
-    removeProjectMessages(runtime, "repo-key", branch);
+    rmSync(
+      projectAssignmentPath(runtime, "repo-key", branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
+      { recursive: true, force: true },
+    );
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -4615,7 +4638,13 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     removeProjectAssignment(runtime, "repo-key", branch);
-    removeProjectMessages(runtime, "repo-key", branch);
+    rmSync(
+      projectAssignmentPath(runtime, "repo-key", branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
+      { recursive: true, force: true },
+    );
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }

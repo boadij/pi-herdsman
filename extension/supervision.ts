@@ -1078,7 +1078,7 @@ export function projectAssignmentAuthorityLockPath(): string {
   return projectAuthorityLock;
 }
 
-function withProjectAssignmentLock<T>(operation: () => T): T {
+export function withProjectAssignmentLock<T>(operation: () => T): T {
   const lease = acquireProcessLock(projectAuthorityLock, {
     name: "project assignment authority",
   });
@@ -2051,6 +2051,22 @@ export function removeProjectAssignment(
   );
 }
 
+export function retireProjectAssignment(
+  runtime: SupervisionRuntime,
+  expected: ProjectAssignment,
+): boolean {
+  return withProjectAssignmentLock(() => {
+    const current = readProjectAssignment(
+      runtime,
+      expected.repoKey,
+      expected.branch,
+    );
+    if (!current || current.id !== expected.id) return false;
+    removeProjectAssignmentUnlocked(runtime, expected.repoKey, expected.branch);
+    return true;
+  });
+}
+
 function removeProjectAssignmentUnlocked(
   runtime: SupervisionRuntime,
   repoKey: string,
@@ -2334,24 +2350,10 @@ export function listProjectMessages(
   return entries
     .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
     .map((entry) => {
-      const path = join(directory, entry);
-      try {
-        if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
-          throw new Error("large");
-        const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-        if (
-          !validProjectMessage(value) ||
-          value.repoKey !== repoKey ||
-          value.branch !== branch ||
-          entry !== `${value.id}.json`
-        )
-          throw new Error("invalid");
-        return value;
-      } catch (error) {
-        throw new Error(`Unable to read project message ${path}`, {
-          cause: error,
-        });
-      }
+      const value = readProjectMessageFile(join(directory, entry));
+      if (value.repoKey !== repoKey || value.branch !== branch)
+        throw new Error(`Project message identity does not match ${directory}`);
+      return value;
     })
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
@@ -2372,16 +2374,75 @@ export function removeProjectMessage(
   }
 }
 
-export function removeProjectMessages(
+function readProjectMessageFile(path: string): ProjectMessage {
+  try {
+    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
+      throw new Error("large");
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!validProjectMessage(value) || basename(path) !== `${value.id}.json`)
+      throw new Error("invalid");
+    return value;
+  } catch (error) {
+    throw new Error(`Unable to read project message ${path}`, { cause: error });
+  }
+}
+
+export function removeProjectMessagesForAssignment(
+  runtime: SupervisionRuntime,
+  assignment: ProjectAssignment,
+): void {
+  for (const message of listProjectMessages(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  )) {
+    if (message.fromSessionId === assignment.id)
+      removeProjectMessage(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+        message.id,
+      );
+  }
+}
+
+export function recoverStaleProjectMessages(
   runtime: SupervisionRuntime,
   repoKey: string,
-  branch: string,
 ): void {
-  rmSync(projectMessageDirectory(runtime, repoKey, branch), {
-    recursive: true,
-    force: true,
+  withProjectAssignmentLock(() => {
+    const directory = dirname(
+      projectAssignmentPath(runtime, repoKey, "lookup"),
+    );
+    let entries: string[];
+    try {
+      entries = readdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries.filter((entry) =>
+      /^[a-f0-9]{64}\.messages$/.test(entry),
+    )) {
+      const messages = join(directory, entry);
+      assignmentDirectory(messages);
+      for (const file of readdirSync(messages).filter(
+        (file) => UUID.test(file.slice(0, -5)) && file.endsWith(".json"),
+      )) {
+        const path = join(messages, file);
+        const message = readProjectMessageFile(path);
+        if (
+          message.repoKey !== repoKey ||
+          projectMessageDirectory(runtime, message.repoKey, message.branch) !==
+            messages
+        )
+          throw new Error(`Project message identity does not match ${path}`);
+        const current = readProjectAssignment(runtime, repoKey, message.branch);
+        if (!current || current.id !== message.fromSessionId)
+          removeProjectMessage(runtime, repoKey, message.branch, message.id);
+      }
+    }
   });
-  fsyncDirectory(dirname(projectAssignmentPath(runtime, repoKey, branch)));
 }
 
 export type CoordinatorState = {
