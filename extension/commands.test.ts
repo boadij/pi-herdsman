@@ -5308,7 +5308,9 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       );
     assert.match(JSON.stringify(transcript), /ordinary transcript content/);
     assert.equal(
-      JSON.stringify(transcript).includes(ordinarySessionPath),
+      JSON.stringify(transcript).includes(
+        JSON.stringify(ordinarySessionPath).slice(1, -1),
+      ),
       false,
     );
     await manager.commandOptions.get("manager").handler("", managerCtx);
