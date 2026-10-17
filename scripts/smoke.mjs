@@ -3367,8 +3367,21 @@ async function runContinuationSmoke(ctx) {
           break;
         }
       }
+      const done = !!firstSession && pids.length > 0;
+      // Keep the simulated child alive until its required live evidence is captured.
+      if (done && ctx.simulated)
+        await writeFile(
+          join(
+            ctx.paths.piAgent,
+            "pi-herdsman",
+            "runtime",
+            "continuation-first-observed",
+          ),
+          "observed\n",
+          { flag: "wx", mode: 0o600 },
+        );
       return {
-        done: !!firstSession && pids.length > 0,
+        done,
         value: firstSession,
         progress: {
           childCount: agents.length,

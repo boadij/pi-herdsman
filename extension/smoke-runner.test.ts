@@ -1718,6 +1718,281 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
   );
 });
 
+test("continuation first-generation stalls if completed child retires before observation", async (t) => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("async function runContinuationSmoke(ctx) {");
+  const end = source.indexOf(
+    "\nasync function runManagerRecoverySmoke(ctx) {",
+    start,
+  );
+  assert.ok(start >= 0 && end > start);
+  const exactFunction = source.slice(start, end).trim();
+  assert.equal(
+    source.match(/async function runContinuationSmoke\(ctx\)/g)?.length,
+    1,
+  );
+  assert.ok(exactFunction.endsWith("\n}"));
+  assert.match(source, /const MODEL_STALL_MS = 120_000;/);
+
+  const prompt =
+    "Delegate exactly one bounded task to an implementer: read package.json and return CONTINUATION_FIRST_DONE.";
+  const completedChild = {
+    role: "assistant",
+    stopReason: "stop",
+    content: "pi-herdsman CONTINUATION_FIRST_DONE",
+  };
+  const call = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "fixture-call",
+        name: "delegate_agent",
+        arguments: {
+          definition: "implementer",
+          label: "smoke-continuation-implementer",
+        },
+      },
+    ],
+  };
+  const result = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "fixture-call",
+    isError: false,
+    details: { ok: true },
+    content: "started",
+  };
+  const delivered = {
+    role: "user",
+    content: `Agent result · agent=smoke-continuation-implementer · definition=implementer · session=fixture-child · status=completed\n\nResult ref: result:fixture#1\n\n${completedChild.content}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+  };
+  const answer = decide("continuation", {
+    messages: [{ role: "user", content: prompt }, call, result, delivered],
+  });
+  assert.equal(answer.content[0].text, "PI_HERDSMAN_CONTINUATION_FIRST");
+  const root = {
+    contents: [
+      {
+        type: "message",
+        id: "prompt",
+        message: { role: "user", content: prompt },
+      },
+      { type: "message", id: "call", parentId: "prompt", message: call },
+      { type: "message", id: "result", parentId: "call", message: result },
+      {
+        type: "custom_message",
+        id: "delivered",
+        parentId: "result",
+        customType: "pi-herdsman-agent-result",
+        content: delivered.content,
+      },
+      { type: "message", id: "answer", parentId: "delivered", message: answer },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n"),
+  };
+  assert.equal(
+    rootDelegationDiagnostics(root.contents).matchingResult,
+    "success",
+  );
+  assert.ok(
+    assistantResultForSession(root, prompt, "PI_HERDSMAN_CONTINUATION_FIRST"),
+  );
+
+  // Controlled schedule: completion, delivery, marker, and normal removal precede all polls.
+  const order = [
+    "child_completed",
+    "result_delivered",
+    "root_marker",
+    "child_removed",
+  ];
+  let polls = 0;
+  let rootReads = 0;
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
+  const run = new Function(
+    "readFile",
+    "join",
+    "waitForEvidence",
+    "tryNestedCommand",
+    "rootSessionSnapshot",
+    "isolatedSessionDetails",
+    "MODEL_STALL_MS",
+    `return (${exactFunction});`,
+  )(
+    async () => '{"name":"pi-herdsman"}',
+    join,
+    waitForEvidence,
+    async (_ctx, args) => {
+      assert.deepEqual(args, ["agent", "list"]);
+      order.push("empty_child_poll");
+      if (++polls === 2) t.mock.timers.setTime(120_001);
+      return { ok: true, value: { agents: [{ pane_id: "fixture-root" }] } };
+    },
+    async () => {
+      rootReads++;
+      return root;
+    },
+    async () =>
+      assert.fail("retired child must not be read through a live Agent"),
+    120_000,
+  );
+  await assert.rejects(
+    run({ repoRoot: ".", rootPaneId: "fixture-root", initialPrompt: prompt }),
+    (error) => {
+      assert.equal(error.code, "SMOKE_STALLED");
+      assert.equal(error.smoke.stage, "continuation-first-generation");
+      assert.deepEqual(error.smoke.lastProgress, {
+        childCount: 0,
+        sessionId: null,
+        sessionBytes: 0,
+        candidatePids: [],
+      });
+      return true;
+    },
+  );
+  assert.deepEqual(order, [
+    "child_completed",
+    "result_delivered",
+    "root_marker",
+    "child_removed",
+    "empty_child_poll",
+    "empty_child_poll",
+  ]);
+  assert.equal(rootReads, 0);
+});
+
+test("simulated continuation releases completion only after full live evidence", async () => {
+  const { waitForContinuationObservation } =
+    await import("../scripts/smoke-faux.mjs");
+  assert.equal(typeof waitForContinuationObservation, "function");
+  const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-gate-"));
+  const runtime = join(directory, "pi-herdsman", "runtime");
+  await mkdir(runtime, { recursive: true });
+  const controller = new AbortController();
+  let completed = false;
+  const completion = waitForContinuationObservation(
+    runtime,
+    controller.signal,
+  ).then(() => {
+    completed = true;
+  });
+  try {
+    const source = await readFile(
+      new URL("../scripts/smoke.mjs", import.meta.url),
+      "utf8",
+    );
+    const start = source.indexOf("async function runContinuationSmoke(ctx) {");
+    const end = source.indexOf(
+      "\nasync function runManagerRecoverySmoke(ctx) {",
+      start,
+    );
+    assert.ok(start >= 0 && end > start);
+    assert.equal(
+      source.match(/async function runContinuationSmoke\(ctx\)/g)?.length,
+      1,
+    );
+    const exactFunction = source.slice(start, end).trim();
+    assert.ok(exactFunction.endsWith("\n}"));
+    const stop = new Error("first stage checked");
+    let inspection = 0;
+    const run = new Function(
+      "readFile",
+      "join",
+      "waitForEvidence",
+      "tryNestedCommand",
+      "isolatedSessionDetails",
+      "candidateProcess",
+      "writeFile",
+      "MODEL_STALL_MS",
+      `return (${exactFunction});`,
+    )(
+      async () => '{"name":"pi-herdsman"}',
+      join,
+      async (_ctx, stage, inspect) => {
+        assert.equal(stage, "continuation-first-generation");
+        for (inspection = 0; inspection < 3; inspection++) {
+          const observed = await inspect();
+          assert.equal(observed.done, inspection === 2);
+          if (inspection < 2) {
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(completed, false);
+          }
+        }
+        assert.ok(
+          (await stat(join(runtime, "continuation-first-observed"))).isFile(),
+        );
+        await completion;
+        assert.equal(completed, true);
+        throw stop;
+      },
+      async (_ctx, args) => ({
+        ok: true,
+        value: args[0] === "agent" ? { agents: [{ pane_id: "child" }] } : {},
+      }),
+      async () =>
+        inspection === 0 ? undefined : { id: "fixture", contents: "saved" },
+      () => (inspection === 2 ? [{ pid: 123 }] : []),
+      writeFile,
+      120_000,
+    );
+    await assert.rejects(
+      run({
+        repoRoot: ".",
+        simulated: true,
+        paths: { piAgent: directory },
+        rootPaneId: "root",
+      }),
+      (error) => error === stop,
+    );
+  } finally {
+    controller.abort();
+    await completion.catch(() => {});
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("continuation completion wait tears down on abort, timeout, and filesystem failure", async (t) => {
+  const { waitForContinuationObservation } =
+    await import("../scripts/smoke-faux.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-abort-"));
+  try {
+    const controller = new AbortController();
+    const aborted = assert.rejects(
+      waitForContinuationObservation(directory, controller.signal),
+      { name: "AbortError" },
+    );
+    controller.abort();
+    await aborted;
+    await assert.rejects(
+      waitForContinuationObservation(directory, controller.signal),
+      { name: "AbortError" },
+    );
+    await assert.rejects(
+      waitForContinuationObservation(join(directory, "absent")),
+      { code: "ENOENT" },
+    );
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const timedOut = assert.rejects(
+      waitForContinuationObservation(directory),
+      /live evidence was not acknowledged/,
+    );
+    t.mock.timers.tick(120_000);
+    await timedOut;
+    t.mock.timers.reset();
+    await writeFile(
+      join(directory, "continuation-first-observed"),
+      "observed\n",
+    );
+    await waitForContinuationObservation(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("evidence progress changes reset inactivity, identical evidence and read errors do not", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   let count = 0;
