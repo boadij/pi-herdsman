@@ -77,8 +77,9 @@ An active row uses the live Lead's lifecycle marker when an executor is present;
 otherwise it uses `●`. Paused uses `○` and conflict uses `!`. The row suffix is
 project status, not the Lead's runtime state.
 Ordinary Leads supervised by the Manager are shown separately from project
-work, with a supervised label and navigation only; they are not treated as
-managed work. Branches are display handles; exact session identity is
+work, with a supervised label; they are not treated as managed work. A Manager
+can inspect an eligible direct report through the overview, independently of
+mouse focus/navigation. Branches are display handles; exact session identity is
 revalidated for control actions.
 
 ## Installation
@@ -122,9 +123,10 @@ and the existing keyboard/menu alternatives such as the Running menu and
 
 Navigation does not grant coordination authority. Agent targets are checked
 against the caller's durable ownership ancestry; Manager targets for project
-control require the Lead's current exact project assignment. Ordinary
-Manager-supervised Leads permit focus/navigation only, and Chief-visible nested
-Leads remain observational. Paused or conflicted project work, lost or unresolved sessions,
+control require the Lead's current exact project assignment. Direct-report
+inspection and messaging use their own fresh supervision authorization;
+focus/navigation alone grants neither. Chief-visible nested Leads remain
+observational. Paused or conflicted project work, lost or unresolved sessions,
 stale projections, truncated/omitted entries, and targets without a uniquely
 verified live Herdr pane are inert. Current placement is checked again when a
 click is handled; the status projection itself is never authorization.

@@ -349,8 +349,11 @@ delegating parent that is merely waiting for its direct children.
 Ordinary leads own their complete herd, including every agent beneath them. The
 Chief supervises ordinary Leads only when they have no active project Manager
 and never changes ownership. An active project Manager supervises eligible
-ordinary Leads throughout its verified worktree group for message-only
-coordination; project execution remains assignment-bound. Use
+ordinary Leads throughout its verified worktree group with the same direct-
+report inspection, transcript access when persisted evidence is available, and
+messaging capabilities as assigned Leads. Authorized messages use cooperative
+steering; project execution remains assignment-bound. Avoid unnecessary
+monitoring. Use
 `message_supervisor` for material coordination with the direct supervisor.
 Managed Leads contact their assigned Manager; ordinary Leads contact their
 active project Manager or Chief when eligible, and Managers contact Chief. It is nonblocking and supports timely questions, clarifications,
@@ -381,7 +384,7 @@ reusable direct-agent result refs, and already-supplied canonical result refs
 through `files`.
 
 Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
-`message_staff`. Manager has those direct-report tools, peer tools, and
+`message_staff`. Manager has those same direct-report tools, peer tools, and
 `delegate_project`, `resume_project`, and `stop_lead`.
 `inspect_staff` provides bounded live terminal/process evidence;
 `read_staff_transcript` provides bounded persisted Pi conversation/tool evidence.

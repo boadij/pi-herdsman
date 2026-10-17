@@ -3,9 +3,10 @@
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
 Staff tools are available to active Chief and Manager sessions. Both roles can
-use `list_staff` and `message_staff`. `inspect_staff` and
-`read_staff_transcript` are available for Chief direct reports and Manager's
-assigned Leads, not ordinary Manager-supervised Leads. Manager additionally has
+use `list_staff`, `inspect_staff`, and `message_staff`; `read_staff_transcript`
+is available when persisted session evidence is available. Manager and Chief
+have the same direct-report observation and communication capabilities.
+Manager additionally has
 the branch-based project operations `delegate_project`, `resume_project`,
 `stop_lead`, and `remove_worktree`. Chief has no project-operation tools.
 
@@ -21,8 +22,10 @@ Manager. Assigned Leads are never Chief targets. A Manager's nested assigned
 and ordinary supervised Leads may be summarized for Chief but are not Chief
 targets. Manager sees eligible Leads throughout its verified project worktree
 group. A current `ProjectAssignment` marks an assigned report; an ordinary
-report is derived supervision only and permits `message_staff`, not inspection,
-transcript access, steering, stopping, or project lifecycle operations.
+report is derived supervision, not project ownership. Both assigned and
+ordinary Manager reports allow inspection, transcript access when valid
+persisted evidence is available, and messaging. Project lifecycle operations
+remain assignment-bound.
 Ordinary Manager-supervised Leads are excluded from Chief's actionable roster.
 Ambiguous duplicate assignments or unverified topology do not produce an
 actionable report.
@@ -90,9 +93,8 @@ Sends an asynchronous durable message to the exact current direct report. The
 message is queued by Herdsman before submission. If an assigned report is
 actively running, supervisor direction uses Pi's cooperative steering lane;
 steering does not abort the current operation or interrupt an in-flight tool
-call. A Manager message to an ordinary Lead starts a turn when the Lead is idle;
-while active, the message remains queued and does not steer the Lead's current
-work.
+call. Authorized Manager messages to ordinary Leads use the same cooperative
+steering behavior, whether the Lead is active or idle.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
 result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden

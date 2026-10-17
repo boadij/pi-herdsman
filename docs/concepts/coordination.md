@@ -32,11 +32,11 @@ An ordinary Lead in a verified project worktree group has the active project
 Manager as its supervisor; otherwise Chief supervises it when eligible. A Lead
 is managed for project execution only when exactly one current
 `ProjectAssignment` for the repository names its exact Pi session. Manager
-supervision of an ordinary Lead permits bounded discovery and communication
-only, not execution control, private inspection, Agent ownership, or automatic
-project-result delivery. Authorized messages may start a normal turn in an idle
-ordinary Lead, but do not steer active work; the Lead may reply explicitly with
-`message_supervisor`. Supervision does not grant Agent ownership: Manager
+supervision of an ordinary Lead permits bounded discovery and communication,
+including live inspection, persisted transcript access when available, and
+cooperative steering through authorized messages. It does not grant project
+execution control, Agent ownership, or automatic project-result delivery. The
+Lead may reply explicitly with `message_supervisor`. Supervision does not grant Agent ownership: Manager
 and Chief can own only Agents they directly start from their own exact Pi
 session, when their effective `agents` profile permits it.
 
@@ -67,15 +67,15 @@ the session as ordinary `Orchestrate` execution.
 Manager is a dedicated project-coordination mode. It controls only Leads named
 by current `ProjectAssignment` records for its repository, and additionally
 supervises eligible ordinary Leads throughout its verified worktree group for
-bounded discovery and communication. Ordinary Leads allow message-only staff
-access. Manager may optionally start its own Agents using definitions in its
+the same direct-report observation and communication capabilities as assigned
+Leads. Manager may optionally start its own Agents using definitions in its
 effective `agents` profile. This does not grant control over supervised Leads'
 Agents or alter project assignments or authority. Its reserved `manager`
 definition customizes instructions, ordinary tool selection, and this
 direct-delegation allowlist.
 
 Project execution belongs to assigned Leads and their Agent trees. Manager can
-inspect assigned Leads and communicate with all direct Leads, but it does not
+inspect and communicate with all direct Leads, but it does not
 acquire ownership of their Agents.
 
 ### Chief
@@ -187,7 +187,7 @@ Coordination crosses one authority edge at a time:
 | Up        | `message_supervisor` / automatic results    | Assigned Lead -> Manager                            |
 | Down      | `message_staff` / project operations        | Manager -> assigned Lead                            |
 | Up        | `message_supervisor`                        | Ordinary Lead -> Manager or Chief; Manager -> Chief |
-| Down      | `message_staff`                             | Manager -> ordinary Lead (idle turn; active queued) |
+| Down      | `message_staff`                             | Manager -> ordinary Lead (cooperative steering)     |
 | Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager                |
 | Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent                      |
 

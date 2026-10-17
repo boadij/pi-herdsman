@@ -4325,9 +4325,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           relationship: sessions.has(lead.lead)
             ? ("assigned" as const)
             : ("supervised" as const),
-          availableActions: sessions.has(lead.lead)
-            ? lead.availableActions
-            : (["message"] as const),
         }));
     }
     if (host.activeRole() !== "chief")
@@ -5120,11 +5117,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 mode = "peek";
                 showPeek();
                 tui.requestRender();
-                if (
-                  host.activeRole() === "manager" &&
-                  lead.relationship === "supervised"
-                )
-                  return;
                 void host
                   .inspectHerdrAgent(
                     host.pi,
@@ -5135,16 +5127,31 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                       piSessionId: lead.lead,
                     },
                     ctx.signal,
-                    (agent: any) =>
-                      host.isPiAgent(agent) &&
-                      agent?.pane_id === lead.paneId &&
-                      agent?.tab_id === lead.tabId &&
-                      host.herdrSessionId(agent) === lead.lead &&
-                      host.readLeadCoordinationState(
-                        host.supervisionRuntime(),
-                        lead.lead,
-                      )?.piSessionId === lead.lead &&
-                      lead.availableActions.includes("inspect"),
+                    async (agent: any) => {
+                      if (
+                        !isCurrentOverview() ||
+                        !host.isPiAgent(agent) ||
+                        agent?.pane_id !== lead.paneId ||
+                        agent?.tab_id !== lead.tabId ||
+                        host.herdrSessionId(agent) !== lead.lead ||
+                        host.readLeadCoordinationState(
+                          host.supervisionRuntime(),
+                          lead.lead,
+                        )?.piSessionId !== lead.lead ||
+                        !lead.availableActions.includes("inspect")
+                      )
+                        return false;
+                      const current = (await directReports(ctx)).find(
+                        (candidate) =>
+                          candidate.lead === lead.lead &&
+                          candidate.instanceId === lead.instanceId &&
+                          candidate.workspaceId === lead.workspaceId &&
+                          candidate.paneId === lead.paneId &&
+                          candidate.tabId === lead.tabId &&
+                          candidate.availableActions.includes("inspect"),
+                      );
+                      return isCurrentOverview() && !!current;
+                    },
                   )
                   .then((inspection) => {
                     if (!isCurrentOverview()) return;
@@ -9627,15 +9634,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
             }
             if (!authorized) return "followUp";
-            const workspaceId = host.workspaceId();
-            if (!workspaceId) return undefined;
-            const relation = await host.resolveEffectiveSupervisor(
-              ctx,
-              ctx.sessionManager.getSessionId(),
-              workspaceId,
-            );
-            const assigned = relation.kind === "assigned";
-            if (!assigned) return ctx.isIdle() ? "followUp" : undefined;
             return "steer";
           }
           const supervisorDownlink =

@@ -4,6 +4,11 @@
 > supersedes the retirement conditions described below: verified checkout
 > absence also retires assignments. Exact-assignment authority and confirmed
 > `/takeover` remain unchanged; the current runtime implements the later policy.
+>
+> **Supervision update:** [ADR 0021](0021-unify-direct-supervision-authority.md)
+> supersedes this record's restrictions on ordinary-Lead inspection,
+> transcript access, and active-message steering. Exact-assignment project
+> authority and the other decisions below remain in force.
 
 ## Status
 
