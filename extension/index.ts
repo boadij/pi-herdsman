@@ -931,7 +931,7 @@ export default function (pi: ExtensionAPI): void {
         description:
           "Exact full Pi session ID from the fresh supervision snapshot or list_staff.",
       }),
-      message: Type.String({ pattern: "\\S" }),
+      message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
     },
     { additionalProperties: false },
@@ -943,7 +943,7 @@ export default function (pi: ExtensionAPI): void {
         description:
           "Exact full Pi session ID returned by list_peers; never use a display label.",
       }),
-      message: Type.String({ pattern: "\\S" }),
+      message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
     },
     { additionalProperties: false },
@@ -955,19 +955,19 @@ export default function (pi: ExtensionAPI): void {
   const staffDelegateParameters = Type.Object(
     {
       task: Type.String({
-        pattern: "\\S",
+        minLength: 1,
         description: "Non-empty task for new project work.",
       }),
       branch: Type.Optional(
         Type.String({
-          pattern: "\\S",
+          minLength: 1,
           description:
             "Optional Git branch for the new project work; Herdsman generates one when omitted.",
         }),
       ),
       base: Type.Optional(
         Type.String({
-          pattern: "\\S",
+          minLength: 1,
           description:
             "Base ref used only when Herdsman creates a new worktree.",
         }),
@@ -979,7 +979,7 @@ export default function (pi: ExtensionAPI): void {
   const staffBranchParameters = Type.Object(
     {
       branch: Type.String({
-        pattern: "\\S",
+        minLength: 1,
         description: "Exact project branch.",
       }),
     },

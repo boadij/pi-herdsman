@@ -118,6 +118,7 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     piSessionId: randomUUID(),
   };
   const calls: { args: string[]; options: any }[] = [];
+  const lockKeys: string[] = [];
   const signal = new AbortController().signal;
   const runtime = createLeadProjectRuntime({
     pi: {} as any,
@@ -147,10 +148,31 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     }),
     prepareMessageInput: (text: string) => ({ text, resultBindings: [] }),
     resolveMessageFiles: () => [],
-    withProjectWorkLock: (_key: string, operation: () => unknown) =>
-      operation(),
+    withProjectWorkLock: (key: string, operation: () => unknown) => {
+      lockKeys.push(key);
+      return operation();
+    },
     appendDurableError: () => {},
   } as any);
+
+  for (const [params, expected] of [
+    [
+      { action: "delegate", task: "work", branch: " \t" },
+      /Project branch must not be empty/,
+    ],
+    [{ action: "resume", branch: " \n" }, /Project branch must not be empty/],
+    [
+      { action: "delegate", task: "work", base: " \t" },
+      /Base ref must not be empty/,
+    ],
+  ] as const) {
+    await assert.rejects(
+      runtime.activateProjectLead(params, {} as any, signal),
+      expected,
+    );
+  }
+  assert.deepEqual(lockKeys, []);
+  assert.deepEqual(calls, []);
 
   await assert.rejects(
     runtime.activateProjectLead(
@@ -370,6 +392,29 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(pi.pi as never);
   const tools = new Map(pi.tools.map((tool) => [tool.name, tool]));
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
+  const portableStrings = [
+    ["delegate_agent", ["definition", "task"]],
+    ["continue_agent", ["session", "task"]],
+    ["steer_agent", ["message"]],
+    ["interrupt_agent", ["message"]],
+    ["reply_agent", ["message"]],
+    ["message_staff", ["message"]],
+    ["message_peer", ["message"]],
+    ["delegate_project", ["task", "branch", "base"]],
+    ["resume_project", ["branch"]],
+    ["remove_worktree", ["branch"]],
+    ["message_supervisor", ["message"]],
+  ] as const;
+  for (const [name, fields] of portableStrings) {
+    const properties = tools.get(name)!.parameters.properties;
+    for (const field of fields) {
+      const schema = properties[field];
+      assert.equal(schema.minLength, 1, `${name}.${field}`);
+      assert.equal(schema.pattern, undefined, `${name}.${field}`);
+      assert.equal(Value.Check(schema, "multi-character value"), true);
+      assert.equal(Value.Check(schema, ""), false);
+    }
+  }
   const labels: Record<string, string> = {
     list_agents: "list agents",
     delegate_agent: "delegate agent",

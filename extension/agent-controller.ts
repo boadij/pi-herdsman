@@ -6341,11 +6341,11 @@ export function createAgentController(
               }
             : Type.String({
                 description: "Agent definition for a fresh Agent.",
-                pattern: "\\S",
+                minLength: 1,
               }),
         task: Type.String({
           description: "Non-empty assignment.",
-          pattern: "\\S",
+          minLength: 1,
         }),
         label: Type.Optional(
           Type.String({
@@ -6363,11 +6363,11 @@ export function createAgentController(
         session: Type.String({
           description:
             "Exact saved managed-Agent Pi session path or full UUID.",
-          pattern: "\\S",
+          minLength: 1,
         }),
         task: Type.String({
           description: "Non-empty assignment.",
-          pattern: "\\S",
+          minLength: 1,
         }),
         files: FILES_SCHEMA,
       },
@@ -6376,7 +6376,7 @@ export function createAgentController(
     const agentMessageParameters = Type.Object(
       {
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
-        message: Type.String({ pattern: "\\S" }),
+        message: Type.String({ minLength: 1 }),
         files: FILES_SCHEMA,
       },
       { additionalProperties: false },

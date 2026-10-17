@@ -6844,6 +6844,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
           }
         : params;
+    if (!operation.branch.trim())
+      throw new Error("Project branch must not be empty");
+    if (
+      operation.action === "delegate" &&
+      operation.base !== undefined &&
+      !operation.base.trim()
+    )
+      throw new Error("Base ref must not be empty");
     return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
       activateProjectLeadLocked(operation, ctx, signal),
     );
