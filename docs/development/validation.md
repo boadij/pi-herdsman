@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md)
 
-Repository handoff is not complete until the current validation gates have been
+Repository handoff remains incomplete until the current validation gates have been
 run or a concrete environment blocker is recorded.
 
 ## Validation order
