@@ -3526,9 +3526,9 @@ mock.module("node:fs", {
   },
   defaultExport: { ...fs.default },
 });
-const storage = await import(process.cwd() + "/extension/supervision.ts");
-const { createLeadRoleTransitions } = await import(process.cwd() + "/extension/lead-runtime.ts");
-const { acquireProcessLock } = await import(process.cwd() + "/extension/lock.ts");
+const storage = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)});
+const { createLeadRoleTransitions } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lead-runtime.ts")).href)});
+const { acquireProcessLock } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lock.ts")).href)});
 const assignment = { version: 2, id: randomUUID(), repoKey: "race", branch: "feature", text: "task" };
 const runtime = storage.supervisionRuntime("/tmp/race-" + randomUUID() + ".sock");
 storage.writeProjectAssignment(runtime, assignment);
