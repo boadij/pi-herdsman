@@ -16,9 +16,15 @@ const RESULT_PREFIX = "result:";
 const RESULT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEMANTIC_RESULT_REF = /^result:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
+const INCIDENTAL_METADATA = new Set([
+  ".ds_store",
+  "desktop.ini",
+  "thumbs.db",
+  ".directory",
+]);
 
 export function isIncidentalMetadata(entry: Dirent): boolean {
-  return entry.name === ".DS_Store" && entry.isFile();
+  return entry.isFile() && INCIDENTAL_METADATA.has(entry.name.toLowerCase());
 }
 
 export type ResultBinding = Readonly<{

@@ -88,12 +88,15 @@ function readProcessLockClaim(path: string, owner: string): ProcessLockClaim {
   return claim;
 }
 
-function lockOwnerEntry(path: string): { owner: string; metadata: boolean } {
+function lockOwnerEntry(path: string): { owner: string; metadata: string[] } {
   const entries = fs.readdirSync(path, { withFileTypes: true });
   const owners = entries.filter((entry) => !isIncidentalMetadata(entry));
   if (owners.length !== 1 || !owners[0]!.isFile())
     throw new Error("Invalid process lock owner");
-  return { owner: owners[0]!.name, metadata: entries.length !== owners.length };
+  return {
+    owner: owners[0]!.name,
+    metadata: entries.filter(isIncidentalMetadata).map((entry) => entry.name),
+  };
 }
 
 function processExists(pid: number): boolean {
@@ -257,7 +260,7 @@ export function acquireProcessLock(
     // absent. Never clean up a quarantined directory unless it is still the
     // exact stale claim that was verified above.
     let quarantinedOwner: string;
-    let metadata: boolean;
+    let metadata: string[];
     try {
       ({ owner: quarantinedOwner, metadata } = lockOwnerEntry(quarantine));
     } catch (error) {
@@ -278,7 +281,7 @@ export function acquireProcessLock(
     }
     options.afterStaleOwnerRemoved?.();
     try {
-      if (metadata) unlinkMetadata(quarantine);
+      unlinkMetadata(quarantine, metadata);
       fs.unlinkSync(join(quarantine, observedOwner));
       fs.rmdirSync(quarantine);
     } catch (cleanupError) {
@@ -313,7 +316,7 @@ function releaseProcessLock(
   name: string,
 ): void {
   let owner: string;
-  let metadata: boolean;
+  let metadata: string[];
   try {
     ({ owner, metadata } = lockOwnerEntry(claimDir));
   } catch (error) {
@@ -348,7 +351,7 @@ function releaseProcessLock(
     throw new Error(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
     );
-  if (metadata) unlinkMetadata(claimDir);
+  unlinkMetadata(claimDir, metadata);
   fs.unlinkSync(ownerPath);
   try {
     fs.rmdirSync(claimDir);
@@ -358,10 +361,12 @@ function releaseProcessLock(
   }
 }
 
-function unlinkMetadata(path: string): void {
-  try {
-    fs.unlinkSync(join(path, ".DS_Store"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+function unlinkMetadata(path: string, entries: string[]): void {
+  for (const entry of entries) {
+    try {
+      fs.unlinkSync(join(path, entry));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }

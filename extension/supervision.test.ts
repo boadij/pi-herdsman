@@ -2741,7 +2741,7 @@ test("global assignment authority finds cross-socket matches and serializes the 
   assert.equal(globalProjectAssignmentSnapshot().get(assignmentId), undefined);
 });
 
-test("global assignment scan ignores only regular .DS_Store metadata", () => {
+test("global assignment scan ignores only regular incidental metadata", () => {
   const runtime = supervisionRuntime(socket());
   const assignment = {
     version: 2 as const,
@@ -2760,26 +2760,36 @@ test("global assignment scan ignores only regular .DS_Store metadata", () => {
     assignmentsDirectory,
     repositoryDirectory,
   ];
-  const metadata = directories.map((directory) => join(directory, ".DS_Store"));
+  const metadataNames = [".DS_Store", "desktop.ini", "Thumbs.db", ".directory"];
+  const metadata = directories.flatMap((directory) =>
+    metadataNames.map((name) => join(directory, name)),
+  );
   try {
     for (const path of metadata) writeFileSync(path, "metadata", "utf8");
+    unlinkSync(join(directories[0]!, "desktop.ini"));
+    writeFileSync(join(directories[0]!, "DESKTOP.INI"), "metadata", "utf8");
     assert.deepEqual(globalProjectAssignmentSnapshot().get(assignment.id), [
       { socketHash: basename(socketDirectory), assignment },
     ]);
 
-    for (const path of metadata) unlinkSync(path);
-    for (const [index, directory] of directories.entries()) {
-      const path = metadata[index]!;
-      mkdirSync(path);
-      assert.throws(() => globalProjectAssignmentSnapshot());
-      rmSync(path, { recursive: true });
+    unlinkSync(join(directories[0]!, "DESKTOP.INI"));
+    for (const path of metadata) {
+      if (path !== join(directories[0]!, "desktop.ini")) unlinkSync(path);
+    }
+    for (const directory of directories) {
+      for (const name of metadataNames) {
+        const path = join(directory, name);
+        mkdirSync(path);
+        assert.throws(() => globalProjectAssignmentSnapshot());
+        rmSync(path, { recursive: true });
 
-      const target = join(directory, "metadata-target");
-      writeFileSync(target, "metadata", "utf8");
-      realFs.symlinkSync(target, path);
-      assert.throws(() => globalProjectAssignmentSnapshot());
-      unlinkSync(path);
-      unlinkSync(target);
+        const target = join(directory, "metadata-target");
+        writeFileSync(target, "metadata", "utf8");
+        realFs.symlinkSync(target, path);
+        assert.throws(() => globalProjectAssignmentSnapshot());
+        unlinkSync(path);
+        unlinkSync(target);
+      }
     }
 
     const unexpected = join(repositoryDirectory, "unrelated-file");
