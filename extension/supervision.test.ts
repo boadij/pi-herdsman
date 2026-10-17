@@ -38,12 +38,14 @@ import {
   readProjectAssignment,
   listProjectAssignments,
   removeProjectAssignment,
+  retireProjectAssignment,
+  removeProjectMessagesForAssignment,
+  recoverStaleProjectMessages,
   projectAssignmentPath,
   projectWorkSnapshot,
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
-  removeProjectMessages,
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
@@ -2851,7 +2853,14 @@ test("global assignment scan recognizes canonical project-message directories", 
       globalProjectAssignmentSnapshot().get(assignment.id),
       undefined,
     );
-    removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+    rmSync(
+      projectAssignmentPath(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+      ).replace(/\.json$/, ".messages"),
+      { recursive: true, force: true },
+    );
 
     // A canonical name with the wrong type remains invalid.
     writeFileSync(messages, "not a directory");
@@ -3136,7 +3145,14 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
       ),
     /Invalid project message/,
   );
-  removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+  rmSync(
+    projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).replace(/\.json$/, ".messages"),
+    { recursive: true, force: true },
+  );
   assert.deepEqual(
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
     [],
@@ -3232,4 +3248,323 @@ test("pending project assignment refresh replaces the record delivered from the 
     delivered[0].content,
     `Project assignment for branch ${refreshed.branch}:\n\n${refreshed.text}`,
   );
+});
+
+test("project retirement compares exact authority and cleans only its pending messages", () => {
+  const runtime = supervisionRuntime(socket());
+  const original = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "retirement",
+    branch: "feature",
+    text: "task",
+  };
+  const replacement = { ...original, id: id() };
+  const pending = {
+    version: 2 as const,
+    id: id(),
+    repoKey: original.repoKey,
+    branch: original.branch,
+    fromSessionId: original.id,
+    text: "handoff",
+    createdAt: 1,
+  };
+  writeProjectAssignment(runtime, original);
+  writeProjectMessage(pending, runtime);
+  writeProjectAssignment(runtime, replacement);
+  const next = { ...pending, id: id(), fromSessionId: replacement.id };
+  writeProjectMessage(next, runtime);
+  assert.equal(retireProjectAssignment(runtime, original), false);
+  assert.deepEqual(
+    readProjectAssignment(runtime, original.repoKey, original.branch),
+    replacement,
+  );
+  assert.equal(
+    listProjectMessages(runtime, original.repoKey, original.branch).length,
+    2,
+  );
+  removeProjectMessagesForAssignment(runtime, original);
+  removeProjectMessagesForAssignment(runtime, original);
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [next],
+  );
+  assert.equal(retireProjectAssignment(runtime, replacement), true);
+  assert.equal(
+    readProjectAssignment(runtime, original.repoKey, original.branch),
+    undefined,
+  );
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [next],
+    "retirement itself never deletes pending handoffs",
+  );
+  assert.equal(retireProjectAssignment(runtime, replacement), false);
+  recoverStaleProjectMessages(runtime, original.repoKey);
+  recoverStaleProjectMessages(runtime, original.repoKey);
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [],
+  );
+});
+
+test("project message recovery preserves replacement authority and fails closed on uncertain records", () => {
+  for (const scenario of [
+    "replacement",
+    "corrupt authority",
+    "wrong branch",
+    "wrong repository",
+    "malformed message",
+  ] as const) {
+    const runtime = supervisionRuntime(socket());
+    const assignment = {
+      version: 2 as const,
+      id: id(),
+      repoKey: "recovery",
+      branch: "feature",
+      text: "task",
+    };
+    const stale = {
+      version: 2 as const,
+      id: id(),
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      fromSessionId: id(),
+      text: "old",
+      createdAt: 1,
+    };
+    const pending = {
+      ...stale,
+      id: id(),
+      fromSessionId: assignment.id,
+      createdAt: 2,
+    };
+    writeProjectAssignment(runtime, assignment);
+    writeProjectMessage(stale, runtime);
+    writeProjectMessage(pending, runtime);
+    const path = projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
+    const messagePath = join(
+      path.replace(/\.json$/, ".messages"),
+      `${stale.id}.json`,
+    );
+    if (scenario === "corrupt authority") writeFileSync(path, "{");
+    if (scenario === "wrong branch")
+      writeFileSync(
+        messagePath,
+        JSON.stringify({ ...stale, branch: "elsewhere" }),
+      );
+    if (scenario === "wrong repository")
+      writeFileSync(
+        messagePath,
+        JSON.stringify({ ...stale, repoKey: "elsewhere" }),
+      );
+    if (scenario === "malformed message") writeFileSync(messagePath, "{");
+    if (scenario === "replacement") {
+      recoverStaleProjectMessages(runtime, assignment.repoKey);
+      recoverStaleProjectMessages(runtime, assignment.repoKey);
+      assert.deepEqual(
+        listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+        [pending],
+      );
+      assert.deepEqual(
+        readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+        assignment,
+      );
+    } else {
+      assert.throws(() =>
+        recoverStaleProjectMessages(runtime, assignment.repoKey),
+      );
+      assert.ok(existsSync(messagePath));
+      assert.ok(existsSync(join(dirname(messagePath), `${pending.id}.json`)));
+    }
+  }
+});
+
+test("project retirement storage failure preserves pending messages", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "failure",
+    branch: "feature",
+    text: "task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const pending = {
+    version: 2 as const,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "handoff",
+    createdAt: 1,
+  };
+  writeProjectMessage(pending, runtime);
+  const lock = acquireProcessLock(projectAssignmentAuthorityLockPath(), {
+    name: "retirement failure injection",
+  });
+  try {
+    assert.throws(() => retireProjectAssignment(runtime, assignment));
+    assert.deepEqual(
+      readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+      assignment,
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [pending],
+    );
+  } finally {
+    lock.release();
+  }
+  writeFileSync(
+    projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+    "{",
+  );
+  assert.throws(() => retireProjectAssignment(runtime, assignment));
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [pending],
+  );
+});
+
+test("project message recovery rejects symlinked ancestors without touching external records", () => {
+  for (const ancestor of ["root", "assignments", "repository"] as const) {
+    const runtime = supervisionRuntime(socket());
+    const assignment = {
+      version: 2 as const,
+      id: id(),
+      repoKey: "symlink-recovery",
+      branch: "feature",
+      text: "unrelated authority",
+    };
+    writeProjectAssignment(runtime, assignment);
+    const pending = {
+      version: 2 as const,
+      id: id(),
+      repoKey: assignment.repoKey,
+      branch: "orphan",
+      fromSessionId: id(),
+      text: "external pending handoff",
+      createdAt: 1,
+    };
+    writeProjectMessage(pending, runtime);
+    const repository = dirname(
+      projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+    );
+    const original = ancestor === "repository" ? repository : runtime[ancestor];
+    const outside = join(
+      mkdtempSync(join(tmpdir(), "recovery-outside-")),
+      "records",
+    );
+    const relativeMessage = join(
+      repository,
+      `${createHash("sha256").update(pending.branch).digest("hex")}.messages`,
+      `${pending.id}.json`,
+    ).slice(original.length + 1);
+    const relativeAssignment = projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).slice(original.length + 1);
+    realFs.renameSync(original, outside);
+    realFs.symlinkSync(
+      outside,
+      original,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    try {
+      assert.throws(
+        () => recoverStaleProjectMessages(runtime, assignment.repoKey),
+        /Invalid project assignment authority directory/,
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(outside, relativeMessage), "utf8")),
+        pending,
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(outside, relativeAssignment), "utf8")),
+        assignment,
+      );
+      assert.equal(
+        readdirSync(join(outside, dirname(relativeAssignment))).filter((name) =>
+          name.endsWith(".json"),
+        ).length,
+        1,
+      );
+    } finally {
+      realFs.rmSync(original, { force: true });
+      realFs.renameSync(outside, original);
+    }
+  }
+});
+
+test("current handoff survives stale-message deletion between enumeration and read", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import { mock } from "node:test";
+import { randomUUID } from "node:crypto";
+const { default: ignored, ...namedExports } = fs;
+let afterEnumeration;
+mock.module("node:fs", {
+  namedExports: {
+    ...namedExports,
+    readdirSync: (...args) => {
+      const entries = fs.readdirSync(...args);
+      afterEnumeration?.(args[0], entries);
+      return entries;
+    },
+  },
+  defaultExport: { ...fs.default },
+});
+const storage = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)});
+const { createLeadRoleTransitions } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lead-runtime.ts")).href)});
+const { acquireProcessLock } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/lock.ts")).href)});
+const assignment = { version: 2, id: randomUUID(), repoKey: "race", branch: "feature", text: "task" };
+const runtime = storage.supervisionRuntime("/tmp/race-" + randomUUID() + ".sock");
+storage.writeProjectAssignment(runtime, assignment);
+const stale = { version: 2, id: randomUUID(), repoKey: assignment.repoKey, branch: assignment.branch, fromSessionId: randomUUID(), text: "old", createdAt: 1 };
+storage.writeProjectMessage(stale, runtime);
+let recoveredDuringListing = false;
+afterEnumeration = (path, entries) => {
+  if (!path.endsWith(".messages")) return;
+  afterEnumeration = undefined;
+  assert.ok(entries.includes(stale.id + ".json"));
+  storage.recoverStaleProjectMessages(runtime, assignment.repoKey);
+  recoveredDuringListing = true;
+};
+const transitions = createLeadRoleTransitions({}, {
+  ...storage,
+  supervisionRuntime: () => runtime,
+  acquireProcessLock,
+  prepareCoordinationInput: async (_ctx, text) => ({ text, resultBindings: [] }),
+});
+const record = await transitions.publishProjectMessage(
+  { sessionManager: { getSessionId: () => assignment.id } }, assignment, "new",
+);
+assert.ok(recoveredDuringListing);
+assert.ok(record);
+assert.deepEqual(storage.listProjectMessages(runtime, assignment.repoKey, assignment.branch), [record]);
+`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), "publication-race-")),
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });

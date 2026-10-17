@@ -4435,10 +4435,6 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal((await matchingWorktrees()).length, 0);
   markStage(ctx, "assignment-absence-reconciliation");
   ctx.owned.managerWorktreeRetirementRequested = true;
-  const messagesDirectory = join(
-    dirname(assignmentPath),
-    `${hash(branch)}.messages`,
-  );
   await waitFor(
     "assignment-removed",
     async () => {
@@ -4453,7 +4449,31 @@ async function runManagerRecoverySmoke(ctx) {
     15_000,
   );
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
-  await assert.rejects(lstat(messagesDirectory), { code: "ENOENT" });
+  await waitFor(
+    "retired-project-messages-removed",
+    async () => {
+      try {
+        for (const name of await readdir(retainedMessagesDirectory)) {
+          if (!name.endsWith(".json")) continue;
+          let record;
+          try {
+            record = JSON.parse(
+              await readFile(join(retainedMessagesDirectory, name), "utf8"),
+            );
+          } catch (error) {
+            if (error.code === "ENOENT") continue;
+            throw error;
+          }
+          if (record.fromSessionId === first.session) return false;
+        }
+        return true;
+      } catch (error) {
+        if (error.code === "ENOENT") return true;
+        throw error;
+      }
+    },
+    15_000,
+  );
   assert.deepEqual(
     JSON.parse(await readFile(unrelatedAssignmentPath, "utf8")),
     unrelatedAssignment,

@@ -162,8 +162,9 @@ type LeadTransitionHost = {
   activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
   reportLeadMetadata: typeof import("./herdr.ts").reportLeadMetadata;
   delay: typeof import("node:timers/promises").setTimeout;
-  removeProjectAssignment: typeof import("./supervision.ts").removeProjectAssignment;
-  removeProjectMessages: typeof import("./supervision.ts").removeProjectMessages;
+  retireProjectAssignment: typeof import("./supervision.ts").retireProjectAssignment;
+  removeProjectMessagesForAssignment: typeof import("./supervision.ts").removeProjectMessagesForAssignment;
+  recoverStaleProjectMessages: typeof import("./supervision.ts").recoverStaleProjectMessages;
   sameManagerDescriptor: typeof import("./supervision.ts").sameManagerDescriptor;
   workspaceId(): string | undefined;
   worktreeGroupScope(
@@ -2677,13 +2678,14 @@ export function registerLeadRuntime(
     options.projectHost.writeProjectAssignment(...args);
     supervisionUiRuntime.requestRefresh();
   };
-  const removeProjectAssignment = (
+  const retireProjectAssignment = (
     ...args: Parameters<
-      typeof options.roleTransitionHost.removeProjectAssignment
+      typeof options.roleTransitionHost.retireProjectAssignment
     >
   ) => {
-    options.roleTransitionHost.removeProjectAssignment(...args);
+    const retired = options.roleTransitionHost.retireProjectAssignment(...args);
     supervisionUiRuntime.requestRefresh();
+    return retired;
   };
   const clearSupervisionUI = (removeWidget = true): void => {
     supervisionUiRuntime.stopPeriodic();
@@ -3072,7 +3074,7 @@ export function registerLeadRuntime(
     currentSupervisoryProfile,
     supervisoryTools,
     fallbackSupervisoryProfile,
-    removeProjectAssignment,
+    retireProjectAssignment,
     controllerScope: { kind: "root" },
     activationGuard,
     advancePeerPresenceGeneration: () =>
@@ -10689,7 +10691,8 @@ export function createLeadRoleTransitions(
     );
   };
   const managerForScope = (
-    scope: WorktreeGroupScope | undefined,
+    scope:
+      Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | undefined,
   ): ManagerDescriptor | undefined => {
     if (!scope) return undefined;
     const status = host.readManagerDescriptorStatus(
@@ -10703,7 +10706,7 @@ export function createLeadRoleTransitions(
   };
   const currentManager = async (
     ctx: ExtensionContext,
-    scope?: WorktreeGroupScope | null,
+    scope?: Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | null,
   ): Promise<ManagerDescriptor | undefined> => {
     const descriptor = managerForScope(
       scope === null || scope === undefined
@@ -10883,27 +10886,15 @@ export function createLeadRoleTransitions(
   };
   const removeProjectAssignmentState = (
     assignment: ProjectAssignment,
-    _ctx: ExtensionContext,
+    ctx: ExtensionContext,
   ): boolean => {
     const runtime = host.supervisionRuntime();
-    const current = host.readProjectAssignment(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-    );
-    if (
-      !current ||
-      current.repoKey !== assignment.repoKey ||
-      current.branch !== assignment.branch ||
-      current.id !== assignment.id
-    )
-      return false;
-    host.removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
-    host.removeProjectAssignment(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-    );
+    if (!host.retireProjectAssignment(runtime, assignment)) return false;
+    try {
+      host.removeProjectMessagesForAssignment(runtime, assignment);
+    } catch (error) {
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+    }
     return true;
   };
   const gitWorktreeInventory = async (
@@ -11107,8 +11098,28 @@ export function createLeadRoleTransitions(
   const reconcileCurrentManagerAssignments = async (
     ctx: ExtensionContext,
   ): Promise<void> => {
-    const manager = await currentManager(ctx);
+    const lease = state.managerLease?.descriptor;
+    if (
+      activeLeadRole(state) !== "manager" ||
+      state.roleSuspended ||
+      !lease ||
+      lease.piSessionId !== ctx.sessionManager.getSessionId() ||
+      lease.workspaceId !== host.workspaceId()
+    )
+      return;
+    const manager = await currentManager(ctx, {
+      repoKey: lease.repoKey,
+      primaryWorkspaceId: lease.workspaceId,
+    });
     if (!manager) return;
+    try {
+      host.recoverStaleProjectMessages(
+        host.supervisionRuntime(),
+        manager.repoKey,
+      );
+    } catch (error) {
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+    }
     const topology = await host.runHerdr(
       host.pi,
       ctx,

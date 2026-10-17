@@ -2057,10 +2057,12 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     failManagerRename = true;
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), managerTools);
-    assert.deepEqual(
-      tabCommands.at(-1),
-      ["tab", "rename", "root-tab", "Manager"],
-      "the attempted Herdr rename fails during the committed Manager transition",
+    await t.waitFor(() =>
+      assert.deepEqual(
+        tabCommands.find((args) => args[3] === "Manager"),
+        ["tab", "rename", "root-tab", "Manager"],
+        "the attempted Herdr rename fails during the committed Manager transition",
+      ),
     );
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
@@ -3225,7 +3227,14 @@ test("takeover cancellation preserves assignment and confirmation releases only 
     branch: "feature",
     text: "task",
   };
-  for (const confirmed of [false, true]) {
+  for (const scenario of [
+    "cancel",
+    "commit",
+    "retirement failure",
+    "cleanup failure",
+  ] as const) {
+    const confirmed = scenario !== "cancel";
+    const errors: unknown[] = [];
     let current: any = assignment;
     let pending = true;
     let removedMessages = 0;
@@ -3249,10 +3258,15 @@ test("takeover cancellation preserves assignment and confirmation releases only 
         supervisionRuntime: () => ({}),
         projectAssignmentPath: () => "/tmp/takeover-assignment",
         readProjectAssignment: () => current,
-        removeProjectAssignment: () => {
+        retireProjectAssignment: () => {
+          if (scenario === "retirement failure")
+            throw new Error("retirement failed");
           current = undefined;
+          return true;
         },
-        removeProjectMessages: () => {
+        removeProjectMessagesForAssignment: () => {
+          assert.equal(current, undefined, "cleanup follows authority commit");
+          if (scenario === "cleanup failure") throw new Error("cleanup failed");
           pending = false;
           removedMessages++;
         },
@@ -3260,7 +3274,7 @@ test("takeover cancellation preserves assignment and confirmation releases only 
           lockCount++;
           return { release() {} };
         },
-        appendDurableError: () => assert.fail("unexpected cleanup error"),
+        appendDurableError: (...args: unknown[]) => errors.push(args.at(-1)),
         pi: fakePi().pi,
       },
       {
@@ -3274,10 +3288,31 @@ test("takeover cancellation preserves assignment and confirmation releases only 
     ctx.hasUI = true;
     ctx.ui.confirm = async () => confirmed;
     ctx.ui.notify = (message: string) => notices.push(message);
-    await transitions.takeover(ctx);
+    if (scenario === "retirement failure") {
+      await assert.rejects(
+        () => transitions.takeover(ctx),
+        /retirement failed/,
+      );
+      assert.equal(current, assignment);
+      assert.equal(pending, true);
+      assert.equal(removedMessages, 0);
+      assert.deepEqual(
+        notices,
+        [],
+        "assignment-removal failure must not report takeover success",
+      );
+      assert.deepEqual(
+        errors,
+        [],
+        "pre-commit failure is not a post-commit cleanup diagnostic",
+      );
+      continue;
+    }
+    assert.equal(await transitions.takeover(ctx), confirmed);
+    assert.equal(errors.length, scenario === "cleanup failure" ? 1 : 0);
     assert.equal(Boolean(current), !confirmed);
-    assert.equal(pending, !confirmed);
-    assert.equal(removedMessages, confirmed ? 1 : 0);
+    assert.equal(pending, !confirmed || scenario === "cleanup failure");
+    assert.equal(removedMessages, scenario === "commit" ? 1 : 0);
     assert.equal(lockCount, confirmed ? 1 : 0);
     assert.equal(
       notices.at(-1),
@@ -3319,11 +3354,11 @@ test("takeover fails closed when assignment authority is duplicated or changes a
         supervisionRuntime: () => ({}),
         projectAssignmentPath: () => "/tmp/takeover-assignment",
         readProjectAssignment: () => current,
-        removeProjectAssignment: () => {
+        retireProjectAssignment: () => {
           removed = true;
           current = undefined as any;
         },
-        removeProjectMessages: () => {},
+        removeProjectMessagesForAssignment: () => {},
         acquireProcessLock: () => ({ release() {} }),
         appendDurableError: () => assert.fail("unexpected cleanup error"),
         pi: fakePi().pi,
@@ -3370,10 +3405,10 @@ test("takeover rejects non-Lead and noninteractive use and leaves ordinary Leads
       }),
       findProjectAssignmentBySession: () => [],
       supervisionRuntime: () => ({}),
-      removeProjectAssignment: () => {
+      retireProjectAssignment: () => {
         removals++;
       },
-      removeProjectMessages: () => {
+      removeProjectMessagesForAssignment: () => {
         removals++;
       },
       acquireProcessLock: () => {
@@ -14026,4 +14061,227 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     else if (hadAgentsDir) realFs.rmSync(definitionPath, { force: true });
     else realFs.rmSync(agentsDir, { recursive: true, force: true });
   }
+});
+
+test("Manager initialization recovers messages before topology and reports recovery failures without skipping reconciliation", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  for (const recoveryFails of [false, true]) {
+    const sessionId = randomUUID();
+    const descriptor = {
+      piSessionId: sessionId,
+      repoKey: "repo-key",
+      workspaceId: WORKSPACE,
+    };
+    const events: string[] = [];
+    const host: any = {
+      pi: fakePi().pi,
+      workspaceId: () => WORKSPACE,
+      worktreeGroupScope: async () => {
+        events.push("scope topology");
+        throw new Error("first topology unavailable");
+      },
+      supervisionRuntime: () => ({}),
+      readManagerDescriptorStatus: () => ({ live: true, descriptor }),
+      readLeadCoordinationState: () => ({
+        role: "manager",
+        piSessionId: sessionId,
+      }),
+      requireCompatibleBuild: () => {},
+      sameManagerDescriptor: () => true,
+      recoverStaleProjectMessages: (_runtime: unknown, repoKey: string) => {
+        assert.equal(repoKey, "repo-key");
+        events.push("recovery");
+        if (recoveryFails) throw new Error("uncertain message storage");
+      },
+      appendDurableError: (
+        _pi: unknown,
+        _ctx: unknown,
+        type: string,
+        error: Error,
+      ) => {
+        assert.equal(type, "pi_herdsman_state_error");
+        assert.match(error.message, /uncertain message storage/);
+        events.push("error");
+      },
+      runHerdr: async () => {
+        events.push("topology");
+        throw new Error("topology unavailable");
+      },
+    };
+    const transitions = createLeadRoleTransitions(
+      {
+        controllerRole: "manager",
+        chiefMode: "inactive",
+        roleSuspended: false,
+        managerLease: { descriptor },
+      } as any,
+      host,
+    );
+    const ctx: any = fakeContext();
+    ctx.sessionManager.getSessionId = () => sessionId;
+    await assert.rejects(
+      () => transitions.reconcileCurrentManagerAssignments(ctx),
+      /topology unavailable/,
+    );
+    assert.deepEqual(
+      events,
+      recoveryFails
+        ? ["recovery", "error", "topology"]
+        : ["recovery", "topology"],
+    );
+  }
+});
+
+test("Manager initialization cannot recover messages under stale or invalid local authority", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  for (const scenario of [
+    "role",
+    "suspended",
+    "missing lease",
+    "session",
+    "workspace",
+    "missing descriptor",
+    "dead descriptor",
+    "replacement",
+    "repository",
+    "coordinator",
+    "build",
+  ] as const) {
+    const sessionId = randomUUID();
+    const descriptor = {
+      piSessionId: sessionId,
+      repoKey: "repo-key",
+      workspaceId: WORKSPACE,
+    };
+    let recovered = false;
+    const host: any = {
+      workspaceId: () =>
+        scenario === "workspace" ? "other-workspace" : WORKSPACE,
+      supervisionRuntime: () => ({}),
+      readManagerDescriptorStatus: () =>
+        scenario === "missing descriptor"
+          ? undefined
+          : {
+              live: scenario !== "dead descriptor",
+              descriptor:
+                scenario === "repository"
+                  ? { ...descriptor, repoKey: "other-repo" }
+                  : descriptor,
+            },
+      readLeadCoordinationState: () =>
+        scenario === "coordinator"
+          ? undefined
+          : { role: "manager", piSessionId: sessionId },
+      requireCompatibleBuild: () => {
+        if (scenario === "build") throw new Error("incompatible build");
+      },
+      sameManagerDescriptor: () => scenario !== "replacement",
+      recoverStaleProjectMessages: () => {
+        recovered = true;
+      },
+      appendDurableError: () =>
+        assert.fail("unauthorized recovery must not start"),
+      worktreeGroupScope: () =>
+        assert.fail("authorization must not query topology"),
+      runHerdr: () =>
+        assert.fail("invalid authority must not reconcile topology"),
+    };
+    const transitions = createLeadRoleTransitions(
+      {
+        controllerRole: scenario === "role" ? "lead" : "manager",
+        chiefMode: "inactive",
+        roleSuspended: scenario === "suspended",
+        managerLease: scenario === "missing lease" ? undefined : { descriptor },
+      } as any,
+      host,
+    );
+    const ctx: any = fakeContext();
+    ctx.sessionManager.getSessionId = () =>
+      scenario === "session" ? randomUUID() : sessionId;
+    if (["repository", "coordinator", "build"].includes(scenario))
+      await assert.rejects(() =>
+        transitions.reconcileCurrentManagerAssignments(ctx),
+      );
+    else await transitions.reconcileCurrentManagerAssignments(ctx);
+    assert.equal(recovered, false, scenario);
+  }
+});
+
+test("current project handoff publishes despite unrelated global authority contention and survives recovery", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const {
+    writeProjectMessage,
+    readProjectAssignment,
+    listProjectMessages,
+    recoverStaleProjectMessages,
+    projectAssignmentAuthorityLockPath,
+  } = await import("./supervision.ts");
+  const runtime = supervisionRuntime(`/tmp/publication-${randomUUID()}.sock`);
+  const assignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: "publication",
+    branch: "feature",
+    text: "task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const stale = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: randomUUID(),
+    text: "retired handoff",
+    createdAt: 1,
+  };
+  writeProjectMessage(stale, runtime);
+  let branchLocks = 0;
+  const transitions = createLeadRoleTransitions(
+    { controllerRole: "lead" } as any,
+    {
+      supervisionRuntime: () => runtime,
+      readProjectAssignment,
+      projectAssignmentPath,
+      acquireProcessLock: (...args: Parameters<typeof acquireProcessLock>) => {
+        branchLocks++;
+        return acquireProcessLock(...args);
+      },
+      prepareCoordinationInput: async (_ctx: unknown, text: string) => ({
+        text,
+        resultBindings: [],
+      }),
+      writeProjectMessage,
+    } as any,
+  );
+  const ctx: any = fakeContext();
+  ctx.sessionManager.getSessionId = () => assignment.id;
+  const global = acquireProcessLock(projectAssignmentAuthorityLockPath(), {
+    name: "unrelated authority operation",
+  });
+  let published;
+  try {
+    published = await transitions.publishProjectMessage(
+      ctx,
+      assignment,
+      "handoff",
+    );
+    assert.ok(published);
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [stale, published],
+    );
+    assert.equal(branchLocks, 1);
+  } finally {
+    global.release();
+  }
+  recoverStaleProjectMessages(runtime, assignment.repoKey);
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [published],
+  );
+  assert.equal(
+    published.fromSessionId,
+    assignment.id,
+    "the existing exact-assignment delivery predicate accepts the handoff",
+  );
 });

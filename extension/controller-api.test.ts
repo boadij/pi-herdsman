@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
@@ -89,9 +89,9 @@ const {
   readManagerDescriptor,
   writeProjectAssignment,
   removeProjectAssignment,
+  recoverStaleProjectMessages,
   listProjectMessages,
   writeProjectMessage,
-  removeProjectMessages,
   projectAssignmentPath,
   writeChiefMessage: writeChiefMessageRaw,
   chiefMessageBytes,
@@ -619,8 +619,13 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     ctx.ui.confirm = async () => true;
     support.failProjectMessageRemoval = true;
     try {
-      await assert.rejects(pi.commandOptions.get("takeover")!.handler("", ctx));
-      assert.equal(listProjectAssignments(runtime, "repo-key").length, 1);
+      await pi.commandOptions.get("takeover")!.handler("", ctx);
+      assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
+      assert.ok(
+        pi.entries.some(
+          (entry: any) => entry.customType === "pi_herdsman_state_error",
+        ),
+      );
       assert.equal(
         listProjectMessages(runtime, "repo-key", "smoke/routing").length,
         3,
@@ -628,7 +633,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     } finally {
       support.failProjectMessageRemoval = false;
     }
-    await pi.commandOptions.get("takeover")!.handler("", ctx);
+    recoverStaleProjectMessages(runtime, "repo-key");
     assert.equal(ctx.sessionManager.getSessionId(), leadId);
     assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
     assert.equal(
@@ -922,7 +927,13 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 2);
 
     removeProjectAssignment(runtime, repoKey, branch);
-    removeProjectMessages(runtime, repoKey, branch);
+    rmSync(
+      projectAssignmentPath(runtime, repoKey, branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
+      { recursive: true, force: true },
+    );
     managerLease = claimManagerLease({
       piSessionId: managerId,
       paneId: "manager-pane",
@@ -939,7 +950,10 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     });
     managerAvailable = true;
     writeProjectAssignment(runtime, replacement);
-    writeProjectMessage(message(randomUUID()), runtime);
+    writeProjectMessage(
+      { ...message(randomUUID()), fromSessionId: replacement.id },
+      runtime,
+    );
     releaseRetirementLock = claimProcessLock(
       `${projectAssignmentPath(runtime, repoKey, branch)}.lock`,
       { name: "test removal-event assignment lock" },
