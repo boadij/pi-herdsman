@@ -2741,6 +2741,60 @@ test("global assignment authority finds cross-socket matches and serializes the 
   assert.equal(globalProjectAssignmentSnapshot().get(assignmentId), undefined);
 });
 
+test("global assignment scan ignores only regular .DS_Store metadata", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "metadata-repo",
+    branch: "main",
+    text: "task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const recordPath = projectAssignmentPath(runtime, assignment.repoKey, "main");
+  const repositoryDirectory = dirname(recordPath);
+  const assignmentsDirectory = dirname(repositoryDirectory);
+  const socketDirectory = dirname(assignmentsDirectory);
+  const directories = [
+    dirname(socketDirectory),
+    assignmentsDirectory,
+    repositoryDirectory,
+  ];
+  const metadata = directories.map((directory) => join(directory, ".DS_Store"));
+  try {
+    for (const path of metadata) writeFileSync(path, "metadata", "utf8");
+    assert.deepEqual(globalProjectAssignmentSnapshot().get(assignment.id), [
+      { socketHash: basename(socketDirectory), assignment },
+    ]);
+
+    for (const path of metadata) unlinkSync(path);
+    for (const [index, directory] of directories.entries()) {
+      const path = metadata[index]!;
+      mkdirSync(path);
+      assert.throws(() => globalProjectAssignmentSnapshot());
+      rmSync(path, { recursive: true });
+
+      const target = join(directory, "metadata-target");
+      writeFileSync(target, "metadata", "utf8");
+      realFs.symlinkSync(target, path);
+      assert.throws(() => globalProjectAssignmentSnapshot());
+      unlinkSync(path);
+      unlinkSync(target);
+    }
+
+    const unexpected = join(repositoryDirectory, "unrelated-file");
+    writeFileSync(unexpected, "metadata", "utf8");
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Unexpected project assignment record/,
+    );
+    unlinkSync(unexpected);
+  } finally {
+    for (const path of metadata) rmSync(path, { recursive: true, force: true });
+    removeProjectAssignment(runtime, assignment.repoKey, assignment.branch);
+  }
+});
+
 test("global assignment scans fail closed on a malformed canonical record", () => {
   const runtime = supervisionRuntime(socket());
   const path = projectAssignmentPath(runtime, "scan-repo", "main");

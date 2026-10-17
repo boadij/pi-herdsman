@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { herdsmanTempRoot } from "./storage.ts";
+import { herdsmanTempRoot, isIncidentalMetadata } from "./storage.ts";
 
 export class ProcessLockOccupiedError extends Error {
   readonly code = "PROCESS_LOCK_OCCUPIED";
@@ -88,6 +88,14 @@ function readProcessLockClaim(path: string, owner: string): ProcessLockClaim {
   return claim;
 }
 
+function lockOwnerEntry(path: string): { owner: string; metadata: boolean } {
+  const entries = fs.readdirSync(path, { withFileTypes: true });
+  const owners = entries.filter((entry) => !isIncidentalMetadata(entry));
+  if (owners.length !== 1 || !owners[0]!.isFile())
+    throw new Error("Invalid process lock owner");
+  return { owner: owners[0]!.name, metadata: entries.length !== owners.length };
+}
+
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -147,15 +155,12 @@ export function readProcessLockStatus(
   name = "process lock",
 ): { claim: ProcessLockClaim; live: boolean } {
   const verifyMessage = `Unable to verify ${name}`;
-  let entries: string[];
+  let owner: string;
   try {
-    entries = fs.readdirSync(path);
+    ({ owner } = lockOwnerEntry(path));
   } catch (error) {
     throw new Error(verifyMessage, { cause: error });
   }
-  if (entries.length !== 1) throw new Error(verifyMessage);
-
-  const owner = entries[0];
   try {
     const claim = readProcessLockClaim(path, owner);
     return { claim, live: processExists(claim.pid) };
@@ -185,9 +190,10 @@ export function acquireProcessLock(
 
   // An empty canonical directory is ambiguous and must not be replaced.
   try {
-    if (fs.readdirSync(claimDir).length === 0) throw new Error(verifyMessage);
+    lockOwnerEntry(claimDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+      throw new Error(verifyMessage, { cause: error });
   }
 
   try {
@@ -198,17 +204,12 @@ export function acquireProcessLock(
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM")
       throw error;
-    let entries: string[];
+    let observedOwner: string;
     try {
-      entries = fs.readdirSync(claimDir);
+      ({ owner: observedOwner } = lockOwnerEntry(claimDir));
     } catch {
       throw new Error(verifyMessage);
     }
-    if (entries.length === 0) {
-      throw new Error(verifyMessage);
-    }
-    if (entries.length !== 1) throw new Error(verifyMessage);
-    const observedOwner = entries[0];
     let staleClaim: ProcessLockClaim;
     try {
       staleClaim = readProcessLockClaim(claimDir, observedOwner);
@@ -230,8 +231,8 @@ export function acquireProcessLock(
       `.${basename(claimDir)}.${randomUUID()}.stale`,
     );
     try {
-      const currentEntries = fs.readdirSync(claimDir);
-      if (currentEntries.length !== 1 || currentEntries[0] !== observedOwner)
+      const { owner: currentOwner } = lockOwnerEntry(claimDir);
+      if (currentOwner !== observedOwner)
         throw new ProcessLockOccupiedError(occupiedMessage);
       const currentClaim = readProcessLockClaim(claimDir, observedOwner);
       if (
@@ -255,16 +256,14 @@ export function acquireProcessLock(
     // A concurrent claimant may have won the canonical name while it was
     // absent. Never clean up a quarantined directory unless it is still the
     // exact stale claim that was verified above.
-    let quarantinedEntries: string[];
+    let quarantinedOwner: string;
+    let metadata: boolean;
     try {
-      quarantinedEntries = fs.readdirSync(quarantine);
+      ({ owner: quarantinedOwner, metadata } = lockOwnerEntry(quarantine));
     } catch (error) {
       throw new Error(recoverMessage, { cause: error });
     }
-    if (
-      quarantinedEntries.length !== 1 ||
-      quarantinedEntries[0] !== observedOwner
-    )
+    if (quarantinedOwner !== observedOwner)
       throw new ProcessLockOccupiedError(occupiedMessage);
     try {
       const quarantinedClaim = readProcessLockClaim(quarantine, observedOwner);
@@ -279,6 +278,7 @@ export function acquireProcessLock(
     }
     options.afterStaleOwnerRemoved?.();
     try {
+      if (metadata) unlinkMetadata(quarantine);
       fs.unlinkSync(join(quarantine, observedOwner));
       fs.rmdirSync(quarantine);
     } catch (cleanupError) {
@@ -312,6 +312,31 @@ function releaseProcessLock(
   claim: ProcessLockClaim,
   name: string,
 ): void {
+  let owner: string;
+  let metadata: boolean;
+  try {
+    ({ owner, metadata } = lockOwnerEntry(claimDir));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    // A lease whose owner has already disappeared or been replaced must not
+    // affect the current lock generation.
+    try {
+      fs.accessSync(ownerPath);
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code === "ENOENT") return;
+    }
+    throw new Error(`Unable to verify ${name} ownership`, { cause: error });
+  }
+  if (owner !== basename(ownerPath)) {
+    try {
+      fs.accessSync(ownerPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    }
+    throw new Error(
+      `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
+    );
+  }
   let current: ProcessLockClaim;
   try {
     current = readProcessLockClaim(claimDir, basename(ownerPath));
@@ -323,11 +348,20 @@ function releaseProcessLock(
     throw new Error(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
     );
+  if (metadata) unlinkMetadata(claimDir);
   fs.unlinkSync(ownerPath);
   try {
     fs.rmdirSync(claimDir);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTEMPTY") throw error;
+  }
+}
+
+function unlinkMetadata(path: string): void {
+  try {
+    fs.unlinkSync(join(path, ".DS_Store"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

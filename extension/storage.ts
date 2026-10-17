@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -15,6 +16,10 @@ const RESULT_PREFIX = "result:";
 const RESULT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEMANTIC_RESULT_REF = /^result:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
+
+export function isIncidentalMetadata(entry: Dirent): boolean {
+  return entry.name === ".DS_Store" && entry.isFile();
+}
 
 export type ResultBinding = Readonly<{
   ref: string;

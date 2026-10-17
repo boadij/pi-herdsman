@@ -25,6 +25,7 @@ import {
 } from "./lock.ts";
 import {
   herdsmanDataRoot,
+  isIncidentalMetadata,
   isResultBinding,
   type ResultBinding,
 } from "./storage.ts";
@@ -2096,6 +2097,7 @@ function scanGlobalProjectAssignments(): Map<
   }
   const bySession = new Map<string, GlobalProjectAssignment[]>();
   for (const socket of sockets) {
+    if (isIncidentalMetadata(socket)) continue;
     if (!/^[a-f0-9]{64}$/.test(socket.name))
       throw new Error(
         `Unexpected project assignment socket entry ${socket.name}`,
@@ -2117,6 +2119,7 @@ function scanGlobalProjectAssignments(): Map<
     }
     assignmentDirectory(assignmentsRoot);
     for (const repository of repositories) {
+      if (isIncidentalMetadata(repository)) continue;
       if (!/^[a-f0-9]{64}$/.test(repository.name))
         throw new Error(
           `Unexpected project assignment repository entry ${repository.name}`,
@@ -2128,6 +2131,7 @@ function scanGlobalProjectAssignments(): Map<
       const directory = join(assignmentsRoot, repository.name);
       assignmentDirectory(directory);
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (isIncidentalMetadata(entry)) continue;
         // Atomic writer temporaries are not committed authority records.
         if (/^\..+\.[a-f0-9-]{36}\.tmp$/.test(entry.name)) {
           if (!entry.isFile() || entry.isSymbolicLink())

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,6 +73,74 @@ test("claim wrapper retains atomic stale recovery after a crash", () => {
     release();
   } finally {
     rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("metadata does not affect live lock verification and is removed on release", () => {
+  const path = temporaryPath();
+  try {
+    const lease = acquireProcessLock(path);
+    writeFileSync(join(path, ".DS_Store"), "metadata");
+    deepEqual(readProcessLockStatus(path), { claim: lease.claim, live: true });
+    assertOccupied(path);
+    lease.release();
+    throws(() => readdirSync(path), { code: "ENOENT" });
+
+    const reacquired = acquireProcessLock(path);
+    reacquired.release();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("stale recovery removes metadata only after verifying the stale owner", () => {
+  const path = temporaryPath();
+  const id = randomUUID();
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, `2147483647-${id}`),
+      JSON.stringify({ pid: 2147483647, id }),
+    );
+    writeFileSync(join(path, ".DS_Store"), "metadata");
+    const release = claimProcessLock(path);
+    assertOccupied(path);
+    release();
+    throws(() => readdirSync(path), { code: "ENOENT" });
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("metadata alone and unsafe entries remain ambiguous", () => {
+  for (const entry of ["file", "symlink", "directory"]) {
+    const path = temporaryPath();
+    try {
+      mkdirSync(path, 0o700);
+      if (entry === "file") writeFileSync(join(path, ".DS_Store"), "metadata");
+      else if (entry === "symlink")
+        symlinkSync("missing", join(path, ".DS_Store"));
+      else mkdirSync(join(path, ".DS_Store"));
+      throws(() => claimProcessLock(path), /Unable to verify/);
+      throws(() => readProcessLockStatus(path), /Unable to verify/);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+});
+
+test("owner with a metadata symlink or unknown file is rejected", () => {
+  for (const entry of ["symlink", "unknown"]) {
+    const path = temporaryPath();
+    const lease = acquireProcessLock(path);
+    try {
+      if (entry === "symlink") symlinkSync("missing", join(path, ".DS_Store"));
+      else writeFileSync(join(path, "unexpected"), "unknown");
+      throws(() => readProcessLockStatus(path), /Unable to verify/);
+      throws(() => lease.release(), /Unable to verify/);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
   }
 });
 
