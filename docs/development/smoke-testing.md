@@ -84,6 +84,14 @@ normalizes these custom results as user messages in the provider transcript.
 The faux rules require the exact delivered Agent-result message and its
 correlated successful tool call before returning completion markers; the smoke
 assertions independently verify the persisted tool and session evidence.
+For a separate external Git checkout-absence check, the maintainer-only
+`manager-recovery --manager-external-removal` variant reuses the same disposable
+lifecycle and passive-notice assertions. It revalidates the exact owned checkout,
+branch, workspace, and isolated Git repository before non-forced Git worktree
+removal. The default `manager-recovery` invocation retains Herdr removal. These
+are separate acceptance invocations; neither adds a production setting or
+proves pending retirement delivery across Manager replacement.
+
 `manager-recovery --simulated` remains unsupported and fails immediately.
 `--simulated` cannot be combined with `--model`. Without
 `--simulated`, the configured or explicitly selected live model remains in use;

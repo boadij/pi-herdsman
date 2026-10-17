@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted. The worktree-retirement deletion decision is superseded by
+[ADR 0023](0023-deliver-worktree-retirement-through-pending-manager-context.md).
+Confirmed takeover still deletes the exact assignment; the commit-before-cleanup
+ordering and assignment-scoped cleanup remain in force.
 
 ## Decision
 

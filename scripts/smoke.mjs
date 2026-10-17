@@ -81,6 +81,7 @@ export function parseSmokeArgs(args) {
       simulated: { type: "boolean" },
       "manager-ready-timeout-ms": { type: "string" },
       "manager-recovery-diagnostics": { type: "boolean" },
+      "manager-external-removal": { type: "boolean" },
     },
   });
   const scenario = parseScenario(positionals);
@@ -109,12 +110,18 @@ export function parseSmokeArgs(args) {
     throw new Error(
       "--manager-recovery-diagnostics is only valid for manager-recovery",
     );
+  const managerExternalRemoval = values["manager-external-removal"] ?? false;
+  if (managerExternalRemoval && scenario !== "manager-recovery")
+    throw new Error(
+      "--manager-external-removal is only valid for manager-recovery",
+    );
   return {
     scenario,
     model: values.model,
     simulated,
     managerReadyTimeoutMs,
     managerRecoveryDiagnostics,
+    managerExternalRemoval,
   };
 }
 
@@ -729,6 +736,40 @@ export function projectMessageEntries(contents, branch, sessionId) {
   );
 }
 
+export function retirementNoticeEntries(
+  contents,
+  repoKey,
+  branch,
+  assignmentId,
+) {
+  return sessionEntries(contents).filter(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-project_retired" &&
+      entry.details?.repoKey === repoKey &&
+      entry.details?.branch === branch &&
+      entry.details?.assignmentId === assignmentId,
+  );
+}
+
+export function assertPassiveRetirementEvidence(
+  before,
+  after,
+  repoKey,
+  branch,
+  assignmentId,
+) {
+  const notices = retirementNoticeEntries(after, repoKey, branch, assignmentId);
+  assert.equal(notices.length, 1, "expected one exact retirement notice");
+  assert.equal(notices[0].display, false);
+  assert.deepEqual(
+    sessionEntries(after).filter((entry) => entry.type === "message"),
+    sessionEntries(before).filter((entry) => entry.type === "message"),
+    "passive retirement must not add a user, assistant, system, or tool-result message",
+  );
+  return notices[0];
+}
+
 export function retainedProjectMessageRecord(records, branch, sessionId, text) {
   return (
     records.find(
@@ -767,6 +808,72 @@ export function managerCleanupTarget(
       "exact branch worktree workspace identity does not match captured identity",
     );
   return target;
+}
+
+export async function removeManagerRecoveryWorktree(
+  ctx,
+  worktrees,
+  execute = run,
+  control = nestedCommand,
+) {
+  const { branch, worktreePath, workspaceId } = ctx.managerRecovery;
+  assert.equal(branch, ctx.owned.managerBranch);
+  assert.equal(worktreePath, ctx.owned.managerWorktreePath);
+  assert.equal(workspaceId, ctx.owned.managerWorkspaceId);
+  const target = managerCleanupTarget(
+    worktrees.map((item) => ({
+      ...item,
+      path: item.path ?? item.worktree_path,
+    })),
+    branch,
+    worktreePath,
+    workspaceId,
+  );
+  assert.ok(target, "removal requires the exact currently owned worktree");
+  if (ctx.managerExternalRemoval) {
+    const primary = await realpath(ctx.primaryCheckoutPath);
+    assert.equal(
+      primary,
+      await realpath(join(ctx.paths.root, "project")),
+      "Git removal requires the isolated smoke repository",
+    );
+    const checkout = await realpath(worktreePath);
+    assert.notEqual(checkout, primary, "cannot remove the primary checkout");
+    const top = await execute("git", ["rev-parse", "--show-toplevel"], {
+      cwd: checkout,
+    });
+    assert.equal(await realpath(top.stdout.trim()), checkout);
+    const currentBranch = await execute("git", ["branch", "--show-current"], {
+      cwd: checkout,
+    });
+    assert.equal(
+      currentBranch.stdout.trim(),
+      branch,
+      "checkout branch changed before removal",
+    );
+    const commonArgs = [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ];
+    const primaryCommon = await execute("git", commonArgs, { cwd: primary });
+    const checkoutCommon = await execute("git", commonArgs, { cwd: checkout });
+    assert.ok(
+      isAbsolute(primaryCommon.stdout.trim()) &&
+        isAbsolute(checkoutCommon.stdout.trim()),
+    );
+    assert.equal(
+      await realpath(checkoutCommon.stdout.trim()),
+      await realpath(primaryCommon.stdout.trim()),
+      "checkout belongs to another Git repository",
+    );
+    ctx.owned.managerWorktreeRetirementRequested = true;
+    return execute("git", ["worktree", "remove", "--", checkout], {
+      cwd: primary,
+    });
+  }
+  ctx.owned.managerWorktreeRetirementRequested = true;
+  return control(ctx, ["worktree", "remove", "--workspace", workspaceId]);
 }
 
 export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
@@ -3648,6 +3755,7 @@ async function runManagerRecoverySmoke(ctx) {
     branch,
     contextMarker,
     leadReadyTimeoutMs: ctx.managerReadyTimeoutMs,
+    retirementSource: ctx.managerExternalRemoval ? "git" : "herdr",
   };
   ctx.owned.managerBranch = branch;
   let waitRootSessionBytes = 0;
@@ -4430,11 +4538,35 @@ async function runManagerRecoverySmoke(ctx) {
     worktreePath,
   );
 
+  const beforeRetirement = await waitFor(
+    "manager-idle-before-retirement",
+    async () => {
+      const manager = (await agents()).find(
+        (agent) => agent.pane_id === ctx.rootPaneId,
+      );
+      return manager?.agent_status === "idle" ? rootSnapshot() : null;
+    },
+    15_000,
+  );
+  const preservedLeadHistory = await exactIsolatedSession(ctx, first.session);
+  assert.ok(
+    preservedLeadHistory,
+    "retirement requires verified saved Lead history",
+  );
+  assert.deepEqual(
+    retirementNoticeEntries(
+      beforeRetirement.contents,
+      repoKey,
+      branch,
+      first.session,
+    ),
+    [],
+  );
   markStage(ctx, "missing-worktree");
-  await nestedCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
+  await assertUnchangedAssignment();
+  await removeManagerRecoveryWorktree(ctx, await worktrees());
   assert.equal((await matchingWorktrees()).length, 0);
   markStage(ctx, "assignment-absence-reconciliation");
-  ctx.owned.managerWorktreeRetirementRequested = true;
   await waitFor(
     "assignment-removed",
     async () => {
@@ -4484,6 +4616,75 @@ async function runManagerRecoverySmoke(ctx) {
     ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
     { cwd: ctx.primaryCheckoutPath },
   );
+  const pendingRetirementPath = join(
+    runtime,
+    "retirements",
+    hash(repoKey),
+    `${hash(branch)}.${first.session}.json`,
+  );
+  await waitFor(
+    "passive-retirement-notice",
+    async () => {
+      const session = await rootSnapshot();
+      if (
+        !session ||
+        retirementNoticeEntries(
+          session.contents,
+          repoKey,
+          branch,
+          first.session,
+        ).length === 0
+      )
+        return null;
+      assertPassiveRetirementEvidence(
+        beforeRetirement.contents,
+        session.contents,
+        repoKey,
+        branch,
+        first.session,
+      );
+      try {
+        await lstat(pendingRetirementPath);
+        return null;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      return session;
+    },
+    15_000,
+  );
+  // Observe several existing inbox ticks before allowing another user/model turn.
+  const passiveObservationUntil = Date.now() + 1_500;
+  await waitFor(
+    "passive-retirement-idle",
+    async () => {
+      const session = await rootSnapshot();
+      assert.ok(session);
+      assertPassiveRetirementEvidence(
+        beforeRetirement.contents,
+        session.contents,
+        repoKey,
+        branch,
+        first.session,
+      );
+      const manager = (await agents()).find(
+        (agent) => agent.pane_id === ctx.rootPaneId,
+      );
+      assert.equal(
+        manager?.agent_status,
+        "idle",
+        "retirement must not wake the Manager",
+      );
+      return Date.now() >= passiveObservationUntil;
+    },
+    15_000,
+  );
+  assert.equal(
+    (await exactIsolatedSession(ctx, first.session))?.contents,
+    preservedLeadHistory.contents,
+    "retirement must preserve exact Lead history",
+  );
+  ctx.managerRecovery.passiveRetirementNotice = true;
   ctx.managerRecovery.retired = branch;
   const retiredResumePrompt = managerRecoveryRetiredResumePrompt(branch);
   markStage(ctx, "retired-assignment-resume-rejected");
@@ -4504,6 +4705,26 @@ async function runManagerRecoverySmoke(ctx) {
     },
   );
   assert.equal(rejectedResume.branch, branch);
+  await waitFor("retired-resume-response-completed", async () => {
+    const session = await rootSnapshot();
+    return session &&
+      assistantResponseCompletedForSession(session, retiredResumePrompt)
+      ? session
+      : null;
+  });
+  const afterRepeatedReconciliation = await rootSnapshot();
+  assert.equal(
+    retirementNoticeEntries(
+      afterRepeatedReconciliation.contents,
+      repoKey,
+      branch,
+      first.session,
+    ).length,
+    1,
+    "preflight and repeated inbox observation must not duplicate retirement context",
+  );
+  await assert.rejects(lstat(pendingRetirementPath), { code: "ENOENT" });
+  ctx.managerRecovery.retirementNoticeDeduplicated = true;
   assert.equal((await matchingWorktrees()).length, 0);
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage(ctx, "manager-leave-command-submission");
@@ -6365,6 +6586,7 @@ async function main() {
     managerReadyTimeoutMs:
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
+    managerExternalRemoval: args.managerExternalRemoval,
     expectedPackage: `${pkg.name}@${pkg.version}`,
     scenario,
     owned,

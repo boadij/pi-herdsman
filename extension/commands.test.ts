@@ -3258,7 +3258,7 @@ test("takeover cancellation preserves assignment and confirmation releases only 
         supervisionRuntime: () => ({}),
         projectAssignmentPath: () => "/tmp/takeover-assignment",
         readProjectAssignment: () => current,
-        retireProjectAssignment: () => {
+        releaseProjectAssignment: () => {
           if (scenario === "retirement failure")
             throw new Error("retirement failed");
           current = undefined;
@@ -3354,7 +3354,7 @@ test("takeover fails closed when assignment authority is duplicated or changes a
         supervisionRuntime: () => ({}),
         projectAssignmentPath: () => "/tmp/takeover-assignment",
         readProjectAssignment: () => current,
-        retireProjectAssignment: () => {
+        releaseProjectAssignment: () => {
           removed = true;
           current = undefined as any;
         },
@@ -3405,7 +3405,7 @@ test("takeover rejects non-Lead and noninteractive use and leaves ordinary Leads
       }),
       findProjectAssignmentBySession: () => [],
       supervisionRuntime: () => ({}),
-      retireProjectAssignment: () => {
+      releaseProjectAssignment: () => {
         removals++;
       },
       removeProjectMessagesForAssignment: () => {
