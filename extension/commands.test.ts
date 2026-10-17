@@ -5177,6 +5177,8 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   });
   const liveAgents = [managerAgent, assignedLead, ordinaryLead];
   let revokeOrdinaryDuringRead = false;
+  let delayOrdinaryRead = false;
+  let finishDelayedRead: (() => void) | undefined;
   const exec = (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
@@ -5214,6 +5216,13 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
           ) ?? managerAgent,
       });
     if (command === "herdr" && args[0] === "agent" && args[1] === "read") {
+      if (delayOrdinaryRead)
+        return new Promise<{ stdout: string; stderr: string; code: number }>(
+          (resolve) => {
+            finishDelayedRead = () =>
+              resolve({ stdout: "stale ordinary output", stderr: "", code: 0 });
+          },
+        );
       if (revokeOrdinaryDuringRead)
         liveAgents.splice(liveAgents.indexOf(ordinaryLead), 1);
       return { stdout: "bounded ordinary live output", stderr: "", code: 0 };
@@ -5298,7 +5307,10 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
         managerCtx,
       );
     assert.match(JSON.stringify(transcript), /ordinary transcript content/);
-    assert.doesNotMatch(JSON.stringify(transcript), /ordinarySessionPath/);
+    assert.equal(
+      JSON.stringify(transcript).includes(ordinarySessionPath),
+      false,
+    );
     await manager.commandOptions.get("manager").handler("", managerCtx);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -5322,6 +5334,22 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       "inspection evidence is not rendered after direct-report revocation",
     );
     liveAgents.push(ordinaryLead);
+    delayOrdinaryRead = true;
+    overview.handleInput("\u001b");
+    overview.handleInput(" ");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(finishDelayedRead, "inspection is still pending");
+    overview.handleInput("\u001b");
+    finishDelayedRead!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(
+      overview.render(120).join("\n"),
+      /stale ordinary output/,
+      "a completed inspection does not reopen a dismissed peek",
+    );
+    delayOrdinaryRead = false;
     nativeSessions.delete(ordinarySessionPath);
     ordinaryLead.agent_session = {
       source: "herdr:pi",
@@ -5680,7 +5708,7 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
       ),
     );
     assert.deepEqual(
-      lead.sentMessageCalls.find(
+      lead.sentMessageCalls.findLast(
         ({ message }: any) =>
           message?.customType === "pi-herdsman-manager_message" &&
           message?.details?.toSessionId === leadSession,

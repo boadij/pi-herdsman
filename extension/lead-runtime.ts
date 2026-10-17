@@ -4837,6 +4837,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           const supervisionGeneration = generation(ctx);
           const sessionId = ctx.sessionManager.getSessionId();
           let mode: "overview" | "peek" = "overview";
+          let peekRequest = 0;
           let peekLead:
             ReturnType<typeof host.presentationReports>[number] | undefined;
           let peekEvidence: any;
@@ -5086,6 +5087,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   host.tui.matchesKey(data, host.tui.Key.escape) ||
                   host.tui.matchesKey(data, host.tui.Key.space)
                 ) {
+                  peekRequest++;
                   mode = "overview";
                   showOverview();
                   tui.requestRender();
@@ -5108,6 +5110,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   .presentationReports(snapshot)
                   .find((item) => item.lead === leadId);
                 if (!lead) return;
+                const request = ++peekRequest;
                 peekLead = lead;
                 peekEvidence = {
                   agents: (lead.agents ?? []).map(
@@ -5154,7 +5157,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                     },
                   )
                   .then((inspection) => {
-                    if (!isCurrentOverview()) return;
+                    if (
+                      !isCurrentOverview() ||
+                      mode !== "peek" ||
+                      request !== peekRequest
+                    )
+                      return;
                     peekEvidence = {
                       recentOutput: inspection.recentOutput,
                       process: inspection.process,
