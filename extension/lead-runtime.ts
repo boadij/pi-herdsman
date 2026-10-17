@@ -30,7 +30,6 @@ import {
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
-  withProjectAssignmentLock as withProjectAssignmentAuthorityLock,
   readPeerLeadRecord,
   samePeerLeadGeneration,
   samePeerLeadAuthority,
@@ -10661,36 +10660,34 @@ export function createLeadRoleTransitions(
     return withProjectAssignmentLock(
       assignment.repoKey,
       assignment.branch,
-      () =>
-        withProjectAssignmentAuthorityLock(() => {
-          // Serialize the final authority check and publication with startup recovery.
-          const latest = host.readProjectAssignment(
-            runtime,
-            assignment.repoKey,
-            assignment.branch,
-          );
-          if (!latest || latest.id !== sessionId) return undefined;
-          const existing = listProjectMessages(
-            runtime,
-            assignment.repoKey,
-            assignment.branch,
-          ).find((candidate) => candidate.id === id);
-          if (existing) {
-            if (
-              existing.fromSessionId !== sessionId ||
-              existing.text !== record.text ||
-              existing.kind !== record.kind ||
-              JSON.stringify(existing.resultBindings ?? []) !==
-                JSON.stringify(record.resultBindings ?? [])
-            )
-              throw new Error(
-                "Project message identity conflicts with durable payload",
-              );
-            return existing;
-          }
-          host.writeProjectMessage(record, runtime);
-          return record;
-        }),
+      () => {
+        const latest = host.readProjectAssignment(
+          runtime,
+          assignment.repoKey,
+          assignment.branch,
+        );
+        if (!latest || latest.id !== sessionId) return undefined;
+        const existing = listProjectMessages(
+          runtime,
+          assignment.repoKey,
+          assignment.branch,
+        ).find((candidate) => candidate.id === id);
+        if (existing) {
+          if (
+            existing.fromSessionId !== sessionId ||
+            existing.text !== record.text ||
+            existing.kind !== record.kind ||
+            JSON.stringify(existing.resultBindings ?? []) !==
+              JSON.stringify(record.resultBindings ?? [])
+          )
+            throw new Error(
+              "Project message identity conflicts with durable payload",
+            );
+          return existing;
+        }
+        host.writeProjectMessage(record, runtime);
+        return record;
+      },
     );
   };
   const managerForScope = (

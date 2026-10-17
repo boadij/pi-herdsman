@@ -1078,7 +1078,7 @@ export function projectAssignmentAuthorityLockPath(): string {
   return projectAuthorityLock;
 }
 
-export function withProjectAssignmentLock<T>(operation: () => T): T {
+function withProjectAssignmentLock<T>(operation: () => T): T {
   const lease = acquireProcessLock(projectAuthorityLock, {
     name: "project assignment authority",
   });
@@ -2349,11 +2349,22 @@ export function listProjectMessages(
   }
   return entries
     .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
-    .map((entry) => {
-      const value = readProjectMessageFile(join(directory, entry));
+    .flatMap((entry) => {
+      let value: ProjectMessage;
+      try {
+        value = readProjectMessageFile(join(directory, entry));
+      } catch (error) {
+        // Pending records may be consumed after directory enumeration.
+        if (
+          error instanceof Error &&
+          (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
+        )
+          return [];
+        throw error;
+      }
       if (value.repoKey !== repoKey || value.branch !== branch)
         throw new Error(`Project message identity does not match ${directory}`);
-      return value;
+      return [value];
     })
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
@@ -2416,6 +2427,16 @@ export function recoverStaleProjectMessages(
     );
     let entries: string[];
     try {
+      const dataRoot = herdsmanDataRoot();
+      for (const path of [
+        dataRoot,
+        join(dataRoot, "runtime"),
+        join(dataRoot, "runtime", "supervision-v2"),
+        runtime.root,
+        runtime.assignments,
+        directory,
+      ])
+        assignmentDirectory(path);
       entries = readdirSync(directory);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
