@@ -326,9 +326,8 @@ function releaseProcessLock(
   name: string,
 ): void {
   let owner: string;
-  let metadata: string[];
   try {
-    ({ owner, metadata } = lockOwnerEntry(claimDir));
+    ({ owner } = lockOwnerEntry(claimDir));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     // A lease whose owner has already disappeared or been replaced must not
@@ -365,10 +364,28 @@ function releaseProcessLock(
     throw new Error(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
     );
-  unlinkMetadata(claimDir, metadata);
-  fs.unlinkSync(ownerPath);
+  // Retire the complete claim before cleanup; a new canonical owner may follow.
+  const retired = join(
+    dirname(claimDir),
+    `.${basename(claimDir)}.${randomUUID()}.released`,
+  );
+  fs.renameSync(claimDir, retired);
+  let retiredOwner: string;
+  let metadata: string[];
   try {
-    fs.rmdirSync(claimDir);
+    ({ owner: retiredOwner, metadata } = lockOwnerEntry(retired));
+    if (retiredOwner !== basename(ownerPath))
+      throw new Error("Process lock owner changed");
+    const relocated = readProcessLockClaim(retired, retiredOwner);
+    if (relocated.pid !== claim.pid || relocated.id !== claim.id)
+      throw new Error("Process lock generation changed");
+  } catch (error) {
+    throw new Error(`Unable to verify ${name} ownership`, { cause: error });
+  }
+  unlinkMetadata(retired, metadata);
+  fs.unlinkSync(join(retired, retiredOwner));
+  try {
+    fs.rmdirSync(retired);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTEMPTY") throw error;

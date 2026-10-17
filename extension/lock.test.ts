@@ -9,8 +9,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   acquireProcessLock,
@@ -36,6 +38,62 @@ test("claim wrapper publishes a complete claim and releases exactly", () => {
     throws(() => readdirSync(path), { code: "ENOENT" });
   } finally {
     rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("interrupted release does not strand the canonical lock", (t) => {
+  const path = temporaryPath();
+  const release = claimProcessLock(path);
+  const originalRmdir = fs.rmdirSync;
+  t.mock.method(fs, "rmdirSync", (directory: string) => {
+    if (directory === path || directory.endsWith(".released"))
+      throw new Error("simulated release interruption");
+    return originalRmdir(directory);
+  });
+  syncBuiltinESMExports();
+  let replacement: (() => void) | undefined;
+  try {
+    throws(release, /simulated release interruption/);
+    throws(() => readdirSync(path), { code: "ENOENT" });
+    replacement = claimProcessLock(path);
+    assertOccupied(path);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    try {
+      replacement?.();
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  }
+});
+
+test("retired generation cleanup preserves a replacement owner", (t) => {
+  const path = temporaryPath();
+  const lease = acquireProcessLock(path);
+  const originalRename = fs.renameSync;
+  let replacement: ReturnType<typeof acquireProcessLock> | undefined;
+  t.mock.method(fs, "renameSync", (source: string, destination: string) => {
+    originalRename(source, destination);
+    if (source === path && destination.endsWith(".released"))
+      replacement = acquireProcessLock(path);
+  });
+  syncBuiltinESMExports();
+  try {
+    lease.release();
+    equal(replacement === undefined, false);
+    deepEqual(readLiveProcessLock(path), replacement!.claim);
+    assertOccupied(path);
+    lease.release();
+    deepEqual(readLiveProcessLock(path), replacement!.claim);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    try {
+      replacement?.release();
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
   }
 });
 
