@@ -2132,6 +2132,11 @@ function scanGlobalProjectAssignments(): Map<
       assignmentDirectory(directory);
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         if (isIncidentalMetadata(entry)) continue;
+        if (/^[a-f0-9]{64}\.messages$/.test(entry.name)) {
+          if (!entry.isDirectory() || entry.isSymbolicLink())
+            throw new Error(`Invalid project message directory ${entry.name}`);
+          continue;
+        }
         // Atomic writer temporaries are not committed authority records.
         if (/^\..+\.[a-f0-9-]{36}\.tmp$/.test(entry.name)) {
           if (!entry.isFile() || entry.isSymbolicLink())

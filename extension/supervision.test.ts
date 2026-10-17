@@ -2805,6 +2805,81 @@ test("global assignment scan ignores only regular incidental metadata", () => {
   }
 });
 
+test("global assignment scan recognizes canonical project-message directories", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "message-scan-repo",
+    branch: "main",
+    text: "task",
+  };
+  const message: ProjectMessage = {
+    version: 2,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "handoff",
+    createdAt: 1,
+  };
+  const path = projectAssignmentPath(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  const directory = dirname(path);
+  const messages = join(directory, `${basename(path, ".json")}.messages`);
+  const unknown = join(directory, "unknown.messages");
+  writeProjectAssignment(runtime, assignment);
+  try {
+    writeProjectMessage(message, runtime);
+    assert.deepEqual(
+      globalProjectAssignmentSnapshot()
+        .get(assignment.id)
+        ?.map((entry) => entry.assignment),
+      [assignment],
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [message],
+    );
+
+    // Pending message storage alone does not grant authority.
+    removeProjectAssignment(runtime, assignment.repoKey, assignment.branch);
+    assert.equal(
+      globalProjectAssignmentSnapshot().get(assignment.id),
+      undefined,
+    );
+    removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+
+    // A canonical name with the wrong type remains invalid.
+    writeFileSync(messages, "not a directory");
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Invalid project message directory/,
+    );
+    unlinkSync(messages);
+    realFs.symlinkSync(directory, messages, "dir");
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Invalid project message directory/,
+    );
+    unlinkSync(messages);
+
+    // Arbitrary neighboring directories remain forbidden.
+    mkdirSync(unknown);
+    assert.throws(
+      () => globalProjectAssignmentSnapshot(),
+      /Unexpected project assignment record/,
+    );
+  } finally {
+    rmSync(unknown, { recursive: true, force: true });
+    rmSync(messages, { recursive: true, force: true });
+    removeProjectAssignment(runtime, assignment.repoKey, assignment.branch);
+  }
+});
+
 test("global assignment scans fail closed on a malformed canonical record", () => {
   const runtime = supervisionRuntime(socket());
   const path = projectAssignmentPath(runtime, "scan-repo", "main");
