@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.29.0](https://github.com/boadij/pi-herdsman/compare/v0.28.0...v0.29.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **supervision:** unify direct-report capabilities ([#419](https://github.com/boadij/pi-herdsman/issues/419))
+
+### Features
+
+* **supervision:** unify direct-report capabilities ([#419](https://github.com/boadij/pi-herdsman/issues/419)) ([1cca816](https://github.com/boadij/pi-herdsman/commit/1cca816276306abbe4d3e1f21c6ac8180f626cc6))
+
+
+### Fixes
+
+* **manager:** ignore unrelated Leads in project work status ([#426](https://github.com/boadij/pi-herdsman/issues/426)) ([be8a6c9](https://github.com/boadij/pi-herdsman/commit/be8a6c958c5c2bcb7b805e4c5c9f6cecf106756f))
+* **peer:** recognize project-message directories in authority scans ([#429](https://github.com/boadij/pi-herdsman/issues/429)) ([3e4b13b](https://github.com/boadij/pi-herdsman/commit/3e4b13b923a0c0bd920ef533d66c027d1756dd2c))
+* **runtime:** tolerate incidental metadata in authority scans and locks ([#425](https://github.com/boadij/pi-herdsman/issues/425)) ([0be6ffa](https://github.com/boadij/pi-herdsman/commit/0be6ffad4f958a4ade982f17b28029c5fd490000))
+* **smoke:** gate simulated continuation completion on live evidence ([#431](https://github.com/boadij/pi-herdsman/issues/431)) ([390923d](https://github.com/boadij/pi-herdsman/commit/390923daee8dc326aad6796f5b587cbffc1b2b32))
+* **tools:** use portable non-empty coordination strings ([#433](https://github.com/boadij/pi-herdsman/issues/433)) ([ed87613](https://github.com/boadij/pi-herdsman/commit/ed876134fdb778d006d2a19e50b866b0462d6f13))
+
+
+### Tests
+
+* **ci:** gate runtime changes with simulated smoke acceptance ([#418](https://github.com/boadij/pi-herdsman/issues/418)) ([37e54ab](https://github.com/boadij/pi-herdsman/commit/37e54ab03a560fc6f0aa2f1e5d4bc4c1540268b4))
+
 ## [0.28.0](https://github.com/boadij/pi-herdsman/compare/v0.27.0...v0.28.0) (2026-10-16)
 
 
