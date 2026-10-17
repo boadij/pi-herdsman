@@ -2860,10 +2860,21 @@ test("project work derives active, paused, or conflict from runtime placement", 
       issue: "assigned Lead is running outside its branch worktree",
     },
     {
-      name: "different Lead in worktree",
-      input: { worktrees: [worktree], leads: [{ ...lead, lead: "other" }] },
-      status: "conflict",
-      issue: "another Lead is active in this worktree",
+      name: "ordinary Lead cannot replace absent assigned Lead",
+      input: {
+        worktrees: [worktree],
+        leads: [{ ...lead, lead: "ordinary" }],
+      },
+      status: "paused",
+    },
+    {
+      name: "assigned and ordinary Leads share a workspace",
+      input: {
+        worktrees: [worktree],
+        leads: [lead, { ...lead, lead: "ordinary", runtimeState: "idle" }],
+      },
+      status: "active",
+      runtimeState: "working",
     },
   ] as const;
 

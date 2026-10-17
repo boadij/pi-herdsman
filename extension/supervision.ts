@@ -2602,18 +2602,12 @@ export function projectWorkSnapshot(options: {
       issue = "project runtime identity is ambiguous";
     } else {
       const workspaceId = worktrees[0]?.open_workspace_id ?? undefined;
-      const occupants = workspaceId
-        ? options.leads.filter((lead) => lead.workspaceId === workspaceId)
-        : [];
       if (
         exact.length === 1 &&
         (!workspaceId || exact[0]!.workspaceId !== workspaceId)
       ) {
         status = "conflict";
         issue = "assigned Lead is running outside its branch worktree";
-      } else if (occupants.some((lead) => lead.lead !== assignment.id)) {
-        status = "conflict";
-        issue = "another Lead is active in this worktree";
       } else if (exact.length === 1) {
         status = "active";
         runtimeState = exact[0]!.runtimeState;
