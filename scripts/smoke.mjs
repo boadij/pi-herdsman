@@ -2732,11 +2732,22 @@ function commandLineHasPath(cmdline, path) {
 }
 
 function candidateProcessMatch(proc, extension, integration) {
-  if (Array.isArray(proc.argv))
-    return hasExtensionArg(proc.argv, extension) &&
-      hasExtensionArg(proc.argv, integration)
-      ? "argv"
-      : null;
+  if (
+    Array.isArray(proc.argv) &&
+    hasExtensionArg(proc.argv, extension) &&
+    hasExtensionArg(proc.argv, integration)
+  )
+    return "argv";
+  // shortcut: accepts Pi's exact process title when Linux hides CLI args, later scenario evidence still proves loaded extensions; upgrade when Herdr exposes executable and extension provenance.
+  if (
+    proc.name === "pi" &&
+    proc.argv?.length === 1 &&
+    proc.argv[0] === "pi" &&
+    proc.cmdline === "pi" &&
+    Number.isSafeInteger(proc.pid) &&
+    proc.pid > 0
+  )
+    return "process-title";
   if (typeof proc.cmdline === "string")
     return commandLineHasPath(proc.cmdline, extension) &&
       commandLineHasPath(proc.cmdline, integration)

@@ -4387,6 +4387,39 @@ test("process evidence requires both exact extension paths and excludes root pan
   );
 });
 
+test("Linux Pi process-title evidence requires an exact title and valid PID", async () => {
+  const result = await inspectPaneProcesses(
+    ["candidate"],
+    "root",
+    async () => ({
+      process_info: {
+        foreground_processes: [
+          { pid: 42, name: "pi", argv: ["pi"], cmdline: "pi" },
+          { pid: 43, name: "Pi", argv: ["pi"], cmdline: "pi" },
+          { pid: 44, name: "pi", argv: ["pi", "--extension"], cmdline: "pi" },
+          { pid: "45", name: "pi", argv: ["pi"], cmdline: "pi" },
+          {
+            pid: 46,
+            name: "pi",
+            argv: ["pi"],
+            cmdline: "pi --extension /candidate/dist/index.js",
+          },
+        ],
+      },
+    }),
+    "/candidate/dist/index.js",
+    "/isolated/herdr-agent-state.ts",
+  );
+
+  assert.deepEqual(
+    result.verified.map(({ pid, processMatchSource }) => [
+      pid,
+      processMatchSource,
+    ]),
+    [[42, "process-title"]],
+  );
+});
+
 test("process-info protocol violations escape pane inspection immediately", async () => {
   await assert.rejects(
     inspectPaneProcesses(
