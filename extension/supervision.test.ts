@@ -38,12 +38,14 @@ import {
   readProjectAssignment,
   listProjectAssignments,
   removeProjectAssignment,
+  retireProjectAssignment,
+  removeProjectMessagesForAssignment,
+  recoverStaleProjectMessages,
   projectAssignmentPath,
   projectWorkSnapshot,
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
-  removeProjectMessages,
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
@@ -2851,7 +2853,14 @@ test("global assignment scan recognizes canonical project-message directories", 
       globalProjectAssignmentSnapshot().get(assignment.id),
       undefined,
     );
-    removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+    rmSync(
+      projectAssignmentPath(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+      ).replace(/\.json$/, ".messages"),
+      { recursive: true, force: true },
+    );
 
     // A canonical name with the wrong type remains invalid.
     writeFileSync(messages, "not a directory");
@@ -3136,7 +3145,14 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
       ),
     /Invalid project message/,
   );
-  removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+  rmSync(
+    projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).replace(/\.json$/, ".messages"),
+    { recursive: true, force: true },
+  );
   assert.deepEqual(
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
     [],
@@ -3231,5 +3247,186 @@ test("pending project assignment refresh replaces the record delivered from the 
   assert.equal(
     delivered[0].content,
     `Project assignment for branch ${refreshed.branch}:\n\n${refreshed.text}`,
+  );
+});
+
+test("project retirement compares exact authority and cleans only its pending messages", () => {
+  const runtime = supervisionRuntime(socket());
+  const original = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "retirement",
+    branch: "feature",
+    text: "task",
+  };
+  const replacement = { ...original, id: id() };
+  const pending = {
+    version: 2 as const,
+    id: id(),
+    repoKey: original.repoKey,
+    branch: original.branch,
+    fromSessionId: original.id,
+    text: "handoff",
+    createdAt: 1,
+  };
+  writeProjectAssignment(runtime, original);
+  writeProjectMessage(pending, runtime);
+  writeProjectAssignment(runtime, replacement);
+  const next = { ...pending, id: id(), fromSessionId: replacement.id };
+  writeProjectMessage(next, runtime);
+  assert.equal(retireProjectAssignment(runtime, original), false);
+  assert.deepEqual(
+    readProjectAssignment(runtime, original.repoKey, original.branch),
+    replacement,
+  );
+  assert.equal(
+    listProjectMessages(runtime, original.repoKey, original.branch).length,
+    2,
+  );
+  removeProjectMessagesForAssignment(runtime, original);
+  removeProjectMessagesForAssignment(runtime, original);
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [next],
+  );
+  assert.equal(retireProjectAssignment(runtime, replacement), true);
+  assert.equal(
+    readProjectAssignment(runtime, original.repoKey, original.branch),
+    undefined,
+  );
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [next],
+    "retirement itself never deletes pending handoffs",
+  );
+  assert.equal(retireProjectAssignment(runtime, replacement), false);
+  recoverStaleProjectMessages(runtime, original.repoKey);
+  recoverStaleProjectMessages(runtime, original.repoKey);
+  assert.deepEqual(
+    listProjectMessages(runtime, original.repoKey, original.branch),
+    [],
+  );
+});
+
+test("project message recovery preserves replacement authority and fails closed on uncertain records", () => {
+  for (const scenario of [
+    "replacement",
+    "corrupt authority",
+    "wrong branch",
+    "wrong repository",
+    "malformed message",
+  ] as const) {
+    const runtime = supervisionRuntime(socket());
+    const assignment = {
+      version: 2 as const,
+      id: id(),
+      repoKey: "recovery",
+      branch: "feature",
+      text: "task",
+    };
+    const stale = {
+      version: 2 as const,
+      id: id(),
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      fromSessionId: id(),
+      text: "old",
+      createdAt: 1,
+    };
+    const pending = {
+      ...stale,
+      id: id(),
+      fromSessionId: assignment.id,
+      createdAt: 2,
+    };
+    writeProjectAssignment(runtime, assignment);
+    writeProjectMessage(stale, runtime);
+    writeProjectMessage(pending, runtime);
+    const path = projectAssignmentPath(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
+    const messagePath = join(
+      path.replace(/\.json$/, ".messages"),
+      `${stale.id}.json`,
+    );
+    if (scenario === "corrupt authority") writeFileSync(path, "{");
+    if (scenario === "wrong branch")
+      writeFileSync(
+        messagePath,
+        JSON.stringify({ ...stale, branch: "elsewhere" }),
+      );
+    if (scenario === "wrong repository")
+      writeFileSync(
+        messagePath,
+        JSON.stringify({ ...stale, repoKey: "elsewhere" }),
+      );
+    if (scenario === "malformed message") writeFileSync(messagePath, "{");
+    if (scenario === "replacement") {
+      recoverStaleProjectMessages(runtime, assignment.repoKey);
+      recoverStaleProjectMessages(runtime, assignment.repoKey);
+      assert.deepEqual(
+        listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+        [pending],
+      );
+      assert.deepEqual(
+        readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+        assignment,
+      );
+    } else {
+      assert.throws(() =>
+        recoverStaleProjectMessages(runtime, assignment.repoKey),
+      );
+      assert.ok(existsSync(messagePath));
+      assert.ok(existsSync(join(dirname(messagePath), `${pending.id}.json`)));
+    }
+  }
+});
+
+test("project retirement storage failure preserves pending messages", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "failure",
+    branch: "feature",
+    text: "task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const pending = {
+    version: 2 as const,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "handoff",
+    createdAt: 1,
+  };
+  writeProjectMessage(pending, runtime);
+  const lock = acquireProcessLock(projectAssignmentAuthorityLockPath(), {
+    name: "retirement failure injection",
+  });
+  try {
+    assert.throws(() => retireProjectAssignment(runtime, assignment));
+    assert.deepEqual(
+      readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+      assignment,
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [pending],
+    );
+  } finally {
+    lock.release();
+  }
+  writeFileSync(
+    projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+    "{",
+  );
+  assert.throws(() => retireProjectAssignment(runtime, assignment));
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [pending],
   );
 });
