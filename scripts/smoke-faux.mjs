@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -445,6 +445,36 @@ export function decide(model, context) {
   throw new Error(`Unexpected ${model} transcript`);
 }
 
+export async function waitForContinuationObservation(directory, signal) {
+  signal?.throwIfAborted();
+  let watcher;
+  let timeout;
+  let abort;
+  try {
+    await new Promise((resolve, reject) => {
+      const check = () => {
+        if (existsSync(join(directory, "continuation-first-observed")))
+          resolve();
+      };
+      watcher = watch(directory, check);
+      watcher.on("error", reject);
+      timeout = setTimeout(
+        () =>
+          reject(new Error("Continuation live evidence was not acknowledged")),
+        120_000,
+      );
+      abort = () => reject(signal.reason);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      else check();
+    });
+  } finally {
+    watcher?.close();
+    clearTimeout(timeout);
+    if (abort) signal?.removeEventListener("abort", abort);
+  }
+}
+
 export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
@@ -515,6 +545,16 @@ export default function install(pi) {
         );
     }
     const answer = decide(model.id, context);
+    if (
+      model.id === "continuation" &&
+      answer.stopReason === "stop" &&
+      text(answer).includes("CONTINUATION_FIRST_DONE")
+    ) {
+      return waitForContinuationObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        _options?.signal,
+      ).then(() => answer);
+    }
     return answer;
   }
   faux.setResponses([response]);

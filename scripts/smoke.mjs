@@ -1488,6 +1488,64 @@ export function assistantResponseCompletedForSession(session, prompt) {
   );
 }
 
+export function rootDelegationDiagnostics(contents) {
+  const messages = sessionEntries(contents)
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message ?? {});
+  let call;
+  let result;
+  let assistant;
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      assistant = message;
+      for (const block of Array.isArray(message.content)
+        ? message.content
+        : []) {
+        if (block?.type === "toolCall" && block.name === "delegate_agent") {
+          call = block;
+          result = undefined;
+        }
+      }
+    }
+    if (
+      call &&
+      typeof call.id === "string" &&
+      message.role === "toolResult" &&
+      message.toolName === "delegate_agent" &&
+      message.toolCallId === call.id
+    )
+      result = message;
+  }
+  return {
+    delegationCallObserved: Boolean(call),
+    matchingResult: !call
+      ? "absent"
+      : !result
+        ? "pending"
+        : result.isError === true || result.details?.ok === false
+          ? "error"
+          : result.isError === false
+            ? "success"
+            : "unknown",
+    assistantObserved: Boolean(assistant),
+    assistantStopReason: [
+      "stop",
+      "length",
+      "toolUse",
+      "error",
+      "aborted",
+    ].includes(assistant?.stopReason)
+      ? assistant.stopReason
+      : "unknown",
+    assistantErrorObserved: Boolean(
+      assistant &&
+      (assistant.stopReason === "error" ||
+        (typeof assistant.errorMessage === "string" &&
+          assistant.errorMessage.length > 0)),
+    ),
+  };
+}
+
 function summarizeSession(contents) {
   const entries = sessionEntries(contents);
   const header = entries.find((entry) => entry.type === "session");
@@ -3309,8 +3367,21 @@ async function runContinuationSmoke(ctx) {
           break;
         }
       }
+      const done = !!firstSession && pids.length > 0;
+      // Keep the simulated child alive until its required live evidence is captured.
+      if (done && ctx.simulated)
+        await writeFile(
+          join(
+            ctx.paths.piAgent,
+            "pi-herdsman",
+            "runtime",
+            "continuation-first-observed",
+          ),
+          "observed\n",
+          { flag: "wx", mode: 0o600 },
+        );
       return {
-        done: !!firstSession && pids.length > 0,
+        done,
         value: firstSession,
         progress: {
           childCount: agents.length,
@@ -5774,6 +5845,14 @@ export async function collectDiagnostics(
     rootSessionObserved: Boolean(
       diagnostics.rootSession && !diagnostics.rootSession.error,
     ),
+    ...(ctx.scenario === "continuation"
+      ? {
+          rootDelegation:
+            rootSession.status === "fulfilled" && rootSession.value
+              ? rootDelegationDiagnostics(rootSession.value.contents)
+              : null,
+        }
+      : {}),
     candidateProcessesObserved: Array.isArray(diagnostics.processes)
       ? diagnostics.processes.filter((record) => record.processMatch).length
       : null,
