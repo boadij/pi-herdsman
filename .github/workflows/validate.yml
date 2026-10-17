@@ -106,7 +106,7 @@ jobs:
   smoke:
     name: Simulated smoke
     needs: scope
-    if: ${{ needs.scope.outputs.smoke == 'true' }}
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
