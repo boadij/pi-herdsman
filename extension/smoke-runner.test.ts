@@ -3175,6 +3175,72 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
   );
 });
 
+test("collectDiagnostics projects supervisor-agent evidence without private session data", async () => {
+  const privatePrompt = "PRIVATE_PROMPT PRIVATE_TOKEN";
+  const privatePath = "/PRIVATE_PATH/session.jsonl";
+  const projection = await collectDiagnostics(
+    {
+      scenario: "supervisor-agent",
+      stage: "supervisor-agent-verification",
+      paths: {},
+      sessionName: "smoke-supervisor-agent",
+      rootPaneId: "root-pane",
+    },
+    { hostPaneId: "host-pane" },
+    null,
+    {
+      execute: async () => ({ stdout: "root terminal output" }),
+      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+      snapshot: async () => ({
+        path: privatePath,
+        status: "saved",
+        contents:
+          [
+            JSON.stringify({
+              type: "session",
+              id: "root-session",
+              cwd: "/workspace",
+            }),
+            JSON.stringify({
+              type: "message",
+              message: { role: "user", content: privatePrompt },
+            }),
+          ].join("\n") + "\n",
+      }),
+    },
+  );
+
+  assert.deepEqual(projection, {
+    stage: "supervisor-agent-verification",
+    agentsObserved: 0,
+    panesObserved: 0,
+    rootSessionObserved: true,
+    candidateProcessesObserved: 0,
+    supervisorAgent: {
+      assignmentsObserved: 0,
+      childSessionObserved: false,
+      matchingMailboxes: 0,
+    },
+  });
+  assert.doesNotMatch(
+    JSON.stringify(projection),
+    /PRIVATE_PROMPT|PRIVATE_TOKEN|PRIVATE_PATH/u,
+  );
+  const evidence = sanitizedFailureEvidence(
+    { scenario: "supervisor-agent", simulated: true, stage: "verification" },
+    { error: { code: "SCENARIO_FAIL" } },
+    "SCENARIO_FAIL",
+    "PENDING",
+  );
+  evidence.diagnostics = projection;
+  const artifactPath = await preserveFailureEvidence(evidence);
+  const persisted = await readFile(artifactPath, "utf8");
+  assert.doesNotMatch(persisted, /PRIVATE_PROMPT|PRIVATE_TOKEN|PRIVATE_PATH/u);
+  assert.match(persisted, /"agentsObserved": 0/u);
+  assert.match(persisted, /"rootSessionObserved": true/u);
+  await rm(dirname(artifactPath), { recursive: true, force: true });
+});
+
 test("terminal-failure assignment polling captures topology before assignment succeeds", async () => {
   const ctx = {
     rootWorkspaceId: "parent-workspace",

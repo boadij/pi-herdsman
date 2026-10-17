@@ -5765,7 +5765,18 @@ export async function collectDiagnostics(
       ? diagnostics.processes.filter((record) => record.processMatch).length
       : null,
     ...(diagnostics.supervisorAgent
-      ? { supervisorAgent: diagnostics.supervisorAgent }
+      ? {
+          supervisorAgent: {
+            assignmentsObserved: diagnostics.supervisorAgent.assignments.length,
+            childSessionObserved: Boolean(
+              diagnostics.supervisorAgent.childSession,
+            ),
+            matchingMailboxes:
+              diagnostics.supervisorAgent.mailboxes?.filter(
+                (item) => item.stateMatches,
+              ).length ?? 0,
+          },
+        }
       : {}),
   };
 }

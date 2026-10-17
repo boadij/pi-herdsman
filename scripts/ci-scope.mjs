@@ -5,6 +5,7 @@ function classify(paths) {
   let tests = false;
   let packageCheck = false;
   let container = "none";
+  let runtimeSmoke = false;
 
   const smoke = () => {
     container = "smoke";
@@ -18,6 +19,7 @@ function classify(paths) {
     tests = true;
     packageCheck = true;
     smoke();
+    runtimeSmoke = true;
   };
 
   for (const path of paths) {
@@ -61,6 +63,7 @@ function classify(paths) {
     if (path === "scripts/build.mjs") {
       packageCheck = true;
       smoke();
+      runtimeSmoke = true;
       continue;
     }
 
@@ -96,7 +99,7 @@ function classify(paths) {
     full();
   }
 
-  return { tests, package: packageCheck, container };
+  return { tests, package: packageCheck, container, smoke: runtimeSmoke };
 }
 
 if (process.argv[2] === "--self-test") {
@@ -104,42 +107,84 @@ if (process.argv[2] === "--self-test") {
     tests: false,
     package: true,
     container: "none",
+    smoke: false,
   });
 
   assert.deepEqual(classify(["extension/core.test.ts"]), {
     tests: true,
     package: false,
     container: "none",
+    smoke: false,
   });
 
   assert.deepEqual(classify(["extension/index.ts"]), {
     tests: true,
     package: true,
     container: "smoke",
+    smoke: true,
   });
 
   assert.deepEqual(classify(["compose.yaml"]), {
     tests: false,
     package: false,
     container: "config",
+    smoke: false,
   });
 
   assert.deepEqual(classify([".github/workflows/release.yml"]), {
     tests: true,
     package: false,
     container: "none",
+    smoke: false,
   });
 
   assert.deepEqual(classify(["docs/README.md", "extension/config.test.ts"]), {
     tests: true,
     package: true,
     container: "none",
+    smoke: false,
   });
 
   assert.deepEqual(classify(["some-new-runtime-surface/file"]), {
     tests: true,
     package: true,
     container: "smoke",
+    smoke: true,
+  });
+
+  assert.deepEqual(classify(["scripts/build.mjs"]), {
+    tests: false,
+    package: true,
+    container: "smoke",
+    smoke: true,
+  });
+
+  assert.deepEqual(classify(["scripts/smoke.mjs"]), {
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+  });
+
+  assert.deepEqual(classify(["Dockerfile"]), {
+    tests: false,
+    package: false,
+    container: "smoke",
+    smoke: false,
+  });
+
+  assert.deepEqual(classify(["scripts/check.mjs"]), {
+    tests: true,
+    package: false,
+    container: "none",
+    smoke: false,
+  });
+
+  assert.deepEqual(classify(["extension/core.test.ts", "docs/README.md"]), {
+    tests: true,
+    package: true,
+    container: "none",
+    smoke: false,
   });
 
   process.exit(0);

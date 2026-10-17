@@ -176,11 +176,22 @@ Record:
 
 Do not claim a passing full check from a partial focused run.
 
-## Runtime smoke verification
+## CI runtime smoke
 
-Deterministic tests are the repository gate. Cross-process Pi/herdr behavior may
-also require isolated live smoke, selected according to the change being
-verified:
+GitHub Actions runs all supported simulated Pi/Herdr smoke scenarios for
+changes affecting the runtime, its dependencies, build, smoke harness, or
+validation workflow. The existing required `CI` check fails when required
+smoke does not succeed. Documentation-only and test-only changes normally skip
+it.
+
+Simulated acceptance uses real Pi, Herdsman, and Herdr processes without model
+credentials. It does not verify real-model decisions. The supported simulated
+scenarios are `core`, `continuation`, `chief-tree`, `supervisor-agent`, and
+`terminal-failure`.
+
+`npm run validate` remains unchanged and does not run smoke. Manual/live smoke
+remains separate and opt-in. For cross-process Pi/Herdr behavior outside the CI
+acceptance, choose an isolated smoke scenario according to the change:
 
 ```sh
 npm run smoke
@@ -191,15 +202,14 @@ npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
 ```
 
-The opt-in `--simulated` mode covers `core`, `continuation`, `chief-tree`, and
-`terminal-failure` using
-Pi's native faux provider, without remote inference credentials. It retains
-the real Pi/Herdr runtime checks and does not replace live-model acceptance.
-`manager-recovery` remains live-only and rejects `--simulated`. Asynchronous
-Agent results are delivered as user messages to the real Pi transcript; the
-simulated scenarios require those delivered results and correlated tool
-evidence. Without that flag, smoke remains live-model acceptance and uses the configured
-`pi-herdsman.smoke-model` or a one-run `--model` override.
+The opt-in `--simulated` mode uses Pi's native faux provider without remote
+inference credentials. It retains the real Pi/Herdr runtime checks and does not
+replace live-model acceptance. `manager-recovery` remains live-only and rejects
+`--simulated`. Asynchronous Agent results are delivered as user messages to the
+real Pi transcript; the simulated scenarios require those delivered results
+and correlated tool evidence. Without that flag, smoke remains live-model
+acceptance and uses the configured `pi-herdsman.smoke-model` or a one-run
+`--model` override.
 `npm run smoke` defaults to live `core`. The runner creates its own isolated
 Herdr server and workspace, so smoke can run from an ordinary repository
 shell, including one already inside Herdr. See [Smoke testing](smoke-testing.md)

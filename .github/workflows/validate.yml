@@ -19,6 +19,7 @@ jobs:
       tests: ${{ steps.scope.outputs.tests }}
       package: ${{ steps.scope.outputs.package }}
       container: ${{ steps.scope.outputs.container }}
+      smoke: ${{ steps.scope.outputs.smoke }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -102,10 +103,73 @@ jobs:
       - run: docker compose config
       - run: docker compose -f compose.yaml -f compose.tailscale.yaml config
 
+  smoke:
+    name: Simulated smoke
+    needs: scope
+    if: ${{ needs.scope.outputs.smoke == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          package-manager-cache: false
+      - run: npm ci
+      - name: Install verified Herdr
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version=$(node -p \
+            "require('./package.json').piHerdsman.runtime.herdr.version")
+          sha=$(node -p \
+            "require('./package.json').piHerdsman.runtime.herdr.sha256['linux-x86_64']")
+
+          curl -fsSL --retry 3 \
+            "https://github.com/herdrdev/herdr/releases/download/v${version}/herdr-linux-x86_64" \
+            -o "$RUNNER_TEMP/herdr"
+
+          printf '%s  %s\n' "$sha" "$RUNNER_TEMP/herdr" |
+            sha256sum -c -
+
+          chmod 0755 "$RUNNER_TEMP/herdr"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Simulated runtime acceptance
+        id: acceptance
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+
+          for scenario in \
+            core \
+            continuation \
+            chief-tree \
+            supervisor-agent \
+            terminal-failure
+          do
+            echo "::group::Simulated smoke: $scenario"
+            npm run smoke -- "$scenario" --simulated
+            echo "::endgroup::"
+          done
+      - name: Upload sanitized failure evidence
+        if: ${{ failure() && steps.acceptance.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulated-smoke-failure
+          path: ${{ runner.temp }}/pi-herdsman-smoke-evidence-*/result.json
+          if-no-files-found: warn
+          retention-days: 3
+
   ci:
     name: CI
     if: ${{ always() }}
-    needs: [scope, format, validate, package, container]
+    needs: [scope, format, validate, package, container, smoke]
     runs-on: ubuntu-latest
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
@@ -113,6 +177,8 @@ jobs:
       VALIDATE_RESULT: ${{ needs.validate.result }}
       PACKAGE_RESULT: ${{ needs.package.result }}
       CONTAINER_RESULT: ${{ needs.container.result }}
+      SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
+      SMOKE_RESULT: ${{ needs.smoke.result }}
     steps:
       - run: |
           set -euo pipefail
@@ -127,3 +193,12 @@ jobs:
           do
             [ "$result" = "success" ] || [ "$result" = "skipped" ]
           done
+
+          case "$SMOKE_REQUIRED:$SMOKE_RESULT" in
+            true:success|false:skipped)
+              ;;
+            *)
+              echo "Invalid simulated smoke outcome: required=$SMOKE_REQUIRED result=$SMOKE_RESULT" >&2
+              exit 1
+              ;;
+          esac
