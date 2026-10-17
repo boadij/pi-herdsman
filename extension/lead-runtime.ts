@@ -4325,9 +4325,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           relationship: sessions.has(lead.lead)
             ? ("assigned" as const)
             : ("supervised" as const),
-          availableActions: sessions.has(lead.lead)
-            ? lead.availableActions
-            : (["message"] as const),
         }));
     }
     if (host.activeRole() !== "chief")
@@ -4840,6 +4837,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           const supervisionGeneration = generation(ctx);
           const sessionId = ctx.sessionManager.getSessionId();
           let mode: "overview" | "peek" = "overview";
+          let peekRequest = 0;
           let peekLead:
             ReturnType<typeof host.presentationReports>[number] | undefined;
           let peekEvidence: any;
@@ -5089,6 +5087,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   host.tui.matchesKey(data, host.tui.Key.escape) ||
                   host.tui.matchesKey(data, host.tui.Key.space)
                 ) {
+                  peekRequest++;
                   mode = "overview";
                   showOverview();
                   tui.requestRender();
@@ -5111,6 +5110,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   .presentationReports(snapshot)
                   .find((item) => item.lead === leadId);
                 if (!lead) return;
+                const request = ++peekRequest;
                 peekLead = lead;
                 peekEvidence = {
                   agents: (lead.agents ?? []).map(
@@ -5120,11 +5120,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 mode = "peek";
                 showPeek();
                 tui.requestRender();
-                if (
-                  host.activeRole() === "manager" &&
-                  lead.relationship === "supervised"
-                )
-                  return;
                 void host
                   .inspectHerdrAgent(
                     host.pi,
@@ -5135,19 +5130,39 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                       piSessionId: lead.lead,
                     },
                     ctx.signal,
-                    (agent: any) =>
-                      host.isPiAgent(agent) &&
-                      agent?.pane_id === lead.paneId &&
-                      agent?.tab_id === lead.tabId &&
-                      host.herdrSessionId(agent) === lead.lead &&
-                      host.readLeadCoordinationState(
-                        host.supervisionRuntime(),
-                        lead.lead,
-                      )?.piSessionId === lead.lead &&
-                      lead.availableActions.includes("inspect"),
+                    async (agent: any) => {
+                      if (
+                        !isCurrentOverview() ||
+                        !host.isPiAgent(agent) ||
+                        agent?.pane_id !== lead.paneId ||
+                        agent?.tab_id !== lead.tabId ||
+                        host.herdrSessionId(agent) !== lead.lead ||
+                        host.readLeadCoordinationState(
+                          host.supervisionRuntime(),
+                          lead.lead,
+                        )?.piSessionId !== lead.lead ||
+                        !lead.availableActions.includes("inspect")
+                      )
+                        return false;
+                      const current = (await directReports(ctx)).find(
+                        (candidate) =>
+                          candidate.lead === lead.lead &&
+                          candidate.instanceId === lead.instanceId &&
+                          candidate.workspaceId === lead.workspaceId &&
+                          candidate.paneId === lead.paneId &&
+                          candidate.tabId === lead.tabId &&
+                          candidate.availableActions.includes("inspect"),
+                      );
+                      return isCurrentOverview() && !!current;
+                    },
                   )
                   .then((inspection) => {
-                    if (!isCurrentOverview()) return;
+                    if (
+                      !isCurrentOverview() ||
+                      mode !== "peek" ||
+                      request !== peekRequest
+                    )
+                      return;
                     peekEvidence = {
                       recentOutput: inspection.recentOutput,
                       process: inspection.process,
@@ -9627,15 +9642,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
             }
             if (!authorized) return "followUp";
-            const workspaceId = host.workspaceId();
-            if (!workspaceId) return undefined;
-            const relation = await host.resolveEffectiveSupervisor(
-              ctx,
-              ctx.sessionManager.getSessionId(),
-              workspaceId,
-            );
-            const assigned = relation.kind === "assigned";
-            if (!assigned) return ctx.isIdle() ? "followUp" : undefined;
             return "steer";
           }
           const supervisorDownlink =

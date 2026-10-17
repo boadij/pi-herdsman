@@ -54,10 +54,10 @@ recipient to forward them.
 
 Direct-supervisor messages are queued for the exact current recipient and
 validated against current authority before delivery. A Manager message to an
-ordinary Lead starts a normal turn when the Lead is idle and remains queued
-while it is active; it does not steer active work. Ordinary Leads can reply
-explicitly with `message_supervisor`; a triggered turn does not guarantee a
-reply. Assigned Lead delivery retains existing steering/follow-up behavior.
+ordinary Lead uses Pi's cooperative steering lane whether the Lead is active or
+idle. Steering does not abort the current operation or interrupt an in-flight
+tool call. Ordinary Leads can reply explicitly with `message_supervisor`; a
+triggered turn does not guarantee a reply.
 
 ## See also
 

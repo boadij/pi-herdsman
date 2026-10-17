@@ -210,7 +210,9 @@ the current Herdr runtime and directly supervises ordinary Leads only when they
 have no active project Manager. An active Manager supervises every eligible
 Lead in its verified project worktree group, but controls project execution
 only for Leads named by exact current project assignments. Ordinary Leads
-remain independent and receive message-only Manager supervision; ambiguous
+remain independent while receiving the same verified direct-report inspection,
+transcript (when valid persisted evidence exists), and messaging capabilities;
+authorized messages can cooperatively steer an active Lead. Ambiguous
 Manager evidence does not trigger Chief fallback. Assignment authority
 survives Manager process replacement. A Manager does not become Chief or
 forward assigned Leads into a parallel Chief control path.

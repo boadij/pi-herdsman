@@ -5098,18 +5098,62 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   };
   const ordinaryLeadSession = randomUUID();
   const ordinaryWorkspace = `workspace-${randomUUID()}`;
+  const ordinarySessionPath = join(
+    PI_AGENT_ROOT,
+    `manager-supervised-${randomUUID()}.jsonl`,
+  );
+  realFs.writeFileSync(
+    ordinarySessionPath,
+    [
+      {
+        type: "session",
+        version: 3,
+        id: ordinaryLeadSession,
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      },
+      {
+        type: "message",
+        id: "ordinary-user",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "ordinary transcript content" }],
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+    "utf8",
+  );
+  nativeSessions.set(ordinarySessionPath, {
+    id: ordinaryLeadSession,
+    path: ordinarySessionPath,
+    cwd: "/tmp",
+    entries: [],
+  });
   const ordinaryLead = {
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
-      kind: "id",
-      value: ordinaryLeadSession,
+      kind: "path",
+      value: ordinarySessionPath,
     },
     workspace_id: ordinaryWorkspace,
     pane_id: "ordinary-pane",
     tab_id: "ordinary-tab",
-    cwd: "/tmp/ordinary-project",
+    cwd: "/tmp",
+    tokens: { pi_herdsman_role: "lead" },
   };
+  const { herdrSessionId, readPiSessionHeaderId } = await import("./herdr.ts");
+  assert.equal(
+    JSON.parse(realFs.readFileSync(ordinarySessionPath, "utf8").split("\n")[0])
+      .id,
+    ordinaryLeadSession,
+  );
+  assert.equal(readPiSessionHeaderId(ordinarySessionPath), ordinaryLeadSession);
+  assert.equal(herdrSessionId(ordinaryLead), ordinaryLeadSession);
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
     role: "lead",
@@ -5132,6 +5176,9 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     text: "assigned work",
   });
   const liveAgents = [managerAgent, assignedLead, ordinaryLead];
+  let revokeOrdinaryDuringRead = false;
+  let delayOrdinaryRead = false;
+  let finishDelayedRead: (() => void) | undefined;
   const exec = (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
@@ -5162,19 +5209,50 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     if (command === "herdr" && isAgentList(args))
       return respond({ agents: liveAgents });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-      return respond({ agent: managerAgent });
+      return respond({
+        agent:
+          [assignedLead, ordinaryLead].find(
+            (agent) => agent.pane_id === args[2],
+          ) ?? managerAgent,
+      });
+    if (command === "herdr" && args[0] === "agent" && args[1] === "read") {
+      if (delayOrdinaryRead)
+        return new Promise<{ stdout: string; stderr: string; code: number }>(
+          (resolve) => {
+            finishDelayedRead = () =>
+              resolve({ stdout: "stale ordinary output", stderr: "", code: 0 });
+          },
+        );
+      if (revokeOrdinaryDuringRead)
+        liveAgents.splice(liveAgents.indexOf(ordinaryLead), 1);
+      return { stdout: "bounded ordinary live output", stderr: "", code: 0 };
+    }
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
         snapshot: { agents: liveAgents, panes: [] },
       });
     return respond({});
   };
+  let overview: any;
   const manager = fakeChiefPi({ activeTools: ["read"], exec });
+  const managerCtx = fakeContext() as any;
+  managerCtx.hasUI = true;
+  managerCtx.ui.custom = async (factory: any) => {
+    overview = factory(
+      { requestRender: () => undefined },
+      {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
+      {},
+      () => undefined,
+    );
+  };
   registerExtension!(manager.pi as never);
   try {
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
-    await manager.events.get("session_start")![0](undefined, fakeContext());
-    await manager.commandOptions.get("manager").handler("", fakeContext());
+    await manager.events.get("session_start")![0](undefined, managerCtx);
+    await manager.commandOptions.get("manager").handler("", managerCtx);
     const managerStaff = manager.tools.find(
       (tool) => tool.name === "list_staff",
     )!;
@@ -5183,7 +5261,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       {},
       undefined,
       undefined,
-      fakeContext(),
+      managerCtx,
     );
     assert.deepEqual(
       managerListing.details.reports.map((report: any) => report.session),
@@ -5197,22 +5275,108 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     ]);
     assert.equal(managerListing.details.reports[1].relationship, "supervised");
     assert.deepEqual(managerListing.details.reports[1].available_tools, [
+      "inspect_staff",
+      "read_staff_transcript",
       "message_staff",
     ]);
-    for (const toolName of ["inspect_staff", "read_staff_transcript"]) {
-      await assert.rejects(
-        manager.tools
-          .find((tool) => tool.name === toolName)!
-          .execute(
-            "ordinary",
-            { session: ordinaryLeadSession },
-            undefined,
-            undefined,
-            fakeContext(),
-          ),
-        /does not currently allow/,
+    const inspection = await manager.tools
+      .find((tool) => tool.name === "inspect_staff")!
+      .execute(
+        "inspect",
+        { action: "inspect", session: ordinaryLeadSession },
+        undefined,
+        undefined,
+        managerCtx,
       );
-    }
+    assert.equal(inspection.details.session, ordinaryLeadSession);
+    assert.equal(
+      inspection.details.identity.pi_session_id,
+      ordinaryLeadSession,
+    );
+    assert.equal(
+      inspection.details.recent_output,
+      "bounded ordinary live output",
+    );
+    const transcript = await manager.tools
+      .find((tool) => tool.name === "read_staff_transcript")!
+      .execute(
+        "transcript",
+        { session: ordinaryLeadSession },
+        undefined,
+        undefined,
+        managerCtx,
+      );
+    assert.match(JSON.stringify(transcript), /ordinary transcript content/);
+    assert.equal(
+      JSON.stringify(transcript).includes(
+        JSON.stringify(ordinarySessionPath).slice(1, -1),
+      ),
+      false,
+    );
+    await manager.commandOptions.get("manager").handler("", managerCtx);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(overview, "Manager overview opens for supervised Leads");
+    overview.handleInput("\u001b[B");
+    overview.handleInput(" ");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.match(
+      overview.render(120).join("\n"),
+      /bounded ordinary live output/,
+    );
+    overview.handleInput("\u001b");
+    revokeOrdinaryDuringRead = true;
+    overview.handleInput(" ");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(
+      overview.render(120).join("\n"),
+      /bounded ordinary live output/,
+      "inspection evidence is not rendered after direct-report revocation",
+    );
+    liveAgents.push(ordinaryLead);
+    delayOrdinaryRead = true;
+    overview.handleInput("\u001b");
+    overview.handleInput(" ");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(finishDelayedRead, "inspection is still pending");
+    overview.handleInput("\u001b");
+    finishDelayedRead!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(
+      overview.render(120).join("\n"),
+      /stale ordinary output/,
+      "a completed inspection does not reopen a dismissed peek",
+    );
+    delayOrdinaryRead = false;
+    nativeSessions.delete(ordinarySessionPath);
+    ordinaryLead.agent_session = {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: ordinaryLeadSession,
+    };
+    const withoutTranscript = await managerStaff.execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      managerCtx,
+    );
+    assert.deepEqual(
+      withoutTranscript.details.reports[1].available_tools,
+      ["inspect_staff", "message_staff"],
+      "ordinary supervision does not advertise unavailable persisted evidence",
+    );
+    ordinaryLead.agent_session = {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: ordinarySessionPath,
+    };
     const duplicatePath = projectAssignmentPath(
       supervisionRuntime(),
       "repo-key",
@@ -5328,6 +5492,8 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       );
     }
   } finally {
+    nativeSessions.delete(ordinarySessionPath);
+    realFs.rmSync(ordinarySessionPath, { force: true });
     await manager.events.get("session_shutdown")![0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
@@ -5438,11 +5604,8 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     registerExtension!(lead.pi as never);
     const leadCtx = fakeContext(lead.entries) as any;
     leadCtx.sessionManager.getSessionId = () => leadSession;
-    let busyChecks = 0;
-    leadCtx.isIdle = () => {
-      busyChecks++;
-      return false;
-    };
+    let leadIsIdle = false;
+    leadCtx.isIdle = () => leadIsIdle;
     await lead.events.get("session_start")![0](undefined, leadCtx);
 
     useManagerIdentity();
@@ -5495,22 +5658,6 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
         managerCtx,
       );
     useLeadIdentity();
-    busyChecks = 0;
-    await t.waitFor(() => assert.ok(busyChecks > 0));
-    assert.equal(
-      lead.sent.some(
-        (message: any) =>
-          message?.customType === "pi-herdsman-manager_message" &&
-          message?.details?.fromSessionId === LEAD_SESSION_ID &&
-          message?.details?.toSessionId === leadSession,
-      ),
-      false,
-    );
-    assert.equal(
-      listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
-      1,
-    );
-    leadCtx.isIdle = () => true;
     await t.waitFor(() =>
       assert.ok(
         lead!.sent.some(
@@ -5526,7 +5673,50 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
         ({ message }: any) =>
           message?.customType === "pi-herdsman-manager_message",
       )?.options,
-      { deliverAs: "followUp", triggerTurn: true },
+      { deliverAs: "steer", triggerTurn: true },
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+      [],
+    );
+
+    leadIsIdle = true;
+    const managerMessagesBeforeIdleDelivery = lead.sentMessageCalls.filter(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-manager_message" &&
+        message?.details?.toSessionId === leadSession,
+    ).length;
+    await manager.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        {
+          session: leadSession,
+          message: "Manager message while ordinary Lead is idle",
+        },
+        undefined,
+        undefined,
+        managerCtx,
+      );
+    useLeadIdentity();
+    await t.waitFor(() =>
+      assert.equal(
+        lead.sentMessageCalls.filter(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-manager_message" &&
+            message?.details?.toSessionId === leadSession,
+        ).length,
+        managerMessagesBeforeIdleDelivery + 1,
+      ),
+    );
+    assert.deepEqual(
+      lead.sentMessageCalls.findLast(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.details?.toSessionId === leadSession,
+      )?.options,
+      { deliverAs: "steer", triggerTurn: true },
+      "an idle ordinary Lead receives a Manager message that starts a turn",
     );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), leadSession),

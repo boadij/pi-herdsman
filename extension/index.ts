@@ -362,7 +362,7 @@ ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CONTRACT = `## Manager role
-You are the verified Manager for this Pi session. Supervise only project Leads established by exact current project assignments; configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.`;
+You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
 const STALE_AFTER_MS = 10 * 60_000;

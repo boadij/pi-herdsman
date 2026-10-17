@@ -253,9 +253,10 @@ live assigned Lead, plus `Remove worktree…` for assigned projects including
 paused work. This uses the same explicitly confirmed removal operation as
 `/manager remove <branch>`; it preserves the Git branch and Pi conversation.
 Running managed execution may be stopped, and assignment retirement is
-reported separately from checkout removal. Manager staff reports contain only live exact Leads named
-by current project assignments; physical worktree scope alone grants no
-authority. Project assignments survive Manager replacement and manual
+reported separately from checkout removal. Manager staff reports include
+eligible live Leads in its verified worktree group; exact current assignments
+grant project execution and lifecycle authority, not direct supervision.
+Project assignments survive Manager replacement and manual
 continuation of the exact assigned Pi session. `managed-lead` is launch policy,
 not authority. Successful Herdr worktree removal or verified checkout absence
 retires an assignment; failed or ambiguous inventory preserves it. A retired
