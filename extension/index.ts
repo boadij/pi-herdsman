@@ -218,6 +218,7 @@ import {
   readProjectAssignment,
   listProjectAssignments,
   findProjectAssignmentBySession,
+  releaseProjectAssignment,
   retireProjectAssignment,
   type ChiefDescriptor,
   type ChiefMessageKind,
@@ -1206,6 +1207,7 @@ export default function (pi: ExtensionAPI): void {
       leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
     projectMessageBytes,
     writeProjectMessage,
+    releaseProjectAssignment,
     retireProjectAssignment,
     removeProjectMessagesForAssignment,
     recoverStaleProjectMessages,
@@ -1322,6 +1324,11 @@ export default function (pi: ExtensionAPI): void {
     prepareSupervisionMessage = (ctx) =>
       leadRuntimes.supervisionUiRuntime!.prepareMessage(ctx);
     const leadAgentEventOptions = {
+      drainRetirementNotices: (ctx: ExtensionContext, preflight: boolean) =>
+        leadRuntimes.coordinationRuntime!.drainRetirementNotices(
+          ctx,
+          preflight,
+        ),
       isCurrentChief,
       chiefTools: CHIEF_TOOLS,
       setActiveTools: (tools: string[]) => pi.setActiveTools(tools),

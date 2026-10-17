@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -65,8 +66,11 @@ import {
   staffDelegateResults,
   staffActionResults,
   projectMessageEntries,
+  retirementNoticeEntries,
+  assertPassiveRetirementEvidence,
   retainedProjectMessageRecord,
   managerCleanupTarget,
+  removeManagerRecoveryWorktree,
   collectDiagnostics,
   rootDelegationDiagnostics,
   bestEffortDiagnostics,
@@ -994,6 +998,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     simulated: false,
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
+    managerExternalRemoval: false,
   });
   for (const scenario of [
     "core",
@@ -1011,6 +1016,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       simulated: false,
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
+      managerExternalRemoval: false,
     },
   );
   assert.deepEqual(
@@ -1021,6 +1027,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       simulated: false,
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
+      managerExternalRemoval: false,
     },
   );
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
@@ -1032,6 +1039,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     simulated: true,
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
+    managerExternalRemoval: false,
   });
   assert.throws(
     () => parseSmokeArgs(["core", "--simulated", "--model", "p/m"]),
@@ -1060,6 +1068,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
       simulated: false,
       managerReadyTimeoutMs: 45_000,
       managerRecoveryDiagnostics: true,
+      managerExternalRemoval: false,
     },
   );
   for (const timeout of ["0", "-1", "1.5", "600001", "many"])
@@ -4892,4 +4901,186 @@ test("best-effort process diagnostics retain protocol failures as evidence", asy
     ),
     { error: "herdr pane process-info returned no result envelope" },
   );
+});
+
+test("passive retirement evidence matches exact identity and rejects duplicate or waking delivery", () => {
+  const identity = ["repo", "feature", "lead-session"] as const;
+  const previous = {
+    type: "message",
+    id: "prior",
+    message: { role: "assistant", content: "done" },
+  };
+  const notice = {
+    type: "custom_message",
+    customType: "pi-herdsman-project_retired",
+    display: false,
+    details: {
+      repoKey: identity[0],
+      branch: identity[1],
+      assignmentId: identity[2],
+    },
+  };
+  const transcript = (entries: unknown[]) =>
+    entries.map((entry) => JSON.stringify(entry)).join("\n");
+  const before = transcript([previous]);
+  const after = transcript([previous, notice]);
+  assert.deepEqual(retirementNoticeEntries(after, ...identity), [notice]);
+  assert.deepEqual(
+    assertPassiveRetirementEvidence(before, after, ...identity),
+    notice,
+  );
+  for (const details of [
+    { ...notice.details, repoKey: "elsewhere" },
+    { ...notice.details, branch: "other" },
+    { ...notice.details, assignmentId: "replacement" },
+  ]) {
+    const wrong = transcript([previous, { ...notice, details }]);
+    assert.deepEqual(retirementNoticeEntries(wrong, ...identity), []);
+    assert.throws(() =>
+      assertPassiveRetirementEvidence(before, wrong, ...identity),
+    );
+  }
+  for (const entries of [
+    [previous, notice, notice],
+    [notice],
+    [previous, { ...notice, display: true }],
+    ...["user", "assistant", "toolResult", "system"].map((role) => [
+      previous,
+      notice,
+      { type: "message", message: { role } },
+    ]),
+  ])
+    assert.throws(() =>
+      assertPassiveRetirementEvidence(before, transcript(entries), ...identity),
+    );
+});
+
+test("external removal variant is smoke-only and scoped to manager-recovery", () => {
+  assert.equal(
+    parseSmokeArgs(["manager-recovery"]).managerExternalRemoval,
+    false,
+  );
+  assert.equal(
+    parseSmokeArgs(["manager-recovery", "--manager-external-removal"])
+      .managerExternalRemoval,
+    true,
+  );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-external-removal"]),
+    /only valid for manager-recovery/,
+  );
+  assert.throws(
+    () =>
+      parseSmokeArgs([
+        "manager-recovery",
+        "--simulated",
+        "--manager-external-removal",
+      ]),
+    /does not support --simulated/,
+  );
+});
+
+test("Manager removal variants target only the exact owned checkout without force", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "smoke-removal-contract-")),
+  );
+  try {
+    const primary = join(root, "project");
+    const checkout = join(root, "checkout");
+    const common = join(primary, ".git");
+    const otherCommon = join(root, "other-git");
+    await mkdir(common, { recursive: true });
+    await mkdir(checkout);
+    await mkdir(otherCommon);
+    for (const scenario of [
+      "herdr",
+      "git",
+      "wrong topology",
+      "wrong owner",
+      "wrong primary",
+      "wrong branch",
+      "wrong repository",
+      "remove failure",
+    ]) {
+      const branch = "herdsman/smoke-manager-recovery-exact";
+      const workspaceId = "owned-workspace";
+      const ctx = {
+        paths: { root },
+        primaryCheckoutPath: scenario === "wrong primary" ? checkout : primary,
+        managerExternalRemoval: scenario !== "herdr",
+        managerRecovery: { branch, worktreePath: checkout, workspaceId },
+        owned: {
+          managerBranch: scenario === "wrong owner" ? "other" : branch,
+          managerWorktreePath: checkout,
+          managerWorkspaceId: workspaceId,
+          managerWorktreeRetirementRequested: false,
+        },
+      };
+      const mutations: unknown[] = [];
+      const execute = async (
+        file: string,
+        args: string[],
+        options: { cwd: string },
+      ) => {
+        assert.equal(file, "git");
+        if (args[0] === "worktree") {
+          mutations.push({ file, args, options });
+          if (scenario === "remove failure")
+            throw new Error("Git refused removal");
+          return { stdout: "" };
+        }
+        if (args.includes("--show-toplevel"))
+          return { stdout: `${checkout}\n` };
+        if (args[0] === "branch")
+          return {
+            stdout: `${scenario === "wrong branch" ? "other" : branch}\n`,
+          };
+        return {
+          stdout: `${scenario === "wrong repository" && options.cwd === checkout ? otherCommon : common}\n`,
+        };
+      };
+      const control = async (_ctx: unknown, args: string[]) => {
+        mutations.push(args);
+      };
+      const topology = [
+        {
+          branch,
+          path: checkout,
+          open_workspace_id:
+            scenario === "wrong topology" ? "unowned" : workspaceId,
+        },
+      ];
+      const remove = () =>
+        removeManagerRecoveryWorktree(ctx, topology, execute, control);
+      if (scenario === "herdr" || scenario === "git") {
+        await remove();
+        assert.equal(mutations.length, 1);
+        assert.deepEqual(
+          mutations[0],
+          scenario === "herdr"
+            ? ["worktree", "remove", "--workspace", workspaceId]
+            : {
+                file: "git",
+                args: ["worktree", "remove", "--", checkout],
+                options: { cwd: primary },
+              },
+        );
+        assert.equal(ctx.owned.managerWorktreeRetirementRequested, true);
+      } else {
+        await assert.rejects(remove);
+        assert.equal(
+          mutations.length,
+          scenario === "remove failure" ? 1 : 0,
+          scenario,
+        );
+        assert.equal(
+          ctx.owned.managerWorktreeRetirementRequested,
+          scenario === "remove failure",
+          scenario,
+        );
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -164,6 +164,23 @@ See [`stop_lead`](../reference/staff.md#stop_lead) and
 
 ## Retire project work
 
+Verified worktree retirement atomically removes the exact assignment from active
+authority and preserves it as pending context for the repository's Manager role.
+The next verified Manager receives a factual, hidden Pi context message without
+starting a turn or interrupting active work. Pre-turn reconciliation delivers
+newly discovered retirement before the first model request; background delivery
+waits for idle. Pre-turn processing is bounded; excess backlog remains pending
+for later inbox passes. The notice does not establish completion, acceptance, merge, or
+discard, and preserves the Git branch and Pi conversation.
+
+Pending context survives Manager replacement. After assignment-scoped handoff
+cleanup succeeds and Pi history proves delivery, it is consumed rather than
+kept as a retirement log. An exact successful removal tool result in the receiving
+Manager's history also proves awareness; a UI-only notification does not.
+A crash between delivery and consumption can replay context to a replacement
+Manager. Cleanup failures preserve pending evidence for a later inbox pass.
+Takeover does not generate a worktree-retirement notice.
+
 Successful Herdr worktree removal or verified checkout absence retires the
 matching project assignment and any still-pending messages; the Git branch
 remains. Failed or ambiguous inventory does not imply absence, so the

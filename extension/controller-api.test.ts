@@ -73,6 +73,8 @@ import support, {
 } from "./support.ts";
 const { visibleAgentCapabilities } = await import("./agent-controller.ts");
 const {
+  listPendingRetirements,
+  retireProjectAssignment,
   listProjectAssignments,
   listChiefMessagePaths,
   readChiefMessage,
@@ -621,6 +623,11 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     try {
       await pi.commandOptions.get("takeover")!.handler("", ctx);
       assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
+      assert.deepEqual(
+        listPendingRetirements(runtime, "repo-key"),
+        [],
+        "takeover produces no worktree retirement context",
+      );
       assert.ok(
         pi.entries.some(
           (entry: any) => entry.customType === "pi_herdsman_state_error",
@@ -904,6 +911,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.deepEqual(listProjectAssignments(runtime, repoKey), [assignment]);
+    assert.deepEqual(listPendingRetirements(runtime, repoKey), []);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
 
     const staleObserved = { ...assignment, id: randomUUID() };
@@ -978,6 +986,18 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     }
     assert.deepEqual(listProjectAssignments(runtime, repoKey), []);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 0);
+    assert.deepEqual(listPendingRetirements(runtime, repoKey), [replacement]);
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }: any) =>
+          message.customType === "pi-herdsman-project_retired",
+      ),
+      false,
+      "observer must not deliver to its own Lead session",
+    );
+    publishRemoval(branch);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(listPendingRetirements(runtime, repoKey), [replacement]);
   } finally {
     eventAbortController.abort();
     releaseRetirementLock?.();
@@ -1954,6 +1974,32 @@ for (const reachable of [true, false]) {
           ),
         );
 
+        const retired = listProjectAssignments(runtime, "repo-key").find(
+          (assignment) => assignment.id === leadId,
+        )!;
+        assert.equal(retireProjectAssignment(runtime, retired), true);
+        await t.waitFor(() =>
+          assert.equal(
+            managerHistory.filter(
+              (entry: any) =>
+                entry.customType === "pi-herdsman-project_retired",
+            ).length,
+            1,
+          ),
+        );
+        const notice = managerHistory.find(
+          (entry: any) => entry.customType === "pi-herdsman-project_retired",
+        ) as any;
+        const noticeCall = pi.sentMessageCalls.find(
+          ({ message }: any) => message === notice,
+        )!;
+        assert.deepEqual(noticeCall.options, { triggerTurn: false });
+        managerHistory.push({ ...notice, type: "custom_message" });
+        await t.waitFor(() =>
+          assert.deepEqual(listPendingRetirements(runtime, "repo-key"), []),
+        );
+        // Preserve the original handoff/replacement fixture after the retirement regression.
+        writeProjectAssignment(runtime, { ...retired, id: leadId });
         await pi.commandOptions.get("manager").handler("leave", ctx);
         const replacementId = randomUUID();
         managerSessionFile = join(tmpdir(), `${replacementId}.jsonl`);
@@ -3831,6 +3877,12 @@ async function runManagerStartupScenario(
           ]);
         }
         assert.deepEqual(assignments, []);
+        assert.equal(
+          listPendingRetirements(supervisionRuntime(), repoKey).filter(
+            (record) => record.id === reconciliationId,
+          ).length,
+          1,
+        );
         assert.deepEqual(
           listProjectMessages(
             supervisionRuntime(),

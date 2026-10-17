@@ -40,6 +40,8 @@ export let failNextMailboxWrite = false;
 export let failNextRequestRemoval = false;
 export let failNextResultRemoval = false;
 export let failProjectMessageRemoval = false;
+let retirementFailure: "rename" | "sync" | undefined;
+let failRetirementSync = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
@@ -137,7 +139,13 @@ mock.module("node:fs", {
       return realFs.existsSync(path);
     },
     fstatSync: realFs.fstatSync,
-    fsyncSync: realFs.fsyncSync,
+    fsyncSync: (fd: number) => {
+      if (failRetirementSync) {
+        failRetirementSync = false;
+        throw new Error("injected retirement sync failure");
+      }
+      return realFs.fsyncSync(fd);
+    },
     mkdirSync: realFs.mkdirSync,
     lstatSync: realFs.lstatSync,
     openSync: (...args: any[]) => {
@@ -161,7 +169,16 @@ mock.module("node:fs", {
     },
     readdirSync: realFs.readdirSync,
     realpathSync: realFs.realpathSync,
-    renameSync: realFs.renameSync,
+    renameSync: (source: string, destination: string) => {
+      if (destination.includes(`${sep}retirements${sep}`)) {
+        if (retirementFailure === "rename")
+          throw new Error("injected retirement rename failure");
+        realFs.renameSync(source, destination);
+        if (retirementFailure === "sync") failRetirementSync = true;
+        return;
+      }
+      return realFs.renameSync(source, destination);
+    },
     rmSync: (path: string, options?: any) => {
       if (failProjectMessageRemoval && String(path).includes(".messages"))
         throw new Error("injected project message removal failure");
@@ -3039,6 +3056,10 @@ export default {
   },
   set failNextResultRemoval(value: boolean) {
     failNextResultRemoval = value;
+  },
+  set retirementFailure(value: "rename" | "sync" | undefined) {
+    retirementFailure = value;
+    failRetirementSync = false;
   },
   get failProjectMessageRemoval() {
     return failProjectMessageRemoval;

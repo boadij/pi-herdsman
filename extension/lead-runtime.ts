@@ -25,6 +25,10 @@ import type {
 import {
   leadSupervisorState as resolveLeadSupervisorState,
   projectTaskSummary,
+  COORDINATION_INBOX_SCAN_LIMIT,
+  listPendingRetirements,
+  removePendingRetirement,
+  removeProjectMessagesForAssignment,
   listProjectAssignments,
   listProjectMessages,
   supervisionRuntime,
@@ -163,6 +167,7 @@ type LeadTransitionHost = {
   activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
   reportLeadMetadata: typeof import("./herdr.ts").reportLeadMetadata;
   delay: typeof import("node:timers/promises").setTimeout;
+  releaseProjectAssignment: typeof import("./supervision.ts").releaseProjectAssignment;
   retireProjectAssignment: typeof import("./supervision.ts").retireProjectAssignment;
   removeProjectMessagesForAssignment: typeof import("./supervision.ts").removeProjectMessagesForAssignment;
   recoverStaleProjectMessages: typeof import("./supervision.ts").recoverStaleProjectMessages;
@@ -578,6 +583,7 @@ type LeadCoordinationBaseHost = {
 };
 
 type LeadCoordinationHost = LeadCoordinationBaseHost & {
+  withProjectAssignmentLock: LeadRoleTransitionRuntime["withProjectAssignmentLock"];
   pi: ExtensionAPI;
   leadRuntime: LeadRuntimeState;
   processRole: "lead";
@@ -1313,6 +1319,10 @@ export function createLeadSessionStartRuntime(host: {
 }
 
 export function createLeadAgentEventRuntime(host: {
+  drainRetirementNotices(
+    ctx: ExtensionContext,
+    preflight: boolean,
+  ): Promise<number>;
   isCurrentChief(ctx: ExtensionContext): boolean;
   setActiveTools(tools: readonly string[]): void;
   chiefTools: readonly string[];
@@ -1390,6 +1400,7 @@ export function createLeadAgentEventRuntime(host: {
         delete sections.agent_definitions;
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
+        await host.drainRetirementNotices(ctx, true);
         return;
       }
       const supervisorStateMessage = host.isActiveLead()
@@ -2601,6 +2612,11 @@ export function registerLeadRuntime(
   const liveLead: typeof identityRuntime.liveLead = (...args) =>
     identityRuntime.liveLead(...args);
   const coordinationServices = {
+    withProjectAssignmentLock: <T>(
+      repoKey: string,
+      branch: string,
+      operation: () => Promise<T> | T,
+    ) => roleTransitions.withProjectAssignmentLock(repoKey, branch, operation),
     ...options.coordinationHost,
     workspaceId: () => options.roleTransitionHost.workspaceId(),
     currentManager: (
@@ -3076,6 +3092,13 @@ export function registerLeadRuntime(
     supervisoryTools,
     fallbackSupervisoryProfile,
     retireProjectAssignment,
+    releaseProjectAssignment: (
+      ...args: Parameters<typeof roleHost.releaseProjectAssignment>
+    ) => {
+      const released = roleHost.releaseProjectAssignment(...args);
+      supervisionUiRuntime.requestRefresh();
+      return released;
+    },
     controllerScope: { kind: "root" },
     activationGuard,
     advancePeerPresenceGeneration: () =>
@@ -3197,7 +3220,12 @@ export function registerLeadRuntime(
     currentPeerPresenceValid: (ctx: ExtensionContext) =>
       coordinationRuntime.currentPeerPresenceValid(ctx),
     drainProjectMessages: (ctx: ExtensionContext) =>
-      coordinationRuntime.drainProjectMessages(ctx),
+      coordinationRuntime
+        .drainRetirementNotices(ctx)
+        .then(
+          async (count) =>
+            count + (await coordinationRuntime.drainProjectMessages(ctx)),
+        ),
   };
   inboxRuntime = createLeadInboxRuntime(inboxServices);
   let herdRunRuntime: ReturnType<typeof createLeadHerdRunRuntime> | undefined;
@@ -6702,6 +6730,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             lead_stopped: leadStopped,
             checkout_removed: checkoutRemoved,
             assignment_retired: assignmentRetired,
+            repo_key: candidate.manager.repoKey,
+            assignment_id: candidate.assignment.id,
             forced: false,
             checkout_state: checkoutRemoved ? "removed" : checkoutState,
             ...("error" in removed ? { removal_error: removed.error } : {}),
@@ -8029,6 +8059,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     importResultBindings,
   } = host;
   const reportedProjectMessageCleanupErrors = new Set<string>();
+  const reportedRetirementErrors = new Set<string>();
   const readLeadSessionIdsFromHost = (
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
@@ -9055,6 +9086,127 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     };
   };
 
+  const processRetirementNotices = async (
+    ctx: ExtensionContext,
+    preflight: boolean,
+  ): Promise<number> => {
+    const eligible = () =>
+      activeRole() === "manager" &&
+      !leadRuntime.roleSuspended &&
+      (preflight || ctx.isIdle());
+    if (!eligible()) return 0;
+    const manager = await currentManager(ctx);
+    const verified = (current: ManagerDescriptor | undefined) =>
+      eligible() &&
+      !!current &&
+      !!manager &&
+      !!leadRuntime.managerLease &&
+      sameManagerDescriptor(current, manager) &&
+      sameManagerDescriptor(current, leadRuntime.managerLease.descriptor) &&
+      ctx.sessionManager.getSessionId() === current.piSessionId;
+    if (!verified(manager)) return 0;
+    const runtime = supervisionRuntime();
+    let errorKey = manager!.repoKey;
+    try {
+      // Bound preflight backlog; ordinary inbox passes deliver one notice at a time.
+      let processed = 0;
+      for (const retired of listPendingRetirements(
+        runtime,
+        manager!.repoKey,
+      ).slice(0, preflight ? COORDINATION_INBOX_SCAN_LIMIT : 1)) {
+        errorKey = retired.id;
+        processed += await host.withProjectAssignmentLock(
+          retired.repoKey,
+          retired.branch,
+          async () => {
+            if (!verified(await currentManager(ctx))) return 0;
+            if (
+              readProjectAssignment(runtime, retired.repoKey, retired.branch)
+                ?.id === retired.id
+            )
+              throw new Error(
+                "Pending retirement still grants assignment authority",
+              );
+            removeProjectMessagesForAssignment(runtime, retired);
+            const received = () =>
+              ctx.sessionManager.getEntries().some((entry: any) => {
+                if (
+                  entry?.type === "custom_message" &&
+                  entry.customType === "pi-herdsman-project_retired"
+                )
+                  return (
+                    entry.details?.repoKey === retired.repoKey &&
+                    entry.details?.branch === retired.branch &&
+                    entry.details?.assignmentId === retired.id
+                  );
+                const message = entry?.message;
+                const details = message?.details;
+                return (
+                  entry?.type === "message" &&
+                  message?.role === "toolResult" &&
+                  !message.isError &&
+                  (message.toolName === "staff" ||
+                    message.toolName === "remove_worktree") &&
+                  details?.ok === true &&
+                  details?.action === "remove" &&
+                  details?.checkout_removed === true &&
+                  details?.assignment_retired === true &&
+                  details?.repo_key === retired.repoKey &&
+                  details?.assignment_id === retired.id
+                );
+              });
+            if (!received()) {
+              pi.sendMessage(
+                {
+                  customType: "pi-herdsman-project_retired",
+                  content: [
+                    "[Pi Herdsman lifecycle notice]",
+                    `The worktree for project branch ${JSON.stringify(retired.branch)} was verified removed.`,
+                    `The assignment for Lead session ${retired.id} was retired.`,
+                    "Manager authority for that assignment has ended.",
+                    "This does not establish task completion, acceptance, merge, or discard.",
+                    "The Git branch and Pi session history are preserved.",
+                  ].join("\n"),
+                  display: false,
+                  details: {
+                    repoKey: retired.repoKey,
+                    branch: retired.branch,
+                    assignmentId: retired.id,
+                  },
+                },
+                { triggerTurn: false },
+              );
+            }
+            if (received()) removePendingRetirement(runtime, retired);
+            reportedRetirementErrors.delete(errorKey);
+            return 1;
+          },
+        );
+      }
+      return processed;
+    } catch (error) {
+      if (!reportedRetirementErrors.has(errorKey)) {
+        reportedRetirementErrors.add(errorKey);
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      }
+      return 0;
+    }
+  };
+  let retirementDrain = Promise.resolve();
+  const drainRetirementNotices = (
+    ctx: ExtensionContext,
+    preflight = false,
+  ): Promise<number> => {
+    // Preflight must retry after an idle pass declines delivery because the run started.
+    const pass = retirementDrain.then(() =>
+      processRetirementNotices(ctx, preflight),
+    );
+    retirementDrain = pass.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pass;
+  };
   const drainProjectMessages = async (
     ctx: ExtensionContext,
   ): Promise<number> => {
@@ -9166,6 +9318,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     queuePeerRecord,
     queueChiefRecord,
     enterCoordinationPublication,
+    drainRetirementNotices,
     drainProjectMessages,
     readLeadSessionIds: readLeadSessionIdsFromHost,
     supervisorMessage: executeSupervisorMessage,
@@ -10890,9 +11043,15 @@ export function createLeadRoleTransitions(
   const removeProjectAssignmentState = (
     assignment: ProjectAssignment,
     ctx: ExtensionContext,
+    takeover = false,
   ): boolean => {
     const runtime = host.supervisionRuntime();
-    if (!host.retireProjectAssignment(runtime, assignment)) return false;
+    if (
+      !(takeover
+        ? host.releaseProjectAssignment(runtime, assignment)
+        : host.retireProjectAssignment(runtime, assignment))
+    )
+      return false;
     try {
       host.removeProjectMessagesForAssignment(runtime, assignment);
     } catch (error) {
@@ -11180,7 +11339,7 @@ export function createLeadRoleTransitions(
             if (
               !current ||
               current.branch !== assignment.branch ||
-              !removeProjectAssignmentState(assignment, ctx)
+              !removeProjectAssignmentState(assignment, ctx, true)
             )
               throw new Error("Project assignment changed during takeover");
           },

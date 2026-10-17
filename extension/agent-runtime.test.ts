@@ -4787,3 +4787,453 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     resetAgentMailbox(mailbox);
   }
 });
+
+for (const concurrentInbox of [false, true]) {
+  test(`Pi 1.3.0 Manager retirement preflight reaches the first model request without waking or steering (concurrent inbox: ${concurrentInbox})`, async () => {
+    const { createLeadCoordinationRuntime, createLeadAgentEventRuntime } =
+      await import("./lead-runtime.ts");
+    const storage = await import("./supervision.ts");
+    const runtime = storage.supervisionRuntime(
+      `/tmp/retirement-${randomUUID()}.sock`,
+    );
+    const sessionManager = SessionManager.inMemory(WORKSPACE);
+    const manager = {
+      piSessionId: sessionManager.getSessionId(),
+      repoKey: "runtime-retirement",
+      leaseId: randomUUID(),
+    };
+    const state = {
+      managerLease: { descriptor: manager },
+      roleSuspended: false,
+    };
+    const a = {
+      version: 2 as const,
+      id: randomUUID(),
+      repoKey: manager.repoKey,
+      branch: "feature\nquoted",
+      text: "PRIVATE TASK MUST NOT LEAK",
+    };
+    storage.writeProjectAssignment(runtime, a);
+    const c = { ...a, id: randomUUID(), branch: "other-feature" };
+    storage.writeProjectAssignment(runtime, c);
+    let coordination: ReturnType<typeof createLeadCoordinationRuntime>;
+    let lastContext: any;
+    let prepare = true;
+    const errors: unknown[] = [];
+    let releaseVerification!: () => void;
+    const verificationBlocked = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let branchAcquired!: () => void;
+    const idleBranchAcquired = new Promise<void>((resolve) => {
+      branchAcquired = resolve;
+    });
+    let preflightStarted!: () => void;
+    const preflightEntered = new Promise<void>((resolve) => {
+      preflightStarted = resolve;
+    });
+    let pauseVerification = concurrentInbox;
+    let branchHeld = false;
+    const { acquireProcessLock } = await import("./lock.ts");
+    const faux = fauxProvider({
+      provider: "manager-retirement",
+      models: [{ id: "test" }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        (api) => {
+          coordination = createLeadCoordinationRuntime({
+            pi: api,
+            leadRuntime: state,
+            activeRole: () => "manager",
+            supervisionRuntime: () => runtime,
+            currentManager: async () => {
+              if (pauseVerification && branchHeld) {
+                pauseVerification = false;
+                branchAcquired();
+                await verificationBlocked;
+              }
+              return manager;
+            },
+            sameManagerDescriptor: (a: any, b: any) => a === b,
+            readProjectAssignment: storage.readProjectAssignment,
+            withProjectAssignmentLock: async (
+              repo: string,
+              branch: string,
+              operation: any,
+            ) => {
+              const lease = acquireProcessLock(
+                `${storage.projectAssignmentPath(runtime, repo, branch)}.lock`,
+                { name: "project assignment lock" },
+              );
+              branchHeld = true;
+              try {
+                return await operation();
+              } finally {
+                branchHeld = false;
+                lease.release();
+              }
+            },
+            appendDurableError: (
+              _pi: any,
+              _ctx: any,
+              _kind: string,
+              error: unknown,
+            ) => errors.push(error),
+          } as any);
+          const events = createLeadAgentEventRuntime({
+            isCurrentChief: () => false,
+            isActiveManager: () => true,
+            roleCharter: () => "Manager",
+            prepareSupervisionMessage: async () => {
+              if (prepare) {
+                storage.retireProjectAssignment(runtime, a);
+                storage.retireProjectAssignment(runtime, c);
+                prepare = false;
+              }
+              return undefined;
+            },
+            drainRetirementNotices: (ctx: any, preflight: boolean) => {
+              const pass = coordination.drainRetirementNotices(ctx, preflight);
+              preflightStarted();
+              return pass;
+            },
+            sendMessage: (message: any) =>
+              api.sendMessage(message, { triggerTurn: false }),
+          } as any);
+          api.on("before_agent_start", async (event, ctx) => {
+            lastContext = ctx;
+            return events.beforeAgentStart(event, ctx);
+          });
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    const requests: any[][] = [];
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    faux.setResponses([
+      (context) => {
+        requests.push(context.messages as any[]);
+        return fauxAssistantMessage("first");
+      },
+      async (context) => {
+        requests.push(context.messages as any[]);
+        entered();
+        await blocked;
+        return fauxAssistantMessage("second");
+      },
+      (context) => {
+        requests.push(context.messages as any[]);
+        return fauxAssistantMessage("third");
+      },
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager,
+      tools: [],
+    });
+    try {
+      if (concurrentInbox) {
+        storage.retireProjectAssignment(runtime, a);
+        const backgroundContext = {
+          sessionManager,
+          isIdle: () => (lastContext ? lastContext.isIdle() : true),
+        };
+        const background = coordination!.drainRetirementNotices(
+          backgroundContext as any,
+        );
+        await idleBranchAcquired;
+        const starting = session.prompt("first request");
+        await preflightEntered;
+        assert.equal(
+          requests.length,
+          0,
+          "preflight waits for the in-flight idle drain",
+        );
+        releaseVerification();
+        assert.equal(
+          await background,
+          0,
+          "idle drain declines delivery once Pi starts the run",
+        );
+        await starting;
+      } else {
+        await session.prompt("first request");
+      }
+      assert.equal(requests.length, 1);
+      assert.match(JSON.stringify(requests[0]), /was verified removed/);
+      assert.match(JSON.stringify(requests[0]), new RegExp(a.id));
+      assert.match(JSON.stringify(requests[0]), new RegExp(c.id));
+      assert.doesNotMatch(
+        JSON.stringify(requests[0]),
+        /PRIVATE TASK MUST NOT LEAK/,
+      );
+      assert.equal(
+        sessionManager
+          .getEntries()
+          .filter((e: any) => e.customType === "pi-herdsman-project_retired")
+          .length,
+        2,
+      );
+      await coordination!.drainRetirementNotices(lastContext);
+      await coordination!.drainRetirementNotices(lastContext);
+      assert.deepEqual(
+        storage.listPendingRetirements(runtime, manager.repoKey),
+        [],
+      );
+      const running = session.prompt("active work");
+      await started;
+      const b = { ...a, id: randomUUID() };
+      storage.writeProjectAssignment(runtime, b);
+      storage.retireProjectAssignment(runtime, b);
+      assert.equal(await coordination!.drainRetirementNotices(lastContext), 0);
+      assert.equal(
+        storage.listPendingRetirements(runtime, manager.repoKey).length,
+        1,
+      );
+      assert.equal(
+        requests.length,
+        2,
+        "no autonomous turn or steering while running",
+      );
+      release();
+      await running;
+      assert.equal(requests.length, 2);
+      await session.prompt("next request");
+      assert.equal(requests.length, 3);
+      assert.match(JSON.stringify(requests[2]), new RegExp(b.id));
+      await coordination!.drainRetirementNotices(lastContext);
+      assert.deepEqual(
+        storage.listPendingRetirements(runtime, manager.repoKey),
+        [],
+      );
+      assert.deepEqual(errors, []);
+    } finally {
+      releaseVerification();
+      release();
+      await session.dispose();
+    }
+  });
+}
+
+test("Manager retirement delivery revalidates recipients, exact receipts, cleanup and replacement generations", async () => {
+  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  const storage = await import("./supervision.ts");
+  for (const scenario of [
+    "notice receipt",
+    "tool receipt",
+    "failed tool",
+    "wrong tool identity",
+    "UI only",
+    "absent",
+    "stale",
+    "wrong session",
+    "wrong repo",
+    "active",
+    "suspended",
+    "cleanup failure",
+    "send failure",
+    "deferred receipt",
+    "reappeared",
+  ] as const) {
+    const runtime = storage.supervisionRuntime(
+      `/tmp/retirement-${randomUUID()}.sock`,
+    );
+    const a = {
+      version: 2 as const,
+      id: randomUUID(),
+      repoKey: "delivery",
+      branch: "feature",
+      text: "task",
+    };
+    storage.writeProjectAssignment(runtime, a);
+    storage.retireProjectAssignment(runtime, a);
+    const b = { ...a, id: randomUUID() };
+    storage.writeProjectAssignment(runtime, scenario === "reappeared" ? a : b);
+    const handoff = {
+      version: 2 as const,
+      id: randomUUID(),
+      repoKey: a.repoKey,
+      branch: a.branch,
+      fromSessionId: a.id,
+      text: "old",
+      createdAt: 1,
+    };
+    const nextHandoff = { ...handoff, id: randomUUID(), fromSessionId: b.id };
+    storage.writeProjectMessage(handoff, runtime);
+    storage.writeProjectMessage(nextHandoff, runtime);
+    const manager = {
+      piSessionId: randomUUID(),
+      repoKey: scenario === "wrong repo" ? "other" : a.repoKey,
+    };
+    const entries: any[] = [];
+    const receipt = {
+      type: "custom_message",
+      customType: "pi-herdsman-project_retired",
+      details: { repoKey: a.repoKey, branch: a.branch, assignmentId: a.id },
+    };
+    if (scenario === "notice receipt") entries.push(receipt);
+    if (
+      ["tool receipt", "failed tool", "wrong tool identity"].includes(scenario)
+    )
+      entries.push({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "staff",
+          isError: scenario === "failed tool",
+          details: {
+            ok: true,
+            action: "remove",
+            checkout_removed: true,
+            assignment_retired: true,
+            repo_key: a.repoKey,
+            assignment_id: scenario === "wrong tool identity" ? b.id : a.id,
+          },
+        },
+      });
+    const errors: unknown[] = [];
+    const sent: any[] = [];
+    let checks = 0;
+    let available = scenario !== "absent";
+    const coordination = createLeadCoordinationRuntime({
+      pi: {
+        sendMessage: (message: any, options: any) => {
+          assert.deepEqual(options, { triggerTurn: false });
+          if (scenario === "send failure") throw new Error("send failed");
+          sent.push(message);
+          if (scenario !== "deferred receipt") entries.push(receipt);
+        },
+      },
+      leadRuntime: {
+        managerLease: { descriptor: manager },
+        roleSuspended: scenario === "suspended",
+      },
+      activeRole: () => "manager",
+      supervisionRuntime: () => runtime,
+      currentManager: async () =>
+        !available || (scenario === "stale" && checks++ > 0)
+          ? undefined
+          : manager,
+      sameManagerDescriptor: (a: any, b: any) => a === b,
+      readProjectAssignment: storage.readProjectAssignment,
+      withProjectAssignmentLock: async (
+        _repo: string,
+        _branch: string,
+        operation: any,
+      ) => operation(),
+      appendDurableError: (
+        _pi: any,
+        _ctx: any,
+        _kind: string,
+        error: unknown,
+      ) => errors.push(error),
+    } as any);
+    const ctx: any = {
+      isIdle: () => scenario !== "active",
+      sessionManager: {
+        getSessionId: () =>
+          scenario === "wrong session" ? "wrong" : manager.piSessionId,
+        getEntries: () => entries,
+      },
+    };
+    support.failProjectMessageRemoval = scenario === "cleanup failure";
+    try {
+      await coordination.drainRetirementNotices(ctx);
+    } finally {
+      support.failProjectMessageRemoval = false;
+    }
+    const blocked = [
+      "absent",
+      "stale",
+      "wrong session",
+      "wrong repo",
+      "active",
+      "suspended",
+      "cleanup failure",
+      "send failure",
+      "reappeared",
+    ].includes(scenario);
+    assert.equal(
+      sent.length,
+      blocked || scenario === "notice receipt" || scenario === "tool receipt"
+        ? 0
+        : 1,
+      scenario,
+    );
+    assert.equal(
+      storage.listPendingRetirements(runtime, a.repoKey).length,
+      blocked || scenario === "deferred receipt" ? 1 : 0,
+      scenario,
+    );
+    assert.equal(
+      errors.length,
+      ["cleanup failure", "send failure", "reappeared"].includes(scenario)
+        ? 1
+        : 0,
+      scenario,
+    );
+    assert.deepEqual(
+      storage.readProjectAssignment(runtime, a.repoKey, a.branch),
+      scenario === "reappeared" ? a : b,
+    );
+    assert.ok(
+      storage
+        .listProjectMessages(runtime, a.repoKey, a.branch)
+        .some((message) => message.id === nextHandoff.id),
+    );
+    if (scenario === "cleanup failure" || scenario === "absent") {
+      // A replacement verified Manager can retry the same durable pending record.
+      manager.piSessionId = randomUUID();
+      const replacementCtx = {
+        ...ctx,
+        sessionManager: {
+          ...ctx.sessionManager,
+          getSessionId: () => manager.piSessionId,
+        },
+      };
+      available = true;
+      await coordination.drainRetirementNotices(replacementCtx);
+      assert.equal(sent.length, 1);
+      assert.deepEqual(storage.listPendingRetirements(runtime, a.repoKey), []);
+      assert.deepEqual(
+        storage.listProjectMessages(runtime, a.repoKey, a.branch),
+        [nextHandoff],
+      );
+    }
+    if (scenario === "deferred receipt") {
+      entries.push(receipt);
+      await coordination.drainRetirementNotices(ctx);
+      assert.equal(sent.length, 1);
+      assert.deepEqual(storage.listPendingRetirements(runtime, a.repoKey), []);
+    }
+  }
+});
