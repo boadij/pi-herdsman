@@ -51,6 +51,30 @@ test("acquireProcessLock returns an exact claim", () => {
   }
 });
 
+test("release rejects a dangling owner symlink", () => {
+  const path = temporaryPath();
+  try {
+    const lease = acquireProcessLock(path);
+    const owner = readdirSync(path)[0]!;
+    unlinkSync(join(path, owner));
+    symlinkSync("missing-target", join(path, owner));
+    throws(() => lease.release(), /Unable to verify .* ownership/);
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("release remains harmless when its owner entry is already removed", () => {
+  const path = temporaryPath();
+  try {
+    const lease = acquireProcessLock(path);
+    unlinkSync(join(path, readdirSync(path)[0]!));
+    lease.release();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
 test("claim wrapper retains atomic stale recovery after a crash", () => {
   const path = temporaryPath();
   const id = randomUUID();

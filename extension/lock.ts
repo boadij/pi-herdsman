@@ -88,6 +88,16 @@ function readProcessLockClaim(path: string, owner: string): ProcessLockClaim {
   return claim;
 }
 
+function ownerMissing(path: string): boolean {
+  try {
+    fs.lstatSync(path);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
 function lockOwnerEntry(path: string): { owner: string; metadata: string[] } {
   const entries = fs.readdirSync(path, { withFileTypes: true });
   const owners = entries.filter((entry) => !isIncidentalMetadata(entry));
@@ -324,17 +334,17 @@ function releaseProcessLock(
     // A lease whose owner has already disappeared or been replaced must not
     // affect the current lock generation.
     try {
-      fs.accessSync(ownerPath);
+      if (ownerMissing(ownerPath)) return;
     } catch (missing) {
-      if ((missing as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new Error(`Unable to verify ${name} ownership`, { cause: missing });
     }
     throw new Error(`Unable to verify ${name} ownership`, { cause: error });
   }
   if (owner !== basename(ownerPath)) {
     try {
-      fs.accessSync(ownerPath);
+      if (ownerMissing(ownerPath)) return;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new Error(`Unable to verify ${name} ownership`, { cause: error });
     }
     throw new Error(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
@@ -344,7 +354,11 @@ function releaseProcessLock(
   try {
     current = readProcessLockClaim(claimDir, basename(ownerPath));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" &&
+      ownerMissing(ownerPath)
+    )
+      return;
     throw new Error(`Unable to verify ${name} ownership`, { cause: error });
   }
   if (current.pid !== claim.pid || current.id !== claim.id)
