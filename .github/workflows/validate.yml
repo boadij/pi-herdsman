@@ -108,6 +108,7 @@ jobs:
     needs: scope
     if: ${{ needs.scope.outputs.smoke == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -129,7 +130,7 @@ jobs:
           sha=$(node -p \
             "require('./package.json').piHerdsman.runtime.herdr.sha256['linux-x86_64']")
 
-          curl -fsSL --retry 3 \
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
             "https://github.com/herdrdev/herdr/releases/download/v${version}/herdr-linux-x86_64" \
             -o "$RUNNER_TEMP/herdr"
 

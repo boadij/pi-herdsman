@@ -68,6 +68,7 @@ import {
   retainedProjectMessageRecord,
   managerCleanupTarget,
   collectDiagnostics,
+  bestEffortDiagnostics,
   captureTerminalFailureAssignment,
   coreAgentDefinitionsExpectations,
   captureTerminalFailureWorktree,
@@ -3175,6 +3176,40 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
   );
 });
 
+test("diagnostic collection failure preserves sanitized primary failure evidence", async () => {
+  const secondaryException = "PRIVATE secondary diagnostic exception";
+  const ctx = {
+    scenario: "supervisor-agent",
+    simulated: true,
+    stage: "supervisor-agent-verification",
+    sessionName: "smoke-supervisor-agent",
+  };
+  const diagnostics = await bestEffortDiagnostics(ctx, async () => {
+    throw new Error(secondaryException);
+  });
+  const evidence = sanitizedFailureEvidence(
+    ctx,
+    { phase: "scenario", error: new Error("primary scenario failure") },
+    "SCENARIO_FAIL",
+    "PENDING",
+  );
+  evidence.diagnostics = diagnostics;
+  const artifact = await preserveFailureEvidence(evidence);
+  try {
+    const persisted = await readFile(artifact, "utf8");
+    const result = JSON.parse(persisted);
+    assert.equal(result.outcome, "SCENARIO_FAIL");
+    assert.equal(result.stage, "supervisor-agent-verification");
+    assert.deepEqual(result.diagnostics, {
+      stage: "supervisor-agent-verification",
+      collectionFailed: true,
+    });
+    assert.doesNotMatch(persisted, /PRIVATE secondary diagnostic exception/u);
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
 test("collectDiagnostics projects supervisor-agent evidence without private session data", async () => {
   const privatePrompt = "PRIVATE_PROMPT PRIVATE_TOKEN";
   const privatePath = "/PRIVATE_PATH/session.jsonl";
@@ -4403,6 +4438,13 @@ test("Linux Pi process-title evidence requires an exact title and valid PID", as
             name: "pi",
             argv: ["pi"],
             cmdline: "pi --extension /candidate/dist/index.js",
+          },
+          {
+            pid: 47,
+            name: "pi",
+            argv: ["pi", "--extension", "/wrong/extension.js"],
+            cmdline:
+              "pi --extension /candidate/dist/index.js --extension /isolated/herdr-agent-state.ts",
           },
         ],
       },

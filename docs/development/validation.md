@@ -198,6 +198,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- supervisor-agent
 npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
 ```
