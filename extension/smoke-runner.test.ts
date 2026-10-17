@@ -68,6 +68,7 @@ import {
   retainedProjectMessageRecord,
   managerCleanupTarget,
   collectDiagnostics,
+  rootDelegationDiagnostics,
   bestEffortDiagnostics,
   captureTerminalFailureAssignment,
   coreAgentDefinitionsExpectations,
@@ -166,6 +167,128 @@ test("parent Herdr environment retains nesting context and clears caller routing
   assert.equal(env.HERDR_CONFIG_PATH, paths.herdrConfig);
   assert.equal(env.XDG_CONFIG_HOME, paths.xdgConfig);
   assert.equal(base.HERDR_SOCKET_PATH, "/wrong/server.sock");
+});
+
+test("root delegation diagnostics correlate results and exclude private data", () => {
+  const call = {
+    role: "assistant",
+    stopReason: "toolUse",
+    content: [
+      {
+        type: "toolCall",
+        name: "delegate_agent",
+        id: "PRIVATE_ID",
+        arguments: { task: "PRIVATE_TOKEN" },
+      },
+    ],
+  };
+  const result = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "PRIVATE_ID",
+    isError: false,
+    details: { ok: true },
+    content: "PRIVATE_PATH",
+  };
+  const project = (messages) =>
+    rootDelegationDiagnostics(
+      messages
+        .map((message) => JSON.stringify({ type: "message", message }))
+        .join("\n"),
+    );
+  for (const [messages, expected] of [
+    [[], "absent"],
+    [[call], "pending"],
+    [[call, { ...result, toolCallId: "unrelated" }], "pending"],
+    [[result, call], "pending"],
+    [[call, result], "success"],
+    [[call, { ...result, isError: true }], "error"],
+    [
+      [
+        call,
+        {
+          ...result,
+          details: {
+            ok: false,
+            error: { category: "agent_busy", message: "PRIVATE_ERROR" },
+          },
+        },
+      ],
+      "error",
+    ],
+    [[call, { ...result, isError: undefined }], "unknown"],
+    [[call, result, call], "pending"],
+  ]) {
+    const projected = project(messages);
+    assert.equal(projected.matchingResult, expected);
+    assert.equal(projected.delegationCallObserved, expected !== "absent");
+    assert.doesNotMatch(JSON.stringify(projected), /PRIVATE|unrelated/u);
+  }
+  assert.deepEqual(
+    project([
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "PRIVATE_ERROR",
+        content: "PRIVATE_TEXT",
+      },
+    ]),
+    {
+      delegationCallObserved: false,
+      matchingResult: "absent",
+      assistantObserved: true,
+      assistantStopReason: "error",
+      assistantErrorObserved: true,
+    },
+  );
+  assert.equal(
+    project([{ role: "assistant", stopReason: "PRIVATE_REASON" }])
+      .assistantStopReason,
+    "unknown",
+  );
+});
+
+test("continuation failure diagnostics retain sanitized root delegation state", async () => {
+  const projection = await collectDiagnostics(
+    {
+      scenario: "continuation",
+      stage: "continuation-first-generation",
+      paths: {},
+      sessionName: "isolated",
+      rootPaneId: "root",
+    },
+    { hostPaneId: "host" },
+    null,
+    {
+      execute: async () => ({ stdout: "PRIVATE_PANE" }),
+      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+      snapshot: async () => ({
+        path: "PRIVATE_PATH",
+        status: "saved",
+        contents: JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "PRIVATE_ERROR",
+          },
+        }),
+      }),
+    },
+  );
+  assert.deepEqual(projection.rootDelegation, {
+    delegationCallObserved: false,
+    matchingResult: "absent",
+    assistantObserved: true,
+    assistantStopReason: "error",
+    assistantErrorObserved: true,
+  });
+  const artifact = await preserveFailureEvidence({ diagnostics: projection });
+  try {
+    assert.doesNotMatch(await readFile(artifact, "utf8"), /PRIVATE/u);
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
 });
 
 test("failure result projection allowlists only bounded nonsensitive fields", () => {
