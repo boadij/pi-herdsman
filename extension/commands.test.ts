@@ -517,6 +517,175 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
   );
 });
 
+test("registered Manager command removes persisted required evidence through the production bridge", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "evidence-manager-pane";
+  process.env.HERDR_TAB_ID = "evidence-manager-tab";
+  const socket = join(tmpdir(), `manager-evidence-bridge-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const storage = supervisionRuntime(socket);
+  const assignmentId = randomUUID();
+  const evidenceId = randomUUID();
+  const fixtureDir = mkdtempSync(join(tmpdir(), "manager-evidence-bridge-"));
+  const snapshotPath = join(fixtureDir, "required.md");
+  writeFileSync(snapshotPath, "required evidence\n");
+  writeProjectAssignment(storage, {
+    version: 2,
+    id: assignmentId,
+    repoKey: "evidence-repo",
+    branch: "feature/evidence-bridge",
+    text: "work",
+    requiredEvidence: [
+      {
+        id: evidenceId,
+        name: "required.md",
+        sourceAssignmentId: assignmentId,
+        path: snapshotPath,
+        sha256: createHash("sha256")
+          .update("required evidence\n")
+          .digest("hex"),
+      },
+    ],
+  });
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "evidence-repo", is_linked_worktree: false },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "evidence-repo",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (args[0] === "pane" && args[1] === "get")
+        return respond({
+          pane: {
+            pane_id: args[2],
+            workspace_id: WORKSPACE,
+            tab_id: process.env.HERDR_TAB_ID,
+          },
+        });
+      if (args[0] === "tab" && args[1] === "list")
+        return respond({
+          tabs: [
+            { tab_id: process.env.HERDR_TAB_ID, number: 1, label: "Manager" },
+          ],
+        });
+      if (isAgentList(args))
+        return respond({ agents: [managerAgentIdentity()] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: managerAgentIdentity() });
+      if (isApiSnapshot(args))
+        return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({});
+    },
+  });
+  const context = fakeContext() as any;
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.mode = "rpc";
+  context.hasUI = true;
+  const selected: string[] = [];
+  context.ui.custom = async (factory: any) => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return new Promise((resolve, reject) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, value: string) => value,
+          bold: (value: string) => value,
+        },
+        {},
+        resolve,
+      );
+      const rendered = component.render(120).join("\n");
+      if (
+        notices?.includes(
+          "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
+        ) &&
+        (rendered.includes("Pi Herdsman · project") ||
+          rendered.includes("Pi Herdsman · unavailable"))
+      ) {
+        setImmediate(() => component.handleInput("\u001b"));
+        return;
+      }
+      const choice = rendered.includes("Pi Herdsman · project")
+        ? "feature/evidence-bridge"
+        : rendered.includes("Remove requirement")
+          ? "Remove requirement"
+          : rendered.includes(evidenceId)
+            ? evidenceId
+            : rendered.includes("Required evidence")
+              ? "Required evidence"
+              : undefined;
+      assert.ok(choice, `unexpected menu:\n${rendered}`);
+      assert.ok(
+        rendered.includes(choice),
+        `expected ${choice} in menu:\n${rendered}`,
+      );
+      selected.push(choice);
+      setImmediate(() => {
+        try {
+          selectTuiItem(component, choice);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  };
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    rmSync(storage.root, { recursive: true, force: true });
+    rmSync(fixtureDir, { recursive: true, force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  });
+  await pi.events.get("session_start")![0](undefined, context);
+  await pi.commandOptions.get("manager").handler("", context);
+  assert.equal(
+    readLeadCoordinationState(storage, LEAD_SESSION_ID)?.role,
+    "manager",
+    notices.join("\n"),
+  );
+  context.mode = "tui";
+  await pi.commandOptions.get("manager").handler("", context);
+  assert.deepEqual(selected.slice(0, 5), [
+    "feature/evidence-bridge",
+    "Required evidence",
+    evidenceId,
+    "Remove requirement",
+    "Remove requirement",
+  ]);
+  assert.ok(
+    notices.includes(
+      "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
+    ),
+  );
+  assert.deepEqual(
+    readProjectAssignment(storage, "evidence-repo", "feature/evidence-bridge")
+      ?.requiredEvidence,
+    undefined,
+  );
+});
+
 const peerTopologyExec = (_command: string, args: string[]) =>
   args[0] === "worktree" && args[1] === "list"
     ? {

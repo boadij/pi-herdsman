@@ -982,7 +982,12 @@ export default function (pi: ExtensionAPI): void {
       }),
       message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
-      retain: Type.Optional(Type.Boolean()),
+      retain: Type.Optional(
+        Type.Boolean({
+          description:
+            "For Manager messages to assigned project Leads: retain both message text and files as required evidence for future Agents. Use for lasting requirements and accepted reviews; omit for temporary communication.",
+        }),
+      ),
     },
     { additionalProperties: false },
   );
@@ -1910,7 +1915,7 @@ export default function (pi: ExtensionAPI): void {
           name: "message_staff",
           label: "message staff",
           description:
-            "Send a durable supervisor message to a direct report; active work is steered cooperatively.",
+            "Send a message to a direct report; active work is steered cooperatively.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],

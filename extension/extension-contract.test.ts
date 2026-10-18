@@ -2027,7 +2027,10 @@ test("active chief describes authoritative remote ask projection", async () => {
     [listTool, "List direct-report supervision state."],
     [inspectTool, "Read bounded live terminal/process evidence"],
     [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
-    [tool, "Send a durable supervisor message to a direct report"],
+    [
+      tool,
+      "Send a message to a direct report; active work is steered cooperatively.",
+    ],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
   assert.doesNotMatch(
@@ -2037,6 +2040,11 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(tool.label, "message staff");
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
+  assert.equal(
+    (tool.parameters as { properties: { retain: { description: string } } })
+      .properties.retain.description,
+    "For Manager messages to assigned project Leads: retain both message text and files as required evidence for future Agents. Use for lasting requirements and accepted reviews; omit for temporary communication.",
+  );
   assert.equal(
     Value.Check(tool.parameters, {
       session: LEAD_SESSION_ID,

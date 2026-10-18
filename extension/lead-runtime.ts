@@ -3731,6 +3731,10 @@ export function registerLeadRuntime(
         removeWorktree: (
           ...args: Parameters<typeof projectRuntime.removeWorktree>
         ) => projectRuntime.removeWorktree(...args),
+        inspectRequiredEvidence: (branch, ctx) =>
+          projectRuntime.inspectRequiredEvidence(branch, ctx),
+        removeRequiredEvidence: (branch, id, assignment, ctx) =>
+          projectRuntime.removeRequiredEvidence(branch, id, assignment, ctx),
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
