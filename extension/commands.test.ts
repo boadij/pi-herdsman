@@ -4964,7 +4964,16 @@ async function managerDelegateAssignmentTest(
       retained.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(retained.id, entry),
       ),
-      ["external review finding", "Address the external review"],
+      [
+        "Implement focused change",
+        "external review finding",
+        "Address the external review",
+      ],
+    );
+    assert.ok(
+      retained.requiredEvidence?.some(
+        (entry) => entry.name === "project-brief.txt",
+      ),
     );
     realFs.rmSync(reviewFile, { force: true });
     const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;

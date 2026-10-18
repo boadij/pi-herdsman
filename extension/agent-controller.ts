@@ -12,7 +12,7 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -6256,12 +6256,26 @@ export function createAgentController(
             return entry.path;
           },
         );
-        const explicitFiles = resolveMessageFiles(ctx, p.files, p.action);
-        const assignmentFiles = [...requiredFiles, ...explicitFiles];
         const verifiedEvidence = requiredEvidence.filter(
           (entry): entry is Extract<RequiredEvidence, { path: string }> =>
             "path" in entry,
         );
+        const explicitFiles = resolveMessageFiles(
+          ctx,
+          p.files,
+          p.action,
+        ).filter((file) => {
+          if (typeof file !== "string") return true;
+          try {
+            const digest = createHash("sha256")
+              .update(readFileSync(resolve(ctx.cwd, file)))
+              .digest("hex");
+            return !verifiedEvidence.some((entry) => entry.sha256 === digest);
+          } catch {
+            return true;
+          }
+        });
+        const assignmentFiles = [...requiredFiles, ...explicitFiles];
         const prepareAssignmentInput = (assignmentLabel: string) =>
           prepareMessageInput(
             p.task,

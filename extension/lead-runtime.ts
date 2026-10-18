@@ -7275,6 +7275,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "delegate_project",
       );
       const requiredEvidence: RequiredEvidence[] = [
+        persistRequiredEvidenceSnapshot(
+          id,
+          "project-brief.txt",
+          operation.task,
+        ),
         ...persistRequiredTextFiles(
           id,
           suppliedFiles.filter(
@@ -8068,28 +8073,42 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (lead.relationship === "assigned") !== !!initialAssignment
     )
       throw new Error("Lead assignment changed before the message was queued");
+    let retainedFiles: RequiredEvidence[] = [];
     if (params.retain === true) {
       if (activeRole() !== "manager" || !initialAssignment)
         throw new Error(
           "Required evidence can be retained only by a Manager forwarding to an assigned project Lead",
         );
+      const supplied = resolveMessageFiles(
+        ctx,
+        params.files,
+        `staff.${params.action}`,
+      );
       await updateAssignmentEvidence(
         _id,
         {
           branch: initialAssignment.branch,
           add: params.files,
+          resolvedAdd: supplied,
           text: params.message,
         },
         undefined,
         undefined,
         ctx,
+        (files) => {
+          retainedFiles = files;
+        },
       );
     }
     try {
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
-        resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
+        params.retain === true
+          ? retainedFiles.flatMap((file) =>
+              "result" in file ? [file.result] : [file.path],
+            )
+          : resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
         `staff.${params.action}`,
         "Message",
         (candidate, resultBindings) => ({
@@ -8186,6 +8205,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     params: {
       branch?: string;
       add?: string[];
+      resolvedAdd?: MessageFileInput[];
       text?: string;
       remove?: string[];
       localOnly?: boolean;
@@ -8194,6 +8214,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     _signal: AbortSignal | undefined,
     _update: unknown,
     ctx: ExtensionContext,
+    onPersisted?: (files: RequiredEvidence[]) => void,
   ) => {
     const role = host.activeRole();
     let assignment: ProjectAssignment | undefined;
@@ -8249,7 +8270,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
 
     const operation = "required_evidence";
     const additions: RequiredEvidence[] = [];
-    const resolved = host.resolveMessageFiles(ctx, params.add, operation);
+    const resolved =
+      params.resolvedAdd ??
+      host.resolveMessageFiles(ctx, params.add, operation);
     additions.push(
       ...persistRequiredTextFiles(
         assignment.id,
@@ -8263,6 +8286,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           : [{ id: randomUUID(), name: file.ref, result: file }],
       ),
     );
+    const suppliedAdditions = [...additions];
     if (params.text !== undefined) {
       if (!params.text.trim())
         throw new Error("Evidence text must not be empty");
@@ -8392,6 +8416,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         return written;
       },
     );
+    onPersisted?.(suppliedAdditions);
     return {
       content: [
         {

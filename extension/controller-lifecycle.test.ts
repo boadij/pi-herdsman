@@ -4523,8 +4523,8 @@ test("assigned Lead retains delegation files as project evidence", async () => {
   const branch = `evidence-${randomUUID()}`;
   const snapshot = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
-    "plan.md",
-    "approved implementation plan",
+    "project-brief.txt",
+    "initial brief: preserve backward compatibility",
   );
   const retainedFile = join(tmpdir(), `retained-${randomUUID()}.md`);
   realFs.writeFileSync(retainedFile, "reviewer finding to retain");
@@ -4533,7 +4533,7 @@ test("assigned Lead retains delegation files as project evidence", async () => {
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    text: "Implement the assigned project",
+    text: "initial brief: preserve backward compatibility",
     requiredEvidence: [snapshot],
   };
   writeProjectAssignment(runtime, assignment);
@@ -4615,8 +4615,6 @@ test("assigned Lead retains delegation files as project evidence", async () => {
           definition: "agent",
           label,
           task: "implement plan",
-          files: [retainedFile],
-          retain: true,
         },
         undefined,
         undefined,
@@ -4650,18 +4648,32 @@ test("assigned Lead retains delegation files as project evidence", async () => {
       afterFailedHandoff.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(afterFailedHandoff.id, entry),
       ),
-      ["approved implementation plan", "reviewer finding to retain"],
+      [
+        "initial brief: preserve backward compatibility",
+        "reviewer finding to retain",
+      ],
     );
     const result = await delegate();
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
-    assert.match(accepted!.text, /approved implementation plan/);
+    assert.match(
+      accepted!.text,
+      /initial brief: preserve backward compatibility/,
+    );
     assert.deepEqual(
       accepted!.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(assignment.id, entry),
       ),
-      ["approved implementation plan", "reviewer finding to retain"],
+      [
+        "initial brief: preserve backward compatibility",
+        "reviewer finding to retain",
+      ],
+    );
+    assert.doesNotMatch(
+      accepted!.requiredEvidence?.map((entry) => entry.name).join("\n") ?? "",
+      /implement plan/,
+      "ordinary child task text is not retained as project evidence",
     );
     assert.equal(
       listProjectAssignments(runtime, "repo-key").find(
@@ -4677,6 +4689,127 @@ test("assigned Lead retains delegation files as project evidence", async () => {
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(retainedFile, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("assigned Lead delivers the project brief to reviewers without supplied files", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-brief-reviewer-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `brief-reviewer-${randomUUID()}`;
+  const brief = "initial project brief: preserve backward compatibility";
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "project-brief.txt",
+    brief,
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: brief,
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `br-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${brief}`,
+    };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "project-brief-reviewer",
+      {
+        definition: "reviewer",
+        label,
+        task: "Review this project",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(
+      accepted!.text,
+      /initial project brief: preserve backward compatibility/,
+    );
+    assert.match(accepted!.text, /Review this project/);
+    assert.deepEqual(
+      accepted!.requiredEvidence?.map((entry) =>
+        readRequiredEvidenceSnapshot(assignment.id, entry),
+      ),
+      [brief],
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -4833,6 +4966,9 @@ test("managed project delegation deduplicates required evidence supplied explici
     "plan.md",
     "duplicate plan body",
   );
+  const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
+  const originalPath = join("/tmp", originalRelativePath);
+  realFs.writeFileSync(originalPath, "duplicate plan body");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -4919,7 +5055,7 @@ test("managed project delegation deduplicates required evidence supplied explici
         definition: "agent",
         label,
         task: "implement plan",
-        files: [snapshot.path],
+        files: [originalRelativePath],
       },
       undefined,
       undefined,
@@ -4936,6 +5072,131 @@ test("managed project delegation deduplicates required evidence supplied explici
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(originalPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed project delegation keeps changed original-path content alongside retained evidence", async () => {
+  setLeadEnvironment();
+  const socket = join(
+    tmpdir(),
+    `project-evidence-changed-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-changed-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "retained plan body",
+  );
+  const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
+  const originalPath = join("/tmp", originalRelativePath);
+  realFs.writeFileSync(originalPath, "newer plan body");
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `ec-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-changed-original",
+      {
+        definition: "agent",
+        label,
+        task: "implement newer plan",
+        files: [originalRelativePath],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(accepted!.text, /newer plan body/);
+    assert.match(accepted!.text, /retained plan body/);
+    assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignment.id, snapshot),
+      "retained plan body",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(originalPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });

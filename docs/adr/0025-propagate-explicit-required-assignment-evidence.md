@@ -7,19 +7,25 @@ Accepted
 ## Decision
 
 The current `ProjectAssignment` owns an explicit required-evidence set for a
-verified managed project. Files explicitly supplied to `delegate_project` are
-registered as required inputs. New requirements are retained through existing
+verified managed project. The initial task supplied to `delegate_project` is
+snapshotted as `project-brief.txt`, alongside files explicitly supplied to
+`delegate_project`, and is inherited as required evidence by descendants.
+Ordinary `delegate_agent.task` text remains specific to that recipient and is
+not retained or inherited. New requirements are retained through existing
 handoffs, not a standalone model-facing evidence tool. A Manager uses
 `message_staff(..., retain: true)` to retain the message text and files for the
-target assigned Lead's project assignment. An assigned Lead uses
+target assigned Lead's project assignment. The immediate handoff uses the same
+immutable retained file snapshots as the project evidence, so the recipient
+and descendants receive the accepted versions. An assigned Lead uses
 `delegate_agent(..., retain: true)` to retain supplied files for that project
 assignment. An eligible managed Agent uses the same delegation parameter to
-retain supplied files only in its local assignment for descendants. Delegation
-task text is not retained. Omitted or false `retain` leaves files scoped to the
-current handoff. Retention requires verified assignment authority and eligible
-evidence and fails explicitly rather than silently degrading to ordinary
-delivery. Persistence and handoff are one logical operation; a
-persistence-success/delivery-failure outcome is reported as partial success.
+retain supplied files only in its local assignment for descendants. Omitted or
+false `retain` leaves files scoped to the current handoff. Retention requires
+verified assignment authority and eligible evidence and fails explicitly
+rather than silently degrading to ordinary delivery. Persistence and handoff
+are one logical operation; if persistence succeeds but delivery fails, the
+operation is reported as partial success, distinguishing retained evidence
+from a failed immediate handoff.
 
 This supersedes the former separate evidence-registration interface. The
 Manager targets the exact assigned Lead session; the Lead and managed Agent
@@ -31,8 +37,12 @@ ownership rules.
 Every new descendant assignment receives the effective required-evidence set
 for its scope without relying on the delegating model to repeat those entries
 in `files`. This combines inherited and local requirements with the explicit
-files for that handoff, using canonical-path and result-binding deduplication.
-The accepted assignment carries a snapshot of that set. Later changes do not
+files for that handoff. File attachments are deduplicated by canonical path or
+matching content digest, so an original file identical to its retained
+snapshot is included only once; an explicit file with different, newer content
+is preserved alongside the retained snapshot. Result evidence uses
+result-binding deduplication. The accepted assignment carries a snapshot of
+that set. Later changes do not
 silently rewrite an already-running child's assignment. Project descendants
 inherit project requirements; nested descendants also receive relevant
 Agent-local additions, while siblings do not inherit one another's additions.
@@ -104,8 +114,10 @@ and reference delivery.
   Agent-local removal remains internal only.
 - New descendants inherit a snapshot, not live updates to an ancestor's
   evidence set.
-- Initial project inputs must be supplied at `delegate_project` if they are to
-  become required; Herdsman does not reconstruct omitted earlier context.
+- The initial `delegate_project` task and supplied files become required
+  project evidence. Later `delegate_agent.task` text is recipient-specific and
+  is not retained; requirements intended for descendants must be retained
+  through the applicable coordination operation.
 - Ordinary `files` behavior outside the required-evidence scope remains
   per-message, including reference-only files that are not snapshotted.
 - Unsupported or oversized durable evidence must be handled as ordinary

@@ -17,12 +17,13 @@ successful Herdr worktree removal, or authoritative verification that its
 checkout no longer exists. Failed or ambiguous verification preserves the
 assignment.
 
-Files supplied to `delegate_project` become required evidence for that
-project. When later review material must reach future descendant Agents,
-register it with `update_assignment_evidence` for the exact branch, separately
-from `message_staff`. Messaging alone does not retain evidence. See the
-[staff-tool reference](../../docs/reference/staff.md#update_assignment_evidence)
-for evidence limits and removal behavior.
+The initial task and files supplied to `delegate_project` become required
+evidence for that project and its descendants. When a staff message's text or
+files must remain available to future descendants, send it with
+`message_staff(..., retain: true)`; the immediate handoff uses the same retained
+file snapshots. Without `retain: true`, message files are for that handoff only.
+Use the project assignment menu's **Required evidence** section to inspect and
+remove project-owned evidence; inherited baseline entries are protected.
 
 Use `remove_worktree` only when the user explicitly requests removal of a
 project checkout. Do not infer removal from task completion, review, or
