@@ -5314,5 +5314,110 @@ test("Manager retirement inbox isolates corrupt records and delivers valid notic
   assert.equal(errors.length, 1);
   assert.ok(errors[0] instanceof Error);
   assert.ok(realFs.lstatSync(corruptPath));
-  assert.deepEqual(storage.listPendingRetirements(runtime, valid.repoKey), []);
+  assert.deepEqual(
+    storage.listPendingRetirements(runtime, valid.repoKey, {
+      onReadError: () => {},
+    }),
+    [],
+  );
+});
+
+test("Manager retirement preflight continues after one assignment handoff fails", async () => {
+  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  const storage = await import("./supervision.ts");
+  const runtime = storage.supervisionRuntime(
+    `/tmp/retirement-handoff-${randomUUID()}.sock`,
+  );
+  const corrupt = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: "retirement-handoff",
+    branch: "corrupt",
+    text: "task",
+  };
+  const valid = { ...corrupt, id: randomUUID(), branch: "valid" };
+  for (const assignment of [corrupt, valid]) {
+    storage.writeProjectAssignment(runtime, assignment);
+    assert.equal(storage.retireProjectAssignment(runtime, assignment), true);
+    storage.writeProjectMessage(
+      {
+        version: 2,
+        id: randomUUID(),
+        repoKey: assignment.repoKey,
+        branch: assignment.branch,
+        fromSessionId: assignment.id,
+        text: "handoff",
+        createdAt: 1,
+      },
+      runtime,
+    );
+  }
+  const activePath = storage.projectAssignmentPath(
+    runtime,
+    corrupt.repoKey,
+    corrupt.branch,
+  );
+  const handoffDirectory = `${activePath.slice(0, -5)}.messages`;
+  const handoffPath = join(handoffDirectory, readdirSync(handoffDirectory)[0]!);
+  writeFileSync(handoffPath, "{");
+
+  const manager = { piSessionId: randomUUID(), repoKey: corrupt.repoKey };
+  const errors: unknown[] = [];
+  const sent: any[] = [];
+  const entries: any[] = [];
+  const coordination = createLeadCoordinationRuntime({
+    pi: {
+      sendMessage: (message: any, options: any) => {
+        assert.deepEqual(options, { triggerTurn: false });
+        sent.push(message);
+        entries.push({
+          type: "custom_message",
+          customType: message.customType,
+          details: message.details,
+        });
+      },
+    },
+    leadRuntime: {
+      managerLease: { descriptor: manager },
+      roleSuspended: false,
+    },
+    activeRole: () => "manager",
+    supervisionRuntime: () => runtime,
+    currentManager: async () => manager,
+    sameManagerDescriptor: (a: any, b: any) => a === b,
+    readProjectAssignment: storage.readProjectAssignment,
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: any,
+    ) => operation(),
+    appendDurableError: (_pi: any, _ctx: any, _kind: string, error: unknown) =>
+      errors.push(error),
+  } as any);
+  const ctx: any = {
+    isIdle: () => true,
+    sessionManager: {
+      getSessionId: () => manager.piSessionId,
+      getEntries: () => entries,
+    },
+  };
+
+  assert.equal(await coordination.drainRetirementNotices(ctx, true), 1);
+  assert.deepEqual(
+    sent.map((message) => message.details.assignmentId),
+    [valid.id],
+  );
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0] instanceof Error);
+  assert.equal(await coordination.drainRetirementNotices(ctx, true), 0);
+  assert.equal(errors.length, 1);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(storage.listPendingRetirements(runtime, valid.repoKey), [
+    corrupt,
+  ]);
+  assert.ok(realFs.lstatSync(handoffPath));
+  assert.deepEqual(
+    storage.listProjectMessages(runtime, valid.repoKey, valid.branch),
+    [],
+  );
 });

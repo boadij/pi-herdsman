@@ -3513,7 +3513,12 @@ test("pending retirement validation fails closed without deleting evidence", () 
     const readErrors: Error[] = [];
     if (scenario === "parent symlink")
       assert.throws(() => listPendingRetirements(runtime, a.repoKey));
-    else
+    else {
+      assert.throws(
+        () => listPendingRetirements(runtime, a.repoKey),
+        /Unable to read project assignment/,
+        scenario,
+      );
       assert.deepEqual(
         listPendingRetirements(runtime, a.repoKey, {
           onReadError: (error) => readErrors.push(error),
@@ -3521,6 +3526,7 @@ test("pending retirement validation fails closed without deleting evidence", () 
         [],
         scenario,
       );
+    }
     if (scenario !== "parent symlink") assert.equal(readErrors.length, 1);
     assert.throws(
       () => removePendingRetirement(runtime, a),
@@ -3585,6 +3591,7 @@ test("pending retirement scan is bounded and advances fairly through records", (
           attempts++;
           after = entry;
         },
+        onReadError: () => {},
       }),
       [],
     );
@@ -3618,7 +3625,10 @@ test("pending retirement consumption reads only its exact path", () => {
   writeFileSync(corruptPath, "{");
   removePendingRetirement(runtime, b);
   assert.ok(realFs.lstatSync(corruptPath));
-  assert.deepEqual(listPendingRetirements(runtime, a.repoKey), []);
+  assert.throws(
+    () => listPendingRetirements(runtime, a.repoKey),
+    /Unable to read project assignment/,
+  );
 });
 
 test("retirement rename and post-commit sync failures preserve recoverable state", () => {

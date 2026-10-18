@@ -2197,9 +2197,9 @@ export function listPendingRetirements(
       records.push(record);
       if (records.length >= recordLimit) break;
     } catch (error) {
-      options.onReadError?.(
-        error instanceof Error ? error : new Error(String(error)),
-      );
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (!options.onReadError) throw failure;
+      options.onReadError(failure);
     }
   }
   return records.sort(

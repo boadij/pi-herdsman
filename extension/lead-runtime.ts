@@ -9122,73 +9122,80 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         },
       })) {
         errorKey = retired.id;
-        processed += await host.withProjectAssignmentLock(
-          retired.repoKey,
-          retired.branch,
-          async () => {
-            if (!verified(await currentManager(ctx))) return 0;
-            if (
-              readProjectAssignment(runtime, retired.repoKey, retired.branch)
-                ?.id === retired.id
-            )
-              throw new Error(
-                "Pending retirement still grants assignment authority",
-              );
-            removeProjectMessagesForAssignment(runtime, retired);
-            const received = () =>
-              ctx.sessionManager.getEntries().some((entry: any) => {
-                if (
-                  entry?.type === "custom_message" &&
-                  entry.customType === "pi-herdsman-project_retired"
-                )
-                  return (
-                    entry.details?.repoKey === retired.repoKey &&
-                    entry.details?.branch === retired.branch &&
-                    entry.details?.assignmentId === retired.id
-                  );
-                const message = entry?.message;
-                const details = message?.details;
-                return (
-                  entry?.type === "message" &&
-                  message?.role === "toolResult" &&
-                  !message.isError &&
-                  (message.toolName === "staff" ||
-                    message.toolName === "remove_worktree") &&
-                  details?.ok === true &&
-                  details?.action === "remove" &&
-                  details?.checkout_removed === true &&
-                  details?.assignment_retired === true &&
-                  details?.repo_key === retired.repoKey &&
-                  details?.assignment_id === retired.id
+        try {
+          processed += await host.withProjectAssignmentLock(
+            retired.repoKey,
+            retired.branch,
+            async () => {
+              if (!verified(await currentManager(ctx))) return 0;
+              if (
+                readProjectAssignment(runtime, retired.repoKey, retired.branch)
+                  ?.id === retired.id
+              )
+                throw new Error(
+                  "Pending retirement still grants assignment authority",
                 );
-              });
-            if (!received()) {
-              pi.sendMessage(
-                {
-                  customType: "pi-herdsman-project_retired",
-                  content: [
-                    "[Pi Herdsman lifecycle notice]",
-                    `The worktree for project branch ${JSON.stringify(retired.branch)} was verified removed.`,
-                    `The assignment for Lead session ${retired.id} was retired.`,
-                    "Manager authority for that assignment has ended.",
-                    "This does not establish task completion, acceptance, merge, or discard.",
-                    "Retiring this assignment does not itself delete the Git branch or Pi session history.",
-                  ].join("\n"),
-                  display: false,
-                  details: {
-                    repoKey: retired.repoKey,
-                    branch: retired.branch,
-                    assignmentId: retired.id,
+              removeProjectMessagesForAssignment(runtime, retired);
+              const received = () =>
+                ctx.sessionManager.getEntries().some((entry: any) => {
+                  if (
+                    entry?.type === "custom_message" &&
+                    entry.customType === "pi-herdsman-project_retired"
+                  )
+                    return (
+                      entry.details?.repoKey === retired.repoKey &&
+                      entry.details?.branch === retired.branch &&
+                      entry.details?.assignmentId === retired.id
+                    );
+                  const message = entry?.message;
+                  const details = message?.details;
+                  return (
+                    entry?.type === "message" &&
+                    message?.role === "toolResult" &&
+                    !message.isError &&
+                    (message.toolName === "staff" ||
+                      message.toolName === "remove_worktree") &&
+                    details?.ok === true &&
+                    details?.action === "remove" &&
+                    details?.checkout_removed === true &&
+                    details?.assignment_retired === true &&
+                    details?.repo_key === retired.repoKey &&
+                    details?.assignment_id === retired.id
+                  );
+                });
+              if (!received()) {
+                pi.sendMessage(
+                  {
+                    customType: "pi-herdsman-project_retired",
+                    content: [
+                      "[Pi Herdsman lifecycle notice]",
+                      `The worktree for project branch ${JSON.stringify(retired.branch)} was verified removed.`,
+                      `The assignment for Lead session ${retired.id} was retired.`,
+                      "Manager authority for that assignment has ended.",
+                      "This does not establish task completion, acceptance, merge, or discard.",
+                      "Retiring this assignment does not itself delete the Git branch or Pi session history.",
+                    ].join("\n"),
+                    display: false,
+                    details: {
+                      repoKey: retired.repoKey,
+                      branch: retired.branch,
+                      assignmentId: retired.id,
+                    },
                   },
-                },
-                { triggerTurn: false },
-              );
-            }
-            if (received()) removePendingRetirement(runtime, retired);
-            reportedRetirementErrors.delete(errorKey);
-            return 1;
-          },
-        );
+                  { triggerTurn: false },
+                );
+              }
+              if (received()) removePendingRetirement(runtime, retired);
+              reportedRetirementErrors.delete(errorKey);
+              return 1;
+            },
+          );
+        } catch (error) {
+          if (!reportedRetirementErrors.has(retired.id)) {
+            reportedRetirementErrors.add(retired.id);
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+          }
+        }
       }
       return processed;
     } catch (error) {
