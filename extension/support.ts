@@ -46,6 +46,7 @@ export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
 export let agentStateReadHook: ((path: string) => void) | undefined;
+export let fileReadHook: ((path: unknown) => void) | undefined;
 
 export function emitMailboxChange(directory: string, filename?: string): void {
   for (const listener of watchedMailboxDirectories.get(directory) ?? [])
@@ -152,6 +153,7 @@ mock.module("node:fs", {
       return realFs.openSync(...args);
     },
     readFileSync: (...args: any[]) => {
+      fileReadHook?.(args[0]);
       if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
         configReadHook?.();
       if (
@@ -165,6 +167,7 @@ mock.module("node:fs", {
       return result;
     },
     readSync: (...args: any[]) => {
+      fileReadHook?.(args[0]);
       return realFs.readSync(...args);
     },
     readdirSync: realFs.readdirSync,
@@ -3093,5 +3096,11 @@ export default {
   },
   set agentStateReadHook(value: typeof agentStateReadHook) {
     agentStateReadHook = value;
+  },
+  get fileReadHook() {
+    return fileReadHook;
+  },
+  set fileReadHook(value: typeof fileReadHook) {
+    fileReadHook = value;
   },
 };

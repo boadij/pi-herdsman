@@ -3632,7 +3632,6 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "message_supervisor",
     "list_peers",
     "message_peer",
-    "update_assignment_evidence",
   ]);
   assert.deepEqual(lead.commands, ["lead", "takeover", "herdsman", "agents"]);
   lead.events.get("session_shutdown")?.[0]();
@@ -3992,6 +3991,91 @@ test("managed task acceptance verifies valid inline and reference-only evidence 
   }
 });
 
+test("managed task acceptance validates required result backing files before importing bindings", async () => {
+  for (const failure of ["missing", "nonregular", "valid"] as const) {
+    const mailbox = setAgentEnvironment(`required-result-${failure}`);
+    const agent = fakePi();
+    const context = fakeAgentContext(agent.entries);
+    registerExtension!(agent.pi as never);
+    const resultId = randomUUID();
+    const canonicalRef = resultRef(resultId);
+    const artifact = resultPath(resultId);
+    realFs.mkdirSync(resolve(artifact, ".."), { recursive: true });
+    realFs.writeFileSync(artifact, Buffer.alloc(512 * 1024, 97));
+    try {
+      await agent.events.get("session_start")![0](undefined, context);
+      const state = readAgentState(mailbox)!;
+      const evidence = {
+        id: randomUUID(),
+        name: "required-result.txt",
+        result: { ref: "result:researcher#1", canonicalRef },
+      } as const;
+      const request: RequestRecord = {
+        version: 5,
+        runId: state.runId,
+        requestId: randomUUID(),
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        kind: "task",
+        text: "Review the required result",
+        projectAssignmentId: randomUUID(),
+        evidenceAssignmentId: "",
+        requiredEvidence: [evidence],
+        createdAt: Date.now(),
+      };
+      request.evidenceAssignmentId = request.requestId;
+      writeRequest(mailbox, request);
+      if (failure === "missing") realFs.unlinkSync(artifact);
+      if (failure === "nonregular") {
+        realFs.unlinkSync(artifact);
+        realFs.mkdirSync(artifact);
+      }
+
+      let fileContentReads = 0;
+      if (failure === "valid") {
+        const artifactStat = realFs.statSync(artifact);
+        support.fileReadHook = (path) => {
+          if (
+            path === artifact ||
+            (typeof path === "number" &&
+              realFs.fstatSync(path).dev === artifactStat.dev &&
+              realFs.fstatSync(path).ino === artifactStat.ino)
+          )
+            fileContentReads++;
+        };
+      }
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      );
+      support.fileReadHook = undefined;
+
+      const accepted = readAgentState(mailbox)!;
+      assert.equal(
+        accepted.activeRequestId,
+        failure === "valid" ? request.requestId : undefined,
+      );
+      assert.equal(accepted.lastAck?.accepted, failure === "valid");
+      assert.equal(
+        agent.entries.some(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-result-ref" &&
+            entry.data?.canonicalRef === canonicalRef,
+        ),
+        failure === "valid",
+      );
+      if (failure === "valid") assert.equal(fileContentReads, 0);
+    } finally {
+      support.fileReadHook = undefined;
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+      realFs.rmSync(artifact, { recursive: true, force: true });
+    }
+  }
+});
+
 test("nested task acceptance makes parent effective evidence inherited and starts local evidence empty", async () => {
   const mailbox = setAgentEnvironment("nested-inherited-evidence");
   const snapshots: string[] = [];
@@ -4144,76 +4228,6 @@ test("accepting an unscoped task clears prior project evidence scope", async () 
     assert.deepEqual(clearing.data.inheritedEvidence, []);
     assert.deepEqual(clearing.data.localEvidence, []);
     restarted.events.get("session_shutdown")?.[0]();
-  } finally {
-    agent.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(mailbox);
-  }
-});
-
-test("assignment replacement during evidence update does not publish local evidence", async () => {
-  const mailbox = setAgentEnvironment("implementer");
-  const agent = fakePi();
-  const context = fakeAgentContext(agent.entries);
-  registerExtension!(agent.pi as never);
-  try {
-    await agent.events.get("session_start")![0](undefined, context);
-    const started = readAgentState(mailbox)!;
-    const request: RequestRecord = {
-      version: 5,
-      runId: started.runId,
-      requestId: REQUEST_ID,
-      ownerSessionId: started.ownerSessionId,
-      workspaceId: started.workspaceId,
-      agentLabel: started.agentLabel,
-      paneId: started.paneId,
-      kind: "task",
-      text: "scoped task",
-      projectAssignmentId: randomUUID(),
-      evidenceAssignmentId: REQUEST_ID,
-      requiredEvidence: [],
-      createdAt: Date.now(),
-    };
-    writeRequest(mailbox, request);
-    agent.events.get("input")![0](
-      { text: controlMarker(request.requestId) },
-      context,
-    );
-    const before = agent.entries.filter(
-      (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
-    ).length;
-    const replacement = {
-      ...readAgentState(mailbox)!,
-      activeRequestId: randomUUID(),
-      projectAssignmentId: randomUUID(),
-    };
-    const getSessionId = context.sessionManager.getSessionId;
-    let identityReads = 0;
-    context.sessionManager.getSessionId = () => {
-      identityReads++;
-      if (identityReads === 5) writeAgentState(mailbox, replacement);
-      return getSessionId();
-    };
-    const tool = agent.tools.find(
-      (candidate: any) => candidate.name === "update_assignment_evidence",
-    );
-    assert.ok(tool);
-    await assert.rejects(
-      tool.execute(
-        "replacement",
-        { text: "must not be retained" },
-        undefined,
-        undefined,
-        context,
-      ),
-      /assignment changed during evidence update/,
-    );
-    assert.deepEqual(readAgentState(mailbox), replacement);
-    assert.equal(
-      agent.entries.filter(
-        (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
-      ).length,
-      before,
-    );
   } finally {
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);

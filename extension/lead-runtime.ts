@@ -3290,6 +3290,74 @@ export function registerLeadRuntime(
           ),
       };
     },
+    retainProjectEvidence: async (ctx, assignment, additions) =>
+      roleTransitions.withProjectAssignmentLock(
+        assignment.repoKey,
+        assignment.branch,
+        async () => {
+          const currentLeadAssignment = await currentProjectAssignment(ctx);
+          const current = listProjectAssignments(
+            supervisionRuntime(),
+            assignment.repoKey,
+          ).find((item) => item.branch === assignment.branch);
+          if (
+            !currentLeadAssignment ||
+            currentLeadAssignment.id !== assignment.id ||
+            !current ||
+            current.id !== assignment.id
+          )
+            throw new Error(
+              "Lead assignment changed before evidence retention",
+            );
+          const evidence = [...(current.requiredEvidence ?? [])];
+          const resultBindings = [...(current.resultBindings ?? [])];
+          for (const item of additions) {
+            if (
+              !evidence.some(
+                (existing) =>
+                  ("path" in existing &&
+                    "path" in item &&
+                    (existing.path === item.path ||
+                      (existing.sourceAssignmentId ===
+                        item.sourceAssignmentId &&
+                        existing.name === item.name &&
+                        existing.sha256 === item.sha256))) ||
+                  ("result" in existing &&
+                    "result" in item &&
+                    existing.result.ref === item.result.ref),
+              )
+            )
+              evidence.push(item);
+            if ("result" in item) {
+              const binding = resultBindings.find(
+                (entry) => entry.ref === item.result.ref,
+              );
+              if (binding && binding.canonicalRef !== item.result.canonicalRef)
+                throw new Error(
+                  `Result ref ${item.result.ref} conflicts with the assignment's existing binding`,
+                );
+              if (!binding) resultBindings.push(item.result);
+            }
+          }
+          const updated = {
+            ...current,
+            requiredEvidence: evidence,
+            ...(resultBindings.length ? { resultBindings } : {}),
+          };
+          options.projectHost.writeProjectAssignment(
+            supervisionRuntime(),
+            updated,
+          );
+          return updated;
+        },
+      ),
+    managedProjectEvidence: async (ctx, workspaceId, projectAssignmentId) => {
+      return roleTransitions.projectEvidenceForWorkspace(
+        ctx,
+        workspaceId,
+        projectAssignmentId,
+      );
+    },
     rootDelegationPolicy,
     rootDelegationGeneration,
     build: options.build,
@@ -4883,6 +4951,16 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       removeWorktree(
         ...args: Parameters<LeadProjectRuntime["removeWorktree"]>
       ): ReturnType<LeadProjectRuntime["removeWorktree"]>;
+      inspectRequiredEvidence(
+        branch: string,
+        ctx: ExtensionContext,
+      ): Promise<ProjectAssignment>;
+      removeRequiredEvidence(
+        branch: string,
+        id: string,
+        expectedAssignment: ProjectAssignment,
+        ctx: ExtensionContext,
+      ): Promise<unknown>;
       selectMenu(
         ctx: ExtensionContext,
         title: string,
@@ -5313,6 +5391,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               ]
             : []),
         { value: "remove", label: "Remove worktree…" },
+        ...(host.activeRole() === "manager"
+          ? [{ value: "required-evidence", label: "Required evidence" }]
+          : []),
       ];
       const action = await uiActions.selectMenu(ctx, selection.branch, actions);
       if (generation(ctx) !== expectedGeneration) return;
@@ -5344,6 +5425,66 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 ? "info"
                 : "warning",
           );
+        } else if (action === "required-evidence") {
+          const assignment = await uiActions.inspectRequiredEvidence(
+            selection.branch,
+            ctx,
+          );
+          const entries = assignment.requiredEvidence ?? [];
+          if (!entries.length) {
+            ctx.ui.notify("This project has no required evidence.", "info");
+          } else {
+            const selectedEvidence = await uiActions.selectMenu(
+              ctx,
+              `Required evidence · ${selection.branch}`,
+              entries.map((entry) => ({
+                value: entry.id,
+                label: `${entry.id} · ${entry.name} · ${"sourceAssignmentId" in entry ? `project ${entry.sourceAssignmentId}` : `result ${entry.result.ref}`}`,
+              })),
+            );
+            if (selectedEvidence) {
+              const entry = entries.find(({ id }) => id === selectedEvidence);
+              if (!entry)
+                throw new Error("Required evidence selection is invalid");
+              const detail = `${entry.id}\n${entry.name}\nOrigin: ${"sourceAssignmentId" in entry ? `project assignment ${entry.sourceAssignmentId}` : `Agent result ${entry.result.ref}`}`;
+              const inherited =
+                "sourceAssignmentId" in entry &&
+                entry.sourceAssignmentId !== assignment.id;
+              const remove = await uiActions.selectMenu(ctx, detail, [
+                ...(!inherited
+                  ? [{ value: "remove", label: "Remove requirement…" }]
+                  : []),
+                {
+                  value: "cancel",
+                  label: inherited
+                    ? "Inherited requirement · protected"
+                    : "Cancel",
+                },
+              ]);
+              if (remove === "remove") {
+                const confirmation = await uiActions.selectMenu(
+                  ctx,
+                  `Remove required evidence ${entry.id}?`,
+                  [
+                    { value: "confirm", label: "Remove requirement" },
+                    { value: "cancel", label: "Cancel" },
+                  ],
+                );
+                if (confirmation === "confirm") {
+                  await uiActions.removeRequiredEvidence(
+                    selection.branch,
+                    entry.id,
+                    assignment,
+                    ctx,
+                  );
+                  ctx.ui.notify(
+                    "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
+                    "info",
+                  );
+                }
+              }
+            }
+          }
         }
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error");
@@ -6903,7 +7044,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     | { action: "remove"; branch: string }
     | { action: "stop"; session: string }
     | { action: "inspect" | "transcript"; session: string }
-    | { action: "message"; session: string; message: string; files?: string[] };
+    | {
+        action: "message";
+        session: string;
+        message: string;
+        files?: string[];
+        retain?: boolean;
+      };
   const activateProjectLead = async (
     params:
       | {
@@ -7921,13 +8068,85 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (lead.relationship === "assigned") !== !!initialAssignment
     )
       throw new Error("Lead assignment changed before the message was queued");
-    const prepared = await prepareCoordinationInput(
-      ctx,
-      params.message,
-      resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
-      `staff.${params.action}`,
-      "Message",
-      (candidate, resultBindings) => ({
+    if (params.retain === true) {
+      if (activeRole() !== "manager" || !initialAssignment)
+        throw new Error(
+          "Required evidence can be retained only by a Manager forwarding to an assigned project Lead",
+        );
+      await updateAssignmentEvidence(
+        _id,
+        {
+          branch: initialAssignment.branch,
+          add: params.files,
+          text: params.message,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+    }
+    try {
+      const prepared = await prepareCoordinationInput(
+        ctx,
+        params.message,
+        resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
+        `staff.${params.action}`,
+        "Message",
+        (candidate, resultBindings) => ({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id: recordId,
+          leaseId: finalChief.leaseId,
+          kind: activeRole() === "chief" ? "chief_message" : "manager_message",
+          fromSessionId: finalChief.piSessionId,
+          toSessionId: reportSession(lead),
+          leadSessionId: reportSession(lead),
+          ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
+          text: candidate,
+          ...(resultBindings.length
+            ? { resultBindings: [...resultBindings] }
+            : {}),
+          createdAt,
+        }),
+      );
+      // Attachment preparation can reread Herdsman configuration and files. Recheck
+      // every identity and authority field immediately before transport.
+      const writeChief =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
+      const writeLead = (await directReports(ctx)).find(
+        (candidate: any) => reportSession(candidate) === params.session,
+      );
+      const writeAssignment = writeLead
+        ? assignmentMatches(writeLead)
+        : undefined;
+      if (
+        !writeChief ||
+        writeChief.leaseId !== finalChief.leaseId ||
+        !writeLead ||
+        !sameLeadTarget(writeLead, currentLead) ||
+        !writeLead.availableActions.includes(params.action)
+      )
+        throw new Error("Lead or Chief changed before the message was queued");
+      if (
+        (writeLead.relationship === "assigned") !== !!writeAssignment ||
+        writeAssignment?.branch !== initialAssignment?.branch
+      )
+        throw new Error(
+          "Lead assignment changed before the message was queued",
+        );
+      const targetState = readLeadCoordinationState(
+        supervisionRuntime(),
+        reportSession(writeLead),
+      );
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        targetState?.build,
+        "message_staff",
+        `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
+      );
+      const record: ChiefMessageRecord = {
         version: 2,
         build: HERDSMAN_BUILD,
         id: recordId,
@@ -7937,75 +8156,30 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         toSessionId: reportSession(lead),
         leadSessionId: reportSession(lead),
         ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
-        text: candidate,
-        ...(resultBindings.length
-          ? { resultBindings: [...resultBindings] }
+        text: prepared.text,
+        ...(prepared.resultBindings.length
+          ? { resultBindings: prepared.resultBindings }
           : {}),
         createdAt,
-      }),
-    );
-    // Attachment preparation can reread Herdsman configuration and files. Recheck
-    // every identity and authority field immediately before transport.
-    const writeChief =
-      activeRole() === "chief"
-        ? await currentChiefAuthority(ctx)
-        : await currentManager(ctx);
-    const writeLead = (await directReports(ctx)).find(
-      (candidate: any) => reportSession(candidate) === params.session,
-    );
-    const writeAssignment = writeLead
-      ? assignmentMatches(writeLead)
-      : undefined;
-    if (
-      !writeChief ||
-      writeChief.leaseId !== finalChief.leaseId ||
-      !writeLead ||
-      !sameLeadTarget(writeLead, currentLead) ||
-      !writeLead.availableActions.includes(params.action)
-    )
-      throw new Error("Lead or Chief changed before the message was queued");
-    if (
-      (writeLead.relationship === "assigned") !== !!writeAssignment ||
-      writeAssignment?.branch !== initialAssignment?.branch
-    )
-      throw new Error("Lead assignment changed before the message was queued");
-    const targetState = readLeadCoordinationState(
-      supervisionRuntime(),
-      reportSession(writeLead),
-    );
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      targetState?.build,
-      "message_staff",
-      `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
-    );
-    const record: ChiefMessageRecord = {
-      version: 2,
-      build: HERDSMAN_BUILD,
-      id: recordId,
-      leaseId: finalChief.leaseId,
-      kind: activeRole() === "chief" ? "chief_message" : "manager_message",
-      fromSessionId: finalChief.piSessionId,
-      toSessionId: reportSession(lead),
-      leadSessionId: reportSession(lead),
-      ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
-      text: prepared.text,
-      ...(prepared.resultBindings.length
-        ? { resultBindings: prepared.resultBindings }
-        : {}),
-      createdAt,
-    };
-    const runtime = supervisionRuntime();
-    writeChiefMessage(record, runtime);
-    return result({
-      ok: true,
-      action: params.action,
-      id: record.id,
-      session: lead.lead,
-      display_name: lead.displayName,
-      next_action:
-        "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
-    });
+      };
+      const runtime = supervisionRuntime();
+      writeChiefMessage(record, runtime);
+      return result({
+        ok: true,
+        action: params.action,
+        id: record.id,
+        session: lead.lead,
+        display_name: lead.displayName,
+        next_action:
+          "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
+      });
+    } catch (error) {
+      if (params.retain === true)
+        throw new Error(
+          `Required evidence was retained, but the staff handoff failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      throw error;
+    }
   };
   const updateAssignmentEvidence = async (
     _id: string,
@@ -8014,6 +8188,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       add?: string[];
       text?: string;
       remove?: string[];
+      localOnly?: boolean;
+      expectedAssignment?: ProjectAssignment;
     },
     _signal: AbortSignal | undefined,
     _update: unknown,
@@ -8071,7 +8247,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
     }
 
-    const operation = "update_assignment_evidence";
+    const operation = "required_evidence";
     const additions: RequiredEvidence[] = [];
     const resolved = host.resolveMessageFiles(ctx, params.add, operation);
     additions.push(
@@ -8110,6 +8286,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           if (
             !currentManager ||
             !currentLease ||
+            host.leadRuntime.roleSuspended ||
             !host.sameManagerDescriptor(currentManager, managerAuthority!) ||
             currentManager.repoKey !== assignment!.repoKey ||
             currentLease.descriptor.leaseId !== managerLeaseId
@@ -8150,6 +8327,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Project assignment changed before required evidence was updated",
           );
+        if (
+          params.expectedAssignment &&
+          JSON.stringify(current) !== JSON.stringify(params.expectedAssignment)
+        )
+          throw new Error(
+            "Project assignment changed after required evidence was selected",
+          );
         const resultBindings = [...(current.resultBindings ?? [])];
         for (const evidence of additions)
           if ("result" in evidence) {
@@ -8174,8 +8358,29 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             `Unknown required evidence ID: ${unknown.join(", ")}`,
           );
+        if (
+          params.localOnly &&
+          evidence.some(
+            (entry) =>
+              removals.has(entry.id) &&
+              "sourceAssignmentId" in entry &&
+              entry.sourceAssignmentId !== current.id,
+          )
+        )
+          throw new Error("Inherited required evidence cannot be removed");
         const next = evidence.filter((entry) => !removals.has(entry.id));
-        next.push(...additions);
+        for (const addition of additions) {
+          const duplicate = next.some((entry) =>
+            "result" in entry && "result" in addition
+              ? entry.result.ref === addition.result.ref
+              : "path" in entry && "path" in addition
+                ? entry.sourceAssignmentId === addition.sourceAssignmentId &&
+                  entry.name === addition.name &&
+                  entry.sha256 === addition.sha256
+                : false,
+          );
+          if (!duplicate) next.push(addition);
+        }
         const written = {
           ...current,
           ...(next.length
@@ -8205,6 +8410,50 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       },
     };
   };
+  const inspectRequiredEvidence = async (
+    branch: string,
+    ctx: ExtensionContext,
+  ): Promise<ProjectAssignment> => {
+    if (host.activeRole() !== "manager")
+      throw new Error("Only the Manager can inspect project requirements");
+    const manager = await host.currentManager(ctx);
+    const lease = host.managerLease();
+    if (
+      !manager ||
+      !lease ||
+      host.leadRuntime.roleSuspended ||
+      !host.sameManagerDescriptor(manager, lease.descriptor)
+    )
+      throw new Error("Manager lease is no longer active");
+    const assignment = host.readProjectAssignment(
+      host.supervisionRuntime(),
+      manager.repoKey,
+      branch,
+    );
+    if (!assignment) throw new Error("Project assignment is no longer current");
+    return assignment;
+  };
+  const removeRequiredEvidence = async (
+    branch: string,
+    id: string,
+    expectedAssignment: ProjectAssignment,
+    ctx: ExtensionContext,
+  ) => {
+    if (host.activeRole() !== "manager")
+      throw new Error("Only the Manager can remove project requirements");
+    await updateAssignmentEvidence(
+      "manager-required-evidence",
+      {
+        branch,
+        remove: [id],
+        localOnly: true,
+        expectedAssignment,
+      },
+      ctx.signal,
+      undefined,
+      ctx,
+    );
+  };
   return {
     stopExecution,
     stop,
@@ -8212,6 +8461,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     removeWorktree,
     executeStaff,
     updateAssignmentEvidence,
+    inspectRequiredEvidence,
+    removeRequiredEvidence,
   };
 }
 
@@ -11031,6 +11282,39 @@ export function createLeadRoleTransitions(
       throw new Error("Multiple project assignments match the Lead session");
     return assignments[0];
   };
+  const projectEvidenceForWorkspace = async (
+    ctx: ExtensionContext,
+    workspaceId: string,
+    projectAssignmentId: string,
+  ) => {
+    const scope = await host.worktreeGroupScope(ctx, workspaceId, ctx.signal);
+    const assignment = projectAssignmentForScope(scope, projectAssignmentId);
+    if (!assignment) return undefined;
+    return {
+      assignment,
+      revalidate: (operation: () => Promise<void> | void) =>
+        withProjectAssignmentLock(
+          assignment.repoKey,
+          assignment.branch,
+          async () => {
+            const currentScope = await host.worktreeGroupScope(
+              ctx,
+              workspaceId,
+              ctx.signal,
+            );
+            const current = projectAssignmentForScope(
+              currentScope,
+              projectAssignmentId,
+            );
+            if (!current || current.id !== assignment.id)
+              throw new Error(
+                "Project assignment changed during Agent startup; retry delegation",
+              );
+            await operation();
+          },
+        ),
+    };
+  };
   const withProjectAssignmentLock = async <T>(
     repoKey: string,
     branch: string,
@@ -12462,6 +12746,7 @@ export function createLeadRoleTransitions(
     },
     currentWorktreeScope,
     projectAssignmentForScope,
+    projectEvidenceForWorkspace,
     managerForScope,
     withProjectWorkLock,
     withProjectAssignmentLock,

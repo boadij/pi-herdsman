@@ -75,14 +75,25 @@ See [`delegate_project`](../reference/staff.md#delegate_project) and
 [`resume_project`](../reference/staff.md#resume_project).
 
 Files supplied to `delegate_project` are retained as required evidence for the
-assignment and delivered to future delegated descendants. To make later review
-material a continuing requirement, use `update_assignment_evidence` for the
-project branch; then communicate the requested work separately with
-`message_staff`. That registration is not a message side effect. Assigned Leads
-derive their current assignment rather than choosing a branch, and ordinary
-Leads have no session-wide evidence scope. See
-[`update_assignment_evidence`](../reference/staff.md#update_assignment_evidence)
-for exact behavior and limits.
+assignment and delivered to future delegated descendants. To make later
+review material a continuing requirement while sending it to an assigned
+Lead, a Manager uses `message_staff` with `retain: true`; the message text and
+files then become required project evidence. An assigned Lead can retain
+supplied files for the project assignment by using `delegate_agent` with
+`retain: true` while delegating corrections. The task text is not retained.
+Omitted or false `retain` keeps files limited to that handoff. Retention
+requires verified assignment authority and eligible evidence, and failure is
+explicit rather than falling back to an ordinary handoff. Ordinary Leads have
+no automatic evidence scope. See [required assignment evidence](handoffs.md#required-assignment-evidence)
+and the [`message_staff`](../reference/staff.md#message_staff) and
+[`delegate_agent`](../reference/agent.md#delegate_agent) references.
+To remove project-owned requirements, use the existing project assignment
+action menu: **Required evidence**, select an entry to inspect its ID, name,
+and origin, then choose **Remove** and confirm. Inherited baseline entries are
+protected. This removes the exact requirement record, not its snapshot or
+source file, and does not alter evidence already accepted by Agents. The menu
+does not remove managed-Agent-local additions; assigned Leads have no separate
+removal UI, and local-addition removal remains internal only.
 
 ## Run independent work in parallel
 

@@ -16,31 +16,70 @@ carries evidence, not runtime capability.
 
 A verified managed project assignment can retain **required evidence** for
 future delegated Agents. Initial files supplied to `delegate_project` become
-required evidence. The Manager or assigned Lead can register later evidence
-with `update_assignment_evidence`; use that operation when a review or other
-artifact must remain available to future descendants. It is separate from
-`message_staff`, which communicates a message but does not change assignment
-requirements. The exact operation and role rules are in the
-[staff-tool reference](../reference/staff.md#update_assignment_evidence).
+required evidence. Later evidence is retained as part of a handoff by setting
+`retain: true` on an existing coordination operation:
 
-Each new descendant assignment receives the required evidence effective when
-that assignment is accepted, even when the delegating model omits it from
-`files`. The receiving managed Agent can add local requirements for its own
-project-scoped descendants. It cannot remove inherited requirements; report an
-obsolete inherited item to the project owner. Parent changes do not silently
-rewrite an already-running child's accepted evidence set.
+- A Manager uses `message_staff` to retain the supplied message text and files
+  for the target assigned Lead's project assignment.
+- An assigned Lead uses `delegate_agent` to retain the supplied files for the
+  project assignment; its task text is not retained.
+- An eligible managed Agent uses `delegate_agent` to retain supplied files as
+  additions to its local assignment for its own descendants. Its task text is
+  not retained, and it cannot modify the parent project's evidence set.
+
+Omitted or false `retain` leaves files as evidence for that handoff only.
+Retention requires verified assignment authority and eligible evidence;
+failure is explicit and never silently downgraded to an ordinary handoff. The
+operation persists requirements and performs its normal handoff together. If
+retention succeeds but delivery fails, the result reports the partial outcome.
+Retention failures or operations that fail before the assignment update may
+leave private, unreferenced immutable snapshots; in those cases the
+authoritative assignment remains unchanged. Successful retention followed by
+delivery failure leaves the assignment updated and is reported as partial
+success. This change adds no garbage collection.
+See the [staff-tool reference](../reference/staff.md#message_staff) and
+[Agent-tool reference](../reference/agent.md#delegate_agent).
+
+Each new descendant assignment receives the effective required-evidence set
+when that assignment is accepted, merged with explicit `files` for that
+handoff and deduplicated by canonical path and result binding. Project
+descendants inherit project requirements; nested descendants also inherit
+relevant additions owned by their Agent parent. Siblings do not inherit one
+another's local additions. An inherited snapshot keeps its original
+`sourceAssignmentId`; forwarding inherited evidence does not transfer
+ownership. The receiving managed Agent cannot remove inherited requirements
+or change the project set. Parent changes do not silently rewrite an
+already-running child's accepted evidence set; continuation resumes the saved
+assignment evidence and still requires valid ownership authority. Retired
+project assignments cannot be resumed.
 
 Required file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
 fails explicitly. A supported snapshot that exceeds the inline delivery limit
-is delivered by reference to the preserved snapshot. Ordinary `files` remain
-per-message evidence: reference-only ordinary files are not copied or
-snapshotted and may change or disappear.
+is delivered by reference to the preserved snapshot; the recipient must read
+referenced required evidence before proceeding. Small supported text is
+embedded directly. Result evidence preserves its semantic binding, embedding
+content when it fits or referencing its resolved artifact otherwise. These
+delivery paths continue to use the configured inline and mailbox budgets;
+required evidence is not silently omitted for exceeding an inline threshold.
+Ordinary `files` remain per-message evidence: reference-only ordinary files
+are not copied or snapshotted and may change or disappear.
 
 This is not general attachment or conversation inheritance. Automatic required
 evidence applies to verified managed project assignments and their nested
 managed-Agent assignments, not to an ordinary Lead's whole session. Evidence
-availability does not grant execution or control authority.
+availability does not grant execution or control authority. An unassigned Lead
+or unrelated session acquires no automatic evidence scope. Required evidence
+removal remains an internal exact-ID capability; there is no standalone
+model-facing evidence-management tool. Removing a requirement does not erase
+prior Pi-session entries or evidence already accepted by an Agent.
+For project-owned requirements, a Manager can use the existing project
+assignment action menu: **Required evidence** → select an entry to inspect its
+ID, name, and origin → **Remove** → confirm. This removes only the exact
+project-owned requirement; inherited baseline entries are protected. It does
+not delete snapshots or source files. The project menu does not remove
+managed-Agent-local additions; assigned Leads have no separate evidence
+removal UI, and local Agent-addition removal remains internal only.
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 

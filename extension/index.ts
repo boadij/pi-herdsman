@@ -349,7 +349,6 @@ const MANAGER_TOOLS = [
   ...STAFF_TOOLS,
   "delegate_project",
   "resume_project",
-  "update_assignment_evidence",
   "stop_lead",
   "remove_worktree",
 ] as const;
@@ -357,7 +356,6 @@ const LEAD_COORDINATION_TOOLS = [
   ...AGENT_COORDINATION_TOOLS,
   ...LEAD_SUPERVISOR_TOOLS,
   ...PEER_TOOLS,
-  "update_assignment_evidence",
 ] as const;
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
@@ -834,6 +832,51 @@ export default function (pi: ExtensionAPI): void {
             ),
       staleAfterMs: STALE_AFTER_MS,
     },
+    managedProjectEvidence: async (ctx, workspaceId, projectAssignmentId) => {
+      const resolve = async () => {
+        const scope = await worktreeGroupScope(
+          pi,
+          ctx,
+          workspaceId,
+          ctx.signal,
+        );
+        const matches = findProjectAssignmentBySession(
+          supervisionRuntime(),
+          scope.repoKey,
+          projectAssignmentId,
+        );
+        if (matches.length > 1)
+          throw new Error(
+            "Multiple project assignments match the Agent session",
+          );
+        return matches[0];
+      };
+      const assignment = await resolve();
+      if (!assignment) return undefined;
+      return {
+        assignment,
+        revalidate: async (operation: () => Promise<void> | void) => {
+          const lease = acquireProcessLock(
+            `${projectAssignmentPath(
+              supervisionRuntime(),
+              assignment.repoKey,
+              assignment.branch,
+            )}.lock`,
+            { name: "project assignment lock" },
+          );
+          try {
+            const current = await resolve();
+            if (!current || current.id !== assignment.id)
+              throw new Error(
+                "Project assignment changed during Agent startup; retry delegation",
+              );
+            await operation();
+          } finally {
+            lease.release();
+          }
+        },
+      };
+    },
     persistedTranscriptReady: (state) =>
       controllerPersistedTranscriptReady(state, (path) => {
         const file = statSync(path, { throwIfNoEntry: false });
@@ -939,6 +982,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
+      retain: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );
@@ -988,15 +1032,6 @@ export default function (pi: ExtensionAPI): void {
         minLength: 1,
         description: "Exact project branch.",
       }),
-    },
-    { additionalProperties: false },
-  );
-  const assignmentEvidenceParameters = Type.Object(
-    {
-      branch: Type.Optional(Type.String({ minLength: 1 })),
-      add: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      text: Type.Optional(Type.String({ minLength: 1 })),
-      remove: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     },
     { additionalProperties: false },
   );
@@ -2215,22 +2250,6 @@ export default function (pi: ExtensionAPI): void {
         controllerScope.kind === "root" ? leadHerdRunRuntime.begin : undefined,
       );
       if (controllerScope.kind === "root") {
-        pi.registerTool({
-          name: "update_assignment_evidence",
-          label: "update assignment evidence",
-          exposure: "model-only",
-          description:
-            "Add files, text, or an available result as required evidence for the current project assignment, or remove evidence by its exact ID. Managers must provide the exact branch; assigned Leads derive their own assignment.",
-          parameters: assignmentEvidenceParameters,
-          promptSnippet: undefined,
-          executionMode: "sequential",
-          execute: (...args: any[]) =>
-            projectRuntime.updateAssignmentEvidence(...args),
-          renderCall: (a: unknown, t: any, c: any) =>
-            renderCoordinationCall("staff", "update evidence", a, t, c),
-          renderResult: (r: any, o: any, t: any, c: any) =>
-            renderCoordinationResult("staff", "update evidence", r, o, t, c),
-        });
         pi.registerTool({
           ...supervisorTool,
           name: "message_supervisor",

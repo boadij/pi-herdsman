@@ -138,6 +138,7 @@ mock.module("node:fs", {
 
 const {
   prepareMessageInput,
+  persistRequiredTextFiles,
   snapshotTextFiles,
   agentControlState,
   displayIdentity,
@@ -265,6 +266,45 @@ test("snapshots strict text once and deduplicates canonical paths", () => {
     }),
     [],
   );
+});
+
+test("persists per-file snapshots independently and deduplicates canonical paths", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-required-evidence-"));
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-dir-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const assignmentId = "11111111-1111-4111-8111-111111111111";
+  writeFileSync(join(cwd, "first.txt"), "a".repeat(600 * 1024));
+  writeFileSync(join(cwd, "second.txt"), "b".repeat(600 * 1024));
+  writeFileSync(join(cwd, "too-large.txt"), "c".repeat(1024 * 1024 + 1));
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const evidence = persistRequiredTextFiles(
+      assignmentId,
+      ["first.txt", "./first.txt", "second.txt"],
+      cwd,
+      "assign",
+    );
+    assert.equal(evidence.length, 2);
+    assert.deepEqual(
+      evidence.map(({ name }) => name),
+      ["first.txt", "second.txt"],
+    );
+    assert.throws(
+      () =>
+        persistRequiredTextFiles(
+          "22222222-2222-4222-8222-222222222222",
+          ["too-large.txt"],
+          cwd,
+          "assign",
+        ),
+      /Request exceeds the mailbox size limit/,
+    );
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("reads the canonical target for symlinked snapshots", () => {

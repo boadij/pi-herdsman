@@ -23,7 +23,10 @@ import type {
 } from "./mailbox.ts";
 
 import { claimProcessLock } from "./lock.ts";
-import { persistRequiredEvidenceSnapshot } from "./storage.ts";
+import {
+  persistRequiredEvidenceSnapshot,
+  readRequiredEvidenceSnapshot,
+} from "./storage.ts";
 import {
   listProjectAssignments,
   listProjectMessages,
@@ -455,6 +458,28 @@ const registeredAgentTool = (
         } as Record<string, string>
       )[operation],
   )!;
+
+async function assertManagedLeadRole(
+  pi: ReturnType<typeof fakePi>,
+  context: ReturnType<typeof fakeContext>,
+): Promise<void> {
+  const menus: { title: string; options: string[] }[] = [];
+  let selectedExecution = false;
+  context.mode = "rpc";
+  context.ui.select = async (title, options) => {
+    menus.push({ title, options: [...options] });
+    if (title.startsWith("Pi Herdsman ·") && !selectedExecution) {
+      selectedExecution = true;
+      return options[0];
+    }
+    return undefined;
+  };
+  await pi.commandOptions.get("herdsman")!.handler("", context);
+  assert.equal(menus[0]?.options[2]?.includes("active"), false);
+  assert.equal(menus[0]?.options[6]?.includes("Chief active"), false);
+  assert.equal(menus[1]?.title, "Managed orchestration");
+  context.mode = "tui";
+}
 
 test("lead direct placement modes use real controller delegation", async () => {
   for (const placement of ["tab", "subtree", "split"] as const) {
@@ -988,7 +1013,21 @@ test("managed-agent delegation always splits in its current pane for every lead 
 test("nested managed-Agent delegation publishes inherited and local evidence as child requirements", async () => {
   const label = `evidence-parent-${randomUUID().slice(0, 8)}`;
   setAgentEnvironment(label, ["agent"]);
-  const projectAssignmentId = randomUUID();
+  const projectAssignmentId = LEAD_SESSION_ID;
+  const socket = join(
+    tmpdir(),
+    `nested-project-authority-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const projectRuntime = supervisionRuntime(socket);
+  const projectBranch = `nested-${randomUUID()}`;
+  writeProjectAssignment(projectRuntime, {
+    version: 2,
+    id: projectAssignmentId,
+    repoKey: "repo-key",
+    branch: projectBranch,
+    text: "Parent project",
+  });
   const parentRequestId = randomUUID();
   const inherited = persistRequiredEvidenceSnapshot(
     projectAssignmentId,
@@ -1000,6 +1039,8 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     "review.md",
     "parent review body",
   );
+  const retainedFile = join(tmpdir(), `agent-local-${randomUUID()}.md`);
+  realFs.writeFileSync(retainedFile, "agent-local reviewer note");
   const parent = {
     ...managedState(label, parentRequestId),
     projectAssignmentId,
@@ -1029,6 +1070,22 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   let stopConsumer: (() => void) | undefined;
   const pi = fakePi({
     exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       const result = lifecycle.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         const mailbox = agentMailboxPath(
@@ -1071,6 +1128,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   };
   const contextEntries: any[] = [identity, acceptedContext];
   const context = fakeAgentContext(contextEntries);
+  const appendEntry = pi.pi.appendEntry.bind(pi.pi);
+  pi.pi.appendEntry = ((customType: string, data: unknown) => {
+    appendEntry(customType, data);
+    contextEntries.push({ type: "custom", customType, data });
+  }) as typeof pi.pi.appendEntry;
   registerExtension!(pi.pi as never);
   try {
     for (const handler of pi.events.get("session_start") ?? [])
@@ -1079,7 +1141,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
         "nested-project-evidence",
-        { definition: "agent", task: "child task" },
+        {
+          definition: "agent",
+          task: "child task",
+          files: [retainedFile],
+          retain: true,
+        },
         undefined,
         undefined,
         context,
@@ -1087,11 +1154,40 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
     assert.ok(published);
-    assert.deepEqual(published!.requiredEvidence, [inherited, local]);
+    assert.equal(published!.requiredEvidence?.length, 3);
+    assert.equal(
+      readRequiredEvidenceSnapshot(
+        parentRequestId,
+        published!.requiredEvidence![2]!,
+      ),
+      "agent-local reviewer note",
+    );
     assert.equal(published!.projectAssignmentId, projectAssignmentId);
     assert.equal(published!.evidenceAssignmentId, published!.requestId);
     assert.match(published!.text, /parent plan body/);
     assert.match(published!.text, /parent review body/);
+
+    stopConsumer?.();
+    published = undefined;
+    const retry = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "nested-project-evidence-retry",
+        {
+          definition: "agent",
+          task: "repeat the child assignment",
+          files: [retainedFile],
+          retain: true,
+        },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
+    childMailbox = agentMailboxPath(WORKSPACE, retry.details.agent as string);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(published);
+    assert.equal(published!.requiredEvidence?.length, 3);
 
     stopConsumer?.();
     const clearedRequestId = randomUUID();
@@ -1141,14 +1237,28 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     resetAgentMailbox(childMailbox);
     realFs.rmSync(inherited.path, { force: true });
     realFs.rmSync(local.path, { force: true });
+    realFs.rmSync(retainedFile, { force: true });
     realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
+    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 
 test("nested delegation rejects parent evidence changes during child startup", async () => {
   const label = `evidence-race-parent-${randomUUID().slice(0, 8)}`;
   setAgentEnvironment(label, ["agent"]);
-  const projectAssignmentId = randomUUID();
+  const projectAssignmentId = LEAD_SESSION_ID;
+  const socket = join(tmpdir(), `nested-project-race-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const projectRuntime = supervisionRuntime(socket);
+  const projectBranch = `nested-race-${randomUUID()}`;
+  writeProjectAssignment(projectRuntime, {
+    version: 2,
+    id: projectAssignmentId,
+    repoKey: "repo-key",
+    branch: projectBranch,
+    text: "Parent project",
+  });
   const parentRequestId = randomUUID();
   const inherited = persistRequiredEvidenceSnapshot(
     projectAssignmentId,
@@ -1160,11 +1270,7 @@ test("nested delegation rejects parent evidence changes during child startup", a
     "review.md",
     "parent review body",
   );
-  const addedDuringStart = persistRequiredEvidenceSnapshot(
-    projectAssignmentId,
-    "changed.md",
-    "late amendment",
-  );
+  const replacementProjectAssignmentId = randomUUID();
   const parent = {
     ...managedState(label, parentRequestId),
     projectAssignmentId,
@@ -1223,13 +1329,29 @@ test("nested delegation rejects parent evidence changes during child startup", a
   const context = fakeAgentContext(contextEntries);
   const pi = fakePi({
     exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
-        contextEntries.push({
-          ...acceptedContext,
-          data: {
-            ...acceptedContext.data,
-            localEvidence: [local, addedDuringStart],
-          },
+        writeProjectAssignment(projectRuntime, {
+          version: 2,
+          id: replacementProjectAssignmentId,
+          repoKey: "repo-key",
+          branch: projectBranch,
+          text: "Replacement project",
         });
       }
       const result = lifecycle.exec(command, args, options);
@@ -1263,16 +1385,18 @@ test("nested delegation rejects parent evidence changes during child startup", a
     assert.equal(published, undefined);
     assert.match(
       JSON.stringify(result.details),
-      /evidence changed|foreign|conflicting/i,
+      /project assignment changed|authority|foreign|conflicting/i,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     stopConsumer?.();
     resetAgentMailbox(parentMailbox);
     resetAgentMailbox(childMailbox);
-    for (const evidence of [inherited, local, addedDuringStart])
+    for (const evidence of [inherited, local])
       realFs.rmSync(evidence.path, { force: true });
     realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
+    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 
@@ -4391,7 +4515,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   }
 });
 
-test("managed project delegation publishes required evidence without explicit files", async () => {
+test("assigned Lead retains delegation files as project evidence", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-evidence-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -4402,6 +4526,8 @@ test("managed project delegation publishes required evidence without explicit fi
     "plan.md",
     "approved implementation plan",
   );
+  const retainedFile = join(tmpdir(), `retained-${randomUUID()}.md`);
+  realFs.writeFileSync(retainedFile, "reviewer finding to retain");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -4451,19 +4577,28 @@ test("managed project delegation publishes required evidence without explicit fi
     },
   });
   const context = fakeContext(pi.entries);
+  context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
   registerExtension!(pi.pi as never);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
       details: { id: LEAD_SESSION_ID, branch },
       timestamp: Date.now(),
       content: `Project assignment for branch\n${assignment.text}`,
     };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" && entry.name === `Lead · ${branch}`,
+      ),
+    );
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
     branchEntries.push({
       type: "custom_message",
       customType: assignmentMessage.customType,
@@ -4471,21 +4606,69 @@ test("managed project delegation publishes required evidence without explicit fi
     });
     for (const handler of pi.events.get("message_start") ?? [])
       await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
 
     const delegate = () =>
       registeredAgentTool(pi, "delegate").execute(
         `evidence-${randomUUID()}`,
-        { definition: "agent", label, task: "implement plan" },
+        {
+          definition: "agent",
+          label,
+          task: "implement plan",
+          files: [retainedFile],
+          retain: true,
+        },
         undefined,
         undefined,
         context,
       );
+    const oversizedTask = "x".repeat(
+      131072 - requestRecordBytes(label, "", ""),
+    );
+    const failedHandoff = await registeredAgentTool(pi, "delegate").execute(
+      "evidence-failed-handoff",
+      {
+        definition: "agent",
+        label,
+        task: oversizedTask,
+        files: [retainedFile],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(failedHandoff.details.ok, false);
+    assert.match(
+      JSON.stringify(failedHandoff.details),
+      /Required evidence was retained, but Agent delegation failed/,
+    );
+    const afterFailedHandoff = listProjectAssignments(runtime, "repo-key").find(
+      (item) => item.branch === branch,
+    )!;
+    assert.deepEqual(
+      afterFailedHandoff.requiredEvidence?.map((entry) =>
+        readRequiredEvidenceSnapshot(afterFailedHandoff.id, entry),
+      ),
+      ["approved implementation plan", "reviewer finding to retain"],
+    );
     const result = await delegate();
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
     assert.match(accepted!.text, /approved implementation plan/);
-    assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
+    assert.deepEqual(
+      accepted!.requiredEvidence?.map((entry) =>
+        readRequiredEvidenceSnapshot(assignment.id, entry),
+      ),
+      ["approved implementation plan", "reviewer finding to retain"],
+    );
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").find(
+        (item) => item.branch === branch,
+      )?.requiredEvidence?.length,
+      2,
+    );
     assert.equal(accepted!.evidenceAssignmentId, accepted!.requestId);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -4493,6 +4676,7 @@ test("managed project delegation publishes required evidence without explicit fi
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(retainedFile, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -4571,19 +4755,28 @@ test("managed project delegation references supported evidence larger than the i
     },
   });
   const context = fakeContext(pi.entries);
+  context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
   registerExtension!(pi.pi as never);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
       details: { id: LEAD_SESSION_ID, branch },
       timestamp: Date.now(),
       content: `Project assignment for branch\n${assignment.text}`,
     };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" && entry.name === `Lead · ${branch}`,
+      ),
+    );
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
     branchEntries.push({
       type: "custom_message",
       customType: assignmentMessage.customType,
@@ -4591,6 +4784,7 @@ test("managed project delegation references supported evidence larger than the i
     });
     for (const handler of pi.events.get("message_start") ?? [])
       await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
 
     const result = await registeredAgentTool(pi, "delegate").execute(
       "required-evidence-reference",
@@ -4688,19 +4882,28 @@ test("managed project delegation deduplicates required evidence supplied explici
     },
   });
   const context = fakeContext(pi.entries);
+  context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
   registerExtension!(pi.pi as never);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
       details: { id: LEAD_SESSION_ID, branch },
       timestamp: Date.now(),
       content: `Project assignment for branch\n${assignment.text}`,
     };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" && entry.name === `Lead · ${branch}`,
+      ),
+    );
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
     branchEntries.push({
       type: "custom_message",
       customType: assignmentMessage.customType,
@@ -4708,6 +4911,7 @@ test("managed project delegation deduplicates required evidence supplied explici
     });
     for (const handler of pi.events.get("message_start") ?? [])
       await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
 
     const result = await registeredAgentTool(pi, "delegate").execute(
       "required-evidence-duplicate",
@@ -4894,6 +5098,25 @@ test("unassigned Lead delegation does not receive project evidence implicitly", 
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
+    const rejected = await registeredAgentTool(pi, "delegate").execute(
+      "unassigned-lead-retain",
+      {
+        definition: "agent",
+        label,
+        task: "must not launch",
+        files: [foreignEvidence.path],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(rejected.details.ok, false);
+    assert.match(
+      JSON.stringify(rejected.details),
+      /verified project assignment/,
+    );
+    assert.equal(accepted, undefined);
     const result = await registeredAgentTool(pi, "delegate").execute(
       "unassigned-lead-delegation",
       { definition: "agent", label, task: "unrelated work" },
@@ -7332,7 +7555,7 @@ test("session continuation starts a new agent generation with current prompt con
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
   const savedRequestId = randomUUID();
-  const projectAssignmentId = randomUUID();
+  const projectAssignmentId = LEAD_SESSION_ID;
   const evidenceAssignmentId = randomUUID();
   const inheritedEvidence = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
@@ -7344,6 +7567,19 @@ test("session continuation starts a new agent generation with current prompt con
     "review.md",
     "continued review",
   );
+  const projectSocket = join(tmpdir(), `resume-authority-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = projectSocket;
+  const projectRuntime = supervisionRuntime(projectSocket);
+  const projectBranch = `resume-${randomUUID()}`;
+  const currentAssignment = {
+    version: 2 as const,
+    id: projectAssignmentId,
+    repoKey: "repo-key",
+    branch: projectBranch,
+    text: "Current project",
+    requiredEvidence: [inheritedEvidence, localEvidence],
+  };
+  writeProjectAssignment(projectRuntime, currentAssignment);
   const savedState = {
     ...managedState(name),
     piSessionId: DEFAULT_PI_SESSION_ID,
@@ -7432,6 +7668,22 @@ test("session continuation starts a new agent generation with current prompt con
   let continuedRequest: RequestRecord | undefined;
   const pi = fakePi({
     exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
         for (let index = 0; index < args.length - 1; index++)
           if (args[index] === "--env")
@@ -7445,7 +7697,25 @@ test("session continuation starts a new agent generation with current prompt con
     if (event.phase === "prepare") bootstrapPrepares++;
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  const projectAssignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch: projectBranch },
+    timestamp: Date.now(),
+    content: `Project assignment for branch\n${currentAssignment.text}`,
+  };
+  const projectAssignmentContext = fakeContext(pi.entries);
+  await pi.events.get("session_start")![0](undefined, projectAssignmentContext);
+  await pi.events.get("agent_start")?.[0](undefined, projectAssignmentContext);
+  (projectAssignmentContext.sessionManager.getBranch() as any[]).push({
+    type: "custom_message",
+    customType: projectAssignmentMessage.customType,
+    message: projectAssignmentMessage,
+  });
+  for (const handler of pi.events.get("message_start") ?? [])
+    await handler(
+      { message: projectAssignmentMessage },
+      projectAssignmentContext,
+    );
   try {
     for (const pending of ["request", "ask", "result"] as const) {
       resetAgentMailbox(savedMailbox);
@@ -7535,6 +7805,47 @@ test("session continuation starts a new agent generation with current prompt con
     }
     resetAgentMailbox(savedMailbox);
     writeAgentState(savedMailbox, savedState);
+    const unavailableEvidencePath = `${inheritedEvidence.path}.unavailable`;
+    realFs.renameSync(inheritedEvidence.path, unavailableEvidencePath);
+    try {
+      const unavailableEvidence = await registeredAgentTool(
+        pi,
+        "continue",
+      ).execute(
+        "id",
+        { session: session.path, task: "must reject missing saved evidence" },
+        undefined,
+        undefined,
+        ownedSessionContext(session.id, name),
+      );
+      assert.equal(
+        unavailableEvidence.details.error?.category,
+        "invalid_request",
+        JSON.stringify(unavailableEvidence.details),
+      );
+      assert.match(
+        unavailableEvidence.details.error.message,
+        /Saved assignment evidence .* is unavailable/,
+      );
+    } finally {
+      realFs.renameSync(unavailableEvidencePath, inheritedEvidence.path);
+    }
+    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
+    const takeover = await registeredAgentTool(pi, "continue").execute(
+      "id",
+      { session: session.path, task: "must not revive retired scope" },
+      undefined,
+      undefined,
+      ownedSessionContext(session.id, name),
+    );
+    assert.equal(takeover.details.ok, false, JSON.stringify(takeover.details));
+    assert.equal(takeover.details.error?.category, "invalid_request");
+    writeProjectAssignment(projectRuntime, currentAssignment);
+    // An update to the parent assignment must not rewrite this saved Agent snapshot.
+    writeProjectAssignment(projectRuntime, {
+      ...currentAssignment,
+      requiredEvidence: [],
+    });
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
       {
@@ -7600,6 +7911,8 @@ test("session continuation starts a new agent generation with current prompt con
     realFs.rmSync(session.path, { force: true });
     realFs.rmSync(inheritedEvidence.path, { force: true });
     realFs.rmSync(localEvidence.path, { force: true });
+    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 

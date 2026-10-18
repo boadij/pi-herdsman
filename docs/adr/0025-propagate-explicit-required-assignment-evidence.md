@@ -8,32 +8,55 @@ Accepted
 
 The current `ProjectAssignment` owns an explicit required-evidence set for a
 verified managed project. Files explicitly supplied to `delegate_project` are
-registered as required inputs. The Manager, assigned Lead, or an eligible
-project-scoped managed Agent can add evidence through `update_assignment_evidence`;
-the Manager identifies the assignment by branch, while the Lead and managed
-Agent derive their verified assignment from runtime authority. A managed Agent
-may remove only evidence it added locally; inherited evidence remains under the
-project owner's authority.
+registered as required inputs. New requirements are retained through existing
+handoffs, not a standalone model-facing evidence tool. A Manager uses
+`message_staff(..., retain: true)` to retain the message text and files for the
+target assigned Lead's project assignment. An assigned Lead uses
+`delegate_agent(..., retain: true)` to retain supplied files for that project
+assignment. An eligible managed Agent uses the same delegation parameter to
+retain supplied files only in its local assignment for descendants. Delegation
+task text is not retained. Omitted or false `retain` leaves files scoped to the
+current handoff. Retention requires verified assignment authority and eligible
+evidence and fails explicitly rather than silently degrading to ordinary
+delivery. Persistence and handoff are one logical operation; a
+persistence-success/delivery-failure outcome is reported as partial success.
+
+This supersedes the former separate evidence-registration interface. The
+Manager targets the exact assigned Lead session; the Lead and managed Agent
+derive their assignment from verified runtime authority. A managed Agent
+cannot change the parent project's requirements or remove inherited evidence;
+internal removal remains limited to exact evidence IDs under existing
+ownership rules.
 
 Every new descendant assignment receives the effective required-evidence set
 for its scope without relying on the delegating model to repeat those entries
-in `files`. The accepted assignment carries a snapshot of that set. Later
-changes do not silently rewrite an already-running child's assignment.
+in `files`. This combines inherited and local requirements with the explicit
+files for that handoff, using canonical-path and result-binding deduplication.
+The accepted assignment carries a snapshot of that set. Later changes do not
+silently rewrite an already-running child's assignment. Project descendants
+inherit project requirements; nested descendants also receive relevant
+Agent-local additions, while siblings do not inherit one another's additions.
+Forwarding inherited evidence preserves its original `sourceAssignmentId` and
+does not transfer its ownership.
 
 Required file evidence is preserved as a supported UTF-8 text snapshot up to
 1 MiB. Unsupported, binary, or oversized files cannot be registered as
-required evidence and fail explicitly. A supported preserved snapshot that
-exceeds inline delivery limits may be delivered by reference. Agent results
-retain their existing result binding rather than being copied.
-
-Evidence registration is separate from messaging. `message_staff` remains a
-communication operation and does not mutate assignment requirements.
+required evidence and fail explicitly. Small supported text is embedded;
+content exceeding inline limits is delivered by reference to the preserved
+snapshot, with an instruction to read it before proceeding. Result evidence
+retains its existing semantic binding rather than being copied, embedding text
+when it fits or referencing its resolved artifact otherwise. Configured inline
+and mailbox budgets apply; required evidence is not silently omitted for
+exceeding an inline threshold.
 
 Automatic required-evidence propagation is limited to verified managed
 project assignments and their nested managed-Agent assignments. An ordinary
-Lead's whole session is not an evidence scope. This decision does not introduce
-inheritance of arbitrary conversation or attachments, and evidence
-availability does not grant execution or control authority.
+Lead's whole session is not an evidence scope. An unassigned Lead or unrelated
+session acquires no automatic evidence scope. This decision does not introduce
+inheritance of arbitrary conversation or attachments, and evidence availability
+does not grant execution or control authority. Continuation preserves the
+accepted evidence snapshot and still requires valid ownership authority;
+retired project assignments cannot be resumed.
 
 ## Rationale
 
@@ -43,11 +66,12 @@ Persisting only explicitly designated requirements on the authoritative
 assignment makes delivery deterministic without creating a global artifact
 registry or copying unrelated caller context.
 
-The owner decides when a review or other artifact becomes a continuing
-requirement. Keeping that decision distinct from messaging avoids treating
-every communication as a change to project requirements. Snapshotting
-supported text preserves the exact registered version while reusing the
-existing file-preparation path for inline and reference delivery.
+The responsible owner decides what evidence becomes a continuing requirement
+at the moment of an existing coordination handoff. `retain: true` makes that
+choice explicit without requiring a separate tool call or making every
+message/delegation attachment durable. Snapshotting supported text preserves
+the exact version while reusing the existing file-preparation path for inline
+and reference delivery.
 
 ## Alternatives considered
 
@@ -68,8 +92,16 @@ existing file-preparation path for inline and reference delivery.
 
 - Required evidence is explicit assignment state and is delivered through the
   existing `files` preparation path.
-- Owners can inspect the set and remove entries by exact evidence ID; an
-  assigned managed Agent cannot remove inherited entries.
+- Existing internal logic can identify and remove evidence by exact ID under
+  assignment ownership; there is no standalone model-facing evidence
+  management tool. An assigned managed Agent cannot remove inherited entries.
+- A Manager removes project-owned requirements through the existing project
+  assignment menu: inspect an exact entry under **Required evidence**, choose
+  **Remove**, and confirm. Inherited baseline entries are protected. Removal
+  deletes neither snapshots/source files nor evidence already accepted by
+  Agents. This project UI cannot remove managed-Agent-local additions; neither
+  assigned Leads nor managed Agents have a separate evidence-removal UI, and
+  Agent-local removal remains internal only.
 - New descendants inherit a snapshot, not live updates to an ancestor's
   evidence set.
 - Initial project inputs must be supplied at `delegate_project` if they are to
@@ -79,4 +111,5 @@ existing file-preparation path for inline and reference delivery.
 - Unsupported or oversized durable evidence must be handled as ordinary
   per-message evidence or reduced to supported text before registration.
 - Removed evidence stops automatic propagation; this decision adds no artifact
-  garbage collector or deletion of historical Pi-session evidence.
+  garbage collector or deletion of historical Pi-session evidence, and does
+  not retroactively remove evidence already accepted by an Agent.

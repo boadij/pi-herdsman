@@ -276,7 +276,7 @@ const SEMANTIC_TOOL_CASES = [
   ["list_agents", {}, { agent: "x" }, []],
   [
     "delegate_agent",
-    { definition: "scout", task: "work" },
+    { definition: "scout", task: "work", retain: true },
     { definition: "scout", task: "work", session: "x" },
     ["definition", "task"],
   ],
@@ -353,7 +353,7 @@ const STAFF_TOOL_CASES = [
   ],
   [
     "message_staff",
-    { session: "session-id", message: "progress" },
+    { session: "session-id", message: "progress", retain: true },
     { session: "session-id", message: "progress", lead: "x" },
     ["session", "message"],
   ],
@@ -510,7 +510,6 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "resume_project",
       "stop_lead",
       "remove_worktree",
-      "update_assignment_evidence",
     ].sort(),
   );
   for (const name of [
@@ -556,7 +555,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
     leaf.tools.map((tool) => tool.name),
-    ["ask_owner", "update_assignment_evidence"],
+    ["ask_owner"],
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
   assertPortableToolSchema(askOwner);
@@ -566,16 +565,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     true,
   );
   assert.equal(Value.Check(askOwner.parameters, {}), false);
-  const updateEvidence = leaf.tools.find(
-    (tool) => tool.name === "update_assignment_evidence",
-  )!;
-  assertPortableToolSchema(updateEvidence);
   assert.equal(
-    Value.Check(updateEvidence.parameters, { add: ["result:reviewer#2"] }),
-    true,
-  );
-  assert.equal(
-    Value.Check(updateEvidence.parameters, { remove: ["bad"], extra: true }),
+    leaf.tools.some((tool) => tool.name === "update_assignment_evidence"),
     false,
   );
   leaf.events.get("session_shutdown")?.[0]();
@@ -847,7 +838,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "resume_project",
       "stop_lead",
       "remove_worktree",
-      "update_assignment_evidence",
     ].sort(),
   );
   assert.equal(

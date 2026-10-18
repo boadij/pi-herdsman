@@ -10,12 +10,6 @@ Manager additionally has
 the branch-based project operations `delegate_project`, `resume_project`,
 `stop_lead`, and `remove_worktree`. Chief has no project-operation tools.
 
-`update_assignment_evidence` is available to Managers and assigned Leads.
-Managers identify the assignment by its exact branch; assigned Leads use their
-verified current assignment. It is separate from `message_staff`: registering
-evidence changes what future descendant assignments receive, while a message
-only communicates with its recipient.
-
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `list_staff`. Project actions use the Git branch.
 Presentation state is not authority; every action revalidates current identity
@@ -91,7 +85,8 @@ are excluded; the internal session-file path is not returned.
 {
   "session": "<exact full Pi session ID>",
   "message": "Please revise the error handling.",
-  "files": ["/tmp/review.md", "result:implementation#1"]
+  "files": ["/tmp/review.md", "result:implementation#1"],
+  "retain": true
 }
 ```
 
@@ -105,39 +100,29 @@ steering behavior, whether the Lead is active or idle.
 result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden
 semantic-result bindings needed for the recipient to forward them.
+`retain` is optional and defaults to `false`. Set it to `true` only when the
+message text and supplied files should become continuing required evidence
+for the target's verified project assignment. The target must be an assigned
+project Lead; ordinary supervised Leads have no project evidence scope.
+Retention validates authority and evidence and fails explicitly when either is
+unavailable; it is never silently treated as an ordinary message. Retention
+and message delivery are one logical operation, but if persistence succeeds
+and delivery fails, the outcome reports that partial success rather than
+claiming the handoff completed. Initial `delegate_project.files` are required
+as well. See [Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
 
-## `update_assignment_evidence`
+### Manage project required evidence
 
-```json
-{
-  "branch": "feat/example",
-  "add": ["review.md", "result:reviewer#1"],
-  "text": "The review requires preserving existing error behavior.",
-  "remove": ["<evidence-id>"]
-}
-```
-
-Adds files, text, or available result references to the assignment's required
-evidence, removes entries by exact evidence ID, or returns the current set when
-called without changes. The fields are optional and unrelated fields are
-rejected. A Manager must provide the exact assigned `branch`; an assigned Lead
-must omit `branch` and uses its verified current assignment. The operation
-revalidates authority and updates the assignment atomically. Unknown evidence
-IDs, unavailable result references, and conflicting result bindings fail.
-
-Initial `delegate_project.files` are also registered as required evidence.
-Supported UTF-8 text files and text amendments are preserved as immutable
-snapshots; unsupported, binary, or over-1-MiB files cannot be registered as
-required evidence and fail explicitly. Supported snapshots that exceed the
-inline delivery threshold are delivered by reference to the preserved snapshot.
-Result evidence retains its existing binding rather than copying result data.
-
-Future delegated Agents in the assignment receive its current required
-evidence automatically, whether or not it is repeated in their `files`.
-Evidence explicitly supplied for one recipient remains useful for
-recipient-specific context. Ordinary Leads without a verified project
-assignment do not have an automatic required-evidence scope. See
-[Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
+In the Manager project-assignment action menu, choose **Required evidence**
+to inspect the assignment's required entries, including each exact ID, name,
+and origin. Select an entry to review its details, then choose **Remove** and
+confirm. This Manager-only action removes that exact project-owned requirement
+record. Inherited baseline requirements are shown as protected and cannot be
+removed there. Removal does not delete snapshots or source files and does not
+change evidence already accepted by Agents. The project menu does not remove
+managed-Agent-local additions; local-addition removal is an internal
+capability, not a separate model-facing tool or UI. Assigned Leads can retain
+project evidence through delegation but have no separate evidence-removal UI.
 
 ## `delegate_project`
 

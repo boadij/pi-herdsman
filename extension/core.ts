@@ -136,6 +136,14 @@ function resolveRegularFiles(
   });
 }
 
+export function validateMessageFiles(
+  inputs: readonly MessageFileInput[],
+  cwd: string,
+  operation: string,
+): void {
+  resolveRegularFiles(inputs, cwd, operation);
+}
+
 export function snapshotTextFiles(
   inputs: readonly string[],
   cwd: string,
@@ -203,9 +211,19 @@ export function persistRequiredTextFiles(
   cwd: string,
   operation: string,
 ): RequiredEvidence[] {
-  return snapshotTextFiles(inputs, cwd, operation, {
-    maxBytes: 1024 * 1024,
-  }).map((snapshot) =>
+  const snapshots: TextFileSnapshot[] = [];
+  const seen = new Set<string>();
+  for (const input of inputs) {
+    const [snapshot] = snapshotTextFiles([input], cwd, operation, {
+      maxBytes: 1024 * 1024,
+      skipCanonicalPaths: seen,
+    });
+    if (snapshot) {
+      snapshots.push(snapshot);
+      seen.add(snapshot.canonicalPath);
+    }
+  }
+  return snapshots.map((snapshot) =>
     persistRequiredEvidenceSnapshot(
       assignmentId,
       snapshot.input,

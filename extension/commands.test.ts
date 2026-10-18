@@ -49,12 +49,473 @@ import {
   writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
-import { resultPath } from "./storage.ts";
+import { readRequiredEvidenceSnapshot, resultPath } from "./storage.ts";
 import { claimDelegationLock } from "./agent-controller.ts";
 import {
   createLeadCommandRuntime,
   createLeadProjectRuntime,
 } from "./lead-runtime.ts";
+
+test("Manager required-evidence removal is exact, assignment-scoped, and fail-closed", async () => {
+  const manager = {
+    piSessionId: "evidence-manager",
+    repoKey: "evidence-repo",
+    workspaceId: "evidence-workspace",
+    leaseId: "lease-1",
+  } as any;
+  const assignment = {
+    version: 2 as const,
+    id: "assignment-current",
+    repoKey: manager.repoKey,
+    branch: "feature/evidence",
+    text: "work",
+    requiredEvidence: [
+      {
+        id: "local-a",
+        name: "same-name.md",
+        sourceAssignmentId: "assignment-current",
+        path: "/immutable/a",
+        sha256: "a".repeat(64),
+      },
+      {
+        id: "local-b",
+        name: "same-name.md",
+        sourceAssignmentId: "assignment-current",
+        path: "/immutable/b",
+        sha256: "b".repeat(64),
+      },
+      {
+        id: "inherited",
+        name: "baseline.md",
+        sourceAssignmentId: "parent-assignment",
+        path: "/immutable/baseline",
+        sha256: "c".repeat(64),
+      },
+    ],
+  };
+  let current = assignment;
+  let leaseId = "lease-1";
+  const storedSnapshots = new Set([
+    "/immutable/a",
+    "/immutable/b",
+    "/immutable/baseline",
+  ]);
+  const acceptedEvidence = [...assignment.requiredEvidence];
+  const runtime = createLeadProjectRuntime({
+    leadRuntime: { roleSuspended: false } as any,
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: { ...manager, leaseId } }),
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.piSessionId === right.piSessionId && left.leaseId === right.leaseId,
+    worktreeGroupScope: async () => ({
+      repoKey: manager.repoKey,
+      primaryWorkspaceId: manager.workspaceId,
+    }),
+    supervisionRuntime: () => ({}),
+    readProjectAssignment: () => current,
+    listProjectAssignments: () => [current],
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => Promise<unknown>,
+    ) => operation(),
+    writeProjectAssignment: (_runtime: unknown, next: any) => {
+      current = next;
+    },
+    resolveMessageFiles: () => [],
+    persistRequiredTextFiles: () => [],
+  } as any);
+  const ctx = fakeContext() as any;
+  const before = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
+  assert.equal(
+    before.requiredEvidence?.find((item) => item.id === "inherited")
+      ?.sourceAssignmentId,
+    "parent-assignment",
+  );
+
+  // Cancel means the UI does not invoke the removal callback.
+  const confirmation = "cancel";
+  if (confirmation === "confirm")
+    await runtime.removeRequiredEvidence(assignment.branch, "local-a", ctx);
+  assert.deepEqual(
+    current.requiredEvidence?.map((item) => item.id),
+    ["local-a", "local-b", "inherited"],
+  );
+
+  // IDs, not duplicate display names, identify the selected requirement.
+  await runtime.removeRequiredEvidence(
+    assignment.branch,
+    "local-b",
+    before,
+    ctx,
+  );
+  assert.deepEqual(
+    current.requiredEvidence?.map((item) => item.id),
+    ["local-a", "inherited"],
+  );
+  assert.deepEqual(
+    [...storedSnapshots],
+    ["/immutable/a", "/immutable/b", "/immutable/baseline"],
+  );
+  const afterRemoval = await runtime.inspectRequiredEvidence(
+    assignment.branch,
+    ctx,
+  );
+  await assert.rejects(
+    runtime.removeRequiredEvidence(
+      assignment.branch,
+      "inherited",
+      afterRemoval,
+      ctx,
+    ),
+    /Inherited required evidence cannot be removed/,
+  );
+
+  const inspected = await runtime.inspectRequiredEvidence(
+    assignment.branch,
+    ctx,
+  );
+  current = {
+    ...inspected,
+    id: "replacement-assignment",
+    requiredEvidence: inspected.requiredEvidence?.map((entry) =>
+      entry.id === "local-a"
+        ? { ...entry, sourceAssignmentId: "replacement-assignment" }
+        : entry,
+    ),
+  };
+  // A confirmation applies to the exact assignment shown, not a replacement
+  // that happens to reuse the same branch and evidence ID.
+  await assert.rejects(
+    runtime.removeRequiredEvidence(
+      assignment.branch,
+      "local-a",
+      inspected,
+      ctx,
+    ),
+    /Project assignment changed/,
+  );
+  assert.deepEqual(
+    current.requiredEvidence?.map(({ id }) => id),
+    ["local-a", "inherited"],
+  );
+  current = assignment;
+  await runtime.inspectRequiredEvidence(assignment.branch, ctx);
+  leaseId = "lease-replaced";
+  await assert.rejects(
+    runtime.removeRequiredEvidence(
+      assignment.branch,
+      "local-a",
+      assignment,
+      ctx,
+    ),
+    /Manager (?:authority changed|lease is no longer active)/,
+  );
+  assert.deepEqual(
+    [...storedSnapshots],
+    ["/immutable/a", "/immutable/b", "/immutable/baseline"],
+  );
+  assert.deepEqual(
+    acceptedEvidence.map(({ id }) => id),
+    ["local-a", "local-b", "inherited"],
+  );
+});
+
+test("Manager Required evidence route removes persisted evidence and cancellation preserves it", async (t) => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `manager-evidence-ui-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtimeStorage = supervisionRuntime(socket);
+  t.after(() => {
+    rmSync(runtimeStorage.root, { recursive: true, force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  class Container {
+    addChild() {}
+    clear() {}
+    render() {
+      return [];
+    }
+  }
+  class SelectList {
+    selectedIndex = 0;
+    onSelect?: (item: any) => void;
+    readonly items: any[];
+    constructor(items: any[]) {
+      this.items = items;
+    }
+    setSelectedIndex(index: number) {
+      this.selectedIndex = index;
+    }
+    handleInput(data: string) {
+      if (data === "\r") this.onSelect?.(this.items[this.selectedIndex]);
+    }
+  }
+  class Text {
+    constructor(..._args: any[]) {}
+  }
+  class DynamicBorder {
+    constructor(..._args: any[]) {}
+  }
+  const fixtureDir = mkdtempSync(join(tmpdir(), "manager-evidence-route-"));
+  t.after(() => rmSync(fixtureDir, { recursive: true, force: true }));
+  const baselineSnapshotPath = join(fixtureDir, "baseline-review.md");
+  const snapshotPath = join(fixtureDir, "required-review.md");
+  const assignmentId = randomUUID();
+  const evidenceId1 = randomUUID();
+  const evidenceId2 = randomUUID();
+  const snapshotBytes = "immutable evidence snapshot\n";
+  writeFileSync(baselineSnapshotPath, "baseline snapshot\n");
+  writeFileSync(snapshotPath, snapshotBytes);
+  const acceptedAgentStatePath = join(fixtureDir, "accepted-agent.jsonl");
+  const acceptedAgentStateBytes = `${JSON.stringify({ assignment: assignmentId, acceptedEvidence: [evidenceId2] })}\n`;
+  writeFileSync(acceptedAgentStatePath, acceptedAgentStateBytes);
+  const assignment = {
+    version: 2 as const,
+    id: assignmentId,
+    repoKey: "repo-ui",
+    branch: "feature/ui-evidence",
+    text: "work",
+    requiredEvidence: [
+      {
+        id: evidenceId1,
+        name: "shared.md",
+        sourceAssignmentId: assignmentId,
+        path: baselineSnapshotPath,
+        sha256: createHash("sha256")
+          .update("baseline snapshot\n")
+          .digest("hex"),
+      },
+      {
+        id: evidenceId2,
+        name: "shared.md",
+        sourceAssignmentId: assignmentId,
+        path: snapshotPath,
+        sha256: createHash("sha256").update(snapshotBytes).digest("hex"),
+      },
+    ],
+  };
+  writeProjectAssignment(runtimeStorage, assignment);
+  const manager = {
+    piSessionId: "manager-ui",
+    repoKey: assignment.repoKey,
+    workspaceId: WORKSPACE,
+    leaseId: "lease-ui",
+  };
+  const projectRuntime = createLeadProjectRuntime({
+    leadRuntime: { roleSuspended: false } as any,
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.piSessionId === right.piSessionId && left.leaseId === right.leaseId,
+    worktreeGroupScope: async () => ({
+      repoKey: manager.repoKey,
+      primaryWorkspaceId: manager.workspaceId,
+    }),
+    supervisionRuntime: () => runtimeStorage,
+    readProjectAssignment,
+    listProjectAssignments,
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => Promise<unknown>,
+    ) => operation(),
+    writeProjectAssignment,
+    resolveMessageFiles: () => [],
+  } as any);
+  const snapshot = {
+    project: "ui-project",
+    work: [{ branch: assignment.branch, session: "lead-ui", status: "active" }],
+    leads: [],
+  };
+  const state = {
+    chiefMode: "inactive",
+    controllerRole: "manager",
+    roleSuspended: false,
+    managerLease: undefined,
+    chiefLease: undefined,
+    leadContext: undefined,
+    chiefModeGeneration: 0,
+    sessionGeneration: 0,
+    chiefActivationRollback: false,
+    instanceId: "ui-test",
+  };
+  const runtime = createLeadSupervisionRuntime({
+    activeRole: () => "manager",
+    state,
+    pi: {},
+    herdrSessionSnapshot: async () => ({ agents: [], panes: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    loadSnapshot: async () => snapshot,
+    managerSupervisionItems: (value: any) =>
+      value.work.map((work: any) => ({ kind: "work", work })),
+    presentationReports: () => [],
+    orderedSupervisionLeads: () => [],
+    formatSupervisionNotification: () => "",
+    tui: {
+      Container,
+      SelectList,
+      Text,
+      DynamicBorder,
+      matchesKey: () => false,
+      Key: { ctrl: () => "" },
+    },
+  } as any);
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  const notices: string[] = [];
+  ctx.ui.notify = (message: string) => notices.push(message);
+  let component: any;
+  let customCalls = 0;
+  const menuTitles: string[] = [];
+  const removals: Array<{ branch: string; id: string; assignment: unknown }> =
+    [];
+  const runRoute = async (confirmation: "confirm" | "cancel") => {
+    customCalls = 0;
+    await runtime.refresh(ctx);
+    ctx.ui.custom = (factory: any) => {
+      customCalls++;
+      if (customCalls > 1) return Promise.resolve(undefined);
+      return new Promise((resolve) => {
+        component = factory(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          },
+          {},
+          resolve,
+        );
+        setImmediate(() => component.handleInput("\r"));
+      });
+    };
+    const menuChoices = [
+      "required-evidence",
+      evidenceId2,
+      "remove",
+      confirmation,
+    ];
+    let choice = 0;
+    await runtime.openOverview(ctx, {
+      focusLead: async () => undefined,
+      stopProjectLead: async () => undefined,
+      activateProjectLead: async () => undefined,
+      removeWorktree: async () => {
+        throw new Error("unexpected worktree removal");
+      },
+      inspectRequiredEvidence: (branch: string, context: any) =>
+        projectRuntime.inspectRequiredEvidence(branch, context),
+      removeRequiredEvidence: async (
+        branch: string,
+        id: string,
+        selected: unknown,
+      ) => {
+        removals.push({ branch, id, assignment: selected });
+        await projectRuntime.removeRequiredEvidence(
+          branch,
+          id,
+          selected as any,
+          ctx,
+        );
+      },
+      selectMenu: async (
+        _ctx: unknown,
+        title: string,
+        items: readonly any[],
+      ) => {
+        menuTitles.push(title);
+        if (title.startsWith("Required evidence ·")) {
+          assert.deepEqual(
+            items.map((item) => item.value),
+            [evidenceId1, evidenceId2],
+          );
+          assert.ok(
+            items[1].label.includes(
+              `${evidenceId2} · shared.md · project ${assignmentId}`,
+            ),
+          );
+        }
+        if (
+          title ===
+          `${evidenceId2}\nshared.md\nOrigin: project assignment ${assignmentId}`
+        )
+          assert.ok(items.some((item) => item.value === "remove"));
+        return menuChoices[choice++];
+      },
+    } as any);
+  };
+
+  const beforeCancel = readProjectAssignment(
+    runtimeStorage,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  await runRoute("cancel");
+  assert.deepEqual(
+    readProjectAssignment(
+      runtimeStorage,
+      assignment.repoKey,
+      assignment.branch,
+    ),
+    beforeCancel,
+    "cancel preserves the persisted ProjectAssignment",
+  );
+  assert.deepEqual(
+    readFileSync(baselineSnapshotPath, "utf8"),
+    "baseline snapshot\n",
+  );
+  assert.deepEqual(readFileSync(snapshotPath, "utf8"), snapshotBytes);
+  assert.deepEqual(
+    readFileSync(acceptedAgentStatePath, "utf8"),
+    acceptedAgentStateBytes,
+  );
+  assert.deepEqual(notices, []);
+  assert.deepEqual(removals, []);
+
+  menuTitles.length = 0;
+  await runRoute("confirm");
+  assert.deepEqual(notices, [
+    "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
+  ]);
+  assert.deepEqual(menuTitles, [
+    "feature/ui-evidence",
+    "Required evidence · feature/ui-evidence",
+    `${evidenceId2}\nshared.md\nOrigin: project assignment ${assignmentId}`,
+    `Remove required evidence ${evidenceId2}?`,
+  ]);
+  assert.deepEqual(removals, [
+    { branch: assignment.branch, id: evidenceId2, assignment: beforeCancel },
+  ]);
+  const afterConfirm = readProjectAssignment(
+    runtimeStorage,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  assert.equal(afterConfirm?.id, beforeCancel?.id);
+  assert.equal(afterConfirm?.branch, beforeCancel?.branch);
+  assert.deepEqual(
+    afterConfirm?.requiredEvidence?.map(({ id }) => id),
+    [evidenceId1],
+  );
+  assert.deepEqual(
+    readFileSync(baselineSnapshotPath, "utf8"),
+    "baseline snapshot\n",
+  );
+  assert.deepEqual(readFileSync(snapshotPath, "utf8"), snapshotBytes);
+  assert.deepEqual(
+    readFileSync(acceptedAgentStatePath, "utf8"),
+    acceptedAgentStateBytes,
+  );
+  assert.ok(
+    menuTitles.some((title) =>
+      title.startsWith(`Remove required evidence ${evidenceId2}?`),
+    ),
+  );
+});
 
 const peerTopologyExec = (_command: string, args: string[]) =>
   args[0] === "worktree" && args[1] === "list"
@@ -144,7 +605,6 @@ const leadTools = [
   "message_supervisor",
   "list_peers",
   "message_peer",
-  "update_assignment_evidence",
 ];
 const managerTools = [
   "message_supervisor",
@@ -156,7 +616,6 @@ const managerTools = [
   "message_staff",
   "delegate_project",
   "resume_project",
-  "update_assignment_evidence",
   "stop_lead",
   "remove_worktree",
 ];
@@ -259,19 +718,11 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     const persisted = sessionLeadExecutionState(entries);
     assert.equal(persisted?.mode, "orchestrate");
-    assert.deepEqual(persisted?.leadTools, [
-      ...baseline,
-      "update_assignment_evidence",
-    ]);
+    assert.deepEqual(persisted?.leadTools, [...baseline]);
     await pi.commandOptions.get("lead").handler("flexible", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      ...baseline,
-      "update_assignment_evidence",
-      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       ...baseline,
-      "update_assignment_evidence",
     ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -517,17 +968,12 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
-      leadTools: [...baseline, "update_assignment_evidence"],
+      leadTools: [...baseline],
     });
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      ...baseline,
-      "update_assignment_evidence",
-      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       ...baseline,
-      "update_assignment_evidence",
     ]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: [read]\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
@@ -548,19 +994,11 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     const refresh = pi.commandOptions.get("manager").handler("", context);
     await waiting;
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      ...baseline,
-      "update_assignment_evidence",
-      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     releaseIdle();
     await refresh;
     assert.ok(notices.some((message) => message.includes("mode changed")));
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      ...baseline,
-      "update_assignment_evidence",
-      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -1007,7 +1445,7 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
-      leadTools: [...baseline, "update_assignment_evidence"],
+      leadTools: [...baseline],
     });
     await pi.commandOptions.get("chief").handler("leave", context);
     await t.waitFor(() => assert.equal(tabLabel, "Lead"));
@@ -1018,14 +1456,9 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
       "chief-baseline-tab",
       "Lead",
     ]);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      ...baseline,
-      "update_assignment_evidence",
-      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       ...baseline,
-      "update_assignment_evidence",
     ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -1856,7 +2289,6 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "message_supervisor",
           "list_peers",
           "message_peer",
-          "update_assignment_evidence",
           "list_staff",
           "inspect_staff",
           "read_staff_transcript",
@@ -4507,30 +4939,34 @@ async function managerDelegateAssignmentTest(
     assert.equal(outcome.details.ok, true);
     const assignment = listProjectAssignments(supervisionRuntime(), repoKey)[0];
     assert.ok(assignment);
-    const evidenceTool = pi.tools.find(
-      (tool) => tool.name === "update_assignment_evidence",
+    const reviewFile = join(tmpdir(), `manager-review-${randomUUID()}.md`);
+    t.after(() => rmSync(reviewFile, { force: true }));
+    realFs.writeFileSync(reviewFile, "external review finding");
+    const staffMessage = pi.tools.find(
+      (tool) => tool.name === "message_staff",
     )!;
-    const evidenceUpdate = await evidenceTool.execute(
-      "evidence-update",
-      { branch: assignment.branch, text: "Review requires the approved fix." },
+    await staffMessage.execute(
+      "retain-review",
+      {
+        session: childSession,
+        message: "Address the external review",
+        files: [reviewFile],
+        retain: true,
+      },
       undefined,
       undefined,
       ctx,
     );
-    const evidenceId = evidenceUpdate.details.evidence[0].id;
-    assert.equal(
-      readProjectAssignment(supervisionRuntime(), repoKey, assignment.branch)
-        ?.requiredEvidence?.[0]?.name,
-      "assignment-note.txt",
+    const retained = listProjectAssignments(supervisionRuntime(), repoKey).find(
+      (item) => item.branch === assignment.branch,
+    )!;
+    assert.deepEqual(
+      retained.requiredEvidence?.map((entry) =>
+        readRequiredEvidenceSnapshot(retained.id, entry),
+      ),
+      ["external review finding", "Address the external review"],
     );
-    const evidenceRemoval = await evidenceTool.execute(
-      "evidence-remove",
-      { branch: assignment.branch, remove: [evidenceId] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.deepEqual(evidenceRemoval.details.evidence, []);
+    realFs.rmSync(reviewFile, { force: true });
     const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     const staffList = await staffListTool.execute(
       "list",
@@ -4636,6 +5072,7 @@ async function managerDelegateAssignmentTest(
       "id",
       "piSessionFile",
       "repoKey",
+      "requiredEvidence",
       "text",
       "version",
     ]);
@@ -4655,15 +5092,18 @@ async function managerDelegateAssignmentTest(
       supervisionRuntime(),
       childSession,
     );
-    assert.equal(paths.length, 1);
+    assert.equal(paths.length, 2);
     const assignmentFile = projectAssignmentPath(
       supervisionRuntime(),
       repoKey,
       assignment!.branch,
     );
     const assignmentSnapshot = readFileSync(assignmentFile);
-    const deliverySnapshot = readFileSync(paths[0]!);
-    const delivery = readChiefMessage(paths[0]!);
+    const assignmentDeliveryPath = paths.find(
+      (path) => readChiefMessage(path).kind === "project_assignment",
+    )!;
+    const deliverySnapshot = readFileSync(assignmentDeliveryPath);
+    const delivery = readChiefMessage(assignmentDeliveryPath);
     assert.equal(delivery.kind, "project_assignment");
     assert.equal(delivery.text, "Project assignment ready.");
     assert.equal(delivery.resultBindings, undefined);
@@ -7283,7 +7723,6 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
-    "update_assignment_evidence",
   ]);
   const setActiveTools = pi.pi.setActiveTools;
   let activationAttempted = false;
@@ -7310,17 +7749,12 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
-    "update_assignment_evidence",
   ]);
   const savedRole = [...entries]
     .reverse()
     .find((entry: any) => entry.customType === "pi-herdsman-role");
   assert.equal(savedRole?.data.role, "lead");
-  assert.deepEqual(savedRole?.data.leadTools, [
-    "read",
-    "bash",
-    "update_assignment_evidence",
-  ]);
+  assert.deepEqual(savedRole?.data.leadTools, ["read", "bash"]);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -7627,10 +8061,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
   pi.pi.setActiveTools = (next: string[]) => {
-    if (
-      failRestore &&
-      next.join("|") === [...baseline, "update_assignment_evidence"].join("|")
-    ) {
+    if (failRestore && next.join("|") === [...baseline].join("|")) {
       failRestore = false;
       throw new Error("manual leave restoration failed");
     }
@@ -7713,10 +8144,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
   pi.pi.setActiveTools = (next: string[]) => {
-    if (
-      failRestore &&
-      next.join("|") === [...baseline, "update_assignment_evidence"].join("|")
-    ) {
+    if (failRestore && next.join("|") === [...baseline].join("|")) {
       failRestore = false;
       const activeToolsBeforeFailure = [...pi.pi.getActiveTools()];
       try {
@@ -7743,10 +8171,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     ),
   );
   await start(undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    ...baseline,
-    "update_assignment_evidence",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), [...baseline]);
 });
 
 test("lead session-start continues when chief lease release fails", async () => {
@@ -7811,7 +8236,6 @@ test("lead session-start continues when chief lease release fails", async () => 
     "message_supervisor",
     "list_peers",
     "message_peer",
-    "update_assignment_evidence",
   ]);
   assert.ok(
     entries.some(
@@ -8387,11 +8811,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "read",
-    "update_assignment_evidence",
-    ...leadTools.filter((name) => name !== "update_assignment_evidence"),
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.ok(widgetKeys.includes("pi-herdsman"));
@@ -8707,7 +9127,6 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "message_supervisor",
     "list_peers",
     "message_peer",
-    "update_assignment_evidence",
   ];
   const pi = fakeChiefPi({
     activeTools: ordinaryTools,
@@ -8730,17 +9149,14 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
-    "update_assignment_evidence",
-    ...ordinaryTools.filter(
-      (name) => !["read", "bash", "update_assignment_evidence"].includes(name),
-    ),
+    ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
   ]);
   const role = entries
     .filter((entry: any) => entry.customType === "pi-herdsman-role")
     .at(-1) as any;
   assert.deepEqual(role.data, {
     role: "lead",
-    leadTools: ["read", "bash", "update_assignment_evidence"],
+    leadTools: ["read", "bash"],
   });
 
   const reloaded = fakeChiefPi({
@@ -8760,10 +9176,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   assert.deepEqual(reloaded.pi.getActiveTools(), [
     "read",
     "bash",
-    "update_assignment_evidence",
-    ...ordinaryTools.filter(
-      (name) => !["read", "bash", "update_assignment_evidence"].includes(name),
-    ),
+    ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
   ]);
 
   await reloaded.events.get("session_shutdown")?.[0]();
@@ -8801,7 +9214,6 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
   const branchTools = [
     "read",
     "grep",
-    "update_assignment_evidence",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -9235,7 +9647,6 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "message_supervisor",
     "list_peers",
     "message_peer",
-    "update_assignment_evidence",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;

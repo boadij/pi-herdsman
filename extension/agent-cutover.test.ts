@@ -151,7 +151,7 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
   const leafMailbox = setAgentEnvironment("leaf-surface-agent");
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
-  assert.deepEqual(names(leaf), ["ask_owner", "update_assignment_evidence"]);
+  assert.deepEqual(names(leaf), ["ask_owner"]);
   leaf.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(leafMailbox);
 
@@ -171,7 +171,6 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
       "reply_agent",
       "steer_agent",
       "read_agent_transcript",
-      "update_assignment_evidence",
     ].sort(),
   );
   delegating.events.get("session_shutdown")?.[0]();
