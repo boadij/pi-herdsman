@@ -2451,7 +2451,17 @@ export function recoverStaleProjectMessages(
         (file) => UUID.test(file.slice(0, -5)) && file.endsWith(".json"),
       )) {
         const path = join(messages, file);
-        const message = readProjectMessageFile(path);
+        let message: ProjectMessage;
+        try {
+          message = readProjectMessageFile(path);
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
+          )
+            continue;
+          throw error;
+        }
         if (
           message.repoKey !== repoKey ||
           projectMessageDirectory(runtime, message.repoKey, message.branch) !==
