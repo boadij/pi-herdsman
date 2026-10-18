@@ -1122,6 +1122,9 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     details: {
       piSessionId: "child-session",
       requestId: "request-1",
+      ownerSessionId: "expected-owner",
+      agentLabel: "smoke-terminal-agent",
+      agentDefinition: "smoke-failure-agent",
       status: "failed",
       error: { code: "execution_error" },
     },
@@ -1129,17 +1132,33 @@ test("failed Agent runner handoff requires the persisted custom-message identity
       "Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=child-session · status=failed\n\nDelegation status: failed",
   };
   assert.equal(
-    acceptsFailedAgentHandoff(handoff, "request-1", "child-session"),
+    acceptsFailedAgentHandoff(
+      handoff,
+      "request-1",
+      "child-session",
+      "expected-owner",
+    ),
     true,
   );
   assert.equal(
-    failedAgentHandoff([handoff], "request-1", "child-session"),
+    failedAgentHandoff(
+      [handoff],
+      "request-1",
+      "child-session",
+      "expected-owner",
+    ),
     handoff,
   );
   for (const invalid of [
     { ...handoff, customType: "other" },
     { ...handoff, details: { ...handoff.details, requestId: "wrong" } },
     { ...handoff, details: { ...handoff.details, piSessionId: "wrong" } },
+    { ...handoff, details: { ...handoff.details, ownerSessionId: "wrong" } },
+    { ...handoff, details: { ...handoff.details, agentLabel: "wrong-agent" } },
+    {
+      ...handoff,
+      details: { ...handoff.details, agentDefinition: "wrong-definition" },
+    },
     { ...handoff, details: { ...handoff.details, status: "completed" } },
     {
       ...handoff,
@@ -1147,10 +1166,18 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     },
   ])
     assert.equal(
-      acceptsFailedAgentHandoff(invalid, "request-1", "child-session"),
+      acceptsFailedAgentHandoff(
+        invalid,
+        "request-1",
+        "child-session",
+        "expected-owner",
+      ),
       false,
     );
-  assert.equal(failedAgentHandoff([], "request-1", "child-session"), null);
+  assert.equal(
+    failedAgentHandoff([], "request-1", "child-session", "expected-owner"),
+    null,
+  );
   assert.throws(
     () =>
       failedAgentHandoff(
@@ -1163,6 +1190,7 @@ test("failed Agent runner handoff requires the persisted custom-message identity
         ],
         "request-1",
         "child-session",
+        "expected-owner",
       ),
     /multiple final results/,
   );
@@ -1174,7 +1202,13 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     },
   ])
     assert.throws(
-      () => failedAgentHandoff([invalid], "request-1", "child-session"),
+      () =>
+        failedAgentHandoff(
+          [invalid],
+          "request-1",
+          "child-session",
+          "expected-owner",
+        ),
       /wrong terminal outcome/,
     );
 });

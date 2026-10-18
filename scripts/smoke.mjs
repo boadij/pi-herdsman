@@ -1604,21 +1604,35 @@ function messageText(content) {
     : "";
 }
 
-export function acceptsFailedAgentHandoff(entry, requestId, sessionId) {
+export function acceptsFailedAgentHandoff(
+  entry,
+  requestId,
+  sessionId,
+  ownerSessionId,
+) {
+  const details = entry?.details;
   return (
     entry?.type === "custom_message" &&
     entry.customType === "pi-herdsman-agent-result" &&
-    entry.details?.requestId === requestId &&
-    entry.details?.piSessionId === sessionId &&
-    entry.details?.status === "failed" &&
-    entry.details?.error?.code === "execution_error" &&
+    details?.requestId === requestId &&
+    details?.piSessionId === sessionId &&
+    details?.ownerSessionId === ownerSessionId &&
+    details?.agentLabel === "smoke-terminal-agent" &&
+    details?.agentDefinition === "smoke-failure-agent" &&
+    details?.status === "failed" &&
+    details?.error?.code === "execution_error" &&
     messageText(entry.content).startsWith(
       `Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=${sessionId} · status=failed`,
     )
   );
 }
 
-export function failedAgentHandoff(entries, requestId, sessionId) {
+export function failedAgentHandoff(
+  entries,
+  requestId,
+  sessionId,
+  ownerSessionId,
+) {
   const handoffs = entries.filter(
     (entry) =>
       entry?.type === "custom_message" &&
@@ -1629,7 +1643,14 @@ export function failedAgentHandoff(entries, requestId, sessionId) {
   if (handoffs.length > 1)
     throw new Error("Agent assignment delivered multiple final results");
   if (handoffs.length === 0) return null;
-  if (!acceptsFailedAgentHandoff(handoffs[0], requestId, sessionId))
+  if (
+    !acceptsFailedAgentHandoff(
+      handoffs[0],
+      requestId,
+      sessionId,
+      ownerSessionId,
+    )
+  )
     throw new Error("Agent assignment delivered the wrong terminal outcome");
   return handoffs[0];
 }
@@ -3092,7 +3113,12 @@ async function runAgentTerminalFailureSmoke(ctx) {
           await writeFile(observedPath, "observed\n");
         }
       }
-      const handoff = failedAgentHandoff(entries, requestId, sessionId);
+      const handoff = failedAgentHandoff(
+        entries,
+        requestId,
+        sessionId,
+        ownerSessionId,
+      );
       if (!handoff || !observedAgentEvidence)
         return {
           done: false,
@@ -3253,6 +3279,16 @@ async function runAgentTerminalFailureSmoke(ctx) {
       };
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
+  );
+  const finalOwner = await rootSessionSnapshot(ctx);
+  assert.ok(finalOwner);
+  assert.ok(
+    failedAgentHandoff(
+      sessionEntries(finalOwner.contents),
+      identity.requestId,
+      identity.sessionId,
+      identity.ownerSessionId,
+    ),
   );
 }
 
