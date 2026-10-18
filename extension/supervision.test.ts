@@ -3645,7 +3645,7 @@ test("project message recovery rejects symlinked ancestors without touching exte
   }
 });
 
-test("current handoff survives stale-message deletion between enumeration and read", () => {
+test("publication and recovery tolerate concurrent stale-message consumption", () => {
   const result = spawnSync(
     process.execPath,
     [
@@ -3697,6 +3697,22 @@ const record = await transitions.publishProjectMessage(
 assert.ok(recoveredDuringListing);
 assert.ok(record);
 assert.deepEqual(storage.listProjectMessages(runtime, assignment.repoKey, assignment.branch), [record]);
+const staleA = { ...stale, id: randomUUID(), createdAt: 2 };
+const staleB = { ...stale, id: randomUUID(), createdAt: 3 };
+storage.writeProjectMessage(staleA, runtime);
+storage.writeProjectMessage(staleB, runtime);
+let consumedAfterEnumeration = false;
+afterEnumeration = (path, entries) => {
+  if (!path.endsWith(".messages")) return;
+  afterEnumeration = undefined;
+  assert.ok(entries.includes(staleA.id + ".json"));
+  assert.ok(entries.includes(staleB.id + ".json"));
+  storage.removeProjectMessage(runtime, assignment.repoKey, assignment.branch, staleA.id);
+  consumedAfterEnumeration = true;
+};
+storage.recoverStaleProjectMessages(runtime, assignment.repoKey);
+assert.ok(consumedAfterEnumeration);
+assert.deepEqual(storage.listProjectMessages(runtime, assignment.repoKey, assignment.branch), [record], "recovery skips the concurrently consumed record and continues deleting the other stale record");
 `,
     ],
     {

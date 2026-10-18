@@ -4567,6 +4567,7 @@ async function runManagerRecoverySmoke(ctx) {
   await removeManagerRecoveryWorktree(ctx, await worktrees());
   assert.equal((await matchingWorktrees()).length, 0);
   markStage(ctx, "assignment-absence-reconciliation");
+  ctx.owned.managerWorktreeRetirementRequested = true;
   await waitFor(
     "assignment-removed",
     async () => {
