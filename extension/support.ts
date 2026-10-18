@@ -602,13 +602,16 @@ const {
 const { sessionContextRetired, registerManagedAgentContextHandlers } =
   await import("./managed-agent-runtime.ts");
 const { default: registerExtension } = await import("./index.ts");
-const { readConfig } = await import("./config.ts");
+const { readEffectiveConfig } = await import("./config.ts");
 export function resolveAssignmentSession(
   ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
   raw: string,
 ) {
   return resolveOwnedAssignmentSession(ctx, raw, {
-    contextRetirement: readConfig().contextRetirement,
+    contextRetirementForSession: (context, manager) =>
+      resolve(context.cwd) === resolve(manager.getCwd())
+        ? readEffectiveConfig(context).contextRetirement
+        : undefined,
     isContextRetired: (manager) =>
       sessionContextRetired(manager.getEntries(), manager.getSessionId()),
   });

@@ -1639,7 +1639,6 @@ export function resolveAssignmentSession(
   ctx: ExtensionContext,
   raw: string,
   options: {
-    contextRetirement?: boolean;
     contextRetirementForSession?: (
       ctx: ExtensionContext,
       manager: SessionManager,
@@ -1709,27 +1708,17 @@ export function resolveAssignmentSession(
           "continue",
         );
       const retired = options.isContextRetired?.(manager) ?? false;
-      const targetPolicy = options.contextRetirementForSession?.(ctx, manager);
-      if (
-        retired &&
-        (targetPolicy === true ||
-          (targetPolicy === undefined && options.contextRetirement))
-      )
-        fail(
-          "invalid_request",
-          `Managed agent session ${child.id} is retired after context pressure. Delegate a fresh agent and pass the previous result/handoff and relevant files.`,
-          "continue",
-        );
-      if (
-        retired &&
-        targetPolicy === undefined &&
-        !sameCwd(ctx.cwd, manager.getCwd())
-      )
-        fail(
-          "invalid_request",
-          `Cannot verify the retirement policy for saved agent session ${child.id} in ${manager.getCwd()}. Continue from the original trusted project context or create a fresh Agent.`,
-          "continue",
-        );
+      if (retired) {
+        const enabled = options.contextRetirementForSession?.(ctx, manager);
+        if (enabled !== false)
+          fail(
+            "invalid_request",
+            enabled === true
+              ? `Managed agent session ${child.id} is retired after context pressure. Delegate a fresh agent and pass the previous result/handoff and relevant files.`
+              : `Cannot verify the retirement policy for saved agent session ${child.id}. Continue from the original trusted project context or create a fresh Agent.`,
+            "continue",
+          );
+      }
       return {
         path: child.path,
         id: child.id,

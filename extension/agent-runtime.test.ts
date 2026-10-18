@@ -4065,6 +4065,7 @@ test("overflow retry bridges queued retirement guidance once and only when absen
   registerManagedAgentContextHandlers(agent.pi as never, {
     contextRetirementEnabled: () => true,
     hasActiveAssignment: () => true,
+    reportConfigError: () => {},
   });
 
   const compact = agent.events.get("session_before_compact")![0];
@@ -4159,6 +4160,7 @@ test("overflow reminder is deduplicated only against the effective instruction",
     registerManagedAgentContextHandlers(agent.pi as never, {
       contextRetirementEnabled: () => true,
       hasActiveAssignment: () => true,
+      reportConfigError: () => {},
     });
 
     agent.events.get("session_before_compact")![0](
@@ -4186,6 +4188,7 @@ test("agent settlement clears an overflow retry bridge when no retry context run
   registerManagedAgentContextHandlers(agent.pi as never, {
     contextRetirementEnabled: () => true,
     hasActiveAssignment: () => true,
+    reportConfigError: () => {},
   });
 
   assert.equal(
@@ -4218,6 +4221,7 @@ test("threshold retirement bridges guidance into the next request once", () => {
   registerManagedAgentContextHandlers(agent.pi as never, {
     contextRetirementEnabled: () => true,
     hasActiveAssignment: () => true,
+    reportConfigError: () => {},
   });
 
   const compact = agent.events.get("session_before_compact")![0];
@@ -4265,6 +4269,7 @@ test("threshold retirement bridges guidance into the next request once", () => {
   registerManagedAgentContextHandlers(alreadyVisibleAgent.pi as never, {
     contextRetirementEnabled: () => true,
     hasActiveAssignment: () => true,
+    reportConfigError: () => {},
   });
   alreadyVisibleAgent.events.get("session_before_compact")![0](
     { reason: "threshold" },
@@ -4288,6 +4293,31 @@ test("threshold retirement bridges guidance into the next request once", () => {
     ),
     undefined,
     "already-effective durable guidance is not duplicated",
+  );
+});
+
+test("invalid retirement config is durably reported once and retires conservatively", () => {
+  const entries: any[] = [];
+  const context = fakeAgentContext(entries);
+  const agent = fakePi({ entries });
+  const configError = new Error("invalid project settings");
+  const reported: unknown[] = [];
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => {
+      throw configError;
+    },
+    hasActiveAssignment: () => true,
+    reportConfigError: (_ctx, error) => reported.push(error),
+  });
+
+  const compact = agent.events.get("session_before_compact")![0];
+  assert.deepEqual(compact({ reason: "threshold" }, context), { cancel: true });
+  assert.deepEqual(compact({ reason: "threshold" }, context), { cancel: true });
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0], configError);
+  assert.equal(
+    sessionContextRetired(entries, context.sessionManager.getSessionId()),
+    true,
   );
 });
 
@@ -4326,6 +4356,7 @@ test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool us
         registerManagedAgentContextHandlers(api, {
           contextRetirementEnabled: () => true,
           hasActiveAssignment: () => true,
+          reportConfigError: () => {},
         });
       },
     ],
@@ -4484,6 +4515,7 @@ test("retired Agents cannot start fresh assignments but may coordinate children"
   registerManagedAgentContextHandlers(agent.pi as never, {
     contextRetirementEnabled: () => enabled,
     hasActiveAssignment: () => active,
+    reportConfigError: () => {},
   });
   const toolCall = agent.events.get("tool_call")![0];
   assert.equal(toolCall({ toolName: "delegate_agent" }, context), undefined);

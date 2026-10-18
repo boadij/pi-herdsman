@@ -2339,6 +2339,8 @@ export function registerManagedAgentRuntime(
     contextRetirementEnabled: (ctx) =>
       readEffectiveConfig(ctx).contextRetirement,
     hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
+    reportConfigError: (ctx, error) =>
+      options.appendError(ctx, "pi_herdsman_config_error", error),
   });
 }
 
@@ -2596,6 +2598,7 @@ export function registerManagedAgentContextHandlers(
   options: {
     contextRetirementEnabled(ctx: ExtensionContext): boolean;
     hasActiveAssignment(): boolean;
+    reportConfigError(ctx: ExtensionContext, error: unknown): void;
   },
 ): void {
   let pendingGuidance: { sessionId: string; content: string } | undefined;
@@ -2605,9 +2608,10 @@ export function registerManagedAgentContextHandlers(
   const retirementEnabled = (ctx: ExtensionContext) => {
     try {
       return options.contextRetirementEnabled(ctx);
-    } catch {
+    } catch (error) {
       if (!reportedConfigError) {
         reportedConfigError = true;
+        options.reportConfigError(ctx, error);
         ctx.ui.notify(
           "Invalid trusted project Herdsman settings; context retirement remains enabled for safety.",
           "error",

@@ -3719,6 +3719,63 @@ test("completion warnings preserve truncation and persistence evidence", () => {
   );
   assert.match(expandedRetired, /continuation: fresh agent required/);
 
+  for (const sessionRetired of [false, undefined]) {
+    const details = {
+      requestId: "request-id",
+      agentLabel: "agent",
+      status: "completed" as const,
+      truncated: false,
+      sessionRetired,
+    };
+    assert.doesNotMatch(
+      renderedText(
+        renderCompletionMessage(
+          { content: "result", details },
+          {},
+          presentationTheme,
+        ),
+      ),
+      /retired|unverified/,
+    );
+    assert.doesNotMatch(
+      renderedText(
+        renderCompletionMessage(
+          { content: "result", details },
+          { expanded: true },
+          presentationTheme,
+        ),
+      ),
+      /retired|unverified/,
+    );
+  }
+  const unverified = {
+    requestId: "request-id",
+    agentLabel: "agent",
+    status: "completed" as const,
+    truncated: false,
+    sessionRetired: null,
+  };
+  assert.match(
+    renderedText(
+      renderCompletionMessage(
+        { content: "result", details: unverified },
+        {},
+        presentationTheme,
+      ),
+    ),
+    /retirement policy unverified · Ctrl\+O/,
+  );
+  assert.match(
+    renderedText(
+      renderCompletionMessage(
+        { content: "result", details: unverified },
+        { expanded: true },
+        presentationTheme,
+      ),
+    ),
+    /continuation: policy unverified/,
+  );
+
   const collapsedTruncated = renderedText(
     renderCompletionMessage(
       {

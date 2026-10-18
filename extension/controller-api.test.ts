@@ -7068,16 +7068,128 @@ test("context retirement rejects managed session continuation only when enabled"
     assert.throws(
       () =>
         resolveAssignmentSession(otherProjectContext, session.path, {
-          contextRetirement: false,
           isContextRetired: () => true,
           contextRetirementForSession: () => undefined,
         }),
       /Cannot verify the retirement policy/,
     );
+    const retiredEntry = session.entries.pop();
+    let policyReads = 0;
+    try {
+      assert.deepEqual(
+        resolveAssignmentSession(otherProjectContext, session.path, {
+          isContextRetired: () => false,
+          contextRetirementForSession: () => {
+            policyReads++;
+            return undefined;
+          },
+        }).id,
+        sessionId,
+      );
+      assert.equal(policyReads, 0, "unretired sessions do not read policy");
+    } finally {
+      if (retiredEntry) session.entries.push(retiredEntry);
+    }
   } finally {
     updateConfig("contextRetirement", undefined);
     nativeSessions.clear();
     realFs.rmSync(session.path, { force: true });
+  }
+});
+
+test("production continuation policy uses the saved project's trusted override", async () => {
+  setLeadEnvironment();
+  nativeSessions.clear();
+  const projectA = realFs.mkdtempSync(join(tmpdir(), "continue-policy-a-"));
+  const projectB = realFs.mkdtempSync(join(tmpdir(), "continue-policy-b-"));
+  const sessionId = randomUUID();
+  const sessionPath = join(tmpdir(), `retired-${sessionId}.jsonl`);
+  const label = `retired-${sessionId.slice(0, 8)}`;
+  const session = {
+    id: sessionId,
+    path: sessionPath,
+    cwd: projectA,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId, definition: "agent", label },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-context-retired",
+        data: { sessionId },
+      },
+    ],
+  };
+  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  for (const [cwd, value] of [
+    [projectA, false],
+    [projectB, true],
+  ] as const) {
+    realFs.mkdirSync(join(cwd, ".pi"), { recursive: true });
+    realFs.writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ piHerdsman: { contextRetirement: value } }),
+    );
+  }
+  nativeSessions.set(sessionId, session);
+  updateConfig("contextRetirement", true);
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    projectA,
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  const context = fakeContext([
+    ownershipResult(sessionId, LEAD_SESSION_ID, {
+      path: sessionPath,
+      label,
+    }),
+  ]) as any;
+  context.model = { provider: "continue-provider", id: "continue-model" };
+  context.cwd = projectA;
+  try {
+    const sameProject = await agentTool(pi, "continue").execute(
+      "id",
+      { session: sessionPath, task: "same project" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      sameProject.details.ok,
+      true,
+      JSON.stringify(sameProject.details),
+    );
+
+    context.cwd = projectB;
+    const differentProject = await agentTool(pi, "continue").execute(
+      "id",
+      { session: sessionPath, task: "different project" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(differentProject.details.error.category, "invalid_request");
+    assert.match(
+      differentProject.details.error.message,
+      /Cannot verify the retirement policy/,
+    );
+  } finally {
+    updateConfig("contextRetirement", undefined);
+    pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.clear();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(sessionPath, { force: true });
+    realFs.rmSync(projectA, { recursive: true, force: true });
+    realFs.rmSync(projectB, { recursive: true, force: true });
   }
 });
 

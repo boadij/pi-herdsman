@@ -148,7 +148,7 @@ export interface CompletionMessageDetails {
   piSessionId?: string;
   piSessionFile?: string;
   status: "completed" | "failed";
-  sessionRetired?: boolean;
+  sessionRetired?: boolean | null;
   elapsedMs?: number;
   contextUsage?: {
     tokens: number | null;
@@ -3425,7 +3425,11 @@ export function renderCompletionMessage(
     const metadata = [
       ...(d?.agentDefinition ? [`definition: ${d.agentDefinition}`] : []),
       ...(d?.piSessionId ? [`session: ${d.piSessionId}`] : []),
-      ...(d?.sessionRetired ? ["continuation: fresh agent required"] : []),
+      ...(d?.sessionRetired === true
+        ? ["continuation: fresh agent required"]
+        : d?.sessionRetired === null
+          ? ["continuation: policy unverified"]
+          : []),
       ...(d?.requestId ? [`request: ${d.requestId}`] : []),
       ...(elapsed ? [`elapsed: ${elapsed}`] : []),
       ...(d?.contextUsage?.percent != null
@@ -3456,7 +3460,11 @@ export function renderCompletionMessage(
     }
   } else {
     const notices = [
-      ...(d?.sessionRetired ? ["session retired"] : []),
+      ...(d?.sessionRetired === true
+        ? ["session retired"]
+        : d?.sessionRetired === null
+          ? ["retirement policy unverified"]
+          : []),
       ...(d?.truncated === true ? ["output truncated"] : []),
       ...(d?.resultPersistenceError ? ["result not saved"] : []),
     ];
