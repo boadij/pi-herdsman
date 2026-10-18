@@ -5,7 +5,6 @@ import {
   constants,
   fstatSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
   statSync,
@@ -173,7 +172,20 @@ export function snapshotTextFiles(
           "Request exceeds the mailbox size limit",
           operation,
         );
-      const bytes = readFileSync(fd);
+      const buffer = Buffer.allocUnsafe(maxBytes - totalBytes + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = readSync(
+          fd,
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        );
+        if (count === 0) break;
+        bytesRead += count;
+      }
+      const bytes = buffer.subarray(0, bytesRead);
       if (bytes.length + totalBytes > maxBytes)
         fail(
           "invalid_request",

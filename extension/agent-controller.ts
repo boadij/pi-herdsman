@@ -95,6 +95,7 @@ import {
   prepareMessageInput,
   chooseLabel,
   persistRequiredTextFiles,
+  snapshotTextFiles,
 } from "./core.ts";
 import { normalizeHerdrLifecycleState } from "./supervision.ts";
 import {
@@ -6083,13 +6084,12 @@ export function createAgentController(
               ...continuationEvidence.inheritedEvidence,
               ...continuationEvidence.localEvidence,
             ]
-          : (projectAssignment?.requiredEvidence ??
-            (nestedEvidence
-              ? [
-                  ...nestedEvidence.inheritedEvidence,
-                  ...nestedEvidence.localEvidence,
-                ]
-              : []));
+          : scope.kind === "managed-agent"
+            ? [
+                ...(nestedEvidence?.inheritedEvidence ?? []),
+                ...(nestedEvidence?.localEvidence ?? []),
+              ]
+            : (projectAssignment?.requiredEvidence ?? []);
         if (p.retain === true) {
           if (!p.files?.length)
             fail(
@@ -6260,15 +6260,16 @@ export function createAgentController(
           (entry): entry is Extract<RequiredEvidence, { path: string }> =>
             "path" in entry,
         );
-        const explicitFiles = resolveMessageFiles(
-          ctx,
-          p.files,
-          p.action,
+        const explicitFiles = (
+          p.retain === true ? [] : resolveMessageFiles(ctx, p.files, p.action)
         ).filter((file) => {
           if (typeof file !== "string") return true;
           try {
+            const [snapshot] = snapshotTextFiles([file], ctx.cwd, p.action, {
+              maxBytes: 1024 * 1024,
+            });
             const digest = createHash("sha256")
-              .update(readFileSync(resolve(ctx.cwd, file)))
+              .update(snapshot.text, "utf8")
               .digest("hex");
             return !verifiedEvidence.some((entry) => entry.sha256 === digest);
           } catch {

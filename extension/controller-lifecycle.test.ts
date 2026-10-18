@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -1021,12 +1022,18 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   process.env.HERDR_SOCKET_PATH = socket;
   const projectRuntime = supervisionRuntime(socket);
   const projectBranch = `nested-${randomUUID()}`;
+  const laterProjectRequirement = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "later-project.md",
+    "project requirement not accepted by parent",
+  );
   writeProjectAssignment(projectRuntime, {
     version: 2,
     id: projectAssignmentId,
     repoKey: "repo-key",
     branch: projectBranch,
     text: "Parent project",
+    requiredEvidence: [laterProjectRequirement],
   });
   const parentRequestId = randomUUID();
   const inherited = persistRequiredEvidenceSnapshot(
@@ -1169,25 +1176,36 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
 
     stopConsumer?.();
     published = undefined;
-    const retry = await pi.tools
+    const ordinaryChild = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
-        "nested-project-evidence-retry",
-        {
-          definition: "agent",
-          task: "repeat the child assignment",
-          files: [retainedFile],
-          retain: true,
-        },
+        "nested-project-evidence-ordinary-child",
+        { definition: "agent", task: "ordinary child task" },
         undefined,
         undefined,
         context,
       );
-    assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
-    childMailbox = agentMailboxPath(WORKSPACE, retry.details.agent as string);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      ordinaryChild.details.ok,
+      true,
+      JSON.stringify(ordinaryChild.details),
+    );
+    childMailbox = agentMailboxPath(
+      WORKSPACE,
+      ordinaryChild.details.agent as string,
+    );
     assert.ok(published);
+    assert.deepEqual(published!.requiredEvidence?.slice(0, 2), [
+      inherited,
+      local,
+    ]);
     assert.equal(published!.requiredEvidence?.length, 3);
+    assert.match(published!.text, /parent plan body/);
+    assert.match(published!.text, /parent review body/);
+    assert.doesNotMatch(
+      published!.text,
+      /project requirement not accepted by parent/,
+    );
 
     stopConsumer?.();
     const clearedRequestId = randomUUID();
@@ -1237,6 +1255,7 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     resetAgentMailbox(childMailbox);
     realFs.rmSync(inherited.path, { force: true });
     realFs.rmSync(local.path, { force: true });
+    realFs.rmSync(laterProjectRequirement.path, { force: true });
     realFs.rmSync(retainedFile, { force: true });
     realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
     removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
@@ -4834,6 +4853,13 @@ test("managed project delegation references supported evidence larger than the i
   const runtime = supervisionRuntime(socket);
   const branch = `evidence-reference-${randomUUID()}`;
   const content = "large supported evidence\n".repeat(256);
+  const largeExplicitPath = join(tmpdir(), `large-explicit-${randomUUID()}.md`);
+  const largeExplicit = "large explicit attachment\n".repeat(65536);
+  const nonRegularPath = join(tmpdir(), `non-regular-${randomUUID()}`);
+  realFs.writeFileSync(largeExplicitPath, largeExplicit);
+  realFs.mkdirSync(nonRegularPath);
+  const fifoPath = join(tmpdir(), `non-regular-fifo-${randomUUID()}`);
+  if (process.platform !== "win32") execFileSync("mkfifo", [fifoPath]);
   const snapshot = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
     "plan.md",
@@ -4919,9 +4945,43 @@ test("managed project delegation references supported evidence larger than the i
       await handler({ message: assignmentMessage }, context);
     await assertManagedLeadRole(pi, context);
 
+    const nonRegular = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-non-regular",
+      {
+        definition: "agent",
+        label,
+        task: "reject non-regular input",
+        files: [nonRegularPath],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(nonRegular.details.ok, false);
+    if (process.platform !== "win32") {
+      const fifo = await registeredAgentTool(pi, "delegate").execute(
+        "required-evidence-fifo",
+        {
+          definition: "agent",
+          label,
+          task: "reject FIFO input",
+          files: [fifoPath],
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(fifo.details.ok, false);
+    }
+
     const result = await registeredAgentTool(pi, "delegate").execute(
       "required-evidence-reference",
-      { definition: "agent", label, task: "use the retained plan" },
+      {
+        definition: "agent",
+        label,
+        task: "use the retained plan",
+        files: [largeExplicitPath],
+      },
       undefined,
       undefined,
       context,
@@ -4939,12 +4999,21 @@ test("managed project delegation references supported evidence larger than the i
       accepted!.requiredEvidence?.[0]?.sourceAssignmentId,
       LEAD_SESSION_ID,
     );
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(largeExplicitPath)}" bytes="${Buffer.byteLength(largeExplicit)}" />`,
+      ),
+      "oversized explicit input must remain reference-only rather than being read for deduplication",
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(largeExplicitPath, { force: true });
+    realFs.rmSync(nonRegularPath, { recursive: true, force: true });
+    if (process.platform !== "win32") realFs.rmSync(fifoPath, { force: true });
     if (previousConfig === undefined)
       realFs.rmSync(configPath, { force: true });
     else realFs.writeFileSync(configPath, previousConfig);
@@ -5197,6 +5266,159 @@ test("managed project delegation keeps changed original-path content alongside r
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(originalPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("retain true delegation delivers the saved snapshot after its source changes", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-evidence-retain-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-retain-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "retained plan body",
+  );
+  const sourcePath = join(tmpdir(), `retain-source-${randomUUID()}.md`);
+  realFs.writeFileSync(sourcePath, "original source bytes");
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  let changedSource = false;
+  const priorEvidenceIds = new Set(
+    assignment.requiredEvidence.map((entry) => entry.id),
+  );
+  const label = `rt-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
+
+    const mutateOnSnapshotRead = (_path: unknown) => {
+      if (changedSource) return;
+      support.fileReadHook = undefined;
+      let currentAssignment;
+      try {
+        currentAssignment = listProjectAssignments(runtime, "repo-key").find(
+          (item) => item.branch === branch,
+        )!;
+      } finally {
+        support.fileReadHook = mutateOnSnapshotRead;
+      }
+      const retained = currentAssignment.requiredEvidence?.find(
+        (entry) => !priorEvidenceIds.has(entry.id) && "path" in entry,
+      );
+      if (retained && "path" in retained) {
+        realFs.readFileSync(retained.path);
+        changedSource = true;
+        realFs.writeFileSync(sourcePath, "changed source bytes");
+      }
+    };
+    support.fileReadHook = mutateOnSnapshotRead;
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-retain-source-change",
+      {
+        definition: "agent",
+        label,
+        task: "implement the retained plan",
+        files: [sourcePath],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(
+      changedSource,
+      true,
+      "retained snapshot read must trigger source mutation",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(accepted!.text, /original source bytes/);
+    assert.doesNotMatch(accepted!.text, /changed source bytes/);
+    assert.deepEqual(
+      accepted!.requiredEvidence?.map((entry) =>
+        readRequiredEvidenceSnapshot(assignment.id, entry),
+      ),
+      ["retained plan body", "original source bytes"],
+    );
+  } finally {
+    support.fileReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(sourcePath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });

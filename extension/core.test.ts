@@ -28,6 +28,8 @@ let candidateReadContents: Buffer | undefined;
 let candidateReadOpenCount = 0;
 let candidateReadMissingOnSecondOpen = false;
 let candidateReadIsFile = true;
+let snapshotReadHook: (() => void) | undefined;
+let snapshotReadRequests: number[] = [];
 const syntheticCanonicalPaths = new Map<string, string>();
 mock.module("@earendil-works/pi-coding-agent", {
   namedExports: {
@@ -94,6 +96,8 @@ mock.module("node:fs", {
     },
     readSync: (...args: any[]) => {
       if (countMessageReads) messageReadCount++;
+      snapshotReadHook?.();
+      if (snapshotReadHook) snapshotReadRequests.push(args[3] as number);
       if (
         candidateReadFd !== undefined &&
         args[0] === candidateReadFd &&
@@ -399,6 +403,34 @@ test("snapshots reject NUL, invalid UTF-8, and byte limits", () => {
     snapshotTextFiles(["at-limit.txt"], cwd, "assign", { maxBytes: 3 })[0].text,
     "123",
   );
+});
+
+test("caps snapshot reads when a file grows after its size check", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-growth-"));
+  const path = join(cwd, "source.txt");
+  const maxBytes = 3;
+  writeFileSync(path, "123");
+  let grew = false;
+  snapshotReadRequests = [];
+  snapshotReadHook = () => {
+    if (!grew) {
+      grew = true;
+      realFs.appendFileSync(path, "456");
+    }
+  };
+  try {
+    assert.throws(
+      () => snapshotTextFiles([path], cwd, "assign", { maxBytes }),
+      /Request exceeds the mailbox size limit/,
+    );
+    assert.ok(grew);
+    assert.ok(snapshotReadRequests.length > 0);
+    assert.ok(snapshotReadRequests.every((count) => count <= maxBytes + 1));
+  } finally {
+    snapshotReadHook = undefined;
+    snapshotReadRequests = [];
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("prepares mixed message files as complete text or references", () => {
