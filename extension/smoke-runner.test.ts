@@ -67,6 +67,8 @@ import {
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
   staffDelegateResults,
+  managerAssignmentDiagnostics,
+  managerAssignmentIdentity,
   staffActionResults,
   projectMessageEntries,
   retirementNoticeEntries,
@@ -1228,6 +1230,49 @@ test("failed Agent retirement requires absent process, pane, registration, and m
   assert.equal(
     agentRetirementConverged({ ...converged, mailboxPending: true }),
     false,
+  );
+});
+
+test("Manager assignment diagnostics are bounded and reject a mismatched branch identity", () => {
+  assert.equal(
+    managerAssignmentIdentity(
+      {
+        branch: "unexpected-branch",
+        session: "private-session",
+        workspace_id: "private-workspace",
+      },
+      { open_workspace_id: "private-workspace" },
+      "expected-branch",
+    ),
+    "false",
+  );
+  const projection = managerAssignmentDiagnostics({
+    worktree: "true",
+    result: "true",
+    identity: managerAssignmentIdentity(
+      {
+        branch: "unexpected-branch",
+        session: "private-session",
+        workspace_id: "private-workspace",
+      },
+      { open_workspace_id: "private-workspace" },
+      "expected-branch",
+    ),
+    lead: "not_yet_evaluated",
+    candidateProcessCount: 0,
+    provenanceMatch: "not_evaluated",
+    errorCategory: "none",
+  });
+  assert.equal(
+    projection.assignmentIdentitySessionWorkspaceBranchMatch,
+    "false",
+  );
+  assert.equal(projection.candidateProcessCount, 0);
+  assert.equal(projection.candidateProcessProvenanceMatch, "not_evaluated");
+  assert.equal(projection.matchedLead, "not_yet_evaluated");
+  assert.doesNotMatch(
+    JSON.stringify(projection),
+    /unexpected-branch|expected-branch/,
   );
 });
 

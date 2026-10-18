@@ -692,6 +692,42 @@ export function staffDelegateResults(contents) {
   });
 }
 
+export function managerAssignmentDiagnostics({
+  worktree,
+  result,
+  identity,
+  lead,
+  supervisorCall,
+  supervisorSuccess,
+  readiness,
+  candidateProcessCount,
+  provenanceMatch,
+  errorCategory,
+}) {
+  return {
+    expectedBranchWorktree: worktree ?? "not_observed",
+    successfulCorrelatedDelegateProjectResult: result ?? "not_observed",
+    assignmentIdentitySessionWorkspaceBranchMatch: identity ?? "not_observed",
+    matchedLead: lead ?? "not_observed",
+    messageSupervisorCall: supervisorCall ?? "not_observed",
+    messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
+    exactManagerReadinessDelivery: readiness ?? "not_observed",
+    candidateProcessCount: candidateProcessCount ?? "not_observed",
+    candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
+    errorCategory: errorCategory ?? "none",
+  };
+}
+
+export function managerAssignmentIdentity(row, worktree, branch) {
+  if (!row) return "not_observed";
+  return String(
+    row.branch === branch &&
+      !!row.session &&
+      !!row.workspace_id &&
+      worktree?.open_workspace_id === row.workspace_id,
+  );
+}
+
 export function staffActionResults(contents, toolName, action, prompt) {
   const entries = sessionEntries(contents);
   const byId = new Map(
@@ -3363,6 +3399,21 @@ async function runManagerHandoffSmoke(ctx) {
       if (rows.length > 1)
         throw new Error("Manager handoff created multiple project assignments");
       const row = rows.length === 1 ? rows[0] : null;
+      const diagnostics = (values = {}) =>
+        managerAssignmentDiagnostics({
+          worktree: worktree ? "true" : "false",
+          result: rows.length ? String(row?.branch === branch) : "false",
+          identity: managerAssignmentIdentity(row, worktree, branch),
+          lead: "not_yet_evaluated",
+          supervisorCall: "not_yet_evaluated",
+          supervisorSuccess: "not_yet_evaluated",
+          readiness: "not_yet_evaluated",
+          candidateProcessCount: "not_observed",
+          provenanceMatch: "not_evaluated",
+          ...values,
+        });
+      if (row && row.branch !== branch)
+        return { done: false, progress: diagnostics({ identity: "false" }) };
       if (row?.workspace_id) {
         ctx.owned.managerWorkspaceId = row.workspace_id;
       }
@@ -3373,8 +3424,8 @@ async function runManagerHandoffSmoke(ctx) {
           branch,
           row.workspace_id,
         );
-      if (!row || !row.session || !row.workspace_id || !worktree)
-        return { done: false };
+      if (!row || !row.branch || !row.session || !row.workspace_id || !worktree)
+        return { done: false, progress: diagnostics() };
       const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
       let lead;
       for (const agent of agents)
@@ -3386,8 +3437,49 @@ async function runManagerHandoffSmoke(ctx) {
           lead = agent;
           break;
         }
-      if (!lead) return { done: false };
+      if (!lead)
+        return { done: false, progress: diagnostics({ lead: "false" }) };
       const leadSession = await isolatedSessionDetails(ctx, lead);
+      let processCount = "not_observed";
+      let provenanceMatch = "not_evaluated";
+      let errorCategory = "none";
+      try {
+        const info = await nestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          lead.pane_id,
+        ]);
+        const processes = candidateProcess(
+          info,
+          ctx.candidateExtension,
+          ctx.herdrStateExtension,
+        );
+        processCount = processes.length;
+        const provenancePath = join(
+          ctx.paths.piAgent,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-provenance.jsonl",
+        );
+        const records = (await readFile(provenancePath, "utf8"))
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        matchPiProvenance(
+          records,
+          row.session,
+          lead.pane_id,
+          processes,
+          "manager-handoff-lead",
+          true,
+          ctx.expectedPiVersion,
+        );
+        provenanceMatch = "true";
+      } catch {
+        provenanceMatch = "false";
+        errorCategory = "provenance_observation_failed";
+      }
       const ready = hasSuccessfulSupervisorMessage(
         leadSession.contents,
         "MANAGER_HANDOFF_READY",
@@ -3403,9 +3495,42 @@ async function runManagerHandoffSmoke(ctx) {
             entry.content ===
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
-      if (!ready || !readyEntry) return { done: false };
+      const readyCall = sessionEntries(leadSession.contents).some(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "assistant" &&
+          Array.isArray(entry.message.content) &&
+          entry.message.content.some(
+            (block) =>
+              block?.type === "toolCall" &&
+              block.name === "message_supervisor" &&
+              block.arguments?.message === "MANAGER_HANDOFF_READY",
+          ),
+      );
+      if (!ready || !readyEntry)
+        return {
+          done: false,
+          progress: diagnostics({
+            lead: "true",
+            candidateProcessCount: processCount,
+            provenanceMatch,
+            errorCategory,
+            supervisorCall: String(readyCall),
+            supervisorSuccess: String(ready),
+            readiness: String(!!readyEntry),
+          }),
+        };
       return {
         done: true,
+        progress: diagnostics({
+          lead: "true",
+          candidateProcessCount: processCount,
+          provenanceMatch,
+          errorCategory,
+          supervisorCall: "true",
+          supervisorSuccess: "true",
+          readiness: "true",
+        }),
         value: { row, lead, leadSession, owner: session },
       };
     },
