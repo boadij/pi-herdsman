@@ -1,0 +1,46 @@
+name: Investigation
+description: Explore a question before deciding whether a change is needed.
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Investigations do not need to result in code changes.
+        Keeping the current behavior may be the correct outcome.
+
+        **Security:** Do not report vulnerabilities publicly.
+        Follow the [private reporting guidance](https://github.com/boadij/pi-herdsman/blob/main/CONTRIBUTING.md#security-issues).
+        Do not include secrets or sensitive information.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question and motivation
+      description: |
+        What needs investigation, and why does answering it matter?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Existing evidence and unknowns
+      description: |
+        Describe what is established, what remains uncertain,
+        and any supporting measurements or observations.
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired decision or outcome
+      description: |
+        What evidence would be sufficient to decide whether
+        action is warranted?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Supporting context
+      description: |
+        Include relevant upstream versions, releases,
+        code references, prior work, or related issues.

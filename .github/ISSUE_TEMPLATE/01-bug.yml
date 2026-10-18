@@ -1,0 +1,48 @@
+name: Bug Report
+description: Report incorrect behavior or a source-supported defect.
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [existing issues](https://github.com/boadij/pi-herdsman/issues) before reporting.
+
+        **Security:** Do not report vulnerabilities publicly.
+        Follow the [private reporting guidance](https://github.com/boadij/pi-herdsman/blob/main/CONTRIBUTING.md#security-issues).
+        Remove secrets, personal information, and private infrastructure details from evidence.
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Problem and expected behavior
+      description: |
+        Describe what is happening and what should happen instead.
+        State whether the problem was observed, reproduced, or identified from source.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Reproduction and evidence
+      description: |
+        Include steps, errors, logs, screenshots, or relevant source references if available.
+        Distinguish confirmed observations from hypotheses.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and version context
+      description: |
+        Include known OS, Node, Pi, Herdsman, and Herdr versions,
+        relevant dates, and commit references.
+        Distinguish the affected installation from later repository snapshots.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Impact and additional context
+      description: |
+        Describe affected workflows, relevant constraints,
+        related issues, or other useful information.

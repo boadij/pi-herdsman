@@ -25,6 +25,8 @@ function classify(paths) {
   for (const path of paths) {
     if (!path) continue;
 
+    if (path.startsWith(".github/ISSUE_TEMPLATE/")) continue;
+
     if (
       path === "README.md" ||
       path === "SKILL.md" ||
@@ -106,6 +108,13 @@ if (process.argv[2] === "--self-test") {
   assert.deepEqual(classify(["docs/guides/container-deployment.md"]), {
     tests: false,
     package: true,
+    container: "none",
+    smoke: false,
+  });
+
+  assert.deepEqual(classify([".github/ISSUE_TEMPLATE/01-bug.yml"]), {
+    tests: false,
+    package: false,
     container: "none",
     smoke: false,
   });

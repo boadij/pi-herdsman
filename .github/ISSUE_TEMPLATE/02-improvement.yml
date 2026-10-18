@@ -1,0 +1,48 @@
+name: Improvement
+description: Propose a feature, enhancement, or simplification.
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem and desired outcome rather than prescribing an implementation.
+
+        **Security:** Do not report vulnerabilities publicly.
+        Follow the [private reporting guidance](https://github.com/boadij/pi-herdsman/blob/main/CONTRIBUTING.md#security-issues).
+        Do not include secrets or sensitive information.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and motivation
+      description: |
+        What is missing, confusing, unnecessarily complicated,
+        or otherwise worth improving?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: |
+        What should become possible or behave differently?
+        Describe the result independently of its implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and considerations
+      description: |
+        Include relevant existing behavior, guarantees,
+        boundaries, or tradeoffs when known.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Supporting context
+      description: |
+        Include examples, related issues, ADRs, references,
+        or possible approaches if useful.
