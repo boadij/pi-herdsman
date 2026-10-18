@@ -57,7 +57,7 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for five bounded
+The harness also supports an opt-in Pi-native faux provider for seven bounded
 scenarios:
 
 ```sh
@@ -66,6 +66,8 @@ npm run smoke -- continuation --simulated
 npm run smoke -- chief-tree --simulated
 npm run smoke -- supervisor-agent --simulated
 npm run smoke -- terminal-failure --simulated
+npm run smoke -- agent-terminal-failure --simulated
+npm run smoke -- manager-handoff --simulated
 ```
 
 Simulation supplies model decisions only. Pi still runs its real agent loop and
@@ -73,10 +75,12 @@ tools, while Herdsman and Herdr perform and record the actual delegation,
 continuation, role transitions, process/session lifecycle, and cleanup. The
 provider accepts only expected transcript states and requires actual correlated
 tool results before producing completion responses. It cannot produce
-successful tool results or directly mutate Herdsman or Herdr state. Simulated
-runs do not require model credentials or inference, but retain runtime
-compatibility checks, build, isolation, Herdr setup, and cleanup. They are
-integration checks, not replacements for real-model acceptance.
+successful tool results or directly mutate Herdsman or Herdr state. The two
+additional scenarios are simulated-only and use real Pi, Herdsman, and Herdr;
+they do not replace live-model acceptance. Simulated runs do not require model
+credentials or inference, but retain runtime compatibility checks, build,
+isolation, Herdr setup, and cleanup. They are integration checks, not
+replacements for real-model acceptance.
 
 Nested Agent completions arrive asynchronously through Herdsman's normal
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` path. Pi
@@ -98,16 +102,32 @@ proves pending retirement delivery across Manager replacement.
 there is no fallback between modes. `terminal-failure` uses the same native
 faux fixture for its disposable Lead's controlled partial response and terminal
 error, while its Manager remains on the selected live model unless the whole
-scenario is explicitly simulated.
+scenario is explicitly simulated. `agent-terminal-failure` verifies that a
+real managed Agent's native Pi terminal execution failure settles as a failed
+assignment and reaches its exact owner; partial assistant text is not accepted
+as successful assignment content. It does not establish replay guarantees for
+arbitrary tool side effects. `manager-handoff` verifies that an assigned Lead's
+ordinary project message is retained while the Manager role is absent and
+delivered after Manager mode is reentered in a new role generation, without
+retiring or changing the project assignment. It does not test complete Pi
+session replacement, worktree retirement, or passive retirement notices.
+Project-message delivery may be replayed after ambiguous delivery and Manager
+replacement as described by [ADR 0016](../adr/0016-consume-project-messages-after-manager-delivery.md);
+this scenario does not establish universal exactly-once transport or tool
+side effects.
 
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
-generations), `chief-tree` (current Chief/session_tree behavior), and
+generations), `chief-tree` (current Chief/session_tree behavior),
 `supervisor-agent` (Chief direct Agent delegation, completed result delivery,
-and role exit), `manager-recovery` (Manager delegation, review messaging, `stop_lead`, verified
-pause/resume with an intact checkout, Manager turnover with a pending project
-message, verified missing-worktree retirement without recreating the assignment,
-and refusal to resume retired work).
+and role exit), `manager-recovery` (Manager delegation, review messaging,
+`stop_lead`, verified pause/resume with an intact checkout, Manager turnover
+with a pending project message, verified missing-worktree retirement without
+recreating the assignment, and refusal to resume retired work),
+`agent-terminal-failure` (managed-Agent terminal failure settlement and exact
+owner delivery), `manager-handoff` (project-message retention during Manager
+absence and delivery after role reentry), and `terminal-failure` (assigned-Lead
+terminal failure and project reporting).
 `terminal-failure` creates an isolated Manager project and exactly assigned
 Lead, selects the isolated native faux `terminal-error` model only for that
 Lead, and exhausts Pi's bounded native retry after partial assistant output

@@ -14,6 +14,10 @@ const modelIds = [
   "supervisor-agent",
   "terminal-failure",
   "terminal-error",
+  "agent-terminal-failure",
+  "terminal-agent-error",
+  "manager-handoff",
+  "manager-handoff-lead",
 ];
 
 function text(message) {
@@ -368,6 +372,96 @@ export function decide(model, context) {
       stopReason: "error",
       errorMessage: "503 Service Unavailable (controlled smoke failure)",
     });
+  if (model === "terminal-agent-error")
+    return fauxAssistantMessage("CONTROLLED_PARTIAL_RESPONSE", {
+      stopReason: "error",
+      errorMessage: "503 Service Unavailable (controlled smoke failure)",
+    });
+  if (model === "manager-handoff-lead") {
+    if (prompt.includes("MANAGER_HANDOFF_READY")) {
+      if (
+        correlatedCall(messages, "message_supervisor")?.call.arguments
+          ?.message === "MANAGER_HANDOFF_READY"
+      )
+        return fauxAssistantMessage("MANAGER_HANDOFF_READY");
+      return call("message_supervisor", { message: "MANAGER_HANDOFF_READY" });
+    }
+    const marker = prompt.match(/MANAGER_HANDOFF_PENDING_[0-9a-f-]+/)?.[0];
+    if (!marker) throw new Error("Unexpected manager-handoff-lead transcript");
+    if (
+      correlatedCall(messages, "message_supervisor")?.call.arguments
+        ?.message === marker
+    )
+      return fauxAssistantMessage("MANAGER_HANDOFF_SENT");
+    return call("message_supervisor", { message: marker });
+  }
+  if (model === "manager-handoff") {
+    const assignment = correlatedCall(messages, "delegate_project");
+    if (!assignment && prompt.includes("Use delegate_project exactly once")) {
+      const branch = prompt.match(/branch ([^\s]+) and task exactly/)?.[1];
+      const task = prompt.match(/task exactly ("(?:[^"\\]|\\.)*")/)?.[1];
+      if (!branch || !task)
+        throw new Error("Missing Manager handoff assignment details");
+      return call("delegate_project", { branch, task: JSON.parse(task) });
+    }
+    if (!assignment) throw new Error("Unexpected manager-handoff transcript");
+    const branch = assignment.call.arguments?.branch;
+    const leadSessionId = text(assignment.result).match(
+      /^Session: ([^\n]+)$/m,
+    )?.[1];
+    if (!branch || !leadSessionId)
+      throw new Error("Manager handoff assignment omitted exact identity");
+    if (
+      messages.some(
+        (message, index) =>
+          index > assignment.resultIndex &&
+          message.role === "user" &&
+          text(message) ===
+            `Project ${branch} from lead ${leadSessionId}:\n\nMANAGER_HANDOFF_READY`,
+      )
+    )
+      return fauxAssistantMessage("MANAGER_HANDOFF_READY_RECEIVED");
+    return waitForResult(
+      "Waiting for the exact assigned Lead readiness message.",
+    );
+  }
+  if (model === "agent-terminal-failure") {
+    const matched = correlatedCall(messages, "delegate_agent");
+    if (matched) {
+      const details = text(matched.result);
+      const sessionId = details.match(/^Session: ([^\n]+)$/m)?.[1];
+      const requestId = details.match(/^Request: ([^\n]+)$/m)?.[1];
+      if (!sessionId || !requestId)
+        throw new Error("Agent delegation omitted identity");
+      const handoff = messages.find(
+        (message, index) =>
+          index > matched.resultIndex &&
+          message.role === "user" &&
+          text(message).startsWith(
+            `Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=${sessionId} · status=failed`,
+          ),
+      );
+      return handoff
+        ? fauxAssistantMessage("SMOKE_AGENT_FAILURE_DELIVERED")
+        : waitForResult("Waiting for the exact Agent failure handoff.");
+    }
+    if (
+      messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.content?.some(
+            (part) =>
+              part.type === "toolCall" && part.name === "delegate_agent",
+          ),
+      )
+    )
+      throw new Error("Agent delegation result was missing or unsuccessful");
+    return call("delegate_agent", {
+      definition: "smoke-failure-agent",
+      label: "smoke-terminal-agent",
+      task: "Wait for the controlled terminal model failure.",
+    });
+  }
   if (model === "chief-tree") {
     const marker = prompt.match(
       /PI_HERDSMAN_CHIEF_TREE_(?:STARTUP|POST_CHIEF|FOLLOWUP)/,
@@ -445,7 +539,7 @@ export function decide(model, context) {
   throw new Error(`Unexpected ${model} transcript`);
 }
 
-export async function waitForContinuationObservation(directory, signal) {
+export async function waitForSmokeObservation(directory, filename, signal) {
   signal?.throwIfAborted();
   let watcher;
   let timeout;
@@ -453,14 +547,15 @@ export async function waitForContinuationObservation(directory, signal) {
   try {
     await new Promise((resolve, reject) => {
       const check = () => {
-        if (existsSync(join(directory, "continuation-first-observed")))
-          resolve();
+        if (existsSync(join(directory, filename))) resolve();
       };
       watcher = watch(directory, check);
       watcher.on("error", reject);
       timeout = setTimeout(
         () =>
-          reject(new Error("Continuation live evidence was not acknowledged")),
+          reject(
+            new Error(`Smoke live evidence was not acknowledged: ${filename}`),
+          ),
         120_000,
       );
       abort = () => reject(signal.reason);
@@ -473,6 +568,14 @@ export async function waitForContinuationObservation(directory, signal) {
     clearTimeout(timeout);
     if (abort) signal?.removeEventListener("abort", abort);
   }
+}
+
+export function waitForContinuationObservation(directory, signal) {
+  return waitForSmokeObservation(
+    directory,
+    "continuation-first-observed",
+    signal,
+  );
 }
 
 export default function install(pi) {
@@ -526,7 +629,7 @@ export default function install(pi) {
       );
       recordedSessions.add(currentSessionId);
     }
-    if (model.id === "terminal-error") {
+    if (model.id === "terminal-error" || model.id === "terminal-agent-error") {
       const first = terminalErrorRequests++ === 0;
       const systemPrompt = getCurrentSystemPrompt(context.messages);
       const hasRoster = systemPrompt.includes("<agent_definitions>");
@@ -537,9 +640,9 @@ export default function install(pi) {
       );
       appendFileSync(
         join(evidenceDir, "smoke-faux-attempts.jsonl"),
-        `${JSON.stringify({ model: model.id, hasRoster })}\n`,
+        `${JSON.stringify({ model: model.id, hasRoster, sessionId: currentSessionId })}\n`,
       );
-      if (first && !hasRoster)
+      if (model.id === "terminal-error" && first && !hasRoster)
         throw new Error(
           "Assigned Lead's initial request omitted session-matched agent definitions",
         );
@@ -550,11 +653,18 @@ export default function install(pi) {
       answer.stopReason === "stop" &&
       text(answer).includes("CONTINUATION_FIRST_DONE")
     ) {
-      return waitForContinuationObservation(
+      return waitForSmokeObservation(
         join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "continuation-first-observed",
         _options?.signal,
       ).then(() => answer);
     }
+    if (model.id === "terminal-agent-error" && terminalErrorRequests === 1)
+      return waitForSmokeObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "agent-terminal-failure-observed",
+        _options?.signal,
+      ).then(() => answer);
     return answer;
   }
   faux.setResponses([response]);
@@ -574,7 +684,7 @@ export default function install(pi) {
   pi.on("agent_settled", (event, ctx) => {
     if (
       ctx.model?.provider !== "smoke-faux" ||
-      ctx.model?.id !== "terminal-error"
+      !["terminal-error", "terminal-agent-error"].includes(ctx.model?.id)
     )
       return;
     const evidenceDir = join(
