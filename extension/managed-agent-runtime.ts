@@ -89,7 +89,7 @@ import {
 } from "./core.ts";
 import { importResultBindings } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
-import { readConfig } from "./config.ts";
+import { readConfig, readEffectiveConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { ResultBinding } from "./storage.ts";
 import {
@@ -2336,7 +2336,8 @@ export function registerManagedAgentRuntime(
     },
   });
   registerManagedAgentContextHandlers(pi, {
-    contextRetirementEnabled: () => readConfig().contextRetirement,
+    contextRetirementEnabled: (ctx) =>
+      readEffectiveConfig(ctx).contextRetirement,
     hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
   });
 }
@@ -2593,19 +2594,34 @@ function sessionRetirementGuidanceVisible(
 export function registerManagedAgentContextHandlers(
   pi: ExtensionAPI,
   options: {
-    contextRetirementEnabled(): boolean;
+    contextRetirementEnabled(ctx: ExtensionContext): boolean;
     hasActiveAssignment(): boolean;
   },
 ): void {
   let pendingGuidance: { sessionId: string; content: string } | undefined;
   let queuedGuidanceSessionId: string | undefined;
   let bridgedGuidanceSessionId: string | undefined;
+  let reportedConfigError = false;
+  const retirementEnabled = (ctx: ExtensionContext) => {
+    try {
+      return options.contextRetirementEnabled(ctx);
+    } catch {
+      if (!reportedConfigError) {
+        reportedConfigError = true;
+        ctx.ui.notify(
+          "Invalid trusted project Herdsman settings; context retirement remains enabled for safety.",
+          "error",
+        );
+      }
+      return true;
+    }
+  };
   pi.on(
     "session_before_compact",
     (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
-      if (!options.contextRetirementEnabled()) return;
-      if (!options.hasActiveAssignment()) return;
       if (event.reason === "manual") return;
+      if (!retirementEnabled(ctx)) return;
+      if (!options.hasActiveAssignment()) return;
 
       const sessionId = ctx.sessionManager.getSessionId();
       const entries = ctx.sessionManager.getEntries();
@@ -2671,7 +2687,7 @@ export function registerManagedAgentContextHandlers(
     pendingGuidance = undefined;
     const sessionId = ctx.sessionManager.getSessionId();
     if (
-      !options.contextRetirementEnabled() ||
+      !retirementEnabled(ctx) ||
       !options.hasActiveAssignment() ||
       sessionId !== pending.sessionId
     )
@@ -2701,7 +2717,7 @@ export function registerManagedAgentContextHandlers(
   });
   pi.on("tool_call", (event: any, ctx: ExtensionContext) => {
     if (
-      !options.contextRetirementEnabled() ||
+      !retirementEnabled(ctx) ||
       !options.hasActiveAssignment() ||
       (event.toolName !== "delegate_agent" &&
         event.toolName !== "continue_agent")

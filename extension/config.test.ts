@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import * as realFs from "node:fs";
-import { basename, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { mock, test } from "node:test";
 
 let deleteBeforeRead = false;
@@ -64,6 +65,8 @@ const {
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   readConfig,
+  readEffectiveConfig,
+  readProjectOverrides,
   updateConfig,
   validByteLimit,
 } = await import("./config.ts");
@@ -121,6 +124,46 @@ test("partial and complete valid configs overlay defaults", () => {
     inlineAttachmentLimitBytes: MIN_BYTE_LIMIT,
     mailboxPayloadLimitBytes: MAX_BYTE_LIMIT,
   });
+});
+
+test("trusted project preferences override only the two supported global values", () => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-config-"));
+  try {
+    realFs.mkdirSync(`${cwd}/.pi`, { recursive: true });
+    updateConfig("autoActivateManager", true);
+    updateConfig("contextRetirement", true);
+    const ctx = { cwd, isProjectTrusted: () => true } as never;
+    realFs.writeFileSync(
+      `${cwd}/.pi/settings.json`,
+      '\uFEFF{"other":1,"piHerdsman":{"autoActivateManager":false}}',
+    );
+    assert.deepEqual(readProjectOverrides(ctx), { autoActivateManager: false });
+    assert.equal(readEffectiveConfig(ctx).autoActivateManager, false);
+    assert.equal(readEffectiveConfig(ctx).contextRetirement, true);
+    assert.equal(
+      readEffectiveConfig({ ...ctx, isProjectTrusted: () => false })
+        .autoActivateManager,
+      true,
+    );
+    realFs.writeFileSync(
+      `${cwd}/.pi/settings.json`,
+      '{"piHerdsman":{"contextRetirement":false,"autoActivateManager":false}}',
+    );
+    assert.equal(readEffectiveConfig(ctx).contextRetirement, false);
+    for (const content of [
+      '{"piHerdsman":{"autoActivateManager":"false"}}',
+      '{"piHerdsman":{"defaultLeadExecution":"flexible"}}',
+      "{",
+    ]) {
+      realFs.writeFileSync(`${cwd}/.pi/settings.json`, content);
+      assert.throws(
+        () => readProjectOverrides(ctx),
+        /settings|boolean|unsupported/,
+      );
+    }
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("invalid values, malformed JSON, non-object roots, and unknown keys fail clearly", () => {

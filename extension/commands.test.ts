@@ -2891,7 +2891,15 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
 
 test("Manager auto-start activates after identity and coordination verification without persisting role intent", async () => {
   setLeadEnvironment();
-  updateConfig("autoActivateManager", true);
+  updateConfig("autoActivateManager", false);
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "herdsman-manager-override-"),
+  );
+  realFs.mkdirSync(join(projectCwd, ".pi"));
+  realFs.writeFileSync(
+    join(projectCwd, ".pi", "settings.json"),
+    JSON.stringify({ piHerdsman: { autoActivateManager: true } }),
+  );
   process.env.HERDR_PANE_ID = "verified-auto-manager-pane";
   process.env.HERDR_TAB_ID = "verified-auto-manager-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -2960,6 +2968,7 @@ test("Manager auto-start activates after identity and coordination verification 
   registerExtension!(pi.pi as never);
   try {
     const context = fakeContext(pi.entries) as any;
+    context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(healthyLeadCoordinationBeforeIdentityCheck, true);
@@ -2983,6 +2992,7 @@ test("Manager auto-start activates after identity and coordination verification 
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
+    realFs.rmSync(projectCwd, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -9341,8 +9351,8 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  Flexible",
-    "Manager auto-start  off",
-    "Context retirement  on",
+    "Manager auto-start  Global off · Effective off",
+    "Context retirement  Global on · Effective on",
     "Message limits",
   ]);
   assert.equal(prompts[2]?.label, prompts[0]?.label);
@@ -9966,8 +9976,8 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  Flexible",
-      "Manager auto-start  off",
-      "Context retirement  on",
+      "Manager auto-start  Global off · Effective off",
+      "Context retirement  Global on · Effective on",
       "Message limits",
     ]);
     assert.equal(prompts[2]?.label, "Message limits");
@@ -10019,7 +10029,7 @@ test("settings toggles context retirement and retains its updated value", async 
       menus[1]?.options.find((option) =>
         option.includes("Context retirement"),
       ) ?? "",
-      /Context retirement\s+on/,
+      /Context retirement\s+Global on · Effective on/,
     );
     assert.equal(readConfig().contextRetirement, false);
     assert.deepEqual(notices, ["Context retirement: off"]);
@@ -10029,7 +10039,7 @@ test("settings toggles context retirement and retains its updated value", async 
         .filter(({ label }) => label === "Settings")
         .at(-1)
         ?.options.find((option) => option.includes("Context retirement")) ?? "",
-      /Context retirement\s+off/,
+      /Context retirement\s+Global off · Effective off/,
     );
   } finally {
     updateConfig("contextRetirement", undefined);

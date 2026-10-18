@@ -7064,6 +7064,16 @@ test("context retirement rejects managed session continuation only when enabled"
       label: "retired-agent",
       cwd: resolve("/tmp"),
     });
+    const otherProjectContext = { ...context, cwd: "/tmp/project-b" };
+    assert.throws(
+      () =>
+        resolveAssignmentSession(otherProjectContext, session.path, {
+          contextRetirement: false,
+          isContextRetired: () => true,
+          contextRetirementForSession: () => undefined,
+        }),
+      /Cannot verify the retirement policy/,
+    );
   } finally {
     updateConfig("contextRetirement", undefined);
     nativeSessions.clear();

@@ -351,6 +351,8 @@ type LeadCommandHost = {
     selectedValue?: string,
   ): Promise<string | undefined>;
   readConfig: typeof import("./config.ts").readConfig;
+  readEffectiveConfig: typeof import("./config.ts").readEffectiveConfig;
+  readProjectOverrides: typeof import("./config.ts").readProjectOverrides;
   contextAgentDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
     roleDefinitions: AgentDefinition[];
@@ -1020,7 +1022,7 @@ export function createLeadSessionStartRuntime(host: {
   clearLeadExecution(): void;
   hasLeadExecutionState(ctx: ExtensionContext): boolean;
   diagnostic(): void;
-  autoActivateManager(): boolean;
+  autoActivateManager(ctx: ExtensionContext): boolean;
   clearDefinitionRoster(): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
@@ -1138,8 +1140,14 @@ export function createLeadSessionStartRuntime(host: {
         }
         skipLeadExecutionProfileResolution = persistedRole === "chief";
         host.roleTransitions.reconcileRoleTools();
-        const optionalManager =
-          !hasPersistedRole && !malformedRole && host.autoActivateManager();
+        let optionalManager = false;
+        if (!hasPersistedRole && !malformedRole) {
+          try {
+            optionalManager = host.autoActivateManager(ctx);
+          } catch (error) {
+            host.appendRoleError(ctx, error);
+          }
+        }
         let leadStateRestored = false;
         let leadStateValid = !optionalManager;
         if (optionalManager && host.roleTransitions.canRestoreChiefState()) {
@@ -2072,6 +2080,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       let selectedSetting = "auto-activate-manager";
       while (true) {
         const config = host.readConfig();
+        let effective: ReturnType<typeof host.readConfig>;
+        let overrides: ReturnType<typeof host.readProjectOverrides>;
+        try {
+          effective = host.readEffectiveConfig(ctx);
+          overrides = host.readProjectOverrides(ctx);
+        } catch (error) {
+          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+          return;
+        }
         const selected = await host.selectMenu(
           ctx,
           "Settings",
@@ -2088,13 +2105,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "auto-activate-manager",
               label: "Manager auto-start",
-              description: config.autoActivateManager ? "on" : "off",
+              description: `Global ${config.autoActivateManager ? "on" : "off"} · Effective ${effective.autoActivateManager ? "on" : "off"}${"autoActivateManager" in overrides ? " · Project" : ""}`,
               help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
             },
             {
               value: "context-retirement",
               label: "Context retirement",
-              description: config.contextRetirement ? "on" : "off",
+              description: `Global ${config.contextRetirement ? "on" : "off"} · Effective ${effective.contextRetirement ? "on" : "off"}${"contextRetirement" in overrides ? " · Project" : ""}`,
               help: "Retire managed-Agent sessions at automatic context pressure instead of allowing normal threshold compaction.",
             },
             {

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanConfigPath } from "./storage.ts";
 import {
@@ -120,6 +121,50 @@ function readRawConfig(): Partial<HerdsmanConfig> {
 
 export function readConfig(): HerdsmanConfig {
   return { ...DEFAULT_CONFIG, ...readRawConfig() };
+}
+
+type ProjectContext = Pick<ExtensionContext, "cwd" | "isProjectTrusted">;
+export type ProjectOverrides = Partial<
+  Pick<HerdsmanConfig, "autoActivateManager" | "contextRetirement">
+>;
+
+export function readProjectOverrides(ctx: ProjectContext): ProjectOverrides {
+  if (!ctx.isProjectTrusted()) return {};
+  const path = join(ctx.cwd, ".pi", "settings.json");
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  let settings: unknown;
+  try {
+    settings = JSON.parse(content.replace(/^\uFEFF/, ""));
+  } catch (error) {
+    throw new Error(
+      `Invalid project settings ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!settings || typeof settings !== "object" || Array.isArray(settings))
+    throw new Error(`Invalid project settings ${path}: expected an object`);
+  const raw = (settings as Record<string, unknown>).piHerdsman;
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new Error(`Invalid ${path}: piHerdsman must be an object`);
+  const overrides: ProjectOverrides = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key !== "autoActivateManager" && key !== "contextRetirement")
+      throw new Error(`Invalid ${path}: unsupported piHerdsman field ${key}`);
+    if (typeof value !== "boolean")
+      throw new Error(`Invalid ${path}: piHerdsman.${key} must be boolean`);
+    overrides[key] = value;
+  }
+  return overrides;
+}
+
+export function readEffectiveConfig(ctx: ProjectContext): HerdsmanConfig {
+  return { ...readConfig(), ...readProjectOverrides(ctx) };
 }
 
 function writeConfigAtomically(path: string, content: string): void {

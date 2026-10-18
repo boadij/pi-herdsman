@@ -2,7 +2,8 @@
 
 [Documentation index](../README.md)
 
-Pi Herdsman keeps its configuration in one flat, user-wide file:
+Pi Herdsman keeps its defaults and general configuration in one flat,
+user-wide file:
 
 ```text
 <Pi agent directory>/pi-herdsman/config.json
@@ -13,9 +14,28 @@ The default location is `~/.pi/agent/pi-herdsman/config.json`. Pi's native
 `PI_CODING_AGENT_DIR` relocates the file to
 `$PI_CODING_AGENT_DIR/pi-herdsman/config.json`.
 
-Project trust and project settings do not affect Herdsman configuration.
-Agent definitions remain a separate feature and continue to use the bundled,
-project-local, and user agent-definition locations described in the
+Two preferences can be overridden for a trusted project in Pi's
+`<project>/.pi/settings.json`:
+
+```json
+{
+  "piHerdsman": {
+    "autoActivateManager": true,
+    "contextRetirement": false
+  }
+}
+```
+
+Only `autoActivateManager` and `contextRetirement` are project-overridable.
+Built-in defaults are overlaid by the global configuration, then by explicitly
+set project values. An omitted project property inherits the global value;
+explicit `false` overrides global `true`. Project overrides apply only when Pi
+considers the current project trusted. An untrusted project or an absent
+project override inherits the global value; malformed trusted project settings
+raise a configuration error instead of falling back. The rest of
+`.pi/settings.json` remains Pi-owned. Agent definitions are separate and
+continue to use the bundled, project-local, and user agent-definition
+locations described in the
 [agent-definition guide](../guides/agent-definitions.md).
 
 ## Schema and defaults
@@ -64,19 +84,31 @@ coordination records remain subject to this configured limit and their fixed
 inbox notification, so that coordination ceiling does not reduce the evidence
 capacity of a Manager-to-Lead assignment.
 
-When `contextRetirement` is enabled, automatic context pressure retires a
-managed-agent session. Herdsman suppresses preventive threshold compaction
-while the assignment finalizes and leaves Pi's overflow recovery available.
-The session receives a finalization instruction, and its result requires a
-fresh agent for follow-up. Disabling it bypasses retirement completely,
-including existing retirement markers, and leaves Pi's native compaction and
-session reuse behavior untouched.
+When the effective `contextRetirement` preference is enabled, automatic
+context pressure retires a managed-agent session. Herdsman suppresses
+preventive threshold compaction while the assignment finalizes and leaves Pi's
+overflow recovery available. The session receives a finalization instruction,
+and its result requires a fresh agent for follow-up. Disabling the preference
+bypasses retirement, including enforcement of existing retirement markers,
+and leaves Pi's native compaction and session reuse behavior untouched. The
+preference is evaluated at retirement and continuation checks, so a trusted
+project setting can change how an existing marker is enforced. The policy is
+applied in the applicable project context; a caller's project override cannot
+bypass a retired marker for an Agent from another project when that target
+project's applicable opt-out cannot be verified. In that case, continue from
+the original trusted project context or create a fresh Agent.
 
-When `autoActivateManager` is enabled, a session without a persisted
-`pi-herdsman-role` entry attempts Manager startup only from its Herdr primary
-workspace. Linked workspaces, unavailable eligibility evidence, or an existing
-Manager leave it as an ordinary Lead. The preference does not persist Manager
-role intent and changing it does not affect the current session.
+When the effective `autoActivateManager` preference is enabled, a session
+without a persisted `pi-herdsman-role` entry attempts Manager startup only from
+its Herdr primary workspace. Linked workspaces, unavailable eligibility
+evidence, or an existing Manager leave it as an ordinary Lead. The preference
+does not persist Manager role intent and changing it does not affect the current
+session.
+
+The Settings menu edits global defaults only. It identifies when the effective
+Manager auto-start or context-retirement value comes from a project override;
+changing the global value does not replace that project value. Edit a project
+override in the project's `.pi/settings.json`.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`

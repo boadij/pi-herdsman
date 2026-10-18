@@ -57,8 +57,12 @@ depend on Agent status or definitions to render.
 `Settings` contains `Default Lead execution`, `Manager auto-start`, `Context
 retirement`, and `Message limits`. The default is `Flexible` and applies only
 when a future ordinary Lead session has no persisted execution choice; changing
-it does not change the current session. The Message limits view edits the user-wide inline attachment and
-mailbox payload limits. It is available only to a lead Pi session with UI.
+it does not change the current session. Manager auto-start and context
+retirement show their effective values and identify project overrides, when
+present. These controls edit the global defaults only; project overrides are
+edited in the trusted project's `.pi/settings.json` under `piHerdsman`. The
+Message limits view edits the user-wide inline attachment and mailbox payload
+limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
 
@@ -241,9 +245,10 @@ session's ordinary Lead tool baseline and selected execution profile. Their
 `agents` allowlist independently controls fresh direct delegation. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
-The `Manager auto-start` setting optionally makes a new session attempt
-that same Manager startup when it has no persisted role intent and starts in the
-project's primary workspace. Explicit persisted Lead, Manager, or Chief intent
+The effective `Manager auto-start` setting optionally makes a new session
+attempt that same Manager startup when it has no persisted role intent and
+starts in the project's primary workspace. A trusted project value can
+override the global default. Explicit persisted Lead, Manager, or Chief intent
 takes precedence. Ineligible or contended optional startup remains an ordinary
 Lead; successful automatic startup does not persist Manager intent. Changing
 the setting affects only a later `session_start`, not the running role.

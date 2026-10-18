@@ -255,6 +255,8 @@ import {
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   readConfig,
+  readEffectiveConfig,
+  readProjectOverrides,
   updateConfig,
   validByteLimit,
 } from "./config.ts";
@@ -879,18 +881,18 @@ export default function (pi: ExtensionAPI): void {
         { triggerTurn: true },
       );
     },
-    sessionRetired: (runtime) =>
-      readConfig().contextRetirement &&
-      runtime.piSessionFile !== undefined &&
-      (() => {
-        try {
-          return retiredManagedSession(
-            SessionManager.open(runtime.piSessionFile!),
-          );
-        } catch {
-          return false;
-        }
-      })(),
+    sessionRetired: (ctx, runtime) => {
+      if (!runtime.piSessionFile) return false;
+      try {
+        const session = SessionManager.open(runtime.piSessionFile);
+        if (!retiredManagedSession(session)) return false;
+        return sameCwd(ctx.cwd, session.getCwd())
+          ? readEffectiveConfig(ctx).contextRetirement
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
     onChanged: () => leadStatusRuntime.requestRefresh(),
     reportWatcherError: (ctx, error) => {
@@ -1594,6 +1596,8 @@ export default function (pi: ExtensionAPI): void {
       selectMenu,
       selectModelMenu,
       readConfig,
+      readEffectiveConfig,
+      readProjectOverrides,
       contextAgentDefinitions,
       discoverRoleDefinition,
       setLeadExecutionMode: (
@@ -2032,7 +2036,8 @@ export default function (pi: ExtensionAPI): void {
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
       const sessionStartOptions = {
-        autoActivateManager: () => readConfig().autoActivateManager,
+        autoActivateManager: (ctx: ExtensionContext) =>
+          readEffectiveConfig(ctx).autoActivateManager,
         clearDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
         },

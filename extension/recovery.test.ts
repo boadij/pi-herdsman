@@ -3234,12 +3234,13 @@ test("delivered result remains while agent state is active", async () => {
   }
 });
 
-test("result delivery identifies retired sessions and honors the disabled setting", async () => {
+test("result delivery reports retirement-policy uncertainty without losing results", async () => {
   setLeadEnvironment();
   const deliver = async (
     label: string,
     marker: boolean,
     enabled: boolean,
+    targetCwd = "/tmp",
   ): Promise<any> => {
     const identity = recoveryIdentity(label);
     const child = {
@@ -3264,7 +3265,7 @@ test("result delivery identifies retired sessions and honors the disabled settin
     nativeSessions.set(identity.piSessionFile!, {
       id: identity.piSessionId,
       path: identity.piSessionFile!,
-      cwd: identity.piSessionFile ? "/tmp" : undefined,
+      cwd: targetCwd,
       entries: [
         {
           type: "custom",
@@ -3316,17 +3317,19 @@ test("result delivery identifies retired sessions and honors the disabled settin
   };
 
   try {
-    const retired = await deliver("retired-delivery-agent", true, true);
-    assert.match(
-      retired.content,
-      /Session retired after context pressure\. Do not continue this session\./,
+    const retired = await deliver(
+      "retired-delivery-agent",
+      true,
+      true,
+      "/tmp/other-project",
     );
-    assert.equal(retired.details.sessionRetired, true);
+    assert.match(retired.content, /retirement policy could not be verified/);
+    assert.equal(retired.details.sessionRetired, null);
 
     const disabled = await deliver("disabled-delivery-agent", true, false);
     assert.doesNotMatch(
       disabled.content,
-      /Session retired after context pressure/,
+      /retirement policy could not be verified/,
     );
     assert.equal(disabled.details.sessionRetired, false);
 
