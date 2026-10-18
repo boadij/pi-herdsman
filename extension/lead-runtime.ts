@@ -2145,7 +2145,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const enabled = !host.readConfig()[key];
           host.updateConfig(key, enabled);
           ctx.ui.notify(
-            `${key === "contextRetirement" ? "Context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
+            `Global ${key === "contextRetirement" ? "context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
           );
         }
       }

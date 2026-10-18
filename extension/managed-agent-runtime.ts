@@ -2613,7 +2613,7 @@ export function registerManagedAgentContextHandlers(
         reportedConfigError = true;
         options.reportConfigError(ctx, error);
         ctx.ui.notify(
-          "Invalid trusted project Herdsman settings; context retirement remains enabled for safety.",
+          "Herdsman configuration error; context retirement remains enabled for safety.",
           "error",
         );
       }

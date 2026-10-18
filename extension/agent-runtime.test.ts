@@ -4302,6 +4302,8 @@ test("invalid retirement config is durably reported once and retires conservativ
   const agent = fakePi({ entries });
   const configError = new Error("invalid project settings");
   const reported: unknown[] = [];
+  const notifications: string[] = [];
+  context.ui.notify = (message: string) => notifications.push(message);
   registerManagedAgentContextHandlers(agent.pi as never, {
     contextRetirementEnabled: () => {
       throw configError;
@@ -4315,6 +4317,9 @@ test("invalid retirement config is durably reported once and retires conservativ
   assert.deepEqual(compact({ reason: "threshold" }, context), { cancel: true });
   assert.equal(reported.length, 1);
   assert.equal(reported[0], configError);
+  assert.deepEqual(notifications, [
+    "Herdsman configuration error; context retirement remains enabled for safety.",
+  ]);
   assert.equal(
     sessionContextRetired(entries, context.sessionManager.getSessionId()),
     true,

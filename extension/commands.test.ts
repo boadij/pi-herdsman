@@ -10032,7 +10032,7 @@ test("settings toggles context retirement and retains its updated value", async 
       /Context retirement\s+Global on · Effective on/,
     );
     assert.equal(readConfig().contextRetirement, false);
-    assert.deepEqual(notices, ["Context retirement: off"]);
+    assert.deepEqual(notices, ["Global context retirement: off"]);
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.match(
       menus
@@ -10069,7 +10069,7 @@ test("Manager auto-start menu toggle does not change the running role", async ()
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.equal(readConfig().autoActivateManager, true);
     assert.deepEqual(pi.pi.getActiveTools(), activeTools);
-    assert.deepEqual(notices, ["Manager auto-start: on"]);
+    assert.deepEqual(notices, ["Global Manager auto-start: on"]);
   } finally {
     updateConfig("autoActivateManager", undefined);
     await pi.events.get("session_shutdown")?.[0]();
