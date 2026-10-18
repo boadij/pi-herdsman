@@ -30,6 +30,8 @@ const scenarioNames = [
   "supervisor-agent",
   "manager-recovery",
   "terminal-failure",
+  "agent-terminal-failure",
+  "manager-handoff",
 ];
 const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
@@ -90,6 +92,11 @@ export function parseSmokeArgs(args) {
     throw new Error("--simulated cannot be combined with --model");
   if (simulated && scenario === "manager-recovery")
     throw new Error("manager-recovery does not support --simulated");
+  if (
+    !simulated &&
+    ["agent-terminal-failure", "manager-handoff"].includes(scenario)
+  )
+    throw new Error(`${scenario} requires --simulated`);
   const timeout = values["manager-ready-timeout-ms"];
   const managerReadyTimeoutMs =
     timeout === undefined ? undefined : Number(timeout);
@@ -779,6 +786,50 @@ export function retainedProjectMessageRecord(records, branch, sessionId, text) {
         record?.text === text &&
         typeof record?.id === "string" &&
         record.id.length > 0,
+    ) ?? null
+  );
+}
+
+export function managerHandoffRetainedRecord(
+  records,
+  repoKey,
+  branch,
+  sessionId,
+  text,
+) {
+  const matches = records.filter(
+    (record) =>
+      record?.repoKey === repoKey &&
+      record?.branch === branch &&
+      record?.fromSessionId === sessionId &&
+      record?.text === text &&
+      typeof record?.id === "string" &&
+      record.id.length > 0,
+  );
+  if (matches.length > 1)
+    throw new Error("Manager handoff retained message is ambiguous");
+  return matches[0] ?? null;
+}
+
+export function managerHandoffDeliveredEntry(
+  contents,
+  repoKey,
+  branch,
+  sessionId,
+  messageId,
+  text,
+) {
+  return (
+    sessionEntries(contents).find(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-project_message" &&
+        entry.details?.repoKey === repoKey &&
+        entry.details?.branch === branch &&
+        entry.details?.fromSessionId === sessionId &&
+        entry.details?.id === messageId &&
+        entry.content ===
+          `Project ${branch} from lead ${sessionId}:\n\n${text}`,
     ) ?? null
   );
 }
@@ -1533,6 +1584,56 @@ function messageText(content) {
         .map((block) => block.text)
         .join("\n")
     : "";
+}
+
+export function acceptsFailedAgentHandoff(entry, requestId, sessionId) {
+  return (
+    entry?.type === "custom_message" &&
+    entry.customType === "pi-herdsman-agent-result" &&
+    entry.details?.requestId === requestId &&
+    entry.details?.piSessionId === sessionId &&
+    entry.details?.status === "failed" &&
+    entry.details?.error?.code === "execution_error" &&
+    messageText(entry.content).startsWith(
+      `Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=${sessionId} · status=failed`,
+    )
+  );
+}
+
+export function isCompletedAgentResult(entry, requestId, sessionId) {
+  return (
+    entry?.type === "custom_message" &&
+    entry.customType === "pi-herdsman-agent-result" &&
+    entry.details?.requestId === requestId &&
+    entry.details?.piSessionId === sessionId &&
+    entry.details?.status === "completed"
+  );
+}
+
+export function managerHandoffCanReenter(
+  managerLeasePresent,
+  contents,
+  repoKey,
+  branch,
+  sessionId,
+  messageId,
+  text,
+) {
+  return (
+    !managerLeasePresent &&
+    !managerHandoffDeliveredEntry(
+      contents,
+      repoKey,
+      branch,
+      sessionId,
+      messageId,
+      text,
+    )
+  );
+}
+
+export function managerHandoffLeadPidContinues(initialPid, currentPid) {
+  return initialPid === currentPid;
 }
 
 function assistantResultsForPrompt(contents, prompt, marker, matchesMarker) {
@@ -2757,6 +2858,630 @@ async function runTerminalFailureSmoke(ctx) {
   };
 }
 
+async function runAgentTerminalFailureSmoke(ctx) {
+  await writeFile(
+    join(ctx.paths.piAgent, "settings.json"),
+    JSON.stringify(
+      {
+        retry: {
+          enabled: true,
+          maxRetries: 1,
+          baseDelayMs: 1,
+          maxAgentDelayMs: 1,
+          provider: { maxRetries: 0 },
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  const prompt =
+    "SMOKE_AGENT_FAILURE: delegate exactly one smoke-failure-agent with label smoke-terminal-agent; then report its failed result.";
+  await waitForEvidence(
+    ctx,
+    "agent-terminal-failure-root-agent",
+    async () => ({
+      done:
+        (await nestedCommand(ctx, ["agent", "list"])).agents?.some(
+          (agent) =>
+            agent.pane_id === ctx.rootPaneId &&
+            typeof agent.agent_session?.value === "string",
+        ) ?? false,
+    }),
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
+  const evidenceDir = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const observedPath = join(evidenceDir, "agent-terminal-failure-observed");
+  let identity;
+  let observedAgentEvidence;
+  await waitForEvidence(
+    ctx,
+    "agent-terminal-failure-result",
+    async () => {
+      const owner = await rootSessionSnapshot(ctx);
+      if (!owner) return { done: false };
+      const entries = sessionEntries(owner.contents);
+      const calls = entries
+        .filter(
+          (entry) =>
+            entry.type === "message" && entry.message?.role === "assistant",
+        )
+        .flatMap((entry) =>
+          (entry.message.content ?? []).filter(
+            (part) =>
+              part.type === "toolCall" && part.name === "delegate_agent",
+          ),
+        );
+      if (calls.length > 1)
+        throw new Error("Agent failure scenario delegated more than once");
+      if (!calls.length)
+        return { done: false, progress: { delegationCount: 0 } };
+      const call = calls[0];
+      if (
+        call.arguments?.definition !== "smoke-failure-agent" ||
+        call.arguments?.label !== "smoke-terminal-agent"
+      )
+        throw new Error("Unexpected Agent failure delegation identity");
+      const result = entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "delegate_agent" &&
+          entry.message.toolCallId === call.id &&
+          !entry.message.isError,
+      );
+      if (!result)
+        return { done: false, progress: { delegationCount: calls.length } };
+      const raw = messageText(result.message.content);
+      const sessionId = raw.match(/^Session: ([^\n]+)$/m)?.[1];
+      const requestId = raw.match(/^Request: ([^\n]+)$/m)?.[1];
+      if (!sessionId || !requestId)
+        throw new Error("Agent delegation omitted session/request identity");
+      identity = { callId: call.id, sessionId, requestId };
+      // Hold the first native error until the exact child process and faux provenance are visible.
+      let childAgent;
+      const persistedChild = await exactIsolatedSession(ctx, sessionId);
+      let listedAgents = [];
+      let matchingAgents = [];
+      if (!observedAgentEvidence) {
+        listedAgents =
+          (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+        matchingAgents = await agentsForPiSession(ctx, listedAgents, sessionId);
+        if (matchingAgents.length > 1)
+          throw new Error(
+            "Delegated Pi session matches multiple managed Agents",
+          );
+        if (matchingAgents.length === 1 && persistedChild)
+          childAgent = matchingAgents[0];
+      }
+      if (!observedAgentEvidence && childAgent?.pane_id) {
+        const info = await nestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          childAgent.pane_id,
+        ]).catch(() => null);
+        const processes = candidateProcess(
+          info,
+          ctx.candidateExtension,
+          ctx.herdrStateExtension,
+        );
+        const provenance = (
+          await readFile(
+            join(evidenceDir, "smoke-faux-provenance.jsonl"),
+            "utf8",
+          ).catch(() => "")
+        )
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        const childProvenance = provenance.filter(
+          (row) => row.sessionId === sessionId,
+        );
+        if (processes.length === 1 && childProvenance.length === 1) {
+          const processProof = matchPiProvenance(
+            provenance,
+            sessionId,
+            childAgent.pane_id,
+            processes,
+            "terminal-agent-error",
+            false,
+            ctx.expectedPiVersion,
+          );
+          observedAgentEvidence = Object.freeze({
+            ...processProof,
+            agentPaneId: childAgent.pane_id,
+            process: Object.freeze({ ...processes[0] }),
+            provenance: Object.freeze({ ...childProvenance[0] }),
+          });
+          await writeFile(observedPath, "observed\n");
+        }
+      }
+      const resultIndex = entries.indexOf(result);
+      const failedHandoffs = entries.filter(
+        (entry, index) =>
+          index > resultIndex &&
+          acceptsFailedAgentHandoff(entry, requestId, sessionId),
+      );
+      if (failedHandoffs.length > 1)
+        throw new Error("Agent failure result was delivered more than once");
+      const handoff = failedHandoffs[0];
+      if (!handoff || !observedAgentEvidence)
+        return {
+          done: false,
+          progress: {
+            delegationCount: 1,
+            failedHandoff: false,
+            childSessionId: sessionId,
+            persistedChildSession: !!persistedChild,
+            persistedChildBytes: persistedChild
+              ? Buffer.byteLength(persistedChild.contents)
+              : 0,
+            persistedChildErrors: persistedChild
+              ? sessionEntries(persistedChild.contents).filter(
+                  (entry) =>
+                    entry.type === "message" &&
+                    entry.message?.role === "assistant" &&
+                    entry.message.stopReason === "error",
+                ).length
+              : 0,
+            matchingAgentCount: matchingAgents.length,
+            listedAgentIdentities: listedAgents.map(
+              ({ pane_id, pi_session_id, agent_session }) => ({
+                pane_id,
+                pi_session_id,
+                agentSessionKind: agent_session?.kind,
+                agentSessionValue: agent_session?.value,
+              }),
+            ),
+            childPane: childAgent?.pane_id ?? null,
+            candidateProcessCount: childAgent?.pane_id
+              ? candidateProcess(
+                  await nestedCommand(ctx, [
+                    "pane",
+                    "process-info",
+                    "--pane",
+                    childAgent.pane_id,
+                  ]).catch(() => null),
+                  ctx.candidateExtension,
+                  ctx.herdrStateExtension,
+                ).length
+              : 0,
+          },
+        };
+      const child = await exactIsolatedSession(ctx, sessionId);
+      const childEntries = child && sessionEntries(child.contents);
+      const errors =
+        childEntries?.filter(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            entry.message.stopReason === "error",
+        ) ?? [];
+      if (
+        !child ||
+        !child.contents.includes("CONTROLLED_PARTIAL_RESPONSE") ||
+        errors.length !== 2
+      )
+        return {
+          done: false,
+          progress: { failedHandoff: true, childError: errors.length },
+        };
+      const attempts = (
+        await readFile(
+          join(evidenceDir, "smoke-faux-attempts.jsonl"),
+          "utf8",
+        ).catch(() => "")
+      )
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.sessionId === sessionId);
+      const settlements = (
+        await readFile(
+          join(evidenceDir, "smoke-faux-settled.jsonl"),
+          "utf8",
+        ).catch(() => "")
+      )
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.sessionId === sessionId);
+      const successfulHandoffs = entries.filter((entry) =>
+        isCompletedAgentResult(entry, requestId, sessionId),
+      );
+      const acknowledged = entries.some(
+        (entry, index) =>
+          index > entries.indexOf(handoff) &&
+          entry.type === "message" &&
+          entry.message?.role === "assistant" &&
+          messageText(entry.message.content).includes(
+            "SMOKE_AGENT_FAILURE_DELIVERED",
+          ),
+      );
+      if (
+        attempts.length !== 2 ||
+        attempts.some((row) => row.model !== "terminal-agent-error") ||
+        settlements.length !== 1 ||
+        settlements[0].aborted !== false ||
+        observedAgentEvidence.sessionId !== sessionId ||
+        successfulHandoffs.length !== 0 ||
+        !acknowledged
+      )
+        return {
+          done: false,
+          progress: {
+            attempts: attempts.length,
+            settlements: settlements.length,
+            successfulHandoffs: successfulHandoffs.length,
+            acknowledged,
+          },
+        };
+      return {
+        done: true,
+        value: { handoff, errors: errors.length },
+        progress: {
+          delegationCount: 1,
+          failedHandoff: true,
+          childError: errors.length,
+        },
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  if (!identity)
+    throw new Error("Agent failure result lacked delegated identity");
+}
+
+async function runManagerHandoffSmoke(ctx) {
+  // Reuses the established Manager assignment and project-message paths; only the turnover under test is exercised.
+  const branch = `herdsman/smoke-manager-handoff-${randomUUID()}`;
+  const marker = `MANAGER_HANDOFF_PENDING_${randomUUID()}`;
+  ctx.managerRecovery = { branch };
+  await run("git", ["add", ".pi/agents/managed-lead.md"], { cwd: ctx.rootCwd });
+  await run(
+    "git",
+    [
+      "-c",
+      "user.name=Herdsman Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "Configure Manager handoff Lead",
+    ],
+    { cwd: ctx.rootCwd },
+  );
+  const root = async () => rootSessionSnapshot(ctx);
+  await waitForEvidence(
+    ctx,
+    "manager-handoff-root-agent",
+    async () => {
+      const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+      const rootAgent = agents.find(
+        (agent) =>
+          agent.pane_id === ctx.rootPaneId &&
+          typeof agent.agent_session?.value === "string",
+      );
+      return { done: !!rootAgent };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Manager mode active.",
+    "--timeout",
+    "15000",
+  ]);
+  const prompt = `Use delegate_project exactly once with branch ${branch} and task exactly "Do not modify files. Call message_supervisor with MANAGER_HANDOFF_READY, then end the turn."`;
+  await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
+  const assignment = await waitForEvidence(
+    ctx,
+    "manager-handoff-assignment",
+    async () => {
+      const session = await root();
+      const rows = session ? staffDelegateResults(session.contents) : [];
+      if (rows.length > 1)
+        throw new Error("Manager handoff created multiple project assignments");
+      if (rows.length !== 1 || !rows[0].session || !rows[0].workspace_id)
+        return { done: false };
+      const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+      let lead;
+      for (const agent of agents)
+        if (
+          agent.workspace_id === rows[0].workspace_id &&
+          agent.pane_id !== ctx.rootPaneId &&
+          (await agentSessionId(ctx, agent)) === rows[0].session
+        ) {
+          lead = agent;
+          break;
+        }
+      if (!lead) return { done: false };
+      const leadSession = await isolatedSessionDetails(ctx, lead);
+      const ready = hasSuccessfulSupervisorMessage(
+        leadSession.contents,
+        "MANAGER_HANDOFF_READY",
+      );
+      const readyEntry =
+        session &&
+        sessionEntries(session.contents).find(
+          (entry) =>
+            entry.type === "custom_message" &&
+            entry.customType === "pi-herdsman-project_message" &&
+            entry.details?.branch === rows[0].branch &&
+            entry.details?.fromSessionId === rows[0].session &&
+            entry.content ===
+              `Project ${rows[0].branch} from lead ${rows[0].session}:\n\nMANAGER_HANDOFF_READY`,
+        );
+      if (!ready || !readyEntry) return { done: false };
+      return {
+        done: true,
+        value: { row: rows[0], lead, leadSession, owner: session },
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  const row = assignment.row;
+  const lead = assignment.lead;
+  const leadSessionId = row.session;
+  const worktrees = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  const worktree = (worktrees.worktrees ?? []).find(
+    (item) => item.branch === branch,
+  );
+  if (!worktree) throw new Error("Manager handoff worktree was not found");
+  const worktreePath = worktree.path ?? worktree.worktree_path;
+  ctx.owned.managerBranch = branch;
+  ctx.owned.managerWorkspaceId = row.workspace_id;
+  ctx.owned.managerWorktreePath = worktreePath;
+  ctx.managerRecovery = {
+    ...ctx.managerRecovery,
+    sessionId: leadSessionId,
+    workspaceId: row.workspace_id,
+    worktreePath,
+  };
+  const topology = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  const repoKey = topology.source?.repo_key;
+  if (typeof repoKey !== "string")
+    throw new Error("Manager handoff repository identity is missing");
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const runtime = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "supervision-v2",
+    hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
+  );
+  const assignmentPath = join(
+    runtime,
+    "assignments",
+    hash(repoKey),
+    `${hash(branch)}.json`,
+  );
+  const managerPath = join(
+    runtime,
+    "managers",
+    `${hash(ctx.rootWorkspaceId)}.json`,
+  );
+  const provenancePath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "smoke-faux-provenance.jsonl",
+  );
+  const leadProcessPid = async () => {
+    const info = await nestedCommand(ctx, [
+      "pane",
+      "process-info",
+      "--pane",
+      lead.pane_id,
+    ]);
+    const processes = candidateProcess(
+      info,
+      ctx.candidateExtension,
+      ctx.herdrStateExtension,
+    );
+    const provenance = (await readFile(provenancePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const proof = matchPiProvenance(
+      provenance,
+      leadSessionId,
+      lead.pane_id,
+      processes,
+      "manager-handoff-lead",
+      true,
+      ctx.expectedPiVersion,
+    );
+    return proof.pid;
+  };
+  const initialLeadPid = await leadProcessPid();
+  const initialBytes = await readFile(assignmentPath, "utf8");
+  const previousLease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await waitForEvidence(
+    ctx,
+    "manager-handoff-manager-absent",
+    async () => {
+      try {
+        await lstat(managerPath);
+        return { done: false };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: true };
+        throw error;
+      }
+    },
+    { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS },
+  );
+  const assertLeadContinuity = async () => {
+    assert.equal(await readFile(assignmentPath, "utf8"), initialBytes);
+    if (!managerHandoffLeadPidContinues(initialLeadPid, await leadProcessPid()))
+      throw new Error(
+        "Assigned Lead Pi process changed during Manager handoff",
+      );
+    const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+    const sameLead = agents.find(
+      (agent) =>
+        agent.workspace_id === row.workspace_id &&
+        agent.pane_id === lead.pane_id,
+    );
+    if (!sameLead || (await agentSessionId(ctx, sameLead)) !== leadSessionId)
+      throw new Error("Assigned Lead did not remain in its exact session");
+    const panes = (await nestedCommand(ctx, ["pane", "list"])).panes ?? [];
+    if (
+      resolve(
+        panes.find((pane) => pane.pane_id === lead.pane_id)?.cwd ?? "",
+      ) !== resolve(worktreePath)
+    )
+      throw new Error("Assigned Lead workspace changed during Manager handoff");
+  };
+  await assertLeadContinuity();
+  const leadPrompt = `Call message_supervisor exactly once with this exact text: ${marker}. Then end the turn.`;
+  await nestedCommand(ctx, ["agent", "prompt", lead.pane_id, leadPrompt]);
+  const messagesDir = join(dirname(assignmentPath), `${hash(branch)}.messages`);
+  const retained = await waitForEvidence(
+    ctx,
+    "manager-handoff-retained",
+    async () => {
+      try {
+        const records = [];
+        for (const name of await readdir(messagesDir))
+          if (name.endsWith(".json"))
+            try {
+              records.push(
+                JSON.parse(await readFile(join(messagesDir, name), "utf8")),
+              );
+            } catch (error) {
+              if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+                throw error;
+            }
+        const record = managerHandoffRetainedRecord(
+          records,
+          repoKey,
+          branch,
+          leadSessionId,
+          marker,
+        );
+        const leadSession = await isolatedSessionDetails(ctx, lead);
+        const toolEvidence =
+          leadSession &&
+          hasSuccessfulSupervisorMessage(leadSession.contents, marker);
+        return {
+          done: !!record && !!toolEvidence,
+          value: record,
+          progress: { retained: !!record, successfulToolCall: !!toolEvidence },
+        };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: false };
+        throw error;
+      }
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  let managerLeasePresent = true;
+  try {
+    await lstat(managerPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    managerLeasePresent = false;
+  }
+  const beforeReentry = await root();
+  if (!beforeReentry)
+    throw new Error("Manager handoff owner session disappeared before reentry");
+  if (
+    !managerHandoffCanReenter(
+      managerLeasePresent,
+      beforeReentry.contents,
+      repoKey,
+      branch,
+      leadSessionId,
+      retained.id,
+      marker,
+    )
+  )
+    throw new Error("Manager handoff was delivered before Manager reentry");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  const newLease = await waitForEvidence(
+    ctx,
+    "manager-handoff-reentered",
+    async () => {
+      try {
+        const lease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+        return { done: lease !== previousLease, value: lease };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: false };
+        throw error;
+      }
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+  const delivered = await waitForEvidence(
+    ctx,
+    "manager-handoff-delivered",
+    async () => {
+      const session = await root();
+      const entry =
+        session &&
+        managerHandoffDeliveredEntry(
+          session.contents,
+          repoKey,
+          branch,
+          leadSessionId,
+          retained.id,
+          marker,
+        );
+      return {
+        done: !!entry,
+        value: entry && session,
+        progress: { delivered: !!entry },
+      };
+    },
+    { timeoutMs: 60_000, stallMs: MODEL_STALL_MS },
+  );
+  await waitForEvidence(
+    ctx,
+    "manager-handoff-consumed",
+    async () => {
+      try {
+        return {
+          done: !(await readdir(messagesDir)).includes(`${retained.id}.json`),
+        };
+      } catch (error) {
+        if (error.code === "ENOENT") return { done: true };
+        throw error;
+      }
+    },
+    { timeoutMs: 30_000, stallMs: MODEL_STALL_MS },
+  );
+  await assertLeadContinuity();
+  assert.notEqual(newLease, previousLease);
+  if (
+    resolve(
+      (await nestedCommand(ctx, ["pane", "list"])).panes.find(
+        (pane) => pane.pane_id === lead.pane_id,
+      )?.cwd,
+    ) !== resolve(worktreePath)
+  )
+    throw new Error("Assigned Lead workspace changed during Manager handoff");
+}
+
 export function managerRecoveryResumePrompt(branch) {
   return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
@@ -2855,6 +3580,9 @@ export function initialPromptForScenario(scenario, ctx) {
       return undefined;
     case "terminal-failure":
       return undefined;
+    case "agent-terminal-failure":
+    case "manager-handoff":
+      return undefined;
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -2875,6 +3603,10 @@ export async function runScenario(ctx, scenario) {
       return runManagerRecoverySmoke(ctx);
     case "terminal-failure":
       return runTerminalFailureSmoke(ctx);
+    case "agent-terminal-failure":
+      return runAgentTerminalFailureSmoke(ctx);
+    case "manager-handoff":
+      return runManagerHandoffSmoke(ctx);
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -3156,6 +3888,18 @@ async function agentSessionId(ctx, agent) {
   if (identity?.kind === "id" && typeof identity.value === "string")
     return identity.value;
   return (await isolatedSessionDetails(ctx, agent))?.id;
+}
+
+export async function agentsForPiSession(
+  ctx,
+  agents,
+  sessionId,
+  getSessionId = agentSessionId,
+) {
+  const matches = [];
+  for (const agent of agents)
+    if ((await getSessionId(ctx, agent)) === sessionId) matches.push(agent);
+  return matches;
 }
 
 export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
@@ -6602,12 +7346,16 @@ async function main() {
     ctx.rootCwd =
       scenario === "manager-recovery" ||
       scenario === "terminal-failure" ||
+      scenario === "agent-terminal-failure" ||
+      scenario === "manager-handoff" ||
       scenario === "supervisor-agent"
         ? await prepareManagerRepository(paths)
         : repoRoot;
     if (
       scenario === "manager-recovery" ||
       scenario === "terminal-failure" ||
+      scenario === "agent-terminal-failure" ||
+      scenario === "manager-handoff" ||
       scenario === "supervisor-agent"
     ) {
       ctx.primaryCheckoutPath = ctx.rootCwd;
@@ -6634,6 +7382,36 @@ async function main() {
       );
       if (scenario === "continuation")
         await prepareContinuationFaux(paths, ctx.simulatedProviderExtension);
+    }
+    if (scenario === "agent-terminal-failure") {
+      await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
+      await writeFile(
+        join(ctx.rootCwd, ".pi", "agents", "smoke-failure-agent.md"),
+        `---\nname: smoke-failure-agent\nmodel: smoke-faux/terminal-agent-error\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+      );
+      await writeFile(
+        join(paths.piAgent, "settings.json"),
+        JSON.stringify(
+          {
+            retry: {
+              enabled: true,
+              maxRetries: 1,
+              baseDelayMs: 1,
+              maxAgentDelayMs: 1,
+              provider: { maxRetries: 0 },
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+    }
+    if (scenario === "manager-handoff") {
+      await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
+      await writeFile(
+        join(ctx.rootCwd, ".pi", "agents", "managed-lead.md"),
+        `---\nname: managed-lead\nmodel: smoke-faux/manager-handoff-lead\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+      );
     }
     if (scenario === "supervisor-agent") await prepareSupervisorAgent(ctx);
     if (args.simulated) ctx.authMechanism = "not required (simulated)";

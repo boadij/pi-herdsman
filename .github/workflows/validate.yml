@@ -153,7 +153,9 @@ jobs:
             continuation \
             chief-tree \
             supervisor-agent \
-            terminal-failure
+            terminal-failure \
+            agent-terminal-failure \
+            manager-handoff
           do
             echo "::group::Simulated smoke: $scenario"
             npm run smoke -- "$scenario" --simulated

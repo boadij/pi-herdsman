@@ -15,6 +15,8 @@ import { dirname, join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
+  acceptsFailedAgentHandoff,
+  isCompletedAgentResult,
   assertCoreToolEvidence,
   classifySmokeFailure,
   assertContinuationReadEvidence,
@@ -69,6 +71,10 @@ import {
   retirementNoticeEntries,
   assertPassiveRetirementEvidence,
   retainedProjectMessageRecord,
+  managerHandoffRetainedRecord,
+  managerHandoffDeliveredEntry,
+  managerHandoffCanReenter,
+  managerHandoffLeadPidContinues,
   managerCleanupTarget,
   removeManagerRecoveryWorktree,
   collectDiagnostics,
@@ -89,6 +95,7 @@ import {
   managerReadyAnswer,
   managerReadyEntryEvidence,
   exactIsolatedSession,
+  agentsForPiSession,
   isolatedSessionDetails,
   preparePi,
   prepareContinuationFaux,
@@ -1051,7 +1058,138 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   );
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
+  for (const scenario of ["agent-terminal-failure", "manager-handoff"]) {
+    assert.equal(parseSmokeArgs([scenario, "--simulated"]).scenario, scenario);
+    assert.throws(() => parseSmokeArgs([scenario]), /requires --simulated/);
+  }
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
+});
+
+test("simulated Agent failure decision requires the exact correlated failed handoff", () => {
+  const call = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "delegate_agent",
+        arguments: {
+          definition: "smoke-failure-agent",
+          label: "smoke-terminal-agent",
+        },
+      },
+    ],
+  };
+  const result = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "call-1",
+    content: "Session: child-session\nRequest: request-1",
+  };
+  const handoff = {
+    role: "user",
+    content:
+      "Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=child-session · status=failed\n\nDelegation status: failed",
+  };
+  const decideWith = (delivered) =>
+    decide("agent-terminal-failure", {
+      messages: [
+        { role: "user", content: "SMOKE_AGENT_FAILURE" },
+        call,
+        result,
+        ...(delivered ? [delivered] : []),
+      ],
+    });
+  assert.match(
+    decideWith(handoff).content[0].text,
+    /SMOKE_AGENT_FAILURE_DELIVERED/,
+  );
+  assert.match(
+    decideWith({
+      ...handoff,
+      content: handoff.content.replace("child-session", "wrong-session"),
+    }).content[0].text,
+    /Waiting for the exact Agent failure/,
+  );
+});
+
+test("failed Agent runner handoff requires the persisted custom-message identity", () => {
+  const handoff = {
+    type: "custom_message",
+    customType: "pi-herdsman-agent-result",
+    details: {
+      piSessionId: "child-session",
+      requestId: "request-1",
+      status: "failed",
+      error: { code: "execution_error" },
+    },
+    content:
+      "Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=child-session · status=failed\n\nDelegation status: failed",
+  };
+  assert.equal(
+    acceptsFailedAgentHandoff(handoff, "request-1", "child-session"),
+    true,
+  );
+  for (const invalid of [
+    { ...handoff, customType: "other" },
+    { ...handoff, details: { ...handoff.details, requestId: "wrong" } },
+    { ...handoff, details: { ...handoff.details, piSessionId: "wrong" } },
+    { ...handoff, details: { ...handoff.details, status: "completed" } },
+    {
+      ...handoff,
+      details: { ...handoff.details, error: { code: "empty_result" } },
+    },
+  ])
+    assert.equal(
+      acceptsFailedAgentHandoff(invalid, "request-1", "child-session"),
+      false,
+    );
+  const completed = {
+    ...handoff,
+    details: { ...handoff.details, status: "completed" },
+  };
+  assert.equal(
+    isCompletedAgentResult(completed, "request-1", "child-session"),
+    true,
+  );
+  assert.equal(
+    isCompletedAgentResult(completed, "other", "child-session"),
+    false,
+  );
+  assert.equal(
+    isCompletedAgentResult(completed, "request-1", "other-session"),
+    false,
+  );
+  assert.equal(
+    isCompletedAgentResult(handoff, "request-1", "child-session"),
+    false,
+  );
+});
+
+test("Agent failure observation resolves the managed Pi session identity", async () => {
+  const child = {
+    agent_session: { kind: "id", value: "herdr-agent-id" },
+    pane_id: "w1:p2",
+  };
+  const resolveSessionId = async (_ctx, agent) =>
+    agent.agent_session?.value === "herdr-agent-id" ? "child-session" : null;
+  assert.deepEqual(
+    await agentsForPiSession({}, [child], "child-session", resolveSessionId),
+    [child],
+  );
+  assert.deepEqual(
+    await agentsForPiSession({}, [child], "herdr-agent-id", resolveSessionId),
+    [],
+  );
+  assert.deepEqual(
+    await agentsForPiSession(
+      {},
+      [child, { ...child, pane_id: "w1:p3" }],
+      "child-session",
+      resolveSessionId,
+    ),
+    [child, { ...child, pane_id: "w1:p3" }],
+  );
 });
 
 test("manager-recovery timeout is bounded and scoped to its ready handshake", () => {
@@ -1415,7 +1553,11 @@ test("installed faux provider requeues decisions and emits its terminal failure 
           await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8")
         ).trim(),
       ),
-      { model: "terminal-error", hasRoster: true },
+      {
+        model: "terminal-error",
+        hasRoster: true,
+        sessionId: "faux-test-session",
+      },
     );
     const provenance = (
       await readFile(join(evidenceDir, "smoke-faux-provenance.jsonl"), "utf8")
@@ -3429,6 +3571,185 @@ test("retained project message selection ignores stale and wrong-scope records",
       marker,
     ),
     null,
+  );
+});
+
+test("manager handoff requires exact repository, assignment, sender, id, and content", () => {
+  const valid = {
+    id: "message-id",
+    repoKey: "repo",
+    branch: "feature/one",
+    fromSessionId: "lead-session",
+    text: "HANDOFF",
+  };
+  assert.equal(
+    managerHandoffRetainedRecord(
+      [valid],
+      "repo",
+      "feature/one",
+      "lead-session",
+      "HANDOFF",
+    ),
+    valid,
+  );
+  for (const wrong of [
+    { ...valid, repoKey: "other" },
+    { ...valid, branch: "feature/two" },
+    { ...valid, fromSessionId: "other-session" },
+  ])
+    assert.equal(
+      managerHandoffRetainedRecord(
+        [wrong],
+        "repo",
+        "feature/one",
+        "lead-session",
+        "HANDOFF",
+      ),
+      null,
+    );
+  const record = {
+    type: "custom_message",
+    customType: "pi-herdsman-project_message",
+    details: {
+      repoKey: "repo",
+      branch: "feature/one",
+      fromSessionId: "lead-session",
+      id: "message-id",
+    },
+    content: "Project feature/one from lead lead-session:\n\nHANDOFF",
+  };
+  const contents = JSON.stringify(record);
+  assert.deepEqual(
+    managerHandoffDeliveredEntry(
+      contents,
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    record,
+  );
+  assert.equal(
+    managerHandoffDeliveredEntry(
+      contents,
+      "other",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    null,
+  );
+  assert.equal(
+    managerHandoffDeliveredEntry(
+      contents,
+      "repo",
+      "feature/one",
+      "lead-session",
+      "wrong-id",
+      "HANDOFF",
+    ),
+    null,
+  );
+  assert.equal(
+    managerHandoffDeliveredEntry(
+      JSON.stringify({ ...record, content: "wrong" }),
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    null,
+  );
+  assert.equal(
+    managerHandoffCanReenter(
+      false,
+      "",
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    true,
+  );
+  assert.equal(
+    managerHandoffCanReenter(
+      true,
+      "",
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    false,
+  );
+  assert.equal(
+    managerHandoffCanReenter(
+      false,
+      contents,
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    false,
+  );
+  assert.equal(managerHandoffLeadPidContinues(123, 123), true);
+  assert.equal(managerHandoffLeadPidContinues(123, 456), false);
+});
+
+test("manager handoff faux decision waits for exact readiness after assignment", () => {
+  const prompt = {
+    role: "user",
+    content:
+      'Use delegate_project exactly once with branch smoke/branch and task exactly "ready"; MANAGER_HANDOFF_READY',
+  };
+  const call = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "delegate_project",
+        arguments: { branch: "smoke/branch", task: "ready" },
+      },
+    ],
+  };
+  const result = {
+    role: "toolResult",
+    toolName: "delegate_project",
+    toolCallId: "call-1",
+    content: "Session: lead-session\nWorkspace: workspace",
+  };
+  assert.equal(
+    decide("manager-handoff", { messages: [prompt] }).content[0].type,
+    "toolCall",
+  );
+  const assigned = [prompt, call, result];
+  assert.match(
+    decide("manager-handoff", { messages: assigned }).content[0].text,
+    /Waiting for the exact assigned Lead readiness/,
+  );
+  const ready = {
+    role: "user",
+    content:
+      "Project smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
+  };
+  assert.match(
+    decide("manager-handoff", { messages: [...assigned, ready] }).content[0]
+      .text,
+    /MANAGER_HANDOFF_READY_RECEIVED/,
+  );
+  assert.match(
+    decide("manager-handoff", {
+      messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
+    }).content[0].text,
+    /Waiting for the exact assigned Lead readiness/,
   );
 });
 
