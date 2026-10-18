@@ -940,6 +940,24 @@ export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
   return worktree;
 }
 
+export function captureManagerHandoffWorktree(
+  ctx,
+  worktrees,
+  branch,
+  expectedWorkspaceId,
+) {
+  const worktree = captureTerminalFailureWorktree(ctx, worktrees, branch);
+  if (!worktree) return null;
+  if (
+    expectedWorkspaceId !== undefined &&
+    worktree.open_workspace_id !== expectedWorkspaceId
+  )
+    throw new Error(
+      "Manager assignment workspace does not match exact worktree",
+    );
+  return worktree;
+}
+
 export function captureTerminalFailureAssignment(ctx, path, workspaceId) {
   if (typeof path !== "string" || !path || !workspaceId)
     throw new Error("exact assigned worktree identity is incomplete");
@@ -1600,14 +1618,101 @@ export function acceptsFailedAgentHandoff(entry, requestId, sessionId) {
   );
 }
 
-export function isCompletedAgentResult(entry, requestId, sessionId) {
-  return (
-    entry?.type === "custom_message" &&
-    entry.customType === "pi-herdsman-agent-result" &&
-    entry.details?.requestId === requestId &&
-    entry.details?.piSessionId === sessionId &&
-    entry.details?.status === "completed"
+export function failedAgentHandoff(entries, requestId, sessionId) {
+  const handoffs = entries.filter(
+    (entry) =>
+      entry?.type === "custom_message" &&
+      entry.customType === "pi-herdsman-agent-result" &&
+      entry.details?.requestId === requestId &&
+      entry.details?.piSessionId === sessionId,
   );
+  if (handoffs.length > 1)
+    throw new Error("Agent assignment delivered multiple final results");
+  if (handoffs.length === 0) return null;
+  if (!acceptsFailedAgentHandoff(handoffs[0], requestId, sessionId))
+    throw new Error("Agent assignment delivered the wrong terminal outcome");
+  return handoffs[0];
+}
+
+export function agentRetirementConverged({
+  matchingAgents,
+  panePresent,
+  processAlive,
+  mailboxPending,
+}) {
+  return (
+    matchingAgents === 0 &&
+    panePresent === false &&
+    processAlive === false &&
+    mailboxPending === false
+  );
+}
+
+async function exactAgentMailboxPending(ctx, identity) {
+  const root = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "mailboxes-v5",
+  );
+  let dirs;
+  try {
+    dirs = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  for (const dir of dirs) {
+    if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
+    if (dir.isSymbolicLink())
+      throw new Error("Agent mailbox inventory contains a symlink");
+    if (!dir.isDirectory()) continue;
+    const mailbox = join(root, dir.name);
+    let state;
+    try {
+      const path = join(mailbox, "state.json");
+      const details = await lstat(path);
+      if (
+        !details.isFile() ||
+        details.isSymbolicLink() ||
+        details.size > 64 * 1024
+      )
+        throw new Error("exact Agent mailbox state is not a safe file");
+      state = JSON.parse(await readFile(path, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (
+      state?.ownerSessionId === identity.ownerSessionId &&
+      state.agentLabel === "smoke-terminal-agent" &&
+      state.piSessionId === identity.sessionId
+    )
+      return true;
+    for (const prefix of ["request", "result"]) {
+      const path = join(mailbox, `${prefix}-${identity.requestId}.json`);
+      try {
+        const details = await lstat(path);
+        if (
+          !details.isFile() ||
+          details.isSymbolicLink() ||
+          details.size > 4 * 1024 * 1024
+        )
+          throw new Error(
+            "exact Agent mailbox request/result is not a safe file",
+          );
+        const record = JSON.parse(await readFile(path, "utf8"));
+        if (
+          record.requestId === identity.requestId &&
+          record.ownerSessionId === identity.ownerSessionId &&
+          record.agentLabel === "smoke-terminal-agent"
+        )
+          return true;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return false;
 }
 
 export function managerHandoffCanReenter(
@@ -2859,22 +2964,6 @@ async function runTerminalFailureSmoke(ctx) {
 }
 
 async function runAgentTerminalFailureSmoke(ctx) {
-  await writeFile(
-    join(ctx.paths.piAgent, "settings.json"),
-    JSON.stringify(
-      {
-        retry: {
-          enabled: true,
-          maxRetries: 1,
-          baseDelayMs: 1,
-          maxAgentDelayMs: 1,
-          provider: { maxRetries: 0 },
-        },
-      },
-      null,
-      2,
-    ) + "\n",
-  );
   const prompt =
     "SMOKE_AGENT_FAILURE: delegate exactly one smoke-failure-agent with label smoke-terminal-agent; then report its failed result.";
   await waitForEvidence(
@@ -2938,7 +3027,12 @@ async function runAgentTerminalFailureSmoke(ctx) {
       const requestId = raw.match(/^Request: ([^\n]+)$/m)?.[1];
       if (!sessionId || !requestId)
         throw new Error("Agent delegation omitted session/request identity");
-      identity = { callId: call.id, sessionId, requestId };
+      const ownerSessionId = entries.find(
+        (entry) => entry.type === "session",
+      )?.id;
+      if (!ownerSessionId)
+        throw new Error("Agent owner session identity is missing");
+      identity = { callId: call.id, sessionId, requestId, ownerSessionId };
       // Hold the first native error until the exact child process and faux provenance are visible.
       let childAgent;
       const persistedChild = await exactIsolatedSession(ctx, sessionId);
@@ -2998,15 +3092,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
           await writeFile(observedPath, "observed\n");
         }
       }
-      const resultIndex = entries.indexOf(result);
-      const failedHandoffs = entries.filter(
-        (entry, index) =>
-          index > resultIndex &&
-          acceptsFailedAgentHandoff(entry, requestId, sessionId),
-      );
-      if (failedHandoffs.length > 1)
-        throw new Error("Agent failure result was delivered more than once");
-      const handoff = failedHandoffs[0];
+      const handoff = failedAgentHandoff(entries, requestId, sessionId);
       if (!handoff || !observedAgentEvidence)
         return {
           done: false,
@@ -3088,9 +3174,6 @@ async function runAgentTerminalFailureSmoke(ctx) {
         .filter(Boolean)
         .map((line) => JSON.parse(line))
         .filter((row) => row.sessionId === sessionId);
-      const successfulHandoffs = entries.filter((entry) =>
-        isCompletedAgentResult(entry, requestId, sessionId),
-      );
       const acknowledged = entries.some(
         (entry, index) =>
           index > entries.indexOf(handoff) &&
@@ -3106,7 +3189,6 @@ async function runAgentTerminalFailureSmoke(ctx) {
         settlements.length !== 1 ||
         settlements[0].aborted !== false ||
         observedAgentEvidence.sessionId !== sessionId ||
-        successfulHandoffs.length !== 0 ||
         !acknowledged
       )
         return {
@@ -3114,7 +3196,6 @@ async function runAgentTerminalFailureSmoke(ctx) {
           progress: {
             attempts: attempts.length,
             settlements: settlements.length,
-            successfulHandoffs: successfulHandoffs.length,
             acknowledged,
           },
         };
@@ -3132,6 +3213,47 @@ async function runAgentTerminalFailureSmoke(ctx) {
   );
   if (!identity)
     throw new Error("Agent failure result lacked delegated identity");
+  await waitForEvidence(
+    ctx,
+    "agent-terminal-failure-retired",
+    async () => {
+      const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+      const matching = await agentsForPiSession(
+        ctx,
+        agents,
+        identity.sessionId,
+      );
+      const panes = (await nestedCommand(ctx, ["pane", "list"])).panes ?? [];
+      const panePresent = panes.some(
+        (pane) => pane.pane_id === observedAgentEvidence.agentPaneId,
+      );
+      const processAlive = (() => {
+        try {
+          process.kill(observedAgentEvidence.process.pid, 0);
+          return true;
+        } catch (error) {
+          return error?.code !== "ESRCH";
+        }
+      })();
+      const mailboxPending = await exactAgentMailboxPending(ctx, identity);
+      const done = agentRetirementConverged({
+        matchingAgents: matching.length,
+        panePresent,
+        processAlive,
+        mailboxPending,
+      });
+      return {
+        done,
+        progress: {
+          matchingAgents: matching.length,
+          panePresent,
+          processAlive,
+          mailboxPending,
+        },
+      };
+    },
+    { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
+  );
 }
 
 async function runManagerHandoffSmoke(ctx) {
@@ -3139,6 +3261,7 @@ async function runManagerHandoffSmoke(ctx) {
   const branch = `herdsman/smoke-manager-handoff-${randomUUID()}`;
   const marker = `MANAGER_HANDOFF_PENDING_${randomUUID()}`;
   ctx.managerRecovery = { branch };
+  ctx.owned.managerBranch = branch;
   await run("git", ["add", ".pi/agents/managed-lead.md"], { cwd: ctx.rootCwd });
   await run(
     "git",
@@ -3186,19 +3309,43 @@ async function runManagerHandoffSmoke(ctx) {
     ctx,
     "manager-handoff-assignment",
     async () => {
+      const topology = await nestedCommand(ctx, [
+        "worktree",
+        "list",
+        "--workspace",
+        ctx.rootWorkspaceId,
+      ]);
+      if (!Array.isArray(topology.worktrees))
+        throw new Error("Manager handoff worktree topology is unavailable");
+      const worktree = captureManagerHandoffWorktree(
+        ctx,
+        topology.worktrees,
+        branch,
+      );
       const session = await root();
       const rows = session ? staffDelegateResults(session.contents) : [];
       if (rows.length > 1)
         throw new Error("Manager handoff created multiple project assignments");
-      if (rows.length !== 1 || !rows[0].session || !rows[0].workspace_id)
+      const row = rows.length === 1 ? rows[0] : null;
+      if (row?.workspace_id) {
+        ctx.owned.managerWorkspaceId = row.workspace_id;
+      }
+      if (row?.workspace_id)
+        captureManagerHandoffWorktree(
+          ctx,
+          topology.worktrees,
+          branch,
+          row.workspace_id,
+        );
+      if (!row || !row.session || !row.workspace_id || !worktree)
         return { done: false };
       const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
       let lead;
       for (const agent of agents)
         if (
-          agent.workspace_id === rows[0].workspace_id &&
+          agent.workspace_id === row.workspace_id &&
           agent.pane_id !== ctx.rootPaneId &&
-          (await agentSessionId(ctx, agent)) === rows[0].session
+          (await agentSessionId(ctx, agent)) === row.session
         ) {
           lead = agent;
           break;
@@ -3215,15 +3362,15 @@ async function runManagerHandoffSmoke(ctx) {
           (entry) =>
             entry.type === "custom_message" &&
             entry.customType === "pi-herdsman-project_message" &&
-            entry.details?.branch === rows[0].branch &&
-            entry.details?.fromSessionId === rows[0].session &&
+            entry.details?.branch === row.branch &&
+            entry.details?.fromSessionId === row.session &&
             entry.content ===
-              `Project ${rows[0].branch} from lead ${rows[0].session}:\n\nMANAGER_HANDOFF_READY`,
+              `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
       if (!ready || !readyEntry) return { done: false };
       return {
         done: true,
-        value: { row: rows[0], lead, leadSession, owner: session },
+        value: { row, lead, leadSession, owner: session },
       };
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
@@ -3242,7 +3389,6 @@ async function runManagerHandoffSmoke(ctx) {
   );
   if (!worktree) throw new Error("Manager handoff worktree was not found");
   const worktreePath = worktree.path ?? worktree.worktree_path;
-  ctx.owned.managerBranch = branch;
   ctx.owned.managerWorkspaceId = row.workspace_id;
   ctx.owned.managerWorktreePath = worktreePath;
   ctx.managerRecovery = {

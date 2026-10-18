@@ -16,7 +16,8 @@ import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
   acceptsFailedAgentHandoff,
-  isCompletedAgentResult,
+  failedAgentHandoff,
+  agentRetirementConverged,
   assertCoreToolEvidence,
   classifySmokeFailure,
   assertContinuationReadEvidence,
@@ -81,6 +82,7 @@ import {
   rootDelegationDiagnostics,
   bestEffortDiagnostics,
   captureTerminalFailureAssignment,
+  captureManagerHandoffWorktree,
   coreAgentDefinitionsExpectations,
   captureTerminalFailureWorktree,
   terminalFailureAssignmentPoll,
@@ -1130,6 +1132,10 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     acceptsFailedAgentHandoff(handoff, "request-1", "child-session"),
     true,
   );
+  assert.equal(
+    failedAgentHandoff([handoff], "request-1", "child-session"),
+    handoff,
+  );
   for (const invalid of [
     { ...handoff, customType: "other" },
     { ...handoff, details: { ...handoff.details, requestId: "wrong" } },
@@ -1144,26 +1150,127 @@ test("failed Agent runner handoff requires the persisted custom-message identity
       acceptsFailedAgentHandoff(invalid, "request-1", "child-session"),
       false,
     );
-  const completed = {
-    ...handoff,
-    details: { ...handoff.details, status: "completed" },
+  assert.equal(failedAgentHandoff([], "request-1", "child-session"), null);
+  assert.throws(
+    () =>
+      failedAgentHandoff(
+        [
+          handoff,
+          {
+            ...handoff,
+            details: { ...handoff.details, error: { code: "empty_result" } },
+          },
+        ],
+        "request-1",
+        "child-session",
+      ),
+    /multiple final results/,
+  );
+  for (const invalid of [
+    { ...handoff, details: { ...handoff.details, status: "completed" } },
+    {
+      ...handoff,
+      details: { ...handoff.details, error: { code: "empty_result" } },
+    },
+  ])
+    assert.throws(
+      () => failedAgentHandoff([invalid], "request-1", "child-session"),
+      /wrong terminal outcome/,
+    );
+});
+
+test("failed Agent retirement requires absent process, pane, registration, and mailbox", () => {
+  const converged = {
+    matchingAgents: 0,
+    panePresent: false,
+    processAlive: false,
+    mailboxPending: false,
   };
+  assert.equal(agentRetirementConverged(converged), true);
   assert.equal(
-    isCompletedAgentResult(completed, "request-1", "child-session"),
-    true,
-  );
-  assert.equal(
-    isCompletedAgentResult(completed, "other", "child-session"),
+    agentRetirementConverged({ ...converged, processAlive: true }),
     false,
   );
   assert.equal(
-    isCompletedAgentResult(completed, "request-1", "other-session"),
+    agentRetirementConverged({ ...converged, mailboxPending: true }),
     false,
   );
+});
+
+test("Manager handoff cleanup owns the worktree before Lead readiness", async () => {
+  const branch = "herdsman/smoke-manager-handoff-test";
+  const ctx = { owned: { managerBranch: branch } };
+  const worktree = {
+    branch,
+    path: "/smoke/manager-handoff",
+    open_workspace_id: "workspace-2",
+  };
+  // A readiness timeout after creation still leaves cleanup exact ownership.
   assert.equal(
-    isCompletedAgentResult(handoff, "request-1", "child-session"),
-    false,
+    captureManagerHandoffWorktree(ctx, [worktree], branch),
+    worktree,
   );
+  assert.equal(ctx.owned.managerWorktreePath, worktree.path);
+  assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
+  assert.equal(
+    managerCleanupTarget(
+      [worktree],
+      branch,
+      ctx.owned.managerWorktreePath,
+      ctx.owned.managerWorkspaceId,
+    ),
+    worktree,
+  );
+  assert.throws(
+    () => captureManagerHandoffWorktree(ctx, [worktree], branch, "wrong"),
+    /does not match exact worktree/,
+  );
+  const removals = [];
+  const paths = { root: "/smoke", authLink: "/smoke/auth" };
+  const cleanupCtx = {
+    rootWorkspaceId: "root-workspace",
+    managerRecovery: { branch },
+    primaryCheckoutPath: "/smoke/project",
+  };
+  const result = await cleanup(paths, ctx.owned, cleanupCtx, {
+    remove: async () => {},
+    removeFile: async () => {
+      const error = new Error("missing auth link");
+      error.code = "ENOENT";
+      throw error;
+    },
+    herdrCommand: async (args) => {
+      if (args[0] === "worktree" && args[1] === "list")
+        return { worktrees: [worktree] };
+      if (args[0] === "worktree" && args[1] === "remove") removals.push(args);
+      return {};
+    },
+    runCommand: async () => {
+      const error = new Error("branch absent");
+      error.code = 1;
+      throw error;
+    },
+  });
+  assert.equal(result, null);
+  assert.deepEqual(removals, [
+    ["worktree", "remove", "--workspace", "workspace-2"],
+  ]);
+
+  const unregistered = await cleanup(
+    paths,
+    { managerBranch: branch },
+    cleanupCtx,
+    {
+      remove: async () => {},
+      removeFile: async () => {
+        const error = new Error("missing auth link");
+        error.code = "ENOENT";
+        throw error;
+      },
+      herdrCommand: async () => ({ worktrees: [worktree] }),
+    },
+  );
+  assert.match(unregistered ?? "", /captured worktree path is unavailable/);
 });
 
 test("Agent failure observation resolves the managed Pi session identity", async () => {
