@@ -728,6 +728,10 @@ export function managerAssignmentIdentity(row, worktree, branch) {
   );
 }
 
+export function managerAssignmentBranchMismatch(row, branch) {
+  return !!row && row.branch !== branch;
+}
+
 export function staffActionResults(contents, toolName, action, prompt) {
   const entries = sessionEntries(contents);
   const byId = new Map(
@@ -3402,7 +3406,7 @@ async function runManagerHandoffSmoke(ctx) {
       const diagnostics = (values = {}) =>
         managerAssignmentDiagnostics({
           worktree: worktree ? "true" : "false",
-          result: rows.length ? String(row?.branch === branch) : "false",
+          result: rows.length ? String(row?.branch === branch) : "not_observed",
           identity: managerAssignmentIdentity(row, worktree, branch),
           lead: "not_yet_evaluated",
           supervisorCall: "not_yet_evaluated",
@@ -3412,8 +3416,10 @@ async function runManagerHandoffSmoke(ctx) {
           provenanceMatch: "not_evaluated",
           ...values,
         });
-      if (row && row.branch !== branch)
-        return { done: false, progress: diagnostics({ identity: "false" }) };
+      if (managerAssignmentBranchMismatch(row, branch))
+        throw new Error(
+          "Manager handoff delegate result has a mismatched branch identity",
+        );
       if (row?.workspace_id) {
         ctx.owned.managerWorkspaceId = row.workspace_id;
       }

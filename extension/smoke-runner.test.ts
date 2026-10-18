@@ -69,6 +69,7 @@ import {
   staffDelegateResults,
   managerAssignmentDiagnostics,
   managerAssignmentIdentity,
+  managerAssignmentBranchMismatch,
   staffActionResults,
   projectMessageEntries,
   retirementNoticeEntries,
@@ -1234,6 +1235,30 @@ test("failed Agent retirement requires absent process, pane, registration, and m
 });
 
 test("Manager assignment diagnostics are bounded and reject a mismatched branch identity", () => {
+  assert.equal(managerAssignmentBranchMismatch(null, "expected-branch"), false);
+  assert.equal(
+    managerAssignmentBranchMismatch(
+      { branch: "expected-branch" },
+      "expected-branch",
+    ),
+    false,
+  );
+  assert.equal(
+    managerAssignmentBranchMismatch(
+      { branch: "unexpected-branch" },
+      "expected-branch",
+    ),
+    true,
+  );
+  assert.equal(
+    managerAssignmentDiagnostics({}).successfulCorrelatedDelegateProjectResult,
+    "not_observed",
+  );
+  assert.equal(
+    managerAssignmentDiagnostics({ result: "false" })
+      .successfulCorrelatedDelegateProjectResult,
+    "false",
+  );
   assert.equal(
     managerAssignmentIdentity(
       {
