@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.30.0](https://github.com/boadij/pi-herdsman/compare/v0.29.0...v0.30.0) (2026-10-18)
+
+
+### Features
+
+* **config:** support trusted project preference overrides ([#446](https://github.com/boadij/pi-herdsman/issues/446)) ([5189afa](https://github.com/boadij/pi-herdsman/commit/5189afa4741edb3f58670f9f14bff43b5b9933fa))
+* **manager:** deliver passive worktree retirement notices ([#436](https://github.com/boadij/pi-herdsman/issues/436)) ([dbbba71](https://github.com/boadij/pi-herdsman/commit/dbbba71a9f4aee1eb2d48c12624dcee5939fa2e0))
+
+
+### Fixes
+
+* **lock:** prevent stranded locks after interrupted release ([#435](https://github.com/boadij/pi-herdsman/issues/435)) ([31b5b98](https://github.com/boadij/pi-herdsman/commit/31b5b985299f519a9a1921431c8f46a05303b541))
+* **manager:** preserve pending handoffs during project retirement ([#434](https://github.com/boadij/pi-herdsman/issues/434)) ([00c05a8](https://github.com/boadij/pi-herdsman/commit/00c05a8fd9de2142c10ed86db3da26bf84850c30))
+
+
+### Tests
+
+* **smoke:** cover Agent failures and Manager handoff recovery ([#448](https://github.com/boadij/pi-herdsman/issues/448)) ([36ea3f9](https://github.com/boadij/pi-herdsman/commit/36ea3f9f8e78f3fce169d4a8e3f91df397d4aee4))
+
+
+### Other Changes
+
+* **repo:** add lightweight GitHub issue forms ([#445](https://github.com/boadij/pi-herdsman/issues/445)) ([cf9a62f](https://github.com/boadij/pi-herdsman/commit/cf9a62f45c674271302e594969d3d15be05afa1a)), closes [#443](https://github.com/boadij/pi-herdsman/issues/443)
+
 ## [0.29.0](https://github.com/boadij/pi-herdsman/compare/v0.28.0...v0.29.0) (2026-10-17)
 
 
