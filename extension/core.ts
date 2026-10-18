@@ -12,8 +12,12 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { TextDecoder } from "node:util";
-import type { ResultBinding } from "./storage.ts";
-import { resolveResultRef } from "./storage.ts";
+import { createHash } from "node:crypto";
+import type { RequiredEvidence, ResultBinding } from "./storage.ts";
+import {
+  persistRequiredEvidenceSnapshot,
+  resolveResultRef,
+} from "./storage.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export function currentTurnIsSoleToolCall(
@@ -192,6 +196,24 @@ export function snapshotTextFiles(
   return snapshots;
 }
 
+/** Snapshot validated source files into immutable assignment-scoped storage. */
+export function persistRequiredTextFiles(
+  assignmentId: string,
+  inputs: readonly string[],
+  cwd: string,
+  operation: string,
+): RequiredEvidence[] {
+  return snapshotTextFiles(inputs, cwd, operation, {
+    maxBytes: 1024 * 1024,
+  }).map((snapshot) =>
+    persistRequiredEvidenceSnapshot(
+      assignmentId,
+      snapshot.input,
+      snapshot.text,
+    ),
+  );
+}
+
 export type PreparedMessageInput = {
   text: string;
   canonicalPaths: string[];
@@ -206,6 +228,7 @@ export type MessagePreparationOptions = {
     text: string,
     resultBindings: readonly ResultBinding[],
   ) => number;
+  verifiedEvidence?: readonly Pick<RequiredEvidence, "path" | "sha256">[];
 };
 
 function escapeMessageFileName(path: string): string {
@@ -300,10 +323,23 @@ export function prepareMessageInput(
       );
       const current = fstatSync(fd);
       if (!current.isFile()) throw new Error("not a regular file");
+      const verified = options.verifiedEvidence?.find(
+        (entry) => realpathSync(entry.path) === file.canonicalPath,
+      );
       if (
         current.dev !== file.dev ||
         current.ino !== file.ino ||
-        current.size !== file.bytes ||
+        current.size !== file.bytes
+      ) {
+        if (verified)
+          fail(
+            "invalid_request",
+            `Required evidence identity check failed: ${file.input}`,
+            operation,
+          );
+        continue;
+      }
+      const cannotInline =
         current.size >
           (options.inlineLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES) ||
         ((options.fits !== undefined ||
@@ -318,9 +354,8 @@ export function prepareMessageInput(
               .concat(`${heading}:\n${text}`)
               .join("\n\n"),
             resultBindings,
-          ))
-      )
-        continue;
+          ));
+      if (cannotInline && !verified) continue;
       bytes = Buffer.allocUnsafe(current.size);
       let offset = 0;
       while (offset < current.size) {
@@ -337,6 +372,16 @@ export function prepareMessageInput(
       if (offset !== current.size || fstatSync(fd).size !== current.size)
         continue;
       bytes = bytes.subarray(0, offset);
+      if (
+        verified &&
+        createHash("sha256").update(bytes).digest("hex") !== verified.sha256
+      )
+        fail(
+          "invalid_request",
+          `Required evidence integrity check failed: ${file.input}`,
+          operation,
+        );
+      if (cannotInline) continue;
     } catch (error) {
       if (error instanceof OperationError) throw error;
       if (

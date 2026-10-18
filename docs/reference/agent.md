@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-Managed-agent operations are exposed as nine distinct tools:
+Managed-agent operations are exposed as ten distinct tools:
 
 ```text
 list_agents
@@ -14,6 +14,7 @@ reply_agent
 close_agent
 inspect_agent
 read_agent_transcript
+update_assignment_evidence
 ```
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
@@ -351,9 +352,34 @@ through a hidden binding; canonical `result:<request-id>` refs remain logical
 result references when explicitly supplied as evidence. `files` remains a
 `string[]` for all three forms.
 
-`files` is explicit per-message evidence. A fresh delegated session does not
-implicitly receive the caller's conversation or caller-side attachments.
-`continue_agent` resumes the exact saved managed-agent Pi history.
+`files` remains explicit per-message evidence; arbitrary caller conversation
+and attachments are not inherited. A fresh managed Agent in a verified project
+assignment also receives that assignment's required evidence automatically.
+That received set is fixed for the accepted assignment: later parent changes do
+not silently rewrite it. For an eligible project-scoped managed Agent, the
+`update_assignment_evidence` tool below adds local requirements for descendants;
+inherited evidence is owned by the project owner. `continue_agent` resumes the
+exact saved managed-agent Pi history and its verified assignment evidence.
+
+## `update_assignment_evidence`
+
+```json
+{
+  "add": ["review.md", "result:reviewer#1"],
+  "text": "Keep the existing error behavior.",
+  "remove": ["<locally-added-evidence-id>"]
+}
+```
+
+Available only to an eligible managed Agent with a verified project
+assignment. Add files, exact available result references, or text as required
+evidence for its descendants; remove only evidence added locally to this
+assignment. `remove` takes exact evidence IDs returned by the tool. Inherited
+evidence cannot be removed by a child; ask the project owner to remove an
+obsolete inherited item. Calling without changes returns the effective set.
+Only these optional fields are accepted. See the
+[staff-tool reference](staff.md#update_assignment_evidence) for assignment
+evidence semantics and snapshot limits.
 
 Startup uses Herdsman's default timeout budget; it is unrelated to managed-agent
 Pi shell execution. Direct calls from a managed agent to the Pi built-in

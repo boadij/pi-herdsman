@@ -68,6 +68,7 @@ import {
   FILE_HANDOFF_GUIDANCE,
   prepareMessageInput,
   MANAGED_AGENT_BOOTSTRAP_EVENT,
+  persistRequiredTextFiles,
 } from "./core.ts";
 import {
   collapseDisplayText,
@@ -87,11 +88,20 @@ import {
   steerAcceptanceAllowed,
   currentTurnIsSoleToolCall,
 } from "./core.ts";
-import { importResultBindings } from "./agent-controller.ts";
+import {
+  importResultBindings,
+  resolveMessageFiles,
+} from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
 import { readConfig, readEffectiveConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
-import type { ResultBinding } from "./storage.ts";
+import {
+  isRequiredEvidence,
+  readRequiredEvidenceSnapshot,
+  type RequiredEvidence,
+  type ResultBinding,
+  persistRequiredEvidenceSnapshot,
+} from "./storage.ts";
 import {
   agentDefinitionEnabled,
   validateAgentDefinitionReferences,
@@ -101,6 +111,187 @@ import {
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
 ${DELEGATING_AGENT_SCOPE_DESCRIPTION}
 ${FILE_HANDOFF_GUIDANCE}`;
+
+export const AGENT_REQUIRED_EVIDENCE_ENTRY =
+  "pi-herdsman-agent-required-evidence";
+const SESSION_REQUEST_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type AcceptedEvidenceContext = {
+  version: 1;
+  sessionId: string;
+  requestId: string;
+  runId: string;
+  ownerSessionId: string;
+  workspaceId: string;
+  agentLabel: string;
+  paneId: string;
+  projectAssignmentId?: string;
+  evidenceAssignmentId?: string;
+  inheritedEvidence: RequiredEvidence[];
+  localEvidence: RequiredEvidence[];
+};
+
+/** Read only the exact session branch; malformed or foreign entries fail closed. */
+export function managedAgentRequiredEvidence(ctx: ExtensionContext):
+  | {
+      projectAssignmentId: string;
+      evidenceAssignmentId: string;
+      inheritedEvidence: RequiredEvidence[];
+      localEvidence: RequiredEvidence[];
+      effectiveEvidence: RequiredEvidence[];
+    }
+  | undefined {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const assignment = managedAgentIdentity(ctx);
+  const identity = sessionAgentIdentity(
+    ctx.sessionManager.getEntries(),
+    sessionId,
+  );
+  const matches = ctx.sessionManager
+    .getBranch()
+    .filter(
+      (entry: any) =>
+        entry?.type === "custom" &&
+        entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+    );
+  let latest: AcceptedEvidenceContext | undefined;
+  const localEvidenceById = new Map<string, RequiredEvidence>();
+  for (const entry of matches as any[]) {
+    const data = entry.data as AcceptedEvidenceContext;
+    if (
+      !data ||
+      data.version !== 1 ||
+      data.sessionId !== sessionId ||
+      typeof data.requestId !== "string" ||
+      !SESSION_REQUEST_ID.test(data.requestId) ||
+      (data.projectAssignmentId !== undefined &&
+        !SESSION_REQUEST_ID.test(data.projectAssignmentId)) ||
+      (data.evidenceAssignmentId !== undefined &&
+        !SESSION_REQUEST_ID.test(data.evidenceAssignmentId)) ||
+      (data.projectAssignmentId === undefined) !==
+        (data.evidenceAssignmentId === undefined) ||
+      !Array.isArray(data.inheritedEvidence) ||
+      !data.inheritedEvidence.every(isRequiredEvidence) ||
+      !Array.isArray(data.localEvidence) ||
+      !data.localEvidence.every(isRequiredEvidence) ||
+      (data.projectAssignmentId === undefined &&
+        (data.inheritedEvidence.length || data.localEvidence.length)) ||
+      new Set(
+        [...data.inheritedEvidence, ...data.localEvidence].map(
+          (item) => item.id,
+        ),
+      ).size !==
+        data.inheritedEvidence.length + data.localEvidence.length
+    )
+      throw new Error(
+        "Managed-agent required-evidence session metadata is malformed",
+      );
+    if (data.requestId !== assignment.activeRequestId) continue;
+    if (
+      !identity ||
+      identity.label !== data.agentLabel ||
+      data.runId !== assignment.runId ||
+      data.ownerSessionId !== assignment.ownerSessionId ||
+      data.workspaceId !== assignment.workspaceId ||
+      data.paneId !== assignment.paneId ||
+      data.agentLabel !== assignment.agentLabel ||
+      data.projectAssignmentId !== assignment.projectAssignmentId ||
+      !assignment.activeRequestId ||
+      data.requestId !== assignment.activeRequestId
+    )
+      throw new Error(
+        "Managed-agent required-evidence session metadata is foreign",
+      );
+    for (const item of data.localEvidence) {
+      const previous = localEvidenceById.get(item.id);
+      if (previous && !isDeepStrictEqual(previous, item))
+        throw new Error("Conflicting managed-agent required-evidence metadata");
+      localEvidenceById.set(item.id, item);
+    }
+    if (
+      latest &&
+      latest.requestId === data.requestId &&
+      (latest.projectAssignmentId !== data.projectAssignmentId ||
+        latest.evidenceAssignmentId !== data.evidenceAssignmentId ||
+        !isDeepStrictEqual(latest.inheritedEvidence, data.inheritedEvidence) ||
+        latest.localEvidence.some((item) => {
+          const retained = data.localEvidence.find(
+            (next) => next.id === item.id,
+          );
+          return retained !== undefined && !isDeepStrictEqual(item, retained);
+        }))
+    )
+      throw new Error("Conflicting managed-agent required-evidence metadata");
+    latest = data;
+  }
+  return latest?.projectAssignmentId
+    ? {
+        ...latest,
+        inheritedEvidence: [...latest.inheritedEvidence],
+        localEvidence: [...latest.localEvidence],
+        effectiveEvidence: [
+          ...latest.inheritedEvidence,
+          ...latest.localEvidence,
+        ],
+      }
+    : undefined;
+}
+
+function persistAcceptedRequiredEvidence(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  request: RequestRecord,
+  state: ManagedAgentState,
+): void {
+  if (request.projectAssignmentId && !request.evidenceAssignmentId)
+    throw new Error("Managed-agent evidence assignment identity is invalid");
+  if (
+    !request.projectAssignmentId &&
+    ((request.requiredEvidence?.length ?? 0) ||
+      (request.inheritedEvidence?.length ?? 0) ||
+      (request.localEvidence?.length ?? 0))
+  )
+    throw new Error("Unscoped task cannot retain project evidence");
+  const sessionId = ctx.sessionManager.getSessionId();
+  if (sessionId !== state.piSessionId)
+    throw new Error(
+      "Managed-agent session changed before required-evidence acceptance",
+    );
+  const entry: AcceptedEvidenceContext = {
+    version: 1,
+    sessionId,
+    requestId: request.requestId,
+    runId: request.runId,
+    ownerSessionId: request.ownerSessionId,
+    workspaceId: request.workspaceId,
+    agentLabel: request.agentLabel,
+    paneId: request.paneId,
+    ...(request.projectAssignmentId
+      ? { projectAssignmentId: request.projectAssignmentId }
+      : {}),
+    ...(request.evidenceAssignmentId
+      ? { evidenceAssignmentId: request.evidenceAssignmentId }
+      : {}),
+    inheritedEvidence: [
+      ...(request.inheritedEvidence ?? request.requiredEvidence ?? []),
+    ],
+    localEvidence: [...(request.localEvidence ?? [])],
+  };
+  const existing = ctx.sessionManager
+    .getBranch()
+    .filter(
+      (candidate: any) =>
+        candidate?.type === "custom" &&
+        candidate.customType === AGENT_REQUIRED_EVIDENCE_ENTRY &&
+        candidate.data?.requestId === request.requestId,
+    ) as any[];
+  if (existing.some((candidate) => !isDeepStrictEqual(candidate.data, entry)))
+    throw new Error(
+      "Conflicting required-evidence metadata for accepted request",
+    );
+  if (!existing.length) pi.appendEntry(AGENT_REQUIRED_EVIDENCE_ENTRY, entry);
+}
 
 function askRecordBytes(
   state: ManagedAgentState,
@@ -989,6 +1180,149 @@ export function registerManagedAgentAskOwnerTool(
   });
 }
 
+/** Register evidence amendments only for an accepted project-scoped assignment. */
+export function registerManagedAgentEvidenceTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "update_assignment_evidence",
+    label: "Update assignment evidence",
+    exposure: "model-only",
+    description:
+      "Add required evidence to this managed project assignment, remove locally added evidence, or omit changes to inspect the effective set. Inherited evidence is owned by the project owner and cannot be removed here.",
+    parameters: Type.Object(
+      {
+        add: Type.Optional(Type.Array(Type.String({ minLength: 1 })), {
+          description: "Files or exact result references to retain.",
+        }),
+        text: Type.Optional(Type.String({ minLength: 1 })),
+        remove: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(
+      _id: string,
+      params: { add?: string[]; text?: string; remove?: string[] },
+      _signal: AbortSignal | undefined,
+      _update: unknown,
+      ctx: ExtensionContext,
+    ) {
+      const state = managedAgentIdentity(ctx);
+      if (!state.projectAssignmentId)
+        throw new Error(
+          "This managed Agent has no verified project assignment; evidence updates are unavailable.",
+        );
+      const current = managedAgentRequiredEvidence(ctx);
+      if (!current || current.projectAssignmentId !== state.projectAssignmentId)
+        throw new Error(
+          "Project assignment evidence is not available for this accepted assignment.",
+        );
+      const isCurrentAssignment = () => {
+        const identity = managedAgentIdentity(ctx);
+        return (
+          identity.activeRequestId === state.activeRequestId &&
+          identity.projectAssignmentId === state.projectAssignmentId &&
+          identity.runId === state.runId &&
+          identity.ownerSessionId === state.ownerSessionId &&
+          identity.workspaceId === state.workspaceId &&
+          identity.agentLabel === state.agentLabel &&
+          identity.paneId === state.paneId &&
+          ctx.sessionManager.getSessionId() === state.piSessionId
+        );
+      };
+      if (!isCurrentAssignment())
+        throw new Error(
+          "Managed-agent assignment changed during evidence update",
+        );
+      const local = [...current.localEvidence];
+      for (const id of params.remove ?? []) {
+        if (current.inheritedEvidence.some((item) => item.id === id))
+          throw new Error(
+            `Evidence ${id} is inherited from the project owner; ask project owner to remove it.`,
+          );
+        const index = local.findIndex((item) => item.id === id);
+        if (index < 0)
+          throw new Error(
+            `Evidence ${id} is not a locally retained item in this assignment.`,
+          );
+        local.splice(index, 1);
+      }
+      const supplied = params.add ?? [];
+      const files = supplied.filter((item) => !item.startsWith("result:"));
+      const results = supplied.filter((item) => item.startsWith("result:"));
+      const bindings = results.length
+        ? (resolveMessageFiles(
+            ctx,
+            results,
+            "update_assignment_evidence",
+          ) as ResultBinding[])
+        : [];
+      const additions: RequiredEvidence[] = [
+        ...bindings.map((result) => ({
+          id: randomUUID(),
+          name: result.ref,
+          result,
+        })),
+      ];
+      if (files.length)
+        additions.push(
+          ...persistRequiredTextFiles(
+            current.evidenceAssignmentId,
+            files,
+            state.cwd,
+            "update_assignment_evidence",
+          ),
+        );
+      if (params.text !== undefined)
+        additions.push(
+          persistRequiredEvidenceSnapshot(
+            current.evidenceAssignmentId,
+            "assignment-note.txt",
+            params.text,
+          ),
+        );
+      for (const item of additions)
+        if (
+          [...current.inheritedEvidence, ...local].some(
+            (existing) => existing.id === item.id,
+          )
+        )
+          throw new Error(
+            "Evidence identity collision while updating assignment evidence",
+          );
+      local.push(...additions);
+      if (additions.length || (params.remove?.length ?? 0) > 0) {
+        if (!isCurrentAssignment())
+          throw new Error(
+            "Managed-agent assignment changed during evidence update",
+          );
+        pi.appendEntry(AGENT_REQUIRED_EVIDENCE_ENTRY, {
+          version: 1,
+          sessionId: ctx.sessionManager.getSessionId(),
+          requestId: state.activeRequestId,
+          runId: state.runId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: state.agentLabel,
+          paneId: state.paneId,
+          projectAssignmentId: current.projectAssignmentId,
+          evidenceAssignmentId: current.evidenceAssignmentId,
+          inheritedEvidence: current.inheritedEvidence,
+          localEvidence: local,
+        } satisfies AcceptedEvidenceContext);
+      }
+      const effective = [...current.inheritedEvidence, ...local];
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Required evidence updated.\n${effective.length ? effective.map((item) => `- ${item.id.slice(0, 8)}: ${item.name}`).join("\n") : "(none)"}`,
+          },
+        ],
+        details: { evidence: effective },
+      };
+    },
+  });
+}
+
 export function registerManagedAgentInputHandlers(
   pi: ExtensionAPI,
   options: {
@@ -1256,7 +1590,33 @@ export function registerManagedAgentInputHandlers(
       return { action: "handled" };
     }
     try {
-      importResultBindings(pi, ctx, request.resultBindings, request.kind);
+      if (request.kind === "task")
+        for (const evidence of request.requiredEvidence ?? [])
+          if (!("result" in evidence))
+            readRequiredEvidenceSnapshot(evidence.sourceAssignmentId, evidence);
+    } catch (error) {
+      options.requestState.acknowledgeAndDiscard(
+        id,
+        false,
+        ctx,
+        "delivery",
+        error instanceof Error ? error.message : String(error),
+      );
+      return { action: "handled" };
+    }
+    try {
+      const evidenceBindings =
+        request.kind === "task"
+          ? (request.requiredEvidence ?? []).flatMap((item) =>
+              "result" in item ? [item.result] : [],
+            )
+          : [];
+      importResultBindings(
+        pi,
+        ctx,
+        [...(request.resultBindings ?? []), ...evidenceBindings],
+        request.kind,
+      );
     } catch (error) {
       const ambiguous =
         error instanceof OperationError &&
@@ -1271,8 +1631,21 @@ export function registerManagedAgentInputHandlers(
       return { action: "handled" };
     }
     if (request.kind === "task") {
+      try {
+        persistAcceptedRequiredEvidence(pi, ctx, request, state);
+      } catch (error) {
+        options.requestState.acknowledgeAndDiscard(
+          id,
+          false,
+          ctx,
+          "delivery",
+          error instanceof Error ? error.message : String(error),
+        );
+        return { action: "handled" };
+      }
       const candidate = options.mutateState((current) => ({
         ...current,
+        projectAssignmentId: request.projectAssignmentId,
         activeRequestId: id,
         completedRequestId: undefined,
         lastActivityAt: Date.now(),
@@ -2174,6 +2547,7 @@ export function registerManagedAgentRuntime(
       },
     }),
   );
+  registerManagedAgentEvidenceTool(pi);
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {

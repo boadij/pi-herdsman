@@ -10,6 +10,12 @@ Manager additionally has
 the branch-based project operations `delegate_project`, `resume_project`,
 `stop_lead`, and `remove_worktree`. Chief has no project-operation tools.
 
+`update_assignment_evidence` is available to Managers and assigned Leads.
+Managers identify the assignment by its exact branch; assigned Leads use their
+verified current assignment. It is separate from `message_staff`: registering
+evidence changes what future descendant assignments receive, while a message
+only communicates with its recipient.
+
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `list_staff`. Project actions use the Git branch.
 Presentation state is not authority; every action revalidates current identity
@@ -100,6 +106,39 @@ result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden
 semantic-result bindings needed for the recipient to forward them.
 
+## `update_assignment_evidence`
+
+```json
+{
+  "branch": "feat/example",
+  "add": ["review.md", "result:reviewer#1"],
+  "text": "The review requires preserving existing error behavior.",
+  "remove": ["<evidence-id>"]
+}
+```
+
+Adds files, text, or available result references to the assignment's required
+evidence, removes entries by exact evidence ID, or returns the current set when
+called without changes. The fields are optional and unrelated fields are
+rejected. A Manager must provide the exact assigned `branch`; an assigned Lead
+must omit `branch` and uses its verified current assignment. The operation
+revalidates authority and updates the assignment atomically. Unknown evidence
+IDs, unavailable result references, and conflicting result bindings fail.
+
+Initial `delegate_project.files` are also registered as required evidence.
+Supported UTF-8 text files and text amendments are preserved as immutable
+snapshots; unsupported, binary, or over-1-MiB files cannot be registered as
+required evidence and fail explicitly. Supported snapshots that exceed the
+inline delivery threshold are delivered by reference to the preserved snapshot.
+Result evidence retains its existing binding rather than copying result data.
+
+Future delegated Agents in the assignment receive its current required
+evidence automatically, whether or not it is repeated in their `files`.
+Evidence explicitly supplied for one recipient remains useful for
+recipient-specific context. Ordinary Leads without a verified project
+assignment do not have an automatic required-evidence scope. See
+[Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
+
 ## `delegate_project`
 
 Manager only. Start new project work with a required `task` and optional
@@ -116,8 +155,12 @@ writer.
 
 For new work, `files` uses the same configured attachment sizing policy as
 Agent delegation: `inlineAttachmentLimitBytes` controls per-file embedding and
-`mailboxPayloadLimitBytes` bounds the durable project assignment. Non-text or
-non-fitting files remain canonical references.
+`mailboxPayloadLimitBytes` bounds the durable project assignment. Explicitly
+supplied files are registered as required evidence for the assignment. Durable
+registration requires supported UTF-8 text no larger than 1 MiB; unsupported,
+binary, or oversized files fail instead of becoming required evidence. A
+supported snapshot that does not fit inline is delivered by reference to the
+preserved snapshot.
 
 Manager-created Leads inherit the Manager session's effective project-trust
 decision for that run; this does not modify Pi's persistent trust store.

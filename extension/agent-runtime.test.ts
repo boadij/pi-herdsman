@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
@@ -25,7 +31,12 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
-import { herdsmanDataRoot, resultPath, resultRef } from "./storage.ts";
+import {
+  herdsmanDataRoot,
+  persistRequiredEvidenceSnapshot,
+  resultPath,
+  resultRef,
+} from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   REQUEST_ID,
@@ -73,6 +84,8 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const { AGENT_REQUIRED_EVIDENCE_ENTRY, managedAgentRequiredEvidence } =
+  await import("./managed-agent-runtime.ts");
 const {
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
@@ -3619,6 +3632,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "update_assignment_evidence",
   ]);
   assert.deepEqual(lead.commands, ["lead", "takeover", "herdsman", "agents"]);
   lead.events.get("session_shutdown")?.[0]();
@@ -3745,6 +3759,617 @@ test("session agent identity reads the session-wide entry array", () => {
       label: "reviewer",
     },
   );
+});
+
+test("required evidence restore verifies the accepted managed assignment identity", () => {
+  const mailbox = setAgentEnvironment("implementer");
+  const ctx = fakeAgentContext();
+  const sessionId = ctx.sessionManager.getSessionId();
+  const assignment = {
+    ...managedState("implementer", REQUEST_ID),
+    projectAssignmentId: randomUUID(),
+    piSessionId: sessionId,
+    piSessionFile: ctx.sessionManager.getSessionFile(),
+    cwd: ctx.cwd,
+  };
+  writeAgentState(mailbox, assignment);
+  const requirement = {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "plan.md",
+    sourceAssignmentId: randomUUID(),
+    path: "/private/plan",
+    sha256: "a".repeat(64),
+  };
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId, definition: "implementer", label: "implementer" },
+  };
+  const evidence = {
+    type: "custom",
+    customType: AGENT_REQUIRED_EVIDENCE_ENTRY,
+    data: {
+      version: 1,
+      sessionId,
+      requestId: REQUEST_ID,
+      runId: assignment.runId,
+      ownerSessionId: assignment.ownerSessionId,
+      workspaceId: assignment.workspaceId,
+      agentLabel: "implementer",
+      paneId: assignment.paneId,
+      projectAssignmentId: assignment.projectAssignmentId,
+      evidenceAssignmentId: REQUEST_ID,
+      inheritedEvidence: [requirement],
+      localEvidence: [],
+    },
+  };
+  const context = (branch: any[]) =>
+    fakeAgentContext([identity, evidence], branch);
+  assert.deepEqual(
+    managedAgentRequiredEvidence(context([evidence]))?.effectiveEvidence,
+    [requirement],
+  );
+  assert.equal(managedAgentRequiredEvidence(context([])), undefined);
+  for (const field of [
+    "runId",
+    "ownerSessionId",
+    "workspaceId",
+    "paneId",
+    "requestId",
+  ])
+    assert.throws(
+      () =>
+        managedAgentRequiredEvidence(
+          context([
+            { ...evidence, data: { ...evidence.data, [field]: "foreign" } },
+          ]),
+        ),
+      field === "requestId" ? /malformed|foreign/ : /foreign/,
+      `reject mismatched ${field}`,
+    );
+  for (const field of [
+    "runId",
+    "ownerSessionId",
+    "workspaceId",
+    "paneId",
+    "requestId",
+  ])
+    assert.throws(
+      () =>
+        managedAgentRequiredEvidence(
+          context([
+            { ...evidence, data: { ...evidence.data, [field]: undefined } },
+          ]),
+        ),
+      /malformed|foreign/,
+      `reject missing ${field}`,
+    );
+  assert.throws(
+    () =>
+      managedAgentRequiredEvidence(
+        context([
+          { ...evidence, data: { ...evidence.data, sessionId: "foreign" } },
+        ]),
+      ),
+    /malformed/,
+  );
+  const previous = {
+    ...evidence,
+    data: {
+      ...evidence.data,
+      requestId: randomUUID(),
+      projectAssignmentId: randomUUID(),
+      localEvidence: [
+        {
+          id: randomUUID(),
+          name: "old-review.md",
+          sourceAssignmentId: REQUEST_ID,
+          path: "/private/old-review",
+          sha256: "b".repeat(64),
+        },
+      ],
+    },
+  };
+  assert.deepEqual(
+    managedAgentRequiredEvidence(context([previous, evidence]))
+      ?.effectiveEvidence,
+    [requirement],
+  );
+});
+
+test("managed task acceptance rejects missing or corrupt required evidence snapshots", async () => {
+  for (const failure of ["missing", "corrupt"] as const) {
+    const mailbox = setAgentEnvironment(`evidence-${failure}-agent`);
+    const agent = fakePi();
+    const context = fakeAgentContext(agent.entries);
+    registerExtension!(agent.pi as never);
+    try {
+      await agent.events.get("session_start")![0](undefined, context);
+      const state = readAgentState(mailbox)!;
+      const projectAssignmentId = randomUUID();
+      const evidence = persistRequiredEvidenceSnapshot(
+        projectAssignmentId,
+        "plan.md",
+        "approved plan\n",
+      );
+      if (failure === "missing") unlinkSync(evidence.path);
+      else writeFileSync(evidence.path, "substituted plan\n");
+      const request: RequestRecord = {
+        version: 5,
+        runId: state.runId,
+        requestId: randomUUID(),
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        kind: "task",
+        text: 'Task: see <file name="plan.md">approved plan</file>',
+        projectAssignmentId,
+        evidenceAssignmentId: "",
+        requiredEvidence: [evidence],
+        createdAt: Date.now(),
+      };
+      request.evidenceAssignmentId = request.requestId;
+      writeRequest(mailbox, request);
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      );
+      const rejected = readAgentState(mailbox)!;
+      assert.equal(rejected.activeRequestId, undefined, failure);
+      assert.equal(rejected.lastAck?.requestId, request.requestId, failure);
+      assert.equal(rejected.lastAck?.accepted, false, failure);
+      assert.equal(
+        agent.entries.some(
+          (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+        ),
+        false,
+        failure,
+      );
+    } finally {
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  }
+});
+
+test("managed task acceptance verifies valid inline and reference-only evidence snapshots", async () => {
+  for (const mode of ["inline", "reference"] as const) {
+    const mailbox = setAgentEnvironment(`evidence-${mode}-agent`);
+    const agent = fakePi();
+    const context = fakeAgentContext(agent.entries);
+    registerExtension!(agent.pi as never);
+    try {
+      await agent.events.get("session_start")![0](undefined, context);
+      const state = readAgentState(mailbox)!;
+      const projectAssignmentId = randomUUID();
+      const evidence = persistRequiredEvidenceSnapshot(
+        projectAssignmentId,
+        "plan.md",
+        "approved plan\n",
+      );
+      const request: RequestRecord = {
+        version: 5,
+        runId: state.runId,
+        requestId: randomUUID(),
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        kind: "task",
+        text:
+          mode === "inline"
+            ? "Task includes approved plan text"
+            : "Task references preserved plan",
+        projectAssignmentId,
+        evidenceAssignmentId: "",
+        requiredEvidence: [evidence],
+        createdAt: Date.now(),
+      };
+      request.evidenceAssignmentId = request.requestId;
+      writeRequest(mailbox, request);
+      assert.deepEqual(
+        agent.events.get("input")![0](
+          { text: controlMarker(request.requestId) },
+          context,
+        ),
+        {
+          action: "transform",
+          text: request.text,
+        },
+      );
+      const accepted = readAgentState(mailbox)!;
+      assert.equal(accepted.activeRequestId, request.requestId, mode);
+      assert.equal(accepted.lastAck?.accepted, true, mode);
+      assert.deepEqual(
+        managedAgentRequiredEvidence(context)?.inheritedEvidence,
+        [evidence],
+      );
+    } finally {
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  }
+});
+
+test("nested task acceptance makes parent effective evidence inherited and starts local evidence empty", async () => {
+  const mailbox = setAgentEnvironment("nested-inherited-evidence");
+  const snapshots: string[] = [];
+  const agent = fakePi();
+  const context = fakeAgentContext(agent.entries);
+  registerExtension!(agent.pi as never);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const projectAssignmentId = randomUUID();
+    const plan = persistRequiredEvidenceSnapshot(
+      projectAssignmentId,
+      "plan.md",
+      "project plan",
+    );
+    const parentLocal = persistRequiredEvidenceSnapshot(
+      projectAssignmentId,
+      "review.md",
+      "parent review",
+    );
+    snapshots.push(plan.path, parentLocal.path);
+    const request: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "nested task",
+      projectAssignmentId,
+      evidenceAssignmentId: "",
+      requiredEvidence: [plan, parentLocal],
+      inheritedEvidence: [plan, parentLocal],
+      localEvidence: [],
+      createdAt: Date.now(),
+    };
+    request.evidenceAssignmentId = request.requestId;
+    writeRequest(mailbox, request);
+    agent.events.get("input")![0](
+      { text: controlMarker(request.requestId) },
+      context,
+    );
+    const evidence = managedAgentRequiredEvidence(context)!;
+    assert.deepEqual(evidence.inheritedEvidence, [plan, parentLocal]);
+    assert.deepEqual(evidence.effectiveEvidence, [plan, parentLocal]);
+    assert.deepEqual(evidence.localEvidence, []);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    for (const path of snapshots) unlinkSync(path);
+  }
+});
+
+test("accepting an unscoped task clears prior project evidence scope", async () => {
+  const mailbox = setAgentEnvironment("scope-cutover-agent");
+  const agent = fakePi();
+  const context = fakeAgentContext(agent.entries);
+  registerExtension!(agent.pi as never);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const started = readAgentState(mailbox)!;
+    const projectAssignmentId = randomUUID();
+    const requirement = persistRequiredEvidenceSnapshot(
+      projectAssignmentId,
+      "plan.md",
+      "approved plan\n",
+    );
+    const scoped: RequestRecord = {
+      version: 5,
+      runId: started.runId,
+      requestId: randomUUID(),
+      ownerSessionId: started.ownerSessionId,
+      workspaceId: started.workspaceId,
+      agentLabel: started.agentLabel,
+      paneId: started.paneId,
+      kind: "task",
+      text: "scoped task",
+      projectAssignmentId,
+      evidenceAssignmentId: randomUUID(),
+      requiredEvidence: [requirement],
+      createdAt: Date.now(),
+    };
+    scoped.evidenceAssignmentId = scoped.requestId;
+    writeRequest(mailbox, scoped);
+    agent.events.get("input")![0](
+      { text: controlMarker(scoped.requestId) },
+      context,
+    );
+    assert.equal(
+      readAgentState(mailbox)?.projectAssignmentId,
+      projectAssignmentId,
+    );
+    assert.deepEqual(managedAgentRequiredEvidence(context)?.effectiveEvidence, [
+      requirement,
+    ]);
+    agent.events.get("message_end")![0](
+      { message: { role: "assistant", content: "done" } },
+      context,
+    );
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+    agent.events.get("session_shutdown")?.[0]();
+    writeAgentState(mailbox, {
+      ...readAgentState(mailbox)!,
+      activeRequestId: undefined,
+      completedRequestId: undefined,
+      lastAck: undefined,
+    });
+    const restarted = fakePi({ entries: agent.entries });
+    registerExtension!(restarted.pi as never);
+    const restartedContext = fakeAgentContext(restarted.entries);
+    await restarted.events.get("session_start")![0](
+      undefined,
+      restartedContext,
+    );
+
+    const unscoped: RequestRecord = {
+      version: 5,
+      runId: started.runId,
+      requestId: randomUUID(),
+      ownerSessionId: started.ownerSessionId,
+      workspaceId: started.workspaceId,
+      agentLabel: started.agentLabel,
+      paneId: started.paneId,
+      kind: "task",
+      text: "unscoped task",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, unscoped);
+    restarted.events.get("input")![0](
+      { text: controlMarker(unscoped.requestId) },
+      restartedContext,
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, unscoped.requestId);
+    assert.equal(readAgentState(mailbox)?.projectAssignmentId, undefined);
+    assert.equal(managedAgentRequiredEvidence(restartedContext), undefined);
+    const clearing = restarted.entries
+      .filter(
+        (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+      )
+      .at(-1) as any;
+    assert.equal(clearing.data.requestId, unscoped.requestId);
+    assert.equal(
+      clearing.data.sessionId,
+      restartedContext.sessionManager.getSessionId(),
+    );
+    assert.equal(clearing.data.projectAssignmentId, undefined);
+    assert.equal(clearing.data.evidenceAssignmentId, undefined);
+    assert.deepEqual(clearing.data.inheritedEvidence, []);
+    assert.deepEqual(clearing.data.localEvidence, []);
+    restarted.events.get("session_shutdown")?.[0]();
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("assignment replacement during evidence update does not publish local evidence", async () => {
+  const mailbox = setAgentEnvironment("implementer");
+  const agent = fakePi();
+  const context = fakeAgentContext(agent.entries);
+  registerExtension!(agent.pi as never);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const started = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 5,
+      runId: started.runId,
+      requestId: REQUEST_ID,
+      ownerSessionId: started.ownerSessionId,
+      workspaceId: started.workspaceId,
+      agentLabel: started.agentLabel,
+      paneId: started.paneId,
+      kind: "task",
+      text: "scoped task",
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: REQUEST_ID,
+      requiredEvidence: [],
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    agent.events.get("input")![0](
+      { text: controlMarker(request.requestId) },
+      context,
+    );
+    const before = agent.entries.filter(
+      (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+    ).length;
+    const replacement = {
+      ...readAgentState(mailbox)!,
+      activeRequestId: randomUUID(),
+      projectAssignmentId: randomUUID(),
+    };
+    const getSessionId = context.sessionManager.getSessionId;
+    let identityReads = 0;
+    context.sessionManager.getSessionId = () => {
+      identityReads++;
+      if (identityReads === 5) writeAgentState(mailbox, replacement);
+      return getSessionId();
+    };
+    const tool = agent.tools.find(
+      (candidate: any) => candidate.name === "update_assignment_evidence",
+    );
+    assert.ok(tool);
+    await assert.rejects(
+      tool.execute(
+        "replacement",
+        { text: "must not be retained" },
+        undefined,
+        undefined,
+        context,
+      ),
+      /assignment changed during evidence update/,
+    );
+    assert.deepEqual(readAgentState(mailbox), replacement);
+    assert.equal(
+      agent.entries.filter(
+        (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+      ).length,
+      before,
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("required evidence history permits removals but rejects changed retained identities", () => {
+  const mailbox = setAgentEnvironment("implementer");
+  const ctx = fakeAgentContext();
+  const sessionId = ctx.sessionManager.getSessionId();
+  const assignment = {
+    ...managedState("implementer", REQUEST_ID),
+    projectAssignmentId: randomUUID(),
+    piSessionId: sessionId,
+    piSessionFile: ctx.sessionManager.getSessionFile(),
+    cwd: ctx.cwd,
+  };
+  writeAgentState(mailbox, assignment);
+  const inherited = {
+    id: randomUUID(),
+    name: "plan.md",
+    sourceAssignmentId: randomUUID(),
+    path: "/private/plan",
+    sha256: "a".repeat(64),
+  };
+  const localFile = {
+    id: randomUUID(),
+    name: "review.md",
+    sourceAssignmentId: REQUEST_ID,
+    path: "/private/review",
+    sha256: "b".repeat(64),
+  };
+  const localResult = {
+    id: randomUUID(),
+    name: "result:reviewer#2",
+    result: { ref: "result:reviewer#2", canonicalRef: resultRef(randomUUID()) },
+  };
+  const base = {
+    version: 1,
+    sessionId,
+    requestId: REQUEST_ID,
+    runId: assignment.runId,
+    ownerSessionId: assignment.ownerSessionId,
+    workspaceId: assignment.workspaceId,
+    agentLabel: "implementer",
+    paneId: assignment.paneId,
+    projectAssignmentId: assignment.projectAssignmentId,
+    evidenceAssignmentId: REQUEST_ID,
+    inheritedEvidence: [inherited],
+  };
+  const entry = (localEvidence: unknown[]) => ({
+    type: "custom",
+    customType: AGENT_REQUIRED_EVIDENCE_ENTRY,
+    data: { ...base, localEvidence },
+  });
+  const entryWithInherited = (
+    inheritedEvidence: unknown[],
+    localEvidence: unknown[] = [],
+  ) => ({
+    type: "custom",
+    customType: AGENT_REQUIRED_EVIDENCE_ENTRY,
+    data: { ...base, inheritedEvidence, localEvidence },
+  });
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId, definition: "implementer", label: "implementer" },
+  };
+  const context = (history: unknown[]) =>
+    fakeAgentContext([identity, ...history]);
+  const afterRemoval = managedAgentRequiredEvidence(
+    context([entry([localFile, localResult]), entry([localResult])]),
+  )!;
+  assert.deepEqual(afterRemoval.effectiveEvidence, [inherited, localResult]);
+  const localExtra = {
+    ...localResult,
+    id: randomUUID(),
+    name: "result:reviewer#3",
+  };
+  assert.deepEqual(
+    managedAgentRequiredEvidence(
+      context([
+        entry([localFile, localResult]),
+        entry([localFile, localResult, localExtra]),
+      ]),
+    )?.localEvidence,
+    [localFile, localResult, localExtra],
+  );
+  assert.deepEqual(
+    managedAgentRequiredEvidence(
+      context([entry([localFile, localResult]), entry([localFile])]),
+    )?.localEvidence,
+    [localFile],
+  );
+  assert.throws(
+    () =>
+      managedAgentRequiredEvidence(
+        context([entryWithInherited([inherited]), entryWithInherited([])]),
+      ),
+    /Conflicting/,
+  );
+  assert.throws(
+    () =>
+      managedAgentRequiredEvidence(
+        context([
+          entryWithInherited([inherited]),
+          entryWithInherited([{ ...inherited, sha256: "c".repeat(64) }]),
+        ]),
+      ),
+    /Conflicting/,
+  );
+  for (const [original, changed] of [
+    [localFile, { ...localFile, name: "renamed-after-removal.md" }],
+    [localFile, { ...localFile, sha256: "c".repeat(64) }],
+    [
+      localResult,
+      {
+        ...localResult,
+        result: {
+          ...localResult.result,
+          canonicalRef: resultRef(randomUUID()),
+        },
+      },
+    ],
+  ])
+    assert.throws(
+      () =>
+        managedAgentRequiredEvidence(
+          context([entry([original]), entry([]), entry([changed])]),
+        ),
+      /Conflicting/,
+    );
+  for (const [original, altered] of [
+    [localFile, { ...localFile, name: "renamed.md" }],
+    [localFile, { ...localFile, sha256: "c".repeat(64) }],
+    [localFile, { ...localFile, path: "/private/other" }],
+    [localFile, { ...localFile, sourceAssignmentId: randomUUID() }],
+    [
+      localResult,
+      {
+        ...localResult,
+        result: {
+          ...localResult.result,
+          canonicalRef: resultRef(randomUUID()),
+        },
+      },
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        managedAgentRequiredEvidence(
+          context([entry([original]), entry([altered])]),
+        ),
+      /Conflicting/,
+    );
+  }
 });
 
 test("retired active sessions suppress threshold compaction until completion", async () => {

@@ -32,6 +32,7 @@ import {
   claimManagerLease,
   removeChiefMessage,
   readChiefMessage,
+  readProjectAssignment,
   readManagerDescriptor,
   peerLeadLockPath,
   peerRuntime,
@@ -143,6 +144,7 @@ const leadTools = [
   "message_supervisor",
   "list_peers",
   "message_peer",
+  "update_assignment_evidence",
 ];
 const managerTools = [
   "message_supervisor",
@@ -154,6 +156,7 @@ const managerTools = [
   "message_staff",
   "delegate_project",
   "resume_project",
+  "update_assignment_evidence",
   "stop_lead",
   "remove_worktree",
 ];
@@ -256,10 +259,20 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     const persisted = sessionLeadExecutionState(entries);
     assert.equal(persisted?.mode, "orchestrate");
-    assert.deepEqual(persisted?.leadTools, baseline);
+    assert.deepEqual(persisted?.leadTools, [
+      ...baseline,
+      "update_assignment_evidence",
+    ]);
     await pi.commandOptions.get("lead").handler("flexible", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
-    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, baseline);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "update_assignment_evidence",
+      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      ...baseline,
+      "update_assignment_evidence",
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -504,14 +517,18 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
-      leadTools: baseline,
+      leadTools: [...baseline, "update_assignment_evidence"],
     });
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
-    assert.deepEqual(
-      sessionLeadExecutionState(pi.entries)?.leadTools,
-      baseline,
-    );
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "update_assignment_evidence",
+      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+      ...baseline,
+      "update_assignment_evidence",
+    ]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: [read]\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
@@ -531,11 +548,19 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     const refresh = pi.commandOptions.get("manager").handler("", context);
     await waiting;
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "update_assignment_evidence",
+      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+    ]);
     releaseIdle();
     await refresh;
     assert.ok(notices.some((message) => message.includes("mode changed")));
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "update_assignment_evidence",
+      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -982,7 +1007,7 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
-      leadTools: baseline,
+      leadTools: [...baseline, "update_assignment_evidence"],
     });
     await pi.commandOptions.get("chief").handler("leave", context);
     await t.waitFor(() => assert.equal(tabLabel, "Lead"));
@@ -993,11 +1018,15 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
       "chief-baseline-tab",
       "Lead",
     ]);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
-    assert.deepEqual(
-      sessionLeadExecutionState(pi.entries)?.leadTools,
-      baseline,
-    );
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "update_assignment_evidence",
+      ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+      ...baseline,
+      "update_assignment_evidence",
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -1827,6 +1856,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "message_supervisor",
           "list_peers",
           "message_peer",
+          "update_assignment_evidence",
           "list_staff",
           "inspect_staff",
           "read_staff_transcript",
@@ -4477,6 +4507,30 @@ async function managerDelegateAssignmentTest(
     assert.equal(outcome.details.ok, true);
     const assignment = listProjectAssignments(supervisionRuntime(), repoKey)[0];
     assert.ok(assignment);
+    const evidenceTool = pi.tools.find(
+      (tool) => tool.name === "update_assignment_evidence",
+    )!;
+    const evidenceUpdate = await evidenceTool.execute(
+      "evidence-update",
+      { branch: assignment.branch, text: "Review requires the approved fix." },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const evidenceId = evidenceUpdate.details.evidence[0].id;
+    assert.equal(
+      readProjectAssignment(supervisionRuntime(), repoKey, assignment.branch)
+        ?.requiredEvidence?.[0]?.name,
+      "assignment-note.txt",
+    );
+    const evidenceRemoval = await evidenceTool.execute(
+      "evidence-remove",
+      { branch: assignment.branch, remove: [evidenceId] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.deepEqual(evidenceRemoval.details.evidence, []);
     const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     const staffList = await staffListTool.execute(
       "list",
@@ -7229,6 +7283,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
+    "update_assignment_evidence",
   ]);
   const setActiveTools = pi.pi.setActiveTools;
   let activationAttempted = false;
@@ -7255,12 +7310,17 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
+    "update_assignment_evidence",
   ]);
   const savedRole = [...entries]
     .reverse()
     .find((entry: any) => entry.customType === "pi-herdsman-role");
   assert.equal(savedRole?.data.role, "lead");
-  assert.deepEqual(savedRole?.data.leadTools, ["read", "bash"]);
+  assert.deepEqual(savedRole?.data.leadTools, [
+    "read",
+    "bash",
+    "update_assignment_evidence",
+  ]);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -7567,7 +7627,10 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
   pi.pi.setActiveTools = (next: string[]) => {
-    if (failRestore && next.join("|") === baseline.join("|")) {
+    if (
+      failRestore &&
+      next.join("|") === [...baseline, "update_assignment_evidence"].join("|")
+    ) {
       failRestore = false;
       throw new Error("manual leave restoration failed");
     }
@@ -7650,7 +7713,10 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
   pi.pi.setActiveTools = (next: string[]) => {
-    if (failRestore && next.join("|") === baseline.join("|")) {
+    if (
+      failRestore &&
+      next.join("|") === [...baseline, "update_assignment_evidence"].join("|")
+    ) {
       failRestore = false;
       const activeToolsBeforeFailure = [...pi.pi.getActiveTools()];
       try {
@@ -7677,7 +7743,10 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     ),
   );
   await start(undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    ...baseline,
+    "update_assignment_evidence",
+  ]);
 });
 
 test("lead session-start continues when chief lease release fails", async () => {
@@ -7742,6 +7811,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "update_assignment_evidence",
   ]);
   assert.ok(
     entries.some(
@@ -8317,7 +8387,11 @@ test("Chief activation replaces the lead widget and overview selection is intera
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "update_assignment_evidence",
+    ...leadTools.filter((name) => name !== "update_assignment_evidence"),
+  ]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.ok(widgetKeys.includes("pi-herdsman"));
@@ -8633,6 +8707,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "update_assignment_evidence",
   ];
   const pi = fakeChiefPi({
     activeTools: ordinaryTools,
@@ -8652,11 +8727,21 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   ]);
 
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), ordinaryTools);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "bash",
+    "update_assignment_evidence",
+    ...ordinaryTools.filter(
+      (name) => !["read", "bash", "update_assignment_evidence"].includes(name),
+    ),
+  ]);
   const role = entries
     .filter((entry: any) => entry.customType === "pi-herdsman-role")
     .at(-1) as any;
-  assert.deepEqual(role.data, { role: "lead", leadTools: ["read", "bash"] });
+  assert.deepEqual(role.data, {
+    role: "lead",
+    leadTools: ["read", "bash", "update_assignment_evidence"],
+  });
 
   const reloaded = fakeChiefPi({
     activeTools: [
@@ -8672,7 +8757,14 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   reloadedContext.ui.notify = () => undefined;
   registerExtension!(reloaded.pi as never);
   await reloaded.events.get("session_start")![0](undefined, reloadedContext);
-  assert.deepEqual(reloaded.pi.getActiveTools(), ordinaryTools);
+  assert.deepEqual(reloaded.pi.getActiveTools(), [
+    "read",
+    "bash",
+    "update_assignment_evidence",
+    ...ordinaryTools.filter(
+      (name) => !["read", "bash", "update_assignment_evidence"].includes(name),
+    ),
+  ]);
 
   await reloaded.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
@@ -8709,6 +8801,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
   const branchTools = [
     "read",
     "grep",
+    "update_assignment_evidence",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -9142,6 +9235,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "update_assignment_evidence",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;

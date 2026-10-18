@@ -322,6 +322,185 @@ test("request and ask result bindings are strictly validated", () => {
   });
   assert.equal(readAgentState(path)?.lastAck?.code, "ambiguous");
 });
+test("task requests round-trip validated required evidence snapshots and results", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-evidence-"));
+  const evidence = [
+    {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      name: "plan.md",
+      sourceAssignmentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      path: "/private/plan",
+      sha256: "a".repeat(64),
+    },
+    {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      name: "result:reviewer#1",
+      result: {
+        ref: "result:reviewer#1",
+        canonicalRef: "result:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      },
+    },
+  ];
+  const request: RequestRecord = {
+    version: 5,
+    build: state.build,
+    runId: state.runId,
+    requestId: "55555555-5555-4555-8555-555555555555",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    projectAssignmentId: "66666666-6666-4666-8666-666666666666",
+    evidenceAssignmentId: "77777777-7777-4777-8777-777777777777",
+    text: "work",
+    requiredEvidence: evidence,
+    createdAt: Date.now(),
+  };
+  writeRequest(path, request);
+  assert.deepEqual(readRequest(path, request.requestId), request);
+  const restored = readRequest(path, request.requestId)!;
+  assert.equal("sourceAssignmentId" in restored.requiredEvidence![0]!, true);
+  assert.equal(
+    (restored.requiredEvidence![0] as { sourceAssignmentId: string })
+      .sourceAssignmentId,
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "66666666-6666-4666-8666-666666666666",
+        requiredEvidence: [evidence[0], evidence[0]],
+      }),
+    /required evidence/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "77777777-7777-4777-8777-777777777777",
+        kind: "steer",
+        requiredEvidence: evidence,
+      }),
+    /required evidence/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "88888888-8888-4888-8888-888888888888",
+        kind: "steer",
+        requiredEvidence: undefined,
+      }),
+    /evidence assignment identity/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "99999999-9999-4999-8999-999999999999",
+        kind: "steer",
+        requiredEvidence: undefined,
+        evidenceAssignmentId: undefined,
+      }),
+    /evidence assignment identity/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+        evidenceAssignmentId: undefined,
+      }),
+    /evidence assignment identity/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+        projectAssignmentId: undefined,
+      }),
+    /evidence assignment identity/,
+  );
+});
+test("evidenced task continuations round-trip split metadata and reject malformed splits", () => {
+  const path = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-mailbox-continuation-evidence-"),
+  );
+  const inherited = {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "plan.md",
+    sourceAssignmentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    path: "/private/plan",
+    sha256: "a".repeat(64),
+  };
+  const local = {
+    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    name: "result:reviewer#1",
+    result: {
+      ref: "result:reviewer#1",
+      canonicalRef: "result:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    },
+  };
+  const request: RequestRecord = {
+    version: 5,
+    build: state.build,
+    runId: state.runId,
+    requestId: "55555555-5555-4555-8555-555555555555",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    projectAssignmentId: "66666666-6666-4666-8666-666666666666",
+    evidenceAssignmentId: "77777777-7777-4777-8777-777777777777",
+    text: "continue",
+    inheritedEvidence: [inherited],
+    localEvidence: [local],
+    requiredEvidence: [inherited, local],
+    createdAt: Date.now(),
+  };
+  writeRequest(path, request);
+  assert.deepEqual(readRequest(path, request.requestId), request);
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "88888888-8888-4888-8888-888888888888",
+        requiredEvidence: [inherited],
+      }),
+    /Inconsistent request evidence assignment/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "99999999-9999-4999-8999-999999999999",
+        localEvidence: [inherited],
+      }),
+    /Inconsistent request evidence assignment/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+        kind: "steer",
+      }),
+    /Invalid request required evidence/,
+  );
+  assert.throws(
+    () =>
+      writeRequest(path, {
+        ...request,
+        requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+        unexpectedEvidence: true,
+      } as RequestRecord),
+    /Unknown mailbox field/,
+  );
+});
 test("reply ask IDs are required and non-reply requests cannot carry one", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const base = {

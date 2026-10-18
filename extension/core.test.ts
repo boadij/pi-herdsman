@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { mock, test } from "node:test";
@@ -56,6 +57,7 @@ mock.module("node:fs", {
     },
     fsyncSync: realFs.fsyncSync,
     mkdirSync: realFs.mkdirSync,
+    lstatSync: realFs.lstatSync,
     openSync: (...args: any[]) => {
       openCallCount++;
       if (expectedCanonicalOpenPath && args[0] !== expectedCanonicalOpenPath)
@@ -677,6 +679,46 @@ test("keeps a reference when the candidate descriptor has a different identity",
   }
 });
 
+test("rejects required evidence when its identity changes before preparation", () => {
+  const cwd = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-required-evidence-identity-"),
+  );
+  const path = join(cwd, "plan.md");
+  writeFileSync(path, "approved plan");
+  const canonicalPath = realpathSync(path);
+  const initial = realFs.statSync(path);
+  candidateReadPath = canonicalPath;
+  candidateReadFd = undefined;
+  candidateReadSize = initial.size;
+  candidateReadDev = initial.dev + 1;
+  candidateReadIno = initial.ino + 1;
+  candidateReadOpenCount = 0;
+  try {
+    assert.throws(
+      () =>
+        prepareMessageInput("implement", [path], cwd, "assign", "Task", {
+          verifiedEvidence: [
+            {
+              path: canonicalPath,
+              sha256: createHash("sha256")
+                .update("approved plan")
+                .digest("hex"),
+            },
+          ],
+        }),
+      /Required evidence identity check failed/,
+    );
+  } finally {
+    candidateReadPath = undefined;
+    candidateReadFd = undefined;
+    candidateReadSize = undefined;
+    candidateReadDev = undefined;
+    candidateReadIno = undefined;
+    candidateReadOpenCount = 0;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("keeps a candidate reference when its descriptor no longer fits", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-resize-"));
   const path = join(cwd, "candidate");
@@ -705,6 +747,28 @@ test("keeps a candidate reference when its descriptor no longer fits", () => {
     candidateReadIsFile = true;
     candidateReadOpenCount = 0;
     countMessageReads = false;
+  }
+});
+
+test("rejects required evidence changed after its initial integrity check", () => {
+  const cwd = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-required-evidence-toctou-"),
+  );
+  const path = join(cwd, "plan.md");
+  writeFileSync(path, "approved plan");
+  const expected = createHash("sha256").update("approved plan").digest("hex");
+  // Simulate a same-size replacement after assignment evidence was first read.
+  writeFileSync(path, "altered plan!");
+  try {
+    assert.throws(
+      () =>
+        prepareMessageInput("implement", [path], cwd, "assign", "Task", {
+          verifiedEvidence: [{ path: realpathSync(path), sha256: expected }],
+        }),
+      /Required evidence integrity check failed/,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 

@@ -39,3 +39,8 @@ Result references remain valid evidence selectors within that channel.
 
 Herdsman must not create hidden automatic attachment inheritance to compensate
 for incomplete coordination messages.
+
+Explicitly registered required evidence for a verified assignment is a bounded
+assignment input, not inheritance of the caller's conversation or arbitrary
+attachments. See [ADR 0025](0025-propagate-explicit-required-assignment-evidence.md)
+for the later decision that qualifies this boundary.

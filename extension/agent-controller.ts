@@ -69,6 +69,9 @@ import {
   resultRef,
   type ResultBinding,
   herdsmanTempRoot,
+  readRequiredEvidenceSnapshot,
+  isRequiredEvidence,
+  type RequiredEvidence,
 } from "./storage.ts";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
 import { readConfig } from "./config.ts";
@@ -752,7 +755,69 @@ type ResolvedAssignmentSession = {
   definition: string;
   label: string;
   cwd: string;
+  evidence?: {
+    requestId: string;
+    projectAssignmentId?: string;
+    evidenceAssignmentId?: string;
+    inheritedEvidence: RequiredEvidence[];
+    localEvidence: RequiredEvidence[];
+  };
 };
+
+function requiredEvidenceEntriesForRequest(
+  entries: readonly any[],
+  requestId: string,
+): any[] {
+  return entries.filter(
+    (entry) =>
+      entry?.type === "custom" &&
+      entry.customType === "pi-herdsman-agent-required-evidence" &&
+      entry.data?.requestId === requestId,
+  );
+}
+
+function currentManagedEvidence(ctx: ExtensionContext):
+  | {
+      projectAssignmentId: string;
+      evidenceAssignmentId: string;
+      inheritedEvidence: RequiredEvidence[];
+      localEvidence: RequiredEvidence[];
+    }
+  | undefined {
+  const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
+  if (!state?.projectAssignmentId || !state.activeRequestId) return undefined;
+  const sessionId = ctx.sessionManager.getSessionId();
+  const entries = ctx.sessionManager
+    .getBranch()
+    .filter(
+      (entry: any) =>
+        entry?.type === "custom" &&
+        entry.customType === "pi-herdsman-agent-required-evidence" &&
+        entry.data?.requestId === state.activeRequestId,
+    ) as any[];
+  if (!entries.length) return undefined;
+  const data = entries.at(-1)?.data;
+  if (
+    data?.sessionId !== sessionId ||
+    data?.runId !== state.runId ||
+    data?.ownerSessionId !== state.ownerSessionId ||
+    data?.workspaceId !== state.workspaceId ||
+    data?.agentLabel !== state.agentLabel ||
+    data?.paneId !== state.paneId ||
+    data?.projectAssignmentId !== state.projectAssignmentId ||
+    !Array.isArray(data.inheritedEvidence) ||
+    !Array.isArray(data.localEvidence)
+  )
+    throw new Error(
+      "Managed-agent required-evidence session metadata is foreign or malformed",
+    );
+  return {
+    projectAssignmentId: data.projectAssignmentId,
+    evidenceAssignmentId: data.evidenceAssignmentId,
+    inheritedEvidence: data.inheritedEvidence,
+    localEvidence: data.localEvidence,
+  };
+}
 type AssignmentSessionSelector =
   { kind: "id"; value: string } | { kind: "path"; value: string };
 type OwnedAssignmentSession = {
@@ -1719,12 +1784,228 @@ export function resolveAssignmentSession(
             "continue",
           );
       }
+      const allEvidenceEntries = manager
+        .getEntries()
+        .filter(
+          (entry: any) =>
+            entry?.type === "custom" &&
+            entry.customType === "pi-herdsman-agent-required-evidence",
+        ) as any[];
+      for (const entry of allEvidenceEntries) {
+        const record = entry?.data;
+        if (
+          !record ||
+          record.version !== 1 ||
+          record.sessionId !== child.id ||
+          !validId(record.requestId) ||
+          !validId(record.runId) ||
+          !validId(record.ownerSessionId) ||
+          typeof record.workspaceId !== "string" ||
+          !record.workspaceId.trim() ||
+          typeof record.agentLabel !== "string" ||
+          !validAgentLabel(record.agentLabel) ||
+          typeof record.paneId !== "string" ||
+          !record.paneId.trim() ||
+          (record.projectAssignmentId !== undefined &&
+            !validId(record.projectAssignmentId)) ||
+          (record.evidenceAssignmentId !== undefined &&
+            !validId(record.evidenceAssignmentId)) ||
+          (record.projectAssignmentId === undefined) !==
+            (record.evidenceAssignmentId === undefined) ||
+          !Array.isArray(record.inheritedEvidence) ||
+          !record.inheritedEvidence.every(isRequiredEvidence) ||
+          !Array.isArray(record.localEvidence) ||
+          !record.localEvidence.every(isRequiredEvidence) ||
+          (record.projectAssignmentId === undefined &&
+            (record.inheritedEvidence.length || record.localEvidence.length)) ||
+          new Set(
+            [...record.inheritedEvidence, ...record.localEvidence].map(
+              (item: RequiredEvidence) => item.id,
+            ),
+          ).size !==
+            record.inheritedEvidence.length + record.localEvidence.length
+        )
+          fail(
+            "invalid_request",
+            "Saved assignment has malformed required-evidence metadata",
+            "continue",
+          );
+      }
+      const hasProjectEvidenceHistory = allEvidenceEntries.some(
+        (entry) =>
+          entry?.data?.projectAssignmentId !== undefined ||
+          entry?.data?.evidenceAssignmentId !== undefined,
+      );
+      let evidence: ResolvedAssignmentSession["evidence"];
+      const identity = sessionAgentIdentity(manager.getEntries(), child.id);
+      const matchingStates = listAgentStates()
+        .map(({ state }) => state)
+        .filter(
+          (state) =>
+            state.piSessionId === child.id ||
+            (state.piSessionFile !== undefined &&
+              samePersistedSessionPath(state.piSessionFile, child.path)),
+        );
+      if (matchingStates.length > 1)
+        fail(
+          "target_ambiguous",
+          "Saved assignment has multiple authoritative managed states",
+          "continue",
+        );
+      const currentState = matchingStates[0];
+      if (hasProjectEvidenceHistory && !currentState)
+        fail(
+          "invalid_request",
+          "Cannot verify the current accepted assignment for saved evidence",
+          "continue",
+        );
+      const exactIdState =
+        selector.kind === "id" &&
+        currentState?.piSessionId === child.id &&
+        !!currentState.activeRequestId;
+      if (
+        currentState &&
+        (!identity ||
+          (!exactIdState &&
+            (currentState.agentLabel !== child.label ||
+              currentState.agentDefinition !== child.definition)) ||
+          currentState.piSessionId !== child.id ||
+          currentState.workspaceId.trim() === "")
+      )
+        fail(
+          "invalid_request",
+          "Saved assignment state does not match the exact owned session",
+          "continue",
+        );
+      const currentRequestId =
+        currentState?.activeRequestId ?? currentState?.completedRequestId;
+      if (hasProjectEvidenceHistory && !currentRequestId)
+        fail(
+          "invalid_request",
+          "Saved assignment has no verifiable accepted task identity",
+          "continue",
+        );
+      if (
+        currentState?.completedRequestId &&
+        (currentState.lastAck?.requestId !== currentState.completedRequestId ||
+          currentState.lastAck.accepted !== true)
+      )
+        fail(
+          "invalid_request",
+          "Saved assignment completion identity is not acknowledged",
+          "continue",
+        );
+      const evidenceEntries = currentRequestId
+        ? requiredEvidenceEntriesForRequest(
+            allEvidenceEntries,
+            currentRequestId,
+          )
+        : [];
+      if (hasProjectEvidenceHistory && !evidenceEntries.length)
+        fail(
+          "invalid_request",
+          "Current accepted assignment is missing its evidence context",
+          "continue",
+        );
+      if (
+        (currentState?.projectAssignmentId || hasProjectEvidenceHistory) &&
+        !evidenceEntries.length
+      )
+        fail(
+          "invalid_request",
+          "Current scoped assignment is missing its accepted evidence context",
+          "continue",
+        );
+      if (evidenceEntries.length) {
+        const record = evidenceEntries.at(-1)?.data;
+        if (
+          !record ||
+          record.version !== 1 ||
+          record.sessionId !== child.id ||
+          !validId(record.requestId) ||
+          !validId(record.runId) ||
+          !validId(record.ownerSessionId) ||
+          typeof record.workspaceId !== "string" ||
+          !record.workspaceId.trim() ||
+          typeof record.agentLabel !== "string" ||
+          !validAgentLabel(record.agentLabel) ||
+          typeof record.paneId !== "string" ||
+          !record.paneId.trim() ||
+          (record.projectAssignmentId !== undefined &&
+            !validId(record.projectAssignmentId)) ||
+          (record.evidenceAssignmentId !== undefined &&
+            !validId(record.evidenceAssignmentId)) ||
+          (record.projectAssignmentId === undefined) !==
+            (record.evidenceAssignmentId === undefined) ||
+          !Array.isArray(record.inheritedEvidence) ||
+          !record.inheritedEvidence.every(isRequiredEvidence) ||
+          !Array.isArray(record.localEvidence) ||
+          !record.localEvidence.every(isRequiredEvidence) ||
+          (record.projectAssignmentId === undefined &&
+            (record.inheritedEvidence.length || record.localEvidence.length)) ||
+          new Set(
+            [...record.inheritedEvidence, ...record.localEvidence].map(
+              (item: RequiredEvidence) => item.id,
+            ),
+          ).size !==
+            record.inheritedEvidence.length + record.localEvidence.length
+        )
+          fail(
+            "invalid_request",
+            "Saved assignment has malformed required-evidence metadata",
+            "continue",
+          );
+        if (
+          !identity ||
+          identity.definition !== child.definition ||
+          identity.label !== record.agentLabel ||
+          record.requestId !== currentRequestId ||
+          record.agentLabel !== currentState?.agentLabel ||
+          record.projectAssignmentId !== currentState?.projectAssignmentId ||
+          record.runId !== currentState?.runId ||
+          record.ownerSessionId !== currentState?.ownerSessionId ||
+          record.workspaceId !== currentState?.workspaceId ||
+          record.paneId !== currentState?.paneId
+        )
+          fail(
+            "invalid_request",
+            "Saved assignment evidence does not match the exact owned session",
+            "continue",
+          );
+        for (const item of [
+          ...record.inheritedEvidence,
+          ...record.localEvidence,
+        ])
+          if ("path" in item) {
+            try {
+              readRequiredEvidenceSnapshot(item.sourceAssignmentId, item);
+            } catch (error) {
+              fail(
+                "invalid_request",
+                `Saved assignment evidence ${item.name} is unavailable: ${String(error)}`,
+                "continue",
+              );
+            }
+          }
+        evidence = {
+          requestId: record.requestId,
+          ...(record.projectAssignmentId
+            ? { projectAssignmentId: record.projectAssignmentId }
+            : {}),
+          ...(record.evidenceAssignmentId
+            ? { evidenceAssignmentId: record.evidenceAssignmentId }
+            : {}),
+          inheritedEvidence: [...record.inheritedEvidence],
+          localEvidence: [...record.localEvidence],
+        };
+      }
       return {
         path: child.path,
         id: child.id,
         definition: child.definition,
         label: child.label,
         cwd: manager.getCwd(),
+        ...(evidence ? { evidence } : {}),
       };
     }
     for (const child of children) {
@@ -2116,6 +2397,11 @@ export function requestRecordBytesFor(
   createdAt: number,
   requestId: string,
   resultBindings: readonly ResultBinding[],
+  evidence?: {
+    projectAssignmentId: string;
+    evidenceAssignmentId: string;
+    requiredEvidence: readonly RequiredEvidence[];
+  },
 ): number {
   return mailboxRecordBytes({
     version: 5,
@@ -2130,6 +2416,9 @@ export function requestRecordBytesFor(
     ...(kind === "reply" ? { askId } : {}),
     text,
     ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+    ...(evidence
+      ? { ...evidence, requiredEvidence: [...evidence.requiredEvidence] }
+      : {}),
     createdAt,
   });
 }
@@ -2146,6 +2435,11 @@ export function prospectiveAssignmentFits(
   requestId: string,
   mailboxLimitBytes: number,
   resultBindings: readonly ResultBinding[],
+  evidence?: {
+    projectAssignmentId: string;
+    evidenceAssignmentId: string;
+    requiredEvidence: readonly RequiredEvidence[];
+  },
 ): boolean {
   return (
     mailboxRecordBytes({
@@ -2160,6 +2454,9 @@ export function prospectiveAssignmentFits(
       kind: "task",
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+      ...(evidence
+        ? { ...evidence, requiredEvidence: [...evidence.requiredEvidence] }
+        : {}),
       createdAt,
     }) <= mailboxLimitBytes
   );
@@ -2537,6 +2834,13 @@ export type AgentControllerOptions = {
   rootDelegationPolicy?(): RootDelegationPolicy;
   /** Stable authority/profile generation captured across assignment preflight. */
   rootDelegationGeneration?(): RootDelegationGeneration;
+  projectEvidence?(ctx: ExtensionContext): Promise<
+    | {
+        assignment: import("./supervision.ts").ProjectAssignment;
+        revalidate(operation: () => Promise<void> | void): Promise<void>;
+      }
+    | undefined
+  >;
   build: RuntimeBuild;
   extensionPath: string;
   isContextRetired(
@@ -3354,7 +3658,17 @@ export function createAgentController(
     requestId = randomUUID(),
     operation = kind === "task" ? "delegate" : kind,
     resultBindings: readonly ResultBinding[] = [],
-    submitOptions: { waitForLock?: boolean; beforeWrite?: () => void } = {},
+    submitOptions: {
+      waitForLock?: boolean;
+      beforeWrite?: () => Promise<void> | void;
+      evidence?: {
+        projectAssignmentId: string;
+        evidenceAssignmentId: string;
+        requiredEvidence: readonly RequiredEvidence[];
+        inheritedEvidence?: readonly RequiredEvidence[];
+        localEvidence?: readonly RequiredEvidence[];
+      };
+    } = {},
   ): Promise<string> => {
     if (!text.trim())
       fail("invalid_request", "Message must not be empty", operation);
@@ -3373,6 +3687,22 @@ export function createAgentController(
       ...(kind === "reply" ? { askId } : {}),
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+      ...(submitOptions.evidence
+        ? {
+            ...submitOptions.evidence,
+            requiredEvidence: [...submitOptions.evidence.requiredEvidence],
+            ...(submitOptions.evidence.inheritedEvidence
+              ? {
+                  inheritedEvidence: [
+                    ...submitOptions.evidence.inheritedEvidence,
+                  ],
+                }
+              : {}),
+            ...(submitOptions.evidence.localEvidence
+              ? { localEvidence: [...submitOptions.evidence.localEvidence] }
+              : {}),
+          }
+        : {}),
       createdAt,
     };
     const limits = readConfig();
@@ -3445,7 +3775,7 @@ export function createAgentController(
           fail("internal_failure", message, operation);
         }
       }
-      submitOptions.beforeWrite?.();
+      await submitOptions.beforeWrite?.();
       writeRequest(runtime.mailboxPath, request);
     } catch (error) {
       if (String(error).toLowerCase().includes("too large"))
@@ -5588,15 +5918,35 @@ export function createAgentController(
           .map((agent) => agent.label)
           .filter((agent): agent is string => typeof agent === "string"),
       );
+      let reusableCompletedState: ManagedAgentState | undefined;
       if (resumed) {
         releaseSessionActivation = claimSessionActivationLock(resumed.path);
         try {
           const snapshot = await snapshots(ctx, signal);
-          const states = listAgentStates().filter(
+          const savedStates = listAgentStates().filter(
             ({ state }) =>
               state.piSessionId === resumed.id ||
               (state.piSessionFile !== undefined &&
                 samePersistedSessionPath(state.piSessionFile, resumed.path)),
+          );
+          const exactState =
+            savedStates.length === 1 ? savedStates[0]!.state : undefined;
+          if (savedStates.length > 1)
+            fail(
+              "target_ambiguous",
+              "Saved assignment has multiple authoritative managed states",
+              p.action,
+            );
+          if (
+            exactState &&
+            !exactState.activeRequestId &&
+            exactState.completedRequestId &&
+            exactState.lastAck?.accepted &&
+            exactState.lastAck.requestId === exactState.completedRequestId
+          )
+            reusableCompletedState = exactState;
+          const states = savedStates.filter(
+            ({ state }) => !!state.activeRequestId,
           );
           const representations = new Set(
             states.map(
@@ -5605,13 +5955,19 @@ export function createAgentController(
             ),
           );
           const statePanes = new Set(
-            states.map(({ state }) => `${state.workspaceId}\0${state.paneId}`),
+            savedStates.map(
+              ({ state }) => `${state.workspaceId}\0${state.paneId}`,
+            ),
           );
           for (const agent of snapshot.liveAgents)
             if (
               herdrSessionsMatch(
                 agent,
                 expectedSession(resumed.id, resumed.path),
+              ) &&
+              !savedStates.some(
+                ({ state }) =>
+                  !state.activeRequestId && state.completedRequestId,
               ) &&
               !statePanes.has(
                 `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
@@ -5642,7 +5998,11 @@ export function createAgentController(
           throw error;
         }
       }
-      if (requestedLabel && labels.has(requestedLabel))
+      if (
+        requestedLabel &&
+        labels.has(requestedLabel) &&
+        !(resumed && requestedLabel === resumed.label)
+      )
         fail(
           "agent_label_exists",
           `Agent label already exists: ${requestedLabel}`,
@@ -5656,15 +6016,90 @@ export function createAgentController(
           'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
           p.action,
         );
+      const projectEvidence =
+        scope.kind === "root" && !resumed
+          ? await options.projectEvidence?.(ctx)
+          : undefined;
+      const projectAssignment = projectEvidence?.assignment;
+      const nestedEvidence =
+        scope.kind === "managed-agent"
+          ? currentManagedEvidence(ctx)
+          : undefined;
+      const continuationEvidence = resumed?.evidence;
+      const projectAssignmentId =
+        projectAssignment?.id ??
+        nestedEvidence?.projectAssignmentId ??
+        continuationEvidence?.projectAssignmentId;
+      const requiredEvidence =
+        projectAssignment?.requiredEvidence ??
+        (nestedEvidence
+          ? [
+              ...nestedEvidence.inheritedEvidence,
+              ...nestedEvidence.localEvidence,
+            ]
+          : continuationEvidence
+            ? [
+                ...continuationEvidence.inheritedEvidence,
+                ...continuationEvidence.localEvidence,
+              ]
+            : []);
+      if (
+        scope.kind === "managed-agent" &&
+        readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "")
+          ?.projectAssignmentId &&
+        !nestedEvidence
+      )
+        fail(
+          "invalid_request",
+          "Cannot verify this managed Agent's project evidence assignment",
+          p.action,
+        );
+      const evidenceMetadata = projectAssignmentId
+        ? {
+            projectAssignmentId,
+            evidenceAssignmentId:
+              continuationEvidence?.evidenceAssignmentId ??
+              assignment!.requestId,
+            requiredEvidence,
+            ...(continuationEvidence
+              ? {
+                  inheritedEvidence: continuationEvidence.inheritedEvidence,
+                  localEvidence: continuationEvidence.localEvidence,
+                }
+              : {}),
+          }
+        : undefined;
+      const requiredFiles: MessageFileInput[] = requiredEvidence.map(
+        (entry) => {
+          if ("result" in entry) return entry.result;
+          try {
+            readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry);
+          } catch (error) {
+            fail(
+              "invalid_request",
+              `Required evidence ${entry.name} is unavailable: ${String(error)}`,
+              p.action,
+            );
+          }
+          return entry.path;
+        },
+      );
+      const explicitFiles = resolveMessageFiles(ctx, p.files, p.action);
+      const assignmentFiles = [...requiredFiles, ...explicitFiles];
+      const verifiedEvidence = requiredEvidence.filter(
+        (entry): entry is Extract<RequiredEvidence, { path: string }> =>
+          "path" in entry,
+      );
       const prepareAssignmentInput = (assignmentLabel: string) =>
         prepareMessageInput(
           p.task,
-          resolveMessageFiles(ctx, p.files, p.action),
+          assignmentFiles,
           ctx.cwd,
           p.action,
           "Task",
           {
             inlineLimitBytes: limits.inline.bytes,
+            verifiedEvidence,
             fits: (text, resultBindings) =>
               prospectiveAssignmentFits(
                 options.build,
@@ -5678,6 +6113,7 @@ export function createAgentController(
                 assignment!.requestId,
                 limits.mailbox.bytes,
                 resultBindings,
+                evidenceMetadata,
               ),
           },
         );
@@ -5737,6 +6173,8 @@ export function createAgentController(
             releaseSessionActivation = undefined;
             throw error;
           }
+          if (resumed) labels.delete(resumed.label);
+          else labels.add(label);
           if (requestedLabel) {
             releaseSessionActivation?.();
             releaseSessionActivation = undefined;
@@ -5783,7 +6221,33 @@ export function createAgentController(
             mailbox = agentMailboxPath(workspaceId, label);
             continue;
           }
-          if (requestedLabel)
+          if (
+            requestedLabel &&
+            !(
+              resumed &&
+              reusableCompletedState &&
+              mailbox ===
+                agentMailboxPath(
+                  reusableCompletedState.workspaceId,
+                  reusableCompletedState.agentLabel,
+                ) &&
+              (() => {
+                const current = readAgentState(mailbox);
+                return (
+                  !!current &&
+                  current.piSessionId === resumed.id &&
+                  !current.activeRequestId &&
+                  current.completedRequestId ===
+                    reusableCompletedState.completedRequestId &&
+                  current.lastAck?.accepted === true &&
+                  current.lastAck.requestId === current.completedRequestId &&
+                  !unacknowledgedRequestExists(mailbox, current) &&
+                  !readPendingAsk(mailbox, current) &&
+                  !readResult(mailbox, current.completedRequestId!)
+                );
+              })()
+            )
+          )
             guardMailboxOccupancy(mailbox, label, p.action, true);
           break;
         } catch (error) {
@@ -6099,13 +6563,14 @@ export function createAgentController(
         // authoritative final envelope identity is known.
         assignmentInput = prepareMessageInput(
           p.task,
-          resolveMessageFiles(ctx, p.files, p.action),
+          assignmentFiles,
           ctx.cwd,
           p.action,
           "Task",
           {
             inlineLimitBytes: limits.inline.bytes,
             mailboxLimitBytes: limits.mailbox.bytes,
+            verifiedEvidence,
             serializedBytes: (text, resultBindings) =>
               requestRecordBytesFor(
                 options.build,
@@ -6116,6 +6581,7 @@ export function createAgentController(
                 assignment!.createdAt,
                 assignment!.requestId,
                 resultBindings,
+                evidenceMetadata,
               ),
           },
         );
@@ -6140,7 +6606,67 @@ export function createAgentController(
           assignmentInput!.resultBindings,
           {
             waitForLock: true,
-            beforeWrite: assertRootDelegationAllowed,
+            evidence: evidenceMetadata,
+            beforeWrite: async () => {
+              assertRootDelegationAllowed();
+              if (nestedEvidence) {
+                const current = currentManagedEvidence(ctx);
+                if (
+                  !current ||
+                  current.projectAssignmentId !==
+                    nestedEvidence.projectAssignmentId ||
+                  current.evidenceAssignmentId !==
+                    nestedEvidence.evidenceAssignmentId ||
+                  JSON.stringify(current.inheritedEvidence) !==
+                    JSON.stringify(nestedEvidence.inheritedEvidence) ||
+                  JSON.stringify(current.localEvidence) !==
+                    JSON.stringify(nestedEvidence.localEvidence)
+                )
+                  throw new Error(
+                    "Managed-Agent project assignment or required evidence changed during child startup; retry delegation",
+                  );
+              }
+              if (continuationEvidence && resumed) {
+                const saved = SessionManager.open(resumed.path);
+                if (saved.getSessionId() !== resumed.id)
+                  throw new Error(
+                    "The exact saved assignment session changed during continuation; retry",
+                  );
+                const entries = requiredEvidenceEntriesForRequest(
+                  saved.getEntries(),
+                  continuationEvidence.requestId,
+                );
+                const record = entries.at(-1)?.data;
+                if (
+                  !record ||
+                  record.requestId !== continuationEvidence.requestId ||
+                  record.projectAssignmentId !==
+                    continuationEvidence.projectAssignmentId ||
+                  record.evidenceAssignmentId !==
+                    continuationEvidence.evidenceAssignmentId ||
+                  JSON.stringify(record.inheritedEvidence) !==
+                    JSON.stringify(continuationEvidence.inheritedEvidence) ||
+                  JSON.stringify(record.localEvidence) !==
+                    JSON.stringify(continuationEvidence.localEvidence)
+                )
+                  throw new Error(
+                    "Saved assignment evidence changed during continuation; retry",
+                  );
+              }
+              if (!projectEvidence || !projectAssignment) return;
+              await projectEvidence.revalidate(async () => {
+                const current = await options.projectEvidence?.(ctx);
+                if (
+                  !current ||
+                  current.assignment.id !== projectAssignment.id ||
+                  JSON.stringify(current.assignment.requiredEvidence ?? []) !==
+                    JSON.stringify(requiredEvidence)
+                )
+                  throw new Error(
+                    "Project assignment or required evidence changed during Agent startup; retry delegation",
+                  );
+              });
+            },
           },
         );
         accepted = true;

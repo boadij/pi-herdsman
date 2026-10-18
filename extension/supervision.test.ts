@@ -2443,6 +2443,24 @@ test("project assignments are scoped by repository and branch, strict, and remov
     readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     assignment,
   );
+  const withEvidence = {
+    ...assignment,
+    requiredEvidence: [
+      {
+        id: id(),
+        name: "plan.md",
+        sourceAssignmentId: assignment.id,
+        path: "/private/evidence/snapshot",
+        sha256: "a".repeat(64),
+      },
+    ],
+  };
+  writeProjectAssignment(runtime, withEvidence);
+  assert.deepEqual(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+    withEvidence,
+  );
+  writeProjectAssignment(runtime, assignment);
   assert.equal(
     findProjectAssignmentBySession(
       runtime,
@@ -2459,6 +2477,39 @@ test("project assignments are scoped by repository and branch, strict, and remov
     { branch: undefined },
     { piSessionFile: 42 },
     { piSessionFile: "" },
+    {
+      requiredEvidence: [
+        {
+          id: "../bad",
+          name: "plan",
+          sourceAssignmentId: assignment.id,
+          path: "/tmp/x",
+          sha256: "a".repeat(64),
+        },
+      ],
+    },
+    {
+      requiredEvidence: [
+        {
+          id: id(),
+          name: "plan",
+          sourceAssignmentId: assignment.id,
+          path: "/tmp/x",
+          sha256: "bad",
+        },
+      ],
+    },
+    {
+      requiredEvidence: [
+        {
+          id: id(),
+          name: "plan",
+          sourceAssignmentId: id(),
+          path: "/tmp/x",
+          sha256: "a".repeat(64),
+        },
+      ],
+    },
     {
       resultBindings: [
         { ref: "result:implementation#01", canonicalRef: `result:${id()}` },

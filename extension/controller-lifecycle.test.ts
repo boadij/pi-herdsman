@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
@@ -17,6 +23,7 @@ import type {
 } from "./mailbox.ts";
 
 import { claimProcessLock } from "./lock.ts";
+import { persistRequiredEvidenceSnapshot } from "./storage.ts";
 import {
   listProjectAssignments,
   listProjectMessages,
@@ -71,6 +78,7 @@ import {
   promptLaunchPaths,
   readPendingAsk,
   readRequest,
+  readUnacknowledgedRequest,
   readResult,
   readAgentState,
   MANAGED_AGENT_BOOTSTRAP_EVENT,
@@ -98,6 +106,7 @@ import {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const { claimAgentMailbox } = await import("./mailbox.ts");
 const ownedSessionContext = (id: string, label: string) =>
   fakeContext([
     {
@@ -647,16 +656,18 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
   await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-current-child");
   try {
-    const result = await registeredAgentTool(pi, "delegate").execute(
-      "ambiguous-current-start",
-      {
-        definition: "agent",
-        task: "reject ambiguous root reuse",
-      },
-      undefined,
-      undefined,
-      fakeContext(),
-    );
+    const result = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "ambiguous-current-start",
+        {
+          definition: "agent",
+          task: "reject ambiguous root reuse",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(lifecycle.createdTabs(), 1);
     assert.equal(
@@ -719,16 +730,18 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
   await pi.events.get("session_start")![0](undefined, fakeContext());
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-foreign-child");
   try {
-    const result = await registeredAgentTool(pi, "delegate").execute(
-      "ambiguous-foreign-start",
-      {
-        definition: "agent",
-        task: "reject foreign ambiguity",
-      },
-      undefined,
-      undefined,
-      fakeContext(),
-    );
+    const result = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "ambiguous-foreign-start",
+        {
+          definition: "agent",
+          task: "reject foreign ambiguity",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(lifecycle.createdTabs(), 1);
     assert.equal(
@@ -972,6 +985,297 @@ test("managed-agent delegation always splits in its current pane for every lead 
   }
 });
 
+test("nested managed-Agent delegation publishes inherited and local evidence as child requirements", async () => {
+  const label = `evidence-parent-${randomUUID().slice(0, 8)}`;
+  setAgentEnvironment(label, ["agent"]);
+  const projectAssignmentId = randomUUID();
+  const parentRequestId = randomUUID();
+  const inherited = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "plan.md",
+    "parent plan body",
+  );
+  const local = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "review.md",
+    "parent review body",
+  );
+  const parent = {
+    ...managedState(label, parentRequestId),
+    projectAssignmentId,
+  };
+  realFs.writeFileSync(
+    join(PI_AGENTS_DIR, "parent.md"),
+    '---\nname: parent\nagents: ["agent"]\n---\nparent\n',
+  );
+  const parentMailbox = agentMailboxPath(WORKSPACE, label);
+  let childMailbox = agentMailboxPath(WORKSPACE, "agent");
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  Object.assign(process.env, {
+    PI_HERDSMAN_MAILBOX: parentMailbox,
+    PI_HERDSMAN_RUN_ID: parent.runId,
+    PI_HERDSMAN_OWNER_SESSION_ID: parent.ownerSessionId,
+    PI_HERDSMAN_OWNER_DISPLAY: "lead",
+    PI_HERDSMAN_LABEL: label,
+    PI_HERDSMAN_WORKSPACE_ID: WORKSPACE,
+    PI_HERDSMAN_AGENT_DEFINITION: "parent",
+    PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS: JSON.stringify(["agent"]),
+    HERDR_PANE_ID: parent.paneId,
+  });
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  let published: RequestRecord | undefined;
+  let stopConsumer: (() => void) | undefined;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      const result = lifecycle.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const mailbox = agentMailboxPath(
+          WORKSPACE,
+          lifecycle.paneEnvironment.PI_HERDSMAN_LABEL!,
+        );
+        stopConsumer = consumeMailboxRequest(mailbox, (request) => {
+          published = request;
+        });
+      }
+      return result;
+    },
+  });
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: {
+      sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      definition: "parent",
+      label,
+    },
+  };
+  const acceptedContext = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: identity.data.sessionId,
+      requestId: parentRequestId,
+      runId: parent.runId,
+      ownerSessionId: parent.ownerSessionId,
+      workspaceId: parent.workspaceId,
+      agentLabel: label,
+      paneId: parent.paneId,
+      projectAssignmentId,
+      evidenceAssignmentId: parentRequestId,
+      inheritedEvidence: [inherited],
+      localEvidence: [local],
+    },
+  };
+  const contextEntries: any[] = [identity, acceptedContext];
+  const context = fakeAgentContext(contextEntries);
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const result = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "nested-project-evidence",
+        { definition: "agent", task: "child task" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
+    assert.ok(published);
+    assert.deepEqual(published!.requiredEvidence, [inherited, local]);
+    assert.equal(published!.projectAssignmentId, projectAssignmentId);
+    assert.equal(published!.evidenceAssignmentId, published!.requestId);
+    assert.match(published!.text, /parent plan body/);
+    assert.match(published!.text, /parent review body/);
+
+    stopConsumer?.();
+    const clearedRequestId = randomUUID();
+    const clearedParent = {
+      ...parent,
+      projectAssignmentId: undefined,
+      activeRequestId: clearedRequestId,
+    };
+    writeAgentState(parentMailbox, clearedParent);
+    contextEntries.push({
+      type: "custom",
+      customType: "pi-herdsman-agent-required-evidence",
+      data: {
+        version: 1,
+        sessionId: identity.data.sessionId,
+        requestId: clearedRequestId,
+        runId: parent.runId,
+        ownerSessionId: parent.ownerSessionId,
+        workspaceId: parent.workspaceId,
+        agentLabel: label,
+        paneId: parent.paneId,
+        inheritedEvidence: [],
+        localEvidence: [],
+      },
+    });
+    published = undefined;
+    const cleared = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "nested-after-unscoped",
+        { definition: "agent", task: "unscoped follow-up" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.equal(cleared.details.ok, true, JSON.stringify(cleared.details));
+    childMailbox = agentMailboxPath(WORKSPACE, cleared.details.agent as string);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(published);
+    assert.equal(published!.projectAssignmentId, undefined);
+    assert.equal(published!.requiredEvidence, undefined);
+    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    stopConsumer?.();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    realFs.rmSync(inherited.path, { force: true });
+    realFs.rmSync(local.path, { force: true });
+    realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
+  }
+});
+
+test("nested delegation rejects parent evidence changes during child startup", async () => {
+  const label = `evidence-race-parent-${randomUUID().slice(0, 8)}`;
+  setAgentEnvironment(label, ["agent"]);
+  const projectAssignmentId = randomUUID();
+  const parentRequestId = randomUUID();
+  const inherited = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "plan.md",
+    "parent plan body",
+  );
+  const local = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "review.md",
+    "parent review body",
+  );
+  const addedDuringStart = persistRequiredEvidenceSnapshot(
+    projectAssignmentId,
+    "changed.md",
+    "late amendment",
+  );
+  const parent = {
+    ...managedState(label, parentRequestId),
+    projectAssignmentId,
+  };
+  realFs.writeFileSync(
+    join(PI_AGENTS_DIR, "parent.md"),
+    '---\nname: parent\nagents: ["agent"]\n---\nparent\n',
+  );
+  const parentMailbox = agentMailboxPath(WORKSPACE, label);
+  let childMailbox = agentMailboxPath(WORKSPACE, "agent");
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  Object.assign(process.env, {
+    PI_HERDSMAN_MAILBOX: parentMailbox,
+    PI_HERDSMAN_RUN_ID: parent.runId,
+    PI_HERDSMAN_OWNER_SESSION_ID: parent.ownerSessionId,
+    PI_HERDSMAN_LABEL: label,
+    PI_HERDSMAN_OWNER_DISPLAY: "lead",
+    PI_HERDSMAN_WORKSPACE_ID: WORKSPACE,
+    PI_HERDSMAN_AGENT_DEFINITION: "parent",
+    PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS: JSON.stringify(["agent"]),
+    HERDR_PANE_ID: parent.paneId,
+  });
+  let published: RequestRecord | undefined;
+  let stopConsumer: (() => void) | undefined;
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: {
+      sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      definition: "parent",
+      label,
+    },
+  };
+  const acceptedContext = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: identity.data.sessionId,
+      requestId: parentRequestId,
+      runId: parent.runId,
+      ownerSessionId: parent.ownerSessionId,
+      workspaceId: parent.workspaceId,
+      agentLabel: label,
+      paneId: parent.paneId,
+      projectAssignmentId,
+      evidenceAssignmentId: parentRequestId,
+      inheritedEvidence: [inherited],
+      localEvidence: [local],
+    },
+  };
+  const contextEntries: any[] = [identity, acceptedContext];
+  const context = fakeAgentContext(contextEntries);
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        contextEntries.push({
+          ...acceptedContext,
+          data: {
+            ...acceptedContext.data,
+            localEvidence: [local, addedDuringStart],
+          },
+        });
+      }
+      const result = lifecycle.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const mailbox = agentMailboxPath(
+          WORKSPACE,
+          lifecycle.paneEnvironment.PI_HERDSMAN_LABEL!,
+        );
+        stopConsumer = consumeMailboxRequest(mailbox, (request) => {
+          published = request;
+        });
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const result = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "nested-project-evidence-race",
+        { definition: "agent", task: "must not publish stale evidence" },
+        undefined,
+        undefined,
+        context,
+      );
+    childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
+    assert.notEqual(result.details.ok, true);
+    assert.equal(published, undefined);
+    assert.match(
+      JSON.stringify(result.details),
+      /evidence changed|foreign|conflicting/i,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    stopConsumer?.();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    for (const evidence of [inherited, local, addedDuringStart])
+      realFs.rmSync(evidence.path, { force: true });
+    realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
+  }
+});
+
 test("parent delegation lock makes concurrent close and delegate fail fast", async () => {
   setLeadEnvironment();
   const parent = managedState("race-parent");
@@ -1187,7 +1491,11 @@ test("lead close maps assignment-lock contention to agent_busy", async () => {
       undefined,
       fakeContext(),
     );
-    assert.equal(result.details.error.category, "agent_busy");
+    assert.equal(
+      result.details.error.category,
+      "agent_busy",
+      result.details.error.message,
+    );
     assert.match(result.details.error.message, /managed assignment/i);
     assert.match(result.details.error.nextAction, /retry/i);
     assert.ok(readAgentState(mailbox));
@@ -4083,6 +4391,531 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   }
 });
 
+test("managed project delegation publishes required evidence without explicit files", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-evidence-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "approved implementation plan",
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `ev-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+
+    const delegate = () =>
+      registeredAgentTool(pi, "delegate").execute(
+        `evidence-${randomUUID()}`,
+        { definition: "agent", label, task: "implement plan" },
+        undefined,
+        undefined,
+        context,
+      );
+    const result = await delegate();
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(accepted!.text, /approved implementation plan/);
+    assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
+    assert.equal(accepted!.evidenceAssignmentId, accepted!.requestId);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed project delegation references supported evidence larger than the inline limit", async () => {
+  setLeadEnvironment();
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+  const previousConfig = realFs.existsSync(configPath)
+    ? realFs.readFileSync(configPath, "utf8")
+    : undefined;
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
+  realFs.writeFileSync(
+    configPath,
+    JSON.stringify({ inlineAttachmentLimitBytes: 1024 }),
+  );
+
+  const socket = join(
+    tmpdir(),
+    `project-evidence-reference-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-reference-${randomUUID()}`;
+  const content = "large supported evidence\n".repeat(256);
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    content,
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `er-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-reference",
+      { definition: "agent", label, task: "use the retained plan" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(snapshot.path)}" bytes="${Buffer.byteLength(content)}" />`,
+      ),
+      "request must include a usable reference to the immutable snapshot",
+    );
+    assert.equal(
+      accepted!.requiredEvidence?.[0]?.sourceAssignmentId,
+      LEAD_SESSION_ID,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    if (previousConfig === undefined)
+      realFs.rmSync(configPath, { force: true });
+    else realFs.writeFileSync(configPath, previousConfig);
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed project delegation deduplicates required evidence supplied explicitly", async () => {
+  setLeadEnvironment();
+  const socket = join(
+    tmpdir(),
+    `project-evidence-duplicate-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-duplicate-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "duplicate plan body",
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `ed-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-duplicate",
+      {
+        definition: "agent",
+        label,
+        task: "implement plan",
+        files: [snapshot.path],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.equal(accepted!.text.match(/duplicate plan body/g)?.length, 1);
+    assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed project delegation rejects authority changes during startup without publishing stale evidence", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-evidence-stale-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-stale-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "stale plan body",
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  let published: RequestRecord | undefined;
+  const replacementId = randomUUID();
+  const label = `es-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    (_text, request) => {
+      published = request;
+    },
+    false,
+    () =>
+      writeProjectAssignment(runtime, {
+        ...assignment,
+        id: replacementId,
+        requiredEvidence: [],
+      }),
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-evidence-stale-authority",
+      { definition: "agent", label, task: "use current plan" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.notEqual(result.details.ok, true);
+    assert.equal(
+      accepted,
+      undefined,
+      "stale assignment must not be published to the mailbox",
+    );
+    assert.equal(
+      published,
+      undefined,
+      "no stale request may reach mailbox delivery",
+    );
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").find(
+        (item) => item.branch === branch,
+      )?.id,
+      replacementId,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("unassigned Lead delegation does not receive project evidence implicitly", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `ordinary-lead-evidence-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const foreignEvidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "other-project.md",
+    "unrelated project evidence",
+  );
+  let accepted: RequestRecord | undefined;
+  const label = `ou-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({ exec: startup.exec });
+  const context = fakeContext(pi.entries);
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "unassigned-lead-delegation",
+      { definition: "agent", label, task: "unrelated work" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.doesNotMatch(accepted!.text, /unrelated project evidence/);
+    assert.equal(accepted!.requiredEvidence, undefined);
+    assert.equal(accepted!.projectAssignmentId, undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(foreignEvidence.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
 test("each direct managed Lead turn returns its response", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-zero-agent-${randomUUID()}.sock`);
@@ -5654,8 +6487,9 @@ test("historical session with its inherited label rejects an active managed repr
   nativeSessions.set(session.id, session);
   const active = {
     ...managedState(label, REQUEST_ID, liveIdentity),
-    piSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionId: identity.piSessionId,
     piSessionFile: aliasPath,
+    agentDefinition: name,
   };
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, active);
@@ -5759,7 +6593,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
   resetAgentMailbox(staleMailbox);
   writeAgentState(staleMailbox, {
-    ...managedState(staleLabel),
+    ...managedState(staleLabel, REQUEST_ID),
     piSessionId: session.id,
     piSessionFile: join(PI_AGENT_ROOT, `${name}-deleted-session.jsonl`),
   });
@@ -5770,12 +6604,16 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { session: sessionPath, task: "must wait" },
+      { session: session.id, task: "must wait" },
       undefined,
       undefined,
       ownedSessionContext(session.id, `${name}-agent`),
     );
-    assert.equal(result.details.error.category, "agent_busy");
+    assert.equal(
+      result.details.error.category,
+      "agent_busy",
+      result.details.error.message,
+    );
     assert.equal(
       pi.calls.some(
         (args) =>
@@ -6493,6 +7331,32 @@ test("session continuation starts a new agent generation with current prompt con
   const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
+  const savedRequestId = randomUUID();
+  const projectAssignmentId = randomUUID();
+  const evidenceAssignmentId = randomUUID();
+  const inheritedEvidence = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "plan.md",
+    "continued plan",
+  );
+  const localEvidence = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "review.md",
+    "continued review",
+  );
+  const savedState = {
+    ...managedState(name),
+    piSessionId: DEFAULT_PI_SESSION_ID,
+    piSessionFile: join(PI_AGENT_ROOT, `${name}-session.jsonl`),
+    agentDefinition: name,
+    projectAssignmentId,
+    completedRequestId: savedRequestId,
+    lastAck: {
+      requestId: savedRequestId,
+      accepted: true,
+      acknowledgedAt: Date.now(),
+    },
+  };
   const session = {
     id: DEFAULT_PI_SESSION_ID,
     path: join(PI_AGENT_ROOT, `${name}-session.jsonl`),
@@ -6507,12 +7371,36 @@ test("session continuation starts a new agent generation with current prompt con
           label: name,
         },
       },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: {
+          version: 1,
+          sessionId: DEFAULT_PI_SESSION_ID,
+          requestId: savedRequestId,
+          runId: savedState.runId,
+          ownerSessionId: savedState.ownerSessionId,
+          workspaceId: savedState.workspaceId,
+          agentLabel: name,
+          paneId: savedState.paneId,
+          projectAssignmentId,
+          evidenceAssignmentId,
+          inheritedEvidence: [inheritedEvidence],
+          localEvidence: [localEvidence],
+        },
+      },
     ],
   };
   realFs.writeFileSync(promptPath, "current saved-session prompt");
   realFs.writeFileSync(session.path, "{}", "utf8");
   writePromptDefinition(definitionPath, name, promptPath);
   nativeSessions.set(session.id, session);
+  const savedMailbox = agentMailboxPath(WORKSPACE, name);
+  resetAgentMailbox(savedMailbox);
+  writeAgentState(savedMailbox, savedState);
+  assert.equal(readUnacknowledgedRequest(savedMailbox, savedState), undefined);
+  assert.equal(readPendingAsk(savedMailbox, savedState), undefined);
+  assert.equal(readResult(savedMailbox, savedRequestId), undefined);
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
   resetAgentMailbox(staleMailbox);
@@ -6532,7 +7420,16 @@ test("session continuation starts a new agent generation with current prompt con
     (args) => {
       launched.push({ args: [...args], contents: promptLaunchContents(args) });
     },
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    (request) => {
+      continuedRequest = request;
+    },
   );
+  let continuedRequest: RequestRecord | undefined;
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
@@ -6550,6 +7447,94 @@ test("session continuation starts a new agent generation with current prompt con
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
   try {
+    for (const pending of ["request", "ask", "result"] as const) {
+      resetAgentMailbox(savedMailbox);
+      const askId = randomUUID();
+      writeAgentState(
+        savedMailbox,
+        pending === "ask"
+          ? {
+              ...savedState,
+              completedRequestId: undefined,
+              lastAck: undefined,
+              activeRequestId: savedRequestId,
+              pendingAskId: askId,
+            }
+          : savedState,
+      );
+      if (pending === "request")
+        writeRequest(savedMailbox, {
+          version: 5,
+          runId: savedState.runId,
+          requestId: randomUUID(),
+          ownerSessionId: savedState.ownerSessionId,
+          workspaceId: savedState.workspaceId,
+          agentLabel: savedState.agentLabel,
+          paneId: savedState.paneId,
+          kind: "task",
+          text: "unacknowledged request",
+          createdAt: Date.now(),
+        });
+      if (pending === "ask")
+        writeAsk(savedMailbox, {
+          version: 5,
+          askId,
+          requestId: savedRequestId,
+          runId: savedState.runId,
+          ownerSessionId: savedState.ownerSessionId,
+          workspaceId: savedState.workspaceId,
+          agentLabel: savedState.agentLabel,
+          paneId: savedState.paneId,
+          piSessionId: session.id,
+          question: "pending owner answer",
+          createdAt: Date.now(),
+        });
+      if (pending === "result")
+        writeResult(savedMailbox, {
+          version: 5,
+          runId: savedState.runId,
+          requestId: savedRequestId,
+          ownerSessionId: savedState.ownerSessionId,
+          workspaceId: savedState.workspaceId,
+          agentLabel: savedState.agentLabel,
+          paneId: savedState.paneId,
+          status: "completed",
+          text: "undelivered result",
+          completedAt: Date.now(),
+        });
+      const blocked = await registeredAgentTool(pi, "continue").execute(
+        "id",
+        { session: session.path, task: `reject pending ${pending}` },
+        undefined,
+        undefined,
+        ownedSessionContext(session.id, name),
+      );
+      assert.equal(blocked.details.ok, false, JSON.stringify(blocked.details));
+      assert.equal(
+        blocked.details.error?.category,
+        pending === "ask" ? "target_ambiguous" : "agent_label_exists",
+        JSON.stringify(blocked.details),
+      );
+      if (pending === "request")
+        assert.match(blocked.details.error.message, /unacknowledged request/i);
+      if (pending === "ask")
+        assert.match(blocked.details.error.message, /multiple managed agents/i);
+      if (pending === "result")
+        assert.match(
+          blocked.details.error.message,
+          /Agent label already exists/i,
+        );
+      assert.equal(
+        pi.calls.some(
+          (args) =>
+            args[0] === "agent" && ["start", "prompt"].includes(args[1] ?? ""),
+        ),
+        false,
+        `pending ${pending} must prevent startup`,
+      );
+    }
+    resetAgentMailbox(savedMailbox);
+    writeAgentState(savedMailbox, savedState);
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
       {
@@ -6583,6 +7568,20 @@ test("session continuation starts a new agent generation with current prompt con
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /current saved-session prompt/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(continuedRequest);
+    assert.notEqual(continuedRequest!.requestId, savedRequestId);
+    assert.notEqual(continuedRequest!.runId, savedState.runId);
+    assert.equal(continuedRequest!.projectAssignmentId, projectAssignmentId);
+    assert.equal(continuedRequest!.evidenceAssignmentId, evidenceAssignmentId);
+    assert.deepEqual(continuedRequest!.requiredEvidence, [
+      inheritedEvidence,
+      localEvidence,
+    ]);
+    assert.deepEqual(continuedRequest!.inheritedEvidence, [inheritedEvidence]);
+    assert.deepEqual(continuedRequest!.localEvidence, [localEvidence]);
+    assert.match(continuedRequest!.text, /continued plan/);
+    assert.match(continuedRequest!.text, /continued review/);
     const sessionIndex = launched[0].args.indexOf("--session");
     assert.equal(
       launched[0].args[sessionIndex + 1],
@@ -6594,10 +7593,321 @@ test("session continuation starts a new agent generation with current prompt con
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.delete(session.id);
     resetAgentMailbox(startup.mailbox);
+    resetAgentMailbox(savedMailbox);
     resetAgentMailbox(staleMailbox);
     realFs.rmSync(definitionPath, { force: true });
     realFs.rmSync(promptPath, { force: true });
     realFs.rmSync(session.path, { force: true });
+    realFs.rmSync(inheritedEvidence.path, { force: true });
+    realFs.rmSync(localEvidence.path, { force: true });
+  }
+});
+
+test("continuation after a later unscoped assignment does not revive prior required evidence", async () => {
+  setLeadEnvironment();
+  const name = `unscoped-resume-${randomUUID().slice(0, 8)}`;
+  const sessionId = DEFAULT_PI_SESSION_ID;
+  const path = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
+  const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
+  const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
+  const scopedRequestId = randomUUID();
+  const unscopedRequestId = randomUUID();
+  const scopedProjectId = randomUUID();
+  const scopedEvidenceId = randomUUID();
+  const plan = persistRequiredEvidenceSnapshot(
+    scopedProjectId,
+    "old-plan.md",
+    "obsolete plan must not return",
+  );
+  const review = persistRequiredEvidenceSnapshot(
+    scopedProjectId,
+    "old-review.md",
+    "obsolete review must not return",
+  );
+  const state = managedState(name);
+  const currentState = {
+    ...state,
+    piSessionId: sessionId,
+    piSessionFile: path,
+    agentDefinition: name,
+    completedRequestId: unscopedRequestId,
+    projectAssignmentId: undefined,
+    lastAck: {
+      requestId: unscopedRequestId,
+      accepted: true,
+      acknowledgedAt: Date.now(),
+    },
+  };
+  const session = {
+    id: sessionId,
+    path,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId, definition: name, label: name },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: {
+          version: 1,
+          sessionId,
+          requestId: scopedRequestId,
+          runId: state.runId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: name,
+          paneId: state.paneId,
+          projectAssignmentId: scopedProjectId,
+          evidenceAssignmentId: scopedEvidenceId,
+          inheritedEvidence: [plan],
+          localEvidence: [review],
+        },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: {
+          version: 1,
+          sessionId,
+          requestId: unscopedRequestId,
+          runId: state.runId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: name,
+          paneId: state.paneId,
+          inheritedEvidence: [],
+          localEvidence: [],
+        },
+      },
+      // A stale scoped entry after the clearing marker must not override mailbox identity.
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: {
+          version: 1,
+          sessionId,
+          requestId: randomUUID(),
+          runId: state.runId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: name,
+          paneId: state.paneId,
+          projectAssignmentId: scopedProjectId,
+          evidenceAssignmentId: scopedEvidenceId,
+          inheritedEvidence: [plan],
+          localEvidence: [review],
+        },
+      },
+    ],
+  };
+  realFs.writeFileSync(path, "{}", "utf8");
+  realFs.writeFileSync(promptPath, "saved prompt", "utf8");
+  writePromptDefinition(definitionPath, name, promptPath);
+  nativeSessions.set(sessionId, session);
+  const savedMailbox = agentMailboxPath(WORKSPACE, name);
+  resetAgentMailbox(savedMailbox);
+  writeAgentState(savedMailbox, currentState);
+  let continued: RequestRecord | undefined;
+  const startup = startupExecutor(
+    name,
+    () => sessionId,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    (request) => {
+      continued = request;
+    },
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  try {
+    resetAgentMailbox(savedMailbox);
+    const missingAuthority = await registeredAgentTool(pi, "continue").execute(
+      "reject-missing-scoped-history",
+      { session: path, task: "must fail closed" },
+      undefined,
+      undefined,
+      ownedSessionContext(sessionId, name),
+    );
+    assert.equal(
+      missingAuthority.details.ok,
+      false,
+      JSON.stringify(missingAuthority.details),
+    );
+    assert.equal(missingAuthority.details.error?.category, "invalid_request");
+    assert.match(
+      missingAuthority.details.error.message,
+      /Cannot verify the current accepted assignment/,
+    );
+    assert.equal(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" && ["start", "prompt"].includes(args[1] ?? ""),
+      ),
+      false,
+    );
+    writeAgentState(savedMailbox, currentState);
+    const result = await registeredAgentTool(pi, "continue").execute(
+      "continue-after-unscoped",
+      { session: path, task: "continue unrelated work" },
+      undefined,
+      undefined,
+      ownedSessionContext(sessionId, name),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(continued);
+    assert.equal(continued!.projectAssignmentId, undefined);
+    assert.equal(continued!.evidenceAssignmentId, undefined);
+    assert.equal(continued!.requiredEvidence, undefined);
+    assert.doesNotMatch(continued!.text, /obsolete plan|obsolete review/);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    nativeSessions.delete(sessionId);
+    resetAgentMailbox(startup.mailbox);
+    resetAgentMailbox(savedMailbox);
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(definitionPath, { force: true });
+    realFs.rmSync(promptPath, { force: true });
+    realFs.rmSync(plan.path, { force: true });
+    realFs.rmSync(review.path, { force: true });
+  }
+});
+
+test("ordinary unscoped accepted session continues after mailbox cleanup", async () => {
+  setLeadEnvironment();
+  const name = `unscoped-retired-${randomUUID().slice(0, 8)}`;
+  const sessionId = DEFAULT_PI_SESSION_ID;
+  const path = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
+  const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
+  const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
+  const requestId = randomUUID();
+  const state = managedState(name);
+  const markerData = {
+    version: 1,
+    sessionId,
+    requestId,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: name,
+    paneId: state.paneId,
+    inheritedEvidence: [] as ReturnType<
+      typeof persistRequiredEvidenceSnapshot
+    >[],
+    localEvidence: [],
+  };
+  const session = {
+    id: sessionId,
+    path,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId, definition: name, label: name },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: markerData,
+      },
+    ],
+  };
+  realFs.writeFileSync(path, "{}", "utf8");
+  realFs.writeFileSync(promptPath, "saved prompt", "utf8");
+  writePromptDefinition(definitionPath, name, promptPath);
+  nativeSessions.set(sessionId, session);
+  const savedMailbox = agentMailboxPath(WORKSPACE, name);
+  resetAgentMailbox(savedMailbox); // Normal cleanup leaves no authoritative mailbox state.
+  let continued: RequestRecord | undefined;
+  const startup = startupExecutor(
+    name,
+    () => sessionId,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    (request) => {
+      continued = request;
+    },
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  let malformedEvidence:
+    ReturnType<typeof persistRequiredEvidenceSnapshot> | undefined;
+  try {
+    malformedEvidence = persistRequiredEvidenceSnapshot(
+      randomUUID(),
+      "malformed.txt",
+      "must not be ignored",
+    );
+    markerData.inheritedEvidence = [malformedEvidence];
+    const malformed = await registeredAgentTool(pi, "continue").execute(
+      "reject-malformed-unscoped",
+      { session: path, task: "must fail closed" },
+      undefined,
+      undefined,
+      ownedSessionContext(sessionId, name),
+    );
+    assert.equal(
+      malformed.details.ok,
+      false,
+      JSON.stringify(malformed.details),
+    );
+    assert.equal(malformed.details.error?.category, "invalid_request");
+    assert.match(
+      malformed.details.error.message,
+      /malformed required-evidence metadata/,
+    );
+    assert.equal(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" && ["start", "prompt"].includes(args[1] ?? ""),
+      ),
+      false,
+    );
+    markerData.inheritedEvidence = [];
+    const result = await registeredAgentTool(pi, "continue").execute(
+      "continue-retired-unscoped",
+      { session: path, task: "continue ordinary work" },
+      undefined,
+      undefined,
+      ownedSessionContext(sessionId, name),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(continued);
+    assert.equal(continued!.projectAssignmentId, undefined);
+    assert.equal(continued!.requiredEvidence, undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    nativeSessions.delete(sessionId);
+    resetAgentMailbox(startup.mailbox);
+    resetAgentMailbox(savedMailbox);
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(definitionPath, { force: true });
+    realFs.rmSync(promptPath, { force: true });
+    if (malformedEvidence)
+      realFs.rmSync(malformedEvidence.path, { force: true });
   }
 });
 
@@ -7172,6 +8482,44 @@ test("revalidates automatic-label collision sizing before startup", async () => 
     assert.ok(readRequest(occupiedMailbox, REQUEST_ID));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(occupiedMailbox);
+    resetAgentMailbox(replacementMailbox);
+  }
+});
+
+test("fresh mailbox claim collision retries without touching the occupied mailbox", async () => {
+  setLeadEnvironment();
+  const occupiedMailbox = agentMailboxPath(WORKSPACE, "agent");
+  const replacementMailbox = agentMailboxPath(WORKSPACE, "agent-2");
+  resetAgentMailbox(occupiedMailbox);
+  resetAgentMailbox(replacementMailbox);
+  const releaseOccupiedClaim = claimAgentMailbox(occupiedMailbox);
+  const occupiedContents = realFs.readdirSync(occupiedMailbox).sort();
+  const startup = startupExecutor("agent-2", () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", task: "retry after claim collision" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.error, undefined);
+    assert.equal(startup.getCount(), 2);
+    assert.deepEqual(
+      realFs.readdirSync(occupiedMailbox).sort(),
+      occupiedContents,
+    );
+    assert.equal(readAgentState(occupiedMailbox), undefined);
+    assert.equal(readRequest(occupiedMailbox, REQUEST_ID), undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    releaseOccupiedClaim();
     resetAgentMailbox(occupiedMailbox);
     resetAgentMailbox(replacementMailbox);
   }

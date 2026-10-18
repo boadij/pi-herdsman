@@ -27,6 +27,8 @@ import {
   herdsmanDataRoot,
   isIncidentalMetadata,
   isResultBinding,
+  isRequiredEvidence,
+  type RequiredEvidence,
   type ResultBinding,
 } from "./storage.ts";
 import { isRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
@@ -1845,6 +1847,7 @@ export type ProjectAssignment = Readonly<{
   text: string;
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
+  requiredEvidence?: RequiredEvidence[];
 }>;
 
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
@@ -1873,7 +1876,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
-  const optional = ["piSessionFile", "resultBindings"];
+  const optional = ["piSessionFile", "resultBindings", "requiredEvidence"];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
     Object.keys(r).every(
@@ -1890,7 +1893,16 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
       (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||
       (Array.isArray(r.resultBindings) &&
-        r.resultBindings.every(isResultBinding)))
+        r.resultBindings.every(isResultBinding))) &&
+    (r.requiredEvidence === undefined ||
+      (Array.isArray(r.requiredEvidence) &&
+        r.requiredEvidence.every(isRequiredEvidence) &&
+        r.requiredEvidence.every(
+          (evidence) =>
+            "result" in evidence || evidence.sourceAssignmentId === r.id,
+        ) &&
+        new Set(r.requiredEvidence.map((evidence) => evidence.id)).size ===
+          r.requiredEvidence.length))
   );
 }
 

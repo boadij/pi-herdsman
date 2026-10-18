@@ -6,10 +6,41 @@ Any coordination operation whose schema accepts `files` uses it as the explicit
 evidence channel across session boundaries.
 
 Pass user-supplied or already-available artifacts through `files` when they are
-relevant to what the recipient must do or decide. Do not assume the recipient
-inherits the sender's conversation or attachments. Preserve exact supplied
-result refs when forwarding them and omit unrelated evidence. `files` carries
-evidence, not runtime capability.
+relevant to what the recipient must do or decide and are not already registered
+as required evidence for that recipient's verified assignment. Do not assume
+the recipient inherits arbitrary conversation or attachments. Preserve exact
+supplied result refs when forwarding them and omit unrelated evidence. `files`
+carries evidence, not runtime capability.
+
+## Required assignment evidence
+
+A verified managed project assignment can retain **required evidence** for
+future delegated Agents. Initial files supplied to `delegate_project` become
+required evidence. The Manager or assigned Lead can register later evidence
+with `update_assignment_evidence`; use that operation when a review or other
+artifact must remain available to future descendants. It is separate from
+`message_staff`, which communicates a message but does not change assignment
+requirements. The exact operation and role rules are in the
+[staff-tool reference](../reference/staff.md#update_assignment_evidence).
+
+Each new descendant assignment receives the required evidence effective when
+that assignment is accepted, even when the delegating model omits it from
+`files`. The receiving managed Agent can add local requirements for its own
+project-scoped descendants. It cannot remove inherited requirements; report an
+obsolete inherited item to the project owner. Parent changes do not silently
+rewrite an already-running child's accepted evidence set.
+
+Required file evidence is an immutable snapshot of supported UTF-8 text no
+larger than 1 MiB. Registration of unsupported, binary, or oversized files
+fails explicitly. A supported snapshot that exceeds the inline delivery limit
+is delivered by reference to the preserved snapshot. Ordinary `files` remain
+per-message evidence: reference-only ordinary files are not copied or
+snapshotted and may change or disappear.
+
+This is not general attachment or conversation inheritance. Automatic required
+evidence applies to verified managed project assignments and their nested
+managed-Agent assignments, not to an ordinary Lead's whole session. Evidence
+availability does not grant execution or control authority.
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 
@@ -20,8 +51,11 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
-Strict UTF-8 text is embedded when it fits; non-text and non-fitting files are
-canonical local references and are not copied or snapshotted.
+Strict UTF-8 text is embedded when it fits; ordinary non-text and non-fitting
+files are canonical local references and are not copied or snapshotted. The
+required-assignment exception preserves supported text snapshots and can
+reference those snapshots when they do not fit inline; see
+[Required assignment evidence](#required-assignment-evidence).
 
 ## Coordination `files`
 

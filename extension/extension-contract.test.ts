@@ -510,6 +510,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "resume_project",
       "stop_lead",
       "remove_worktree",
+      "update_assignment_evidence",
     ].sort(),
   );
   for (const name of [
@@ -555,9 +556,9 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
     leaf.tools.map((tool) => tool.name),
-    ["ask_owner"],
+    ["ask_owner", "update_assignment_evidence"],
   );
-  const askOwner = leaf.tools[0]!;
+  const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
   assertPortableToolSchema(askOwner);
   assert.deepEqual(askOwner.parameters.required, ["question"]);
   assert.equal(
@@ -565,6 +566,18 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     true,
   );
   assert.equal(Value.Check(askOwner.parameters, {}), false);
+  const updateEvidence = leaf.tools.find(
+    (tool) => tool.name === "update_assignment_evidence",
+  )!;
+  assertPortableToolSchema(updateEvidence);
+  assert.equal(
+    Value.Check(updateEvidence.parameters, { add: ["result:reviewer#2"] }),
+    true,
+  );
+  assert.equal(
+    Value.Check(updateEvidence.parameters, { remove: ["bad"], extra: true }),
+    false,
+  );
   leaf.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();
@@ -834,6 +847,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "resume_project",
       "stop_lead",
       "remove_worktree",
+      "update_assignment_evidence",
     ].sort(),
   );
   assert.equal(

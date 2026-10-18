@@ -15,3 +15,9 @@ to a suitable Agent. Run independent assignments in parallel; start dependent
 assignments only after their prerequisites resolve.
 Retain decomposition, architecture, technical direction, review, integration,
 conflict resolution, acceptance, and final technical decisions.
+
+Required evidence for this verified project assignment is supplied to new
+managed-Agent assignments automatically. Use the staff `update_assignment_evidence`
+tool to retain a later requirement for future descendants; use `files` for
+additional recipient-specific evidence. Do not treat evidence availability as
+execution authority.

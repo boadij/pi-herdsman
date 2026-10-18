@@ -14,7 +14,11 @@ import type {
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-definitions.ts";
-import { resultPath, resultRef } from "./storage.ts";
+import {
+  readRequiredEvidenceSnapshot,
+  resultPath,
+  resultRef,
+} from "./storage.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -1825,9 +1829,18 @@ for (const reachable of [true, false]) {
       tab_id: "root-tab",
       workspace_id: WORKSPACE,
     };
+    let pauseThirdWorktreeList = false;
+    let worktreeListsSincePause = 0;
+    let worktreeListPaused!: () => void;
+    let resumeWorktreeList!: () => void;
+    let worktreeListGate: Promise<void> | undefined;
     const exec = async (_command: string, args: string[]) => {
       let result: unknown = {};
-      if (args[0] === "worktree" && args[1] === "list")
+      if (args[0] === "worktree" && args[1] === "list") {
+        if (pauseThirdWorktreeList && ++worktreeListsSincePause === 3) {
+          worktreeListPaused();
+          await worktreeListGate;
+        }
         result = {
           source: {
             repo_key: "repo-key",
@@ -1836,7 +1849,7 @@ for (const reachable of [true, false]) {
           },
           worktrees: [],
         };
-      else if (isAgentList(args))
+      } else if (isAgentList(args))
         result = { agents: reachable ? [managerAgent] : [] };
       else if (args[0] === "agent" && args[1] === "get")
         result = { agent: reachable ? managerAgent : undefined };
@@ -1900,6 +1913,141 @@ for (const reachable of [true, false]) {
           branch,
           text: "project assignment",
         });
+        if (reachable) {
+          const evidenceTool = pi.tools.find(
+            (tool) => tool.name === "update_assignment_evidence",
+          )!;
+          await t.test(
+            "concurrent assignment evidence additions are merged",
+            async () => {
+              const attempts = await Promise.allSettled([
+                evidenceTool.execute(
+                  "first",
+                  {
+                    branch,
+                    text: "concurrent review one",
+                  },
+                  undefined,
+                  undefined,
+                  ctx,
+                ),
+                evidenceTool.execute(
+                  "second",
+                  {
+                    branch,
+                    text: "concurrent review two",
+                  },
+                  undefined,
+                  undefined,
+                  ctx,
+                ),
+              ]);
+              assert.equal(
+                attempts.filter(({ status }) => status === "fulfilled").length,
+                1,
+              );
+              const rejected = attempts.find(
+                ({ status }) => status === "rejected",
+              ) as PromiseRejectedResult;
+              assert.match(
+                String(rejected.reason),
+                /Project assignment lock is in progress/,
+              );
+              const missing = [
+                "concurrent review one",
+                "concurrent review two",
+              ].find(
+                (text) =>
+                  !listProjectAssignments(runtime, "repo-key")
+                    .find((assignment) => assignment.branch === branch)
+                    ?.requiredEvidence?.some((entry) => {
+                      return (
+                        readRequiredEvidenceSnapshot(leadId, entry) === text
+                      );
+                    }),
+              )!;
+              await evidenceTool.execute(
+                "retry",
+                {
+                  branch,
+                  text: missing,
+                },
+                undefined,
+                undefined,
+                ctx,
+              );
+              const current = listProjectAssignments(runtime, "repo-key").find(
+                (assignment) => assignment.branch === branch,
+              )!;
+              assert.deepEqual(
+                current.requiredEvidence?.map(({ name }) => name).sort(),
+                ["assignment-note.txt", "assignment-note.txt"],
+              );
+              assert.deepEqual(
+                current.requiredEvidence
+                  ?.map((entry) =>
+                    readRequiredEvidenceSnapshot(current.id, entry),
+                  )
+                  .sort(),
+                ["concurrent review one", "concurrent review two"],
+              );
+            },
+          );
+
+          await t.test(
+            "assignment evidence update rejects a replacement assignment",
+            async () => {
+              const raceBranch = "smoke/evidence-replacement-race";
+              const original = {
+                version: 2 as const,
+                id: randomUUID(),
+                repoKey: "repo-key",
+                branch: raceBranch,
+                text: "original assignment",
+              };
+              writeProjectAssignment(runtime, original);
+              worktreeListsSincePause = 0;
+              worktreeListGate = new Promise<void>((resolve) => {
+                resumeWorktreeList = resolve;
+              });
+              const paused = new Promise<void>((resolve) => {
+                worktreeListPaused = resolve;
+              });
+              pauseThirdWorktreeList = true;
+              const update = evidenceTool.execute(
+                "replacement",
+                {
+                  branch: raceBranch,
+                  text: "must not reach replacement",
+                },
+                undefined,
+                undefined,
+                ctx,
+              );
+              try {
+                await paused;
+                const replacement = {
+                  ...original,
+                  id: randomUUID(),
+                  text: "replacement assignment",
+                };
+                writeProjectAssignment(runtime, replacement);
+                resumeWorktreeList();
+                await assert.rejects(update, /Project assignment changed/);
+                assert.deepEqual(
+                  listProjectAssignments(runtime, "repo-key").find(
+                    (assignment) => assignment.branch === raceBranch,
+                  ),
+                  replacement,
+                );
+              } finally {
+                pauseThirdWorktreeList = false;
+                resumeWorktreeList?.();
+                worktreeListGate = undefined;
+              }
+            },
+          );
+        }
         writeProjectMessage(liveRecord, runtime);
         const projectDeliveries = (id: string) =>
           managerHistory.filter(
@@ -3425,6 +3573,7 @@ async function runManagerStartupScenario(
           ? ["piSessionFile"]
           : []),
         "repoKey",
+        ...(largeEvidence ? ["requiredEvidence"] : []),
         "text",
         "version",
       ]);
@@ -5047,6 +5196,7 @@ async function runManagerStartupScenario(
         ? ["piSessionFile"]
         : []),
       "repoKey",
+      ...(largeEvidence ? ["requiredEvidence"] : []),
       "text",
       "version",
     ]);
@@ -5054,6 +5204,15 @@ async function runManagerStartupScenario(
       assert.equal(
         assignment.piSessionFile,
         realFs.realpathSync(childSessionPath),
+      );
+    assert.equal(
+      assignment.requiredEvidence?.length ?? 0,
+      largeEvidence ? 1 : 0,
+    );
+    if (largeEvidence)
+      assert.match(
+        assignment.requiredEvidence?.[0]?.sha256 ?? "",
+        /^[a-f0-9]{64}$/,
       );
     assert.equal(createCalls, 1);
     assert.equal(startCalls, mode === "recovery" ? 0 : 1);
@@ -8406,6 +8565,7 @@ test("registered lead exposes only explicit live controls", async () => {
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "update_assignment_evidence",
   ]);
   const listed = await tool.execute("id", {}, undefined, undefined, context);
   assert.deepEqual(listed.details.agents[0].available_tools, [

@@ -23,6 +23,7 @@ mock.module("node:fs", {
     fsyncSync: realFs.fsyncSync,
     fstatSync: realFs.fstatSync,
     mkdirSync: realFs.mkdirSync,
+    lstatSync: realFs.lstatSync,
     openSync: realFs.openSync,
     readFileSync: (path: string, encoding: BufferEncoding) => {
       if (deleteBeforeRead && configPath !== undefined && path === configPath) {

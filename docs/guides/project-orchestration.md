@@ -74,6 +74,16 @@ policy takes effect on its next start.
 See [`delegate_project`](../reference/staff.md#delegate_project) and
 [`resume_project`](../reference/staff.md#resume_project).
 
+Files supplied to `delegate_project` are retained as required evidence for the
+assignment and delivered to future delegated descendants. To make later review
+material a continuing requirement, use `update_assignment_evidence` for the
+project branch; then communicate the requested work separately with
+`message_staff`. That registration is not a message side effect. Assigned Leads
+derive their current assignment rather than choosing a branch, and ordinary
+Leads have no session-wide evidence scope. See
+[`update_assignment_evidence`](../reference/staff.md#update_assignment_evidence)
+for exact behavior and limits.
+
 ## Run independent work in parallel
 
 Independent branches can run concurrently:

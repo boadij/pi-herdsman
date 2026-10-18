@@ -21,7 +21,9 @@ import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import {
   herdsmanDataRoot,
   isResultBinding,
+  isRequiredEvidence,
   type ResultBinding,
+  type RequiredEvidence,
 } from "./storage.ts";
 
 export interface ManagedAgentState {
@@ -37,6 +39,7 @@ export interface ManagedAgentState {
   agentDefinition?: string;
   cwd: string;
   activeRequestId?: string;
+  projectAssignmentId?: string;
   pendingAskId?: string;
   lastActivityAt?: number;
   completedRequestId?: string;
@@ -86,6 +89,11 @@ export interface RequestRecord {
   askId?: string;
   text: string;
   resultBindings?: ResultBinding[];
+  requiredEvidence?: RequiredEvidence[];
+  inheritedEvidence?: RequiredEvidence[];
+  localEvidence?: RequiredEvidence[];
+  projectAssignmentId?: string;
+  evidenceAssignmentId?: string;
   createdAt: number;
 }
 export interface AskRecord {
@@ -399,6 +407,7 @@ function validate(
           "agentDefinition",
           "cwd",
           "activeRequestId",
+          "projectAssignmentId",
           "pendingAskId",
           "lastActivityAt",
           "completedRequestId",
@@ -420,6 +429,11 @@ function validate(
             "askId",
             "text",
             "resultBindings",
+            "requiredEvidence",
+            "inheritedEvidence",
+            "localEvidence",
+            "projectAssignmentId",
+            "evidenceAssignmentId",
             "createdAt",
           ]
         : kind === "ask"
@@ -654,6 +668,52 @@ function validate(
         !v.resultBindings.every(isResultBinding))
     )
       throw new Error("Invalid request result bindings");
+    if (
+      v.requiredEvidence !== undefined &&
+      (v.kind !== "task" ||
+        !Array.isArray(v.requiredEvidence) ||
+        !v.requiredEvidence.every(isRequiredEvidence) ||
+        new Set(v.requiredEvidence.map((entry: RequiredEvidence) => entry.id))
+          .size !== v.requiredEvidence.length)
+    )
+      throw new Error("Invalid request required evidence");
+    if (v.inheritedEvidence !== undefined || v.localEvidence !== undefined) {
+      const inherited = v.inheritedEvidence;
+      const local = v.localEvidence;
+      if (
+        v.kind !== "task" ||
+        !Array.isArray(inherited) ||
+        !inherited.every(isRequiredEvidence) ||
+        !Array.isArray(local) ||
+        !local.every(isRequiredEvidence)
+      )
+        throw new Error("Invalid request evidence split");
+      const split = [...inherited, ...local] as RequiredEvidence[];
+      if (
+        new Set(split.map((entry) => entry.id)).size !== split.length ||
+        v.projectAssignmentId === undefined ||
+        v.evidenceAssignmentId === undefined ||
+        !Array.isArray(v.requiredEvidence) ||
+        JSON.stringify(v.requiredEvidence) !== JSON.stringify(split)
+      )
+        throw new Error("Inconsistent request evidence assignment");
+    }
+    const hasProjectAssignmentId = v.projectAssignmentId !== undefined;
+    const hasEvidenceAssignmentId = v.evidenceAssignmentId !== undefined;
+    if (
+      (hasProjectAssignmentId || hasEvidenceAssignmentId) &&
+      (v.kind !== "task" || hasProjectAssignmentId !== hasEvidenceAssignmentId)
+    )
+      throw new Error("Invalid request evidence assignment identity");
+    if (
+      (hasProjectAssignmentId &&
+        (typeof v.projectAssignmentId !== "string" ||
+          !UUID.test(v.projectAssignmentId))) ||
+      (hasEvidenceAssignmentId &&
+        (typeof v.evidenceAssignmentId !== "string" ||
+          !UUID.test(v.evidenceAssignmentId)))
+    )
+      throw new Error("Invalid request evidence assignment identity");
     finite("createdAt");
   } else if (kind === "ask") {
     if (typeof v.question !== "string" || !v.question.trim())
