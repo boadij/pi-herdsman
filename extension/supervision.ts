@@ -2143,6 +2143,12 @@ function pendingRetirementPath(
 export function listPendingRetirements(
   runtime: SupervisionRuntime,
   repoKey: string,
+  options: {
+    after?: string;
+    recordLimit?: number;
+    onReadError?: (error: Error) => void;
+    onScanned?: (entry: string) => void;
+  } = {},
 ): ProjectAssignment[] {
   const repository = basename(
     dirname(projectAssignmentPath(runtime, repoKey, "lookup")),
@@ -2165,20 +2171,40 @@ export function listPendingRetirements(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return entries
-    .map((entry) => {
-      const path = join(directory, entry);
+  entries.sort();
+  const start = options.after
+    ? Math.max(
+        0,
+        entries.findIndex((entry) => entry > options.after!),
+      )
+    : 0;
+  const ordered = [...entries.slice(start), ...entries.slice(0, start)];
+  const records: ProjectAssignment[] = [];
+  const recordLimit = Math.min(
+    options.recordLimit ?? COORDINATION_INBOX_SCAN_LIMIT,
+    COORDINATION_INBOX_SCAN_LIMIT,
+  );
+  for (const entry of ordered.slice(0, COORDINATION_INBOX_SCAN_LIMIT)) {
+    options.onScanned?.(entry);
+    const path = join(directory, entry);
+    try {
       const record = readProjectAssignmentFile(path, repoKey, undefined, true);
       if (!record)
         throw projectAssignmentReadError(
           path,
           "file disappeared while listing",
         );
-      return record;
-    })
-    .sort(
-      (a, b) => a.branch.localeCompare(b.branch) || a.id.localeCompare(b.id),
-    );
+      records.push(record);
+      if (records.length >= recordLimit) break;
+    } catch (error) {
+      options.onReadError?.(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
+  }
+  return records.sort(
+    (a, b) => a.branch.localeCompare(b.branch) || a.id.localeCompare(b.id),
+  );
 }
 
 export function removePendingRetirement(
@@ -2186,12 +2212,26 @@ export function removePendingRetirement(
   expected: ProjectAssignment,
 ): void {
   withProjectAssignmentLock(() => {
-    const record = listPendingRetirements(runtime, expected.repoKey).find(
-      (record) =>
-        record.id === expected.id && record.branch === expected.branch,
+    const path = pendingRetirementPath(runtime, expected);
+    const root = join(runtime.root, "retirements");
+    for (const directory of [
+      herdsmanDataRoot(),
+      dirname(dirname(runtime.root)),
+      dirname(runtime.root),
+      runtime.root,
+      root,
+      dirname(path),
+    ])
+      assignmentDirectory(directory);
+    const record = readProjectAssignmentFile(
+      path,
+      expected.repoKey,
+      expected.branch,
+      true,
     );
     if (!record) return;
-    const path = pendingRetirementPath(runtime, record);
+    if (record.id !== expected.id)
+      throw new Error("Pending retirement identity mismatch");
     unlinkSync(path);
     fsyncDirectory(dirname(path));
   });

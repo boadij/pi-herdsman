@@ -29,6 +29,7 @@ Manager.
 
 [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md)'s exact
 assignment authority and [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md)'s
-verified checkout-absence requirements are unchanged. Retirement does not
-establish task completion, acceptance, merge, or discard, and preserves Git
-branches and Pi conversations.
+verified checkout-absence requirements are unchanged. Herdsman's retirement
+operation does not itself delete Git branches or Pi conversations; external
+actors may independently remove them. Retirement does not establish task
+completion, acceptance, merge, or discard.

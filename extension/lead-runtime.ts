@@ -8059,6 +8059,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   } = host;
   const reportedProjectMessageCleanupErrors = new Set<string>();
   const reportedRetirementErrors = new Set<string>();
+  const retirementCursors = new Map<string, string>();
   const readLeadSessionIdsFromHost = (
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
@@ -9107,12 +9108,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const runtime = supervisionRuntime();
     let errorKey = manager!.repoKey;
     try {
-      // Bound preflight backlog; ordinary inbox passes deliver one notice at a time.
+      // Bound filesystem work and resume after the last examined directory entry.
       let processed = 0;
-      for (const retired of listPendingRetirements(
-        runtime,
-        manager!.repoKey,
-      ).slice(0, preflight ? COORDINATION_INBOX_SCAN_LIMIT : 1)) {
+      for (const retired of listPendingRetirements(runtime, manager!.repoKey, {
+        after: retirementCursors.get(manager!.repoKey),
+        recordLimit: preflight ? COORDINATION_INBOX_SCAN_LIMIT : 1,
+        onScanned: (entry) => retirementCursors.set(manager!.repoKey, entry),
+        onReadError: (error) => {
+          const key = `${manager!.repoKey}:${error.message}`;
+          if (reportedRetirementErrors.has(key)) return;
+          reportedRetirementErrors.add(key);
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        },
+      })) {
         errorKey = retired.id;
         processed += await host.withProjectAssignmentLock(
           retired.repoKey,
@@ -9164,7 +9172,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     `The assignment for Lead session ${retired.id} was retired.`,
                     "Manager authority for that assignment has ended.",
                     "This does not establish task completion, acceptance, merge, or discard.",
-                    "The Git branch and Pi session history are preserved.",
+                    "Retiring this assignment does not itself delete the Git branch or Pi session history.",
                   ].join("\n"),
                   display: false,
                   details: {
