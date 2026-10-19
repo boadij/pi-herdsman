@@ -5656,13 +5656,18 @@ test("project agent discovery is gated by Pi project trust", async () => {
     context.hasUI = true;
     context.mode = "rpc";
     const selections: string[][] = [];
-    context.ui.select = async (_title: string, options: string[]) => {
+    let categorySelection = 0;
+    context.ui.select = async (title: string, options: string[]) => {
       selections.push(options);
+      if (title === "Definitions")
+        return ++categorySelection % 2 === 1
+          ? options.find((option) => option === "Agent definitions")
+          : undefined;
       return undefined;
     };
     await command.handler("definitions", context);
     assert.equal(
-      selections.at(-1)?.some((value) => value.includes("project-only")),
+      selections.at(-2)?.some((value) => value.includes("project-only")),
       true,
     );
     realFs.writeFileSync(
@@ -5678,7 +5683,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
       "---\nname: scout\nmodel: global/model\n---\nglobal",
     );
     await command.handler("definitions", context);
-    const options = selections.at(-1) ?? [];
+    const options = selections.at(-2) ?? [];
     assert.ok(
       options.some(
         (value) =>
@@ -5700,7 +5705,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     context.isProjectTrusted = () => false;
     await command.handler("definitions", context);
     assert.equal(
-      selections.at(-1)?.some((value) => value.includes("project-only")),
+      selections.at(-2)?.some((value) => value.includes("project-only")),
       false,
     );
   } finally {
@@ -6115,7 +6120,13 @@ test("project-only Definitions edits create a global override", async () => {
     getAvailable: () => [{ provider: "provider", id: "edited-model" }],
   };
   let selection = 0;
-  context.ui.select = async (_label: string, options: string[]) => {
+  let categorySelected = false;
+  context.ui.select = async (title: string, options: string[]) => {
+    if (title === "Definitions") {
+      if (categorySelected) return undefined;
+      categorySelected = true;
+      return options.find((option) => option === "Agent definitions");
+    }
     switch (selection++) {
       case 0:
         return options.find((option) => option.includes("project-only"));

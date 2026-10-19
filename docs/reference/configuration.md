@@ -105,10 +105,17 @@ evidence, or an existing Manager leave it as an ordinary Lead. The preference
 does not persist Manager role intent and changing it does not affect the current
 session.
 
-The Settings menu edits global defaults only. It identifies when the effective
-Manager auto-start or context-retirement value comes from a project override;
-changing the global value does not replace that project value. Edit a project
-override in the project's `.pi/settings.json`.
+The Settings menu edits global defaults and, in the `Project overrides…` submenu,
+trusted-project values for these two preferences. Choose `Inherit global`, `On
+for this project`, or `Off for this project`; inheritance removes the stored
+project property. Global controls remain independent, and an explicit project
+value takes precedence over the global value. Untrusted projects cannot be read
+or edited through this menu. Changes follow the existing preference evaluation
+lifecycle and do not retroactively change an already-running role or operation.
+Updates to an existing project settings file coordinate with Pi's settings
+lock. With Pi 1.3.0, concurrent independent writers can still race when
+creating a missing `.pi/settings.json`, because Pi reads the missing file before
+acquiring that lock.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`

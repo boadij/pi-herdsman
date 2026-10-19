@@ -87,6 +87,8 @@ import {
   configuredModel,
   discoverRoleDefinition,
   isReservedRoleDefinition,
+  isRuntimeRoleDefinition,
+  RESERVED_ROLE_DEFINITION_NAMES,
   matchesToolPattern,
   expandAgentBodyFiles,
   FLEXIBLE_LEAD_DEFINITION_NAME,
@@ -358,6 +360,7 @@ type LeadCommandHost = {
   readConfig: typeof import("./config.ts").readConfig;
   readEffectiveConfig: typeof import("./config.ts").readEffectiveConfig;
   readProjectOverrides: typeof import("./config.ts").readProjectOverrides;
+  updateProjectOverride: typeof import("./config.ts").updateProjectOverride;
   contextAgentDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
     roleDefinitions: AgentDefinition[];
@@ -1612,21 +1615,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
     },
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
-      let selectedDefinition: string | undefined;
+      let selectedSection = "agents";
+      const selectedDefinitions: Record<string, string | undefined> = {};
       const loadDefinitions = async () => {
         const { definitions, roleDefinitions } =
           await host.contextAgentDefinitions(ctx);
         return {
           definitions,
-          roleDefinitions: (
-            [
-              FLEXIBLE_LEAD_DEFINITION_NAME,
-              ORCHESTRATOR_LEAD_DEFINITION_NAME,
-              MANAGED_LEAD_DEFINITION_NAME,
-              MANAGER_DEFINITION_NAME,
-              CHIEF_DEFINITION_NAME,
-            ] as const
-          ).map((name) => {
+          roleDefinitions: RESERVED_ROLE_DEFINITION_NAMES.map((name) => {
             const definition = roleDefinitions.find(
               (candidate) => candidate.name === name,
             );
@@ -1643,276 +1639,294 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
       };
       while (true) {
-        const loaded = await loadDefinitions();
-        const definitions = loaded.definitions;
-        const availableDefinitions = [
-          ...loaded.roleDefinitions,
-          ...definitions,
-        ];
-        const options = availableDefinitions.map((definition) => {
-          const { model, thinking } = this.executionSettings(ctx, definition);
-          const sources = [
-            definition.extensionSource ? "bundled" : undefined,
-            definition.projectSource ? "project" : undefined,
-            definition.overrideSource ? "global" : undefined,
-          ]
-            .filter(Boolean)
-            .join(" + ");
-          const reservedLead = isReservedRoleDefinition(definition.name);
-          const runtimeProfile =
-            definition.name === FLEXIBLE_LEAD_DEFINITION_NAME ||
-            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME ||
-            definition.name === MANAGER_DEFINITION_NAME ||
-            definition.name === CHIEF_DEFINITION_NAME;
-          const description = [
-            ...(!runtimeProfile ? [model, thinking] : []),
-            sources,
-            ...(!reservedLead && !host.agentDefinitionEnabled(definition)
-              ? ["disabled"]
-              : []),
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          return {
-            value: definition.name,
-            label: definition.name,
-            description,
-            ...(typeof definition.frontmatter.description === "string"
-              ? { help: definition.frontmatter.description }
-              : {}),
-          };
-        });
-        const selected = await host.selectMenu(
+        const section = await host.selectMenu(
           ctx,
           "Definitions",
-          options,
-          selectedDefinition,
+          [
+            {
+              value: "agents",
+              label: "Agent definitions",
+              help: "Definitions available for Agent delegation.",
+            },
+            {
+              value: "roles",
+              label: "Role profiles",
+              help: "Reserved Lead, Manager, and Chief definitions.",
+            },
+          ],
+          selectedSection,
         );
-        if (selected === undefined) return;
-        if (!selected) continue;
-        const selectedEntry = availableDefinitions.find(
-          (definition) => definition.name === selected,
-        );
-        if (!selectedEntry) continue;
-        selectedDefinition = selectedEntry.name;
-        let definition = selectedEntry;
-        const selectedName = definition.name;
-        let selectedAction = "model";
-        while (true) {
-          const { model, thinking } = this.executionSettings(ctx, definition);
-          const managedDefinition =
-            definition.name === MANAGED_LEAD_DEFINITION_NAME;
-          const runtimeProfile =
-            definition.name === FLEXIBLE_LEAD_DEFINITION_NAME ||
-            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME ||
-            definition.name === MANAGER_DEFINITION_NAME ||
-            definition.name === CHIEF_DEFINITION_NAME;
-          const action = await host.selectMenu(
-            ctx,
-            definition.name,
-            [
-              ...(!runtimeProfile
-                ? [
-                    {
-                      value: "model",
-                      label: "Model",
-                      description: model,
-                      help: managedDefinition
-                        ? "Model for future managed Lead launches. Changes do not affect a running Lead."
-                        : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
-                    },
-                  ]
-                : []),
-              ...(!runtimeProfile
-                ? [
-                    {
-                      value: "thinking",
-                      label: "Thinking",
-                      description: thinking,
-                      help: managedDefinition
-                        ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
-                        : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
-                    },
-                  ]
-                : []),
-              ...(!isReservedRoleDefinition(definition.name)
-                ? [
-                    {
-                      value: "enabled",
-                      label: "Enabled",
-                      description: host.agentDefinitionEnabled(definition)
-                        ? "on"
-                        : "off",
-                      help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
-                    },
-                  ]
-                : []),
-              {
-                value: "details",
-                label: "Details…",
-                help: "Show effective definition metadata and expanded instructions.",
-              },
-            ],
-            selectedAction,
-          );
-          if (!action) break;
-          selectedAction = action;
-          if (action === "details") {
-            let current;
-            try {
-              current = await resolveDefinition(selectedName);
-            } catch (error) {
-              ctx.ui.notify(String(error), "error");
-              break;
-            }
-            if (!current) {
-              ctx.ui.notify(
-                `Definition ${selectedName} is no longer available.`,
-                "warning",
-              );
-              break;
-            }
-            definition = current;
-            const metadata = host.agentDefinitionMetadata(current);
-            if (ctx.mode === "tui") {
-              const instructions = host.expandAgentBodyFiles(
-                current.body,
-                [],
-                "definition details",
-              );
-              host.appendDefinitionsEntry({
-                definitions: [metadata],
-                instructions,
-              });
-            } else {
-              ctx.ui.notify(host.formatAgentDefinitions([metadata]).join("\n"));
-            }
-            continue;
+        if (section !== "agents" && section !== "roles") return;
+        selectedSection = section;
+        const sectionDefinitions =
+          section === "agents" ? "definitions" : "roleDefinitions";
+        const selectedDefinitionsForSection = selectedDefinitions[section];
+        definitionList: while (true) {
+          const loaded = await loadDefinitions();
+          const availableDefinitions = loaded[sectionDefinitions];
+          if (!availableDefinitions.length) {
+            ctx.ui.notify("No Agent definitions are available.");
+            break definitionList;
           }
-          let field: "model" | "thinking" | "enabled";
-          let value: string | boolean | undefined;
-          if (action === "model") {
-            field = "model";
-            await ctx.modelRegistry.refresh();
-            const models = ctx.modelRegistry.getAvailable();
-            const tokens = [
-              ...new Set(models.map((item: Model) => modelToken(item))),
-            ].sort();
-            const configured =
-              typeof definition.frontmatter.model === "string"
-                ? definition.frontmatter.model
-                : undefined;
-            if (configured && !tokens.includes(configured)) {
-              const resolved = this.resolveConfiguredModel(ctx, configured);
-              const resolvedToken = resolved
-                ? modelToken(resolved)
-                : configured;
-              if (!tokens.includes(resolvedToken)) tokens.push(resolvedToken);
-            }
-            const idCounts = new Map<string, number>();
-            for (const token of tokens) {
-              const id = compactModelToken(token);
-              idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
-            }
-            const resolvedConfigured = configured
-              ? this.resolveConfiguredModel(ctx, configured)
-              : undefined;
-            const modelsByToken = new Map(
-              models.map((item: Model) => [modelToken(item), item]),
-            );
-            if (resolvedConfigured)
-              modelsByToken.set(
-                modelToken(resolvedConfigured),
-                resolvedConfigured,
-              );
-            const modelItems = tokens.map((token) => {
-              const id = compactModelToken(token);
-              return {
-                value: token,
-                label: idCounts.get(id) === 1 ? id : token,
-                searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
-              };
-            });
-            const selectedModel = await host.selectModelMenu(
-              ctx,
-              [
-                {
-                  value: "inherit",
-                  label: "Inherit current session",
-                  searchText: "Inherit current session inherit",
-                },
-                ...modelItems,
-              ],
-              configured
-                ? resolvedConfigured
-                  ? modelToken(resolvedConfigured)
-                  : configured
-                : "inherit",
-            );
-            if (!selectedModel) continue;
-            value = selectedModel === "inherit" ? undefined : selectedModel;
-          } else if (action === "thinking") {
-            field = "thinking";
-            await ctx.modelRegistry.refresh();
-            const configured =
-              typeof definition.frontmatter.model === "string"
-                ? definition.frontmatter.model
-                : undefined;
-            const model = configured
-              ? this.resolveConfiguredModel(ctx, configured)
-              : ctx.model;
-            const levels = model
-              ? getSupportedThinkingLevels(model)
-              : [...host.validThinkingLevels];
-            const configuredThinking =
-              definition.frontmatter.thinking === false
-                ? "off"
-                : typeof definition.frontmatter.thinking === "string"
-                  ? definition.frontmatter.thinking
-                  : undefined;
-            const thinkingItems = [
-              { value: "inherit", label: "Inherit current session" },
-              ...levels.map((level: string) => ({
-                value: level,
-                label: level,
-              })),
-            ];
-            if (configuredThinking && !levels.includes(configuredThinking))
-              thinkingItems.push({
-                value: configuredThinking,
-                label: configuredThinking,
-              });
-            const selectedThinking = await host.selectMenu(
-              ctx,
-              "Thinking",
-              thinkingItems,
-              configuredThinking ?? "inherit",
-            );
-            if (!selectedThinking) continue;
-            value =
-              selectedThinking === "inherit" ? undefined : selectedThinking;
-          } else if (action === "enabled") {
-            field = "enabled";
-            value = !host.agentDefinitionEnabled(definition);
-          } else continue;
-          const result = host.updateAgentOverride(definition, field, value);
-          const verified = await resolveDefinition(definition.name);
-          if (!verified)
-            throw new Error(
-              `definition ${definition.name} is no longer available`,
-            );
-          if (result.changed && verified.overrideSource !== result.path)
-            throw new Error(
-              `agent ${definition.name} override verification failed`,
-            );
-          ctx.ui.notify(
-            result.changed
-              ? field === "enabled"
-                ? `${definition.name} ${value ? "enabled" : "disabled"}.`
-                : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
-              : `${definition.name} ${field} is already inherited; no change made.`,
+          const options = availableDefinitions.map((definition) => {
+            const { model, thinking } = this.executionSettings(ctx, definition);
+            const sources = [
+              definition.extensionSource ? "bundled" : undefined,
+              definition.projectSource ? "project" : undefined,
+              definition.overrideSource ? "global" : undefined,
+            ]
+              .filter(Boolean)
+              .join(" + ");
+            const reservedLead = isReservedRoleDefinition(definition.name);
+            const runtimeProfile = isRuntimeRoleDefinition(definition.name);
+            const description = [
+              ...(!runtimeProfile ? [model, thinking] : []),
+              sources,
+              ...(!reservedLead && !host.agentDefinitionEnabled(definition)
+                ? ["disabled"]
+                : []),
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            return {
+              value: definition.name,
+              label: definition.name,
+              description,
+              ...(typeof definition.frontmatter.description === "string"
+                ? { help: definition.frontmatter.description }
+                : {}),
+            };
+          });
+          const selected = await host.selectMenu(
+            ctx,
+            section === "agents" ? "Agent definitions" : "Role profiles",
+            options,
+            selectedDefinitionsForSection,
           );
-          definition = verified;
+          if (selected === undefined) break definitionList;
+          if (!selected) continue;
+          const selectedEntry = availableDefinitions.find(
+            (definition) => definition.name === selected,
+          );
+          if (!selectedEntry) continue;
+          selectedDefinitions[section] = selectedEntry.name;
+          let definition = selectedEntry;
+          const selectedName = definition.name;
+          let selectedAction = "model";
+          while (true) {
+            const { model, thinking } = this.executionSettings(ctx, definition);
+            const managedDefinition =
+              definition.name === MANAGED_LEAD_DEFINITION_NAME;
+            const runtimeProfile = isRuntimeRoleDefinition(definition.name);
+            const action = await host.selectMenu(
+              ctx,
+              definition.name,
+              [
+                ...(!runtimeProfile
+                  ? [
+                      {
+                        value: "model",
+                        label: "Model",
+                        description: model,
+                        help: managedDefinition
+                          ? "Model for future managed Lead launches. Changes do not affect a running Lead."
+                          : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
+                      },
+                    ]
+                  : []),
+                ...(!runtimeProfile
+                  ? [
+                      {
+                        value: "thinking",
+                        label: "Thinking",
+                        description: thinking,
+                        help: managedDefinition
+                          ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
+                          : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
+                      },
+                    ]
+                  : []),
+                ...(!isReservedRoleDefinition(definition.name)
+                  ? [
+                      {
+                        value: "enabled",
+                        label: "Enabled",
+                        description: host.agentDefinitionEnabled(definition)
+                          ? "on"
+                          : "off",
+                        help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
+                      },
+                    ]
+                  : []),
+                {
+                  value: "details",
+                  label: "Details…",
+                  help: "Show effective definition metadata and expanded instructions.",
+                },
+              ],
+              selectedAction,
+            );
+            if (!action) break;
+            selectedAction = action;
+            if (action === "details") {
+              let current;
+              try {
+                current = await resolveDefinition(selectedName);
+              } catch (error) {
+                ctx.ui.notify(String(error), "error");
+                break;
+              }
+              if (!current) {
+                ctx.ui.notify(
+                  `Definition ${selectedName} is no longer available.`,
+                  "warning",
+                );
+                break;
+              }
+              definition = current;
+              const metadata = host.agentDefinitionMetadata(current);
+              if (ctx.mode === "tui") {
+                const instructions = host.expandAgentBodyFiles(
+                  current.body,
+                  [],
+                  "definition details",
+                );
+                host.appendDefinitionsEntry({
+                  definitions: [metadata],
+                  instructions,
+                });
+              } else {
+                ctx.ui.notify(
+                  host.formatAgentDefinitions([metadata]).join("\n"),
+                );
+              }
+              continue;
+            }
+            let field: "model" | "thinking" | "enabled";
+            let value: string | boolean | undefined;
+            if (action === "model") {
+              field = "model";
+              await ctx.modelRegistry.refresh();
+              const models = ctx.modelRegistry.getAvailable();
+              const tokens = [
+                ...new Set(models.map((item: Model) => modelToken(item))),
+              ].sort();
+              const configured =
+                typeof definition.frontmatter.model === "string"
+                  ? definition.frontmatter.model
+                  : undefined;
+              if (configured && !tokens.includes(configured)) {
+                const resolved = this.resolveConfiguredModel(ctx, configured);
+                const resolvedToken = resolved
+                  ? modelToken(resolved)
+                  : configured;
+                if (!tokens.includes(resolvedToken)) tokens.push(resolvedToken);
+              }
+              const idCounts = new Map<string, number>();
+              for (const token of tokens) {
+                const id = compactModelToken(token);
+                idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
+              }
+              const resolvedConfigured = configured
+                ? this.resolveConfiguredModel(ctx, configured)
+                : undefined;
+              const modelsByToken = new Map(
+                models.map((item: Model) => [modelToken(item), item]),
+              );
+              if (resolvedConfigured)
+                modelsByToken.set(
+                  modelToken(resolvedConfigured),
+                  resolvedConfigured,
+                );
+              const modelItems = tokens.map((token) => {
+                const id = compactModelToken(token);
+                return {
+                  value: token,
+                  label: idCounts.get(id) === 1 ? id : token,
+                  searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
+                };
+              });
+              const selectedModel = await host.selectModelMenu(
+                ctx,
+                [
+                  {
+                    value: "inherit",
+                    label: "Inherit current session",
+                    searchText: "Inherit current session inherit",
+                  },
+                  ...modelItems,
+                ],
+                configured
+                  ? resolvedConfigured
+                    ? modelToken(resolvedConfigured)
+                    : configured
+                  : "inherit",
+              );
+              if (!selectedModel) continue;
+              value = selectedModel === "inherit" ? undefined : selectedModel;
+            } else if (action === "thinking") {
+              field = "thinking";
+              await ctx.modelRegistry.refresh();
+              const configured =
+                typeof definition.frontmatter.model === "string"
+                  ? definition.frontmatter.model
+                  : undefined;
+              const model = configured
+                ? this.resolveConfiguredModel(ctx, configured)
+                : ctx.model;
+              const levels = model
+                ? getSupportedThinkingLevels(model)
+                : [...host.validThinkingLevels];
+              const configuredThinking =
+                definition.frontmatter.thinking === false
+                  ? "off"
+                  : typeof definition.frontmatter.thinking === "string"
+                    ? definition.frontmatter.thinking
+                    : undefined;
+              const thinkingItems = [
+                { value: "inherit", label: "Inherit current session" },
+                ...levels.map((level: string) => ({
+                  value: level,
+                  label: level,
+                })),
+              ];
+              if (configuredThinking && !levels.includes(configuredThinking))
+                thinkingItems.push({
+                  value: configuredThinking,
+                  label: configuredThinking,
+                });
+              const selectedThinking = await host.selectMenu(
+                ctx,
+                "Thinking",
+                thinkingItems,
+                configuredThinking ?? "inherit",
+              );
+              if (!selectedThinking) continue;
+              value =
+                selectedThinking === "inherit" ? undefined : selectedThinking;
+            } else if (action === "enabled") {
+              field = "enabled";
+              value = !host.agentDefinitionEnabled(definition);
+            } else continue;
+            const result = host.updateAgentOverride(definition, field, value);
+            const verified = await resolveDefinition(definition.name);
+            if (!verified)
+              throw new Error(
+                `definition ${definition.name} is no longer available`,
+              );
+            if (result.changed && verified.overrideSource !== result.path)
+              throw new Error(
+                `agent ${definition.name} override verification failed`,
+              );
+            ctx.ui.notify(
+              result.changed
+                ? field === "enabled"
+                  ? `${definition.name} ${value ? "enabled" : "disabled"}.`
+                  : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
+                : `${definition.name} ${field} is already inherited; no change made.`,
+            );
+            definition = verified;
+          }
         }
       }
     },
@@ -2086,17 +2100,41 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     },
     async openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSetting = "auto-activate-manager";
+      const loadProjectState = () => {
+        if (!ctx.isProjectTrusted())
+          return { trusted: false as const, overrides: {} };
+        try {
+          return {
+            trusted: true as const,
+            overrides: host.readProjectOverrides(ctx),
+          };
+        } catch (error) {
+          return {
+            trusted: true as const,
+            error: String(error),
+            overrides: {},
+          };
+        }
+      };
       while (true) {
         const config = host.readConfig();
-        let effective: ReturnType<typeof host.readConfig>;
-        let overrides: ReturnType<typeof host.readProjectOverrides>;
-        try {
-          effective = host.readEffectiveConfig(ctx);
-          overrides = host.readProjectOverrides(ctx);
-        } catch (error) {
-          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
-          return;
+        const project = loadProjectState();
+        let effective: ReturnType<typeof host.readConfig> | undefined;
+        if (project.trusted && !("error" in project)) {
+          try {
+            effective = host.readEffectiveConfig(ctx);
+          } catch {
+            /* project value remains unavailable */
+          }
         }
+        const projectDescription = (
+          key: "autoActivateManager" | "contextRetirement",
+        ) =>
+          !project.trusted
+            ? "Project value unavailable (untrusted)"
+            : "error" in project || !effective
+              ? "Project value unavailable"
+              : `Effective ${effective![key] ? "on" : "off"}${Object.hasOwn(project.overrides, key) ? " (project)" : " (global)"}`;
         const selected = await host.selectMenu(
           ctx,
           "Settings",
@@ -2113,13 +2151,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "auto-activate-manager",
               label: "Manager auto-start",
-              description: `Global ${config.autoActivateManager ? "on" : "off"} · Effective ${effective.autoActivateManager ? "on" : "off"}${"autoActivateManager" in overrides ? " · Project" : ""}`,
+              description: `Global ${config.autoActivateManager ? "on" : "off"} · ${projectDescription("autoActivateManager")}`,
               help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
             },
             {
               value: "context-retirement",
               label: "Context retirement",
-              description: `Global ${config.contextRetirement ? "on" : "off"} · Effective ${effective.contextRetirement ? "on" : "off"}${"contextRetirement" in overrides ? " · Project" : ""}`,
+              description: `Global ${config.contextRetirement ? "on" : "off"} · ${projectDescription("contextRetirement")}`,
               help: "Retire managed-Agent sessions at automatic context pressure instead of allowing normal threshold compaction.",
             },
             {
@@ -2127,12 +2165,30 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               label: "Message limits",
               help: "Configure inline attachment and managed mailbox payload byte limits.",
             },
+            {
+              value: "project-overrides",
+              label: "Project overrides…",
+              help: "Choose project-specific values for Manager auto-start and context retirement.",
+            },
           ],
           selectedSetting,
         );
         if (!selected) return;
         selectedSetting = selected;
-        if (selected === "message-limits")
+        if (selected === "project-overrides") {
+          if (!ctx.isProjectTrusted()) {
+            ctx.ui.notify(
+              "Project overrides are unavailable because this project is not trusted.",
+              "warning",
+            );
+            continue;
+          }
+          if ("error" in project) {
+            ctx.ui.notify(project.error.replace(/^Error: /, ""), "error");
+            continue;
+          }
+          await this.openProjectOverridesMenu(ctx);
+        } else if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);
         else if (selected === "default-lead-execution") {
           const mode = await host.selectMenu(
@@ -2145,7 +2201,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             config.defaultLeadExecution,
           );
           if (mode) host.updateConfig("defaultLeadExecution", mode);
-        } else {
+        } else if (
+          selected === "context-retirement" ||
+          selected === "auto-activate-manager"
+        ) {
           const key =
             selected === "context-retirement"
               ? "contextRetirement"
@@ -2155,6 +2214,82 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ctx.ui.notify(
             `Global ${key === "contextRetirement" ? "context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
           );
+        }
+      }
+    },
+    async openProjectOverridesMenu(
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
+      while (true) {
+        if (!ctx.isProjectTrusted()) {
+          ctx.ui.notify(
+            "Project overrides are unavailable because this project is not trusted.",
+            "warning",
+          );
+          return;
+        }
+        let overrides;
+        try {
+          overrides = host.readProjectOverrides(ctx);
+        } catch (error) {
+          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+          return;
+        }
+        const field = await host.selectMenu(ctx, "Project overrides", [
+          {
+            value: "autoActivateManager",
+            label: "Manager auto-start",
+            help: "Attempt Manager mode automatically on eligible future session starts.",
+          },
+          {
+            value: "contextRetirement",
+            label: "Context retirement",
+            help: "Retire managed-Agent sessions at automatic context pressure.",
+          },
+        ]);
+        if (!field) return;
+        const key = field as "autoActivateManager" | "contextRetirement";
+        const global = host.readConfig()[key];
+        const choice = await host.selectMenu(
+          ctx,
+          key === "autoActivateManager"
+            ? "Manager auto-start"
+            : "Context retirement",
+          [
+            {
+              value: "inherit",
+              label: `Inherit global (${global ? "on" : "off"})`,
+              help: "Remove this project's explicit value and use the current global default.",
+            },
+            {
+              value: "on",
+              label: "On for this project",
+              help: "Enable this preference in this trusted project.",
+            },
+            {
+              value: "off",
+              label: "Off for this project",
+              help: "Disable this preference in this trusted project.",
+            },
+          ],
+          Object.hasOwn(overrides, key)
+            ? overrides[key]
+              ? "on"
+              : "off"
+            : "inherit",
+        );
+        if (!choice) continue;
+        try {
+          host.updateProjectOverride(
+            ctx,
+            key,
+            choice === "inherit" ? undefined : choice === "on",
+          );
+          ctx.ui.notify(
+            `${key === "autoActivateManager" ? "Manager auto-start" : "Context retirement"} ${choice === "inherit" ? "inherited" : `set ${choice} for this project`}.`,
+          );
+        } catch (error) {
+          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
         }
       }
     },

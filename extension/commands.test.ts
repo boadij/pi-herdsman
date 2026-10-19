@@ -2615,12 +2615,17 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     sessionName: "current lead name",
   });
   const second = fakeChiefPi({ activeTools: ["read"], exec });
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "herdsman-root-manager-project-"),
+  );
   const ctx1 = fakeContext(first.entries) as any;
+  ctx1.cwd = projectCwd;
   const managerNotices: string[] = [];
   ctx1.ui.notify = (message: string, level?: string) => {
     if (level === "error") managerNotices.push(message);
   };
   const ctx2 = fakeContext() as any;
+  ctx2.cwd = projectCwd;
   ctx2.sessionManager.getSessionId = () => `lead-${randomUUID()}`;
   registerExtension!(first.pi as never);
   registerExtension!(second.pi as never);
@@ -3103,6 +3108,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     }
   } finally {
     updateConfig("autoActivateManager", undefined);
+    realFs.rmSync(projectCwd, { recursive: true, force: true });
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
     await persistedManager?.events.get("session_shutdown")?.[0]();
@@ -3633,6 +3639,9 @@ test("Manager auto-start activates after identity and coordination verification 
 
 test("Manager auto-start rejects mismatched Herdr identity and releases its lease", async () => {
   setLeadEnvironment();
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "herdsman-manager-identity-project-"),
+  );
   updateConfig("autoActivateManager", true);
   process.env.HERDR_PANE_ID = "auto-manager-pane";
   process.env.HERDR_TAB_ID = "auto-manager-tab";
@@ -3700,6 +3709,7 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
   registerExtension!(pi.pi as never);
   try {
     const context = fakeContext(pi.entries) as any;
+    context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(coordinationRestoredBeforeIdentityCheck, true);
@@ -3719,6 +3729,7 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
+    realFs.rmSync(projectCwd, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -3728,6 +3739,9 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
 
 test("Manager auto-start suspends and invalidates Lead when identity cleanup release fails", async () => {
   setLeadEnvironment();
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "herdsman-manager-cleanup-project-"),
+  );
   updateConfig("autoActivateManager", true);
   process.env.HERDR_PANE_ID = "manager-pane";
   process.env.HERDR_TAB_ID = "manager-tab";
@@ -3791,6 +3805,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
   const runtime = supervisionRuntime();
   try {
     const context = fakeContext(pi.entries) as any;
+    context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
@@ -3813,6 +3828,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(runtime.root, { recursive: true, force: true });
     updateConfig("autoActivateManager", undefined);
+    realFs.rmSync(projectCwd, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -10034,9 +10050,10 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  Flexible",
-    "Manager auto-start  Global off · Effective off",
-    "Context retirement  Global on · Effective on",
+    "Manager auto-start  Global off · Effective off (project)",
+    "Context retirement  Global on · Effective on (global)",
     "Message limits",
+    "Project overrides…",
   ]);
   assert.equal(prompts[2]?.label, prompts[0]?.label);
   assert.deepEqual(prompts[2]?.options, prompts[0]?.options);
@@ -10348,7 +10365,11 @@ test("Definitions contextual help uses the selected definition description", asy
         }
         throw new Error("TUI item was not selected: Definitions");
       }
-      if (call > 1) {
+      if (call === 1) {
+        selectTuiItem(component, "Agent definitions");
+        return;
+      }
+      if (call > 2) {
         component.handleInput("\u001b");
         return;
       }
@@ -10485,10 +10506,12 @@ test("definition pickers preselect configured values and honor cancellation", as
         );
         const call = customCalls++;
         if (call === 0) {
-          selectTuiItem(component, "preselect-agent");
+          selectTuiItem(component, "Agent definitions");
         } else if (call === 1) {
+          selectTuiItem(component, "preselect-agent");
+        } else if (call === 2) {
           selectTuiItem(component, scenario.field);
-        } else if (call === 2 && scenario.picker !== undefined) {
+        } else if (call === 3 && scenario.picker !== undefined) {
           if ("filter" in scenario && scenario.filter !== undefined)
             for (const character of scenario.filter)
               component.handleInput(character);
@@ -10498,7 +10521,7 @@ test("definition pickers preselect configured values and honor cancellation", as
           assert.match(line ?? "", /^→/u);
           component.handleInput("\r");
         } else component.handleInput("\u001b");
-        if (call === 4) finishInteractions();
+        if (call === 6) finishInteractions();
       });
     let interactionTimeout!: ReturnType<typeof setTimeout>;
     const interactionTimeoutExpired = new Promise<never>((_resolve, reject) => {
@@ -10515,7 +10538,7 @@ test("definition pickers preselect configured values and honor cancellation", as
         Promise.all([handlerCompletion, interactionsComplete]),
         interactionTimeoutExpired,
       ]);
-      assert.equal(customCalls, 5, JSON.stringify(scenario));
+      assert.equal(customCalls, 7, JSON.stringify(scenario));
       assert.equal(
         discoverAgent("preselect-agent").frontmatter[scenario.property],
         scenario.expected,
@@ -10589,12 +10612,15 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
       );
       switch (customCalls++) {
         case 0:
-          selectTuiItem(component, "search-agent");
+          selectTuiItem(component, "Agent definitions");
           break;
         case 1:
-          selectTuiItem(component, "Model");
+          selectTuiItem(component, "search-agent");
           break;
         case 2:
+          selectTuiItem(component, "Model");
+          break;
+        case 3:
           for (const character of "zulu 46") component.handleInput(character);
           {
             const rendered = component.render(200);
@@ -10608,19 +10634,20 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
           }
           component.handleInput("\r");
           break;
-        case 3:
+        case 4:
           selectTuiItem(component, "Model");
           break;
-        case 4:
         case 5:
         case 6:
+        case 7:
+        case 8:
           component.handleInput("\u001b");
           break;
       }
     });
   try {
     await pi.commandOptions.get("agents").handler("definitions", context);
-    assert.equal(customCalls, 7);
+    assert.equal(customCalls, 9);
     assert.equal(
       discoverAgent("search-agent").frontmatter.model,
       "zulu/claude-sonnet-4-6",
@@ -10659,9 +10686,10 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  Flexible",
-      "Manager auto-start  Global off · Effective off",
-      "Context retirement  Global on · Effective on",
+      "Manager auto-start  Global off · Effective off (project)",
+      "Context retirement  Global on · Effective on (global)",
       "Message limits",
+      "Project overrides…",
     ]);
     assert.equal(prompts[2]?.label, "Message limits");
     assert.match(prompts[2]?.options[0] ?? "", /≈32,768 tokens/);
@@ -11509,11 +11537,12 @@ test("Definitions edits standalone definitions through the shared override write
   };
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
-    if (selection++ === 0)
-      return options.find((option) => option.includes("docs-reviewer"));
+    if (selection++ === 0) return "Agent definitions";
     if (selection === 2)
-      return options.find((option) => option.startsWith("Model"));
+      return options.find((option) => option.includes("docs-reviewer"));
     if (selection === 3)
+      return options.find((option) => option.startsWith("Model"));
+    if (selection === 4)
       return options.find((option) =>
         option.startsWith("Inherit current session"),
       );
@@ -11524,7 +11553,7 @@ test("Definitions edits standalone definitions through the shared override write
     assert.ok(
       prompts.some(
         ({ label, options }) =>
-          label === "Definitions" &&
+          label === "Agent definitions" &&
           options.some((option) => /docs-reviewer.*global/iu.test(option)),
       ),
     );
@@ -11533,7 +11562,7 @@ test("Definitions edits standalone definitions through the shared override write
       original.replace("model: old/model\n", ""),
     );
     assert.ok(
-      prompts[0]?.options.some((option) => option.includes("docs-reviewer")),
+      prompts[1]?.options.some((option) => option.includes("docs-reviewer")),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -11562,6 +11591,8 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     const visit = visits.get(label) ?? 0;
     visits.set(label, visit + 1);
     if (label === "Definitions")
+      return visit === 0 ? "Role profiles" : undefined;
+    if (label === "Role profiles")
       return visit === 0
         ? options.find((option) => option.includes("managed-lead"))
         : undefined;
@@ -11579,7 +11610,14 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   };
   try {
     await command.handler("definitions", context);
-    const definitionMenu = prompts.find(({ label }) => label === "Definitions");
+    const categoryMenu = prompts.find(({ label }) => label === "Definitions");
+    const definitionMenu = prompts.find(
+      ({ label }) => label === "Role profiles",
+    );
+    assert.deepEqual(categoryMenu?.options, [
+      "Agent definitions",
+      "Role profiles",
+    ]);
     assert.deepEqual(
       definitionMenu?.options
         .slice(0, 5)
@@ -11659,8 +11697,11 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
       };
       if (customCall === 0) {
         customCall++;
-        selectTuiItem(component, "managed-lead");
+        selectTuiItem(component, "Role profiles");
       } else if (customCall === 1) {
+        customCall++;
+        selectTuiItem(component, "managed-lead");
+      } else if (customCall === 2) {
         customCall++;
         assert.ok(
           lines().some((line) =>
@@ -11678,10 +11719,19 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
           ),
         );
         component.handleInput("\u001b");
-      } else if (customCall === 2) {
+      } else if (customCall === 3) {
+        customCall++;
+        component.handleInput("\u001b");
+      } else if (customCall === 4) {
+        customCall++;
+        component.handleInput("\u001b");
+      } else if (customCall === 5) {
+        customCall++;
+        selectTuiItem(component, "Agent definitions");
+      } else if (customCall === 6) {
         customCall++;
         selectTuiItem(component, "generalist");
-      } else if (customCall === 3) {
+      } else if (customCall === 7) {
         customCall++;
         assert.ok(
           lines().some((line) =>
@@ -11707,7 +11757,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
     // The TUI Escape key closes this command's menu; reopen it for the Agent case.
     await command.handler("definitions", context);
     await command.handler("definitions", context);
-    assert.equal(customCall, 4);
+    assert.equal(customCall, 8);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -11746,12 +11796,17 @@ test("Definitions Details snapshots effective append and replace instructions", 
           resolve,
         );
         const call = customCalls++;
-        if (call >= 2) {
+        if (call >= 3) {
           component.handleInput("\u001b");
           return;
         }
-        const target = call === 0 ? selectedName : "Details…";
-        if (call === 1) beforeDetails?.();
+        const target =
+          call === 0
+            ? "Agent definitions"
+            : call === 1
+              ? selectedName
+              : "Details…";
+        if (call === 2) beforeDetails?.();
         selectTuiItem(component, target);
       });
       return result;
@@ -11878,9 +11933,10 @@ test("Definitions Details in RPC reports metadata without expanding instructions
   let selection = 0;
   context.ui.select = async (label: string, options: string[]) => {
     const currentSelection = selection++;
-    if (currentSelection === 0)
+    if (currentSelection === 0) return "Agent definitions";
+    if (currentSelection === 1)
       return options.find((option) => option.includes("details-rpc"));
-    if (label === "details-rpc" && currentSelection === 1)
+    if (label === "details-rpc" && currentSelection === 2)
       return options.find((option) => option.startsWith("Details"));
     return undefined;
   };
@@ -11986,16 +12042,18 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
     prompts.push({ label, options });
     switch (selection++) {
       case 0:
-        return options.find((option) => option.includes("implementer"));
+        return "Agent definitions";
       case 1:
-        return options.find((option) => option.startsWith("Model"));
+        return options.find((option) => option.includes("implementer"));
       case 2:
-        return undefined;
+        return options.find((option) => option.startsWith("Model"));
       case 3:
-        return options.find((option) => option.startsWith("Thinking"));
-      case 4:
         return undefined;
+      case 4:
+        return options.find((option) => option.startsWith("Thinking"));
       case 5:
+        return undefined;
+      case 6:
         return undefined;
       default:
         return undefined;
@@ -12007,11 +12065,13 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
       prompts.map(({ label }) => label),
       [
         "Definitions",
+        "Agent definitions",
         "implementer",
         "Model",
         "implementer",
         "Thinking",
         "implementer",
+        "Agent definitions",
         "Definitions",
       ],
     );
@@ -12048,18 +12108,20 @@ test("Definitions applies model and thinking overrides independently", async () 
       prompts.push({ label, options });
       switch (selection++) {
         case 0:
-          return options.find((option) => option.includes("implementer"));
+          return "Agent definitions";
         case 1:
-          return options.find((option) => option.startsWith(scenario.field));
+          return options.find((option) => option.includes("implementer"));
         case 2:
-          return options.find((option) => option.startsWith(scenario.selected));
+          return options.find((option) => option.startsWith(scenario.field));
         case 3:
+          return options.find((option) => option.startsWith(scenario.selected));
+        case 4:
           assert.equal(
             discoverAgent("implementer").frontmatter[scenario.property],
             scenario.property === "model" ? "provider/new-model" : "medium",
           );
           return options.find((option) => option.startsWith(scenario.field));
-        case 4:
+        case 5:
           return options.find((option) =>
             option.startsWith("Inherit current session"),
           );
@@ -12096,16 +12158,18 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   context.ui.select = async (label: string, options: string[]) => {
     switch (selection++) {
       case 0:
-        return options.find((option) => option.includes("implementer"));
+        return "Agent definitions";
       case 1:
+        return options.find((option) => option.includes("implementer"));
+      case 2:
         assert.equal(label, "implementer");
         assert.ok(options.some((option) => /^Enabled\s+on\b/u.test(option)));
         return options.find((option) => option.startsWith("Enabled"));
-      case 2:
+      case 3:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, false);
         assert.ok(options.some((option) => /^Enabled\s+off\b/u.test(option)));
         return options.find((option) => option.startsWith("Enabled"));
-      case 3:
+      case 4:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, true);
         return undefined;
       default:
@@ -12155,18 +12219,20 @@ test("Definitions refreshes the model registry before post-model thinking choice
   context.ui.select = async (_label: string, options: string[]) => {
     switch (selection++) {
       case 0:
+        return "Agent definitions";
+      case 1:
         assert.ok(
           options.some((option) => option.includes("inherit · current-model")),
         );
         return options.find((option) => option.includes("implementer"));
-      case 1:
-        return options.find((option) => option.startsWith("Model"));
       case 2:
-        return options.find((option) => option.startsWith("refresh-model"));
+        return options.find((option) => option.startsWith("Model"));
       case 3:
+        return options.find((option) => option.startsWith("refresh-model"));
+      case 4:
         assert.ok(options.some((option) => option.startsWith("Thinking")));
         return options.find((option) => option.startsWith("Thinking"));
-      case 4:
+      case 5:
         assert.equal(registry.refreshes, 2);
         assert.ok(options.some((option) => option.startsWith("medium")));
         assert.equal(options.includes("xhigh"), false);
@@ -12215,13 +12281,15 @@ test("Definitions uses the current model for inherited thinking choices", async 
   context.ui.select = async (_label: string, options: string[]) => {
     switch (selection++) {
       case 0:
+        return "Agent definitions";
+      case 1:
         assert.ok(
           options.some((option) => option.includes("inherit · current-model")),
         );
         return options.find((option) => option.includes("implementer"));
-      case 1:
-        return options.find((option) => option.startsWith("Thinking"));
       case 2:
+        return options.find((option) => option.startsWith("Thinking"));
+      case 3:
         assert.equal(registry.refreshes, 1);
         assert.ok(options.some((option) => option.startsWith("medium")));
         assert.equal(options.includes("xhigh"), false);
@@ -12280,11 +12348,13 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
     context.ui.select = async (_label: string, options: string[]) => {
       switch (selection++) {
         case 0:
+          return "Agent definitions";
+        case 1:
           assert.ok(options.some((option) => option.includes(scenario.model)));
           return options.find((option) => option.includes("implementer"));
-        case 1:
-          return options.find((option) => option.startsWith("Thinking"));
         case 2:
+          return options.find((option) => option.startsWith("Thinking"));
+        case 3:
           assert.deepEqual(options, [
             "Inherit current session",
             ...scenario.levels,
@@ -12321,16 +12391,19 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
   const prompts: string[][] = [];
+  let categorySelections = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  context.ui.select = async (_label: string, options: string[]) => {
+  context.ui.select = async (label: string, options: string[]) => {
     prompts.push(options);
+    if (label === "Definitions" && categorySelections++ === 0)
+      return "Agent definitions";
     return undefined;
   };
   try {
     await command.handler("definitions", context);
-    const options = prompts[0] ?? [];
+    const options = prompts[1] ?? [];
     const rowA = options.find((option) => option.includes("模型"));
     const rowB = options.find((option) => option.includes("長い名前"));
     assert.ok(rowA);
@@ -12348,7 +12421,7 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
   }
 });
 
-test("Definitions is a flat provenance list and selection reopens the list", async () => {
+test("Definitions separates Agent definitions and preserves provenance", async () => {
   setLeadEnvironment();
   const definitionPaths = [
     join(PI_AGENTS_DIR, "group-custom.md"),
@@ -12372,20 +12445,24 @@ test("Definitions is a flat provenance list and selection reopens the list", asy
   context.mode = "rpc";
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
-    return selections++ === 0
-      ? options.find((option) => option.includes("group:Custom"))
-      : undefined;
+    if (selections++ === 0) return "Agent definitions";
+    if (selections === 2)
+      return options.find((option) => option.includes("group:Custom"));
+    return undefined;
   };
   try {
     await command.handler("definitions", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
-      ["Definitions", "group:Custom", "Definitions"],
+      [
+        "Definitions",
+        "Agent definitions",
+        "group:Custom",
+        "Agent definitions",
+        "Definitions",
+      ],
     );
-    const definitions = prompts[0]!.options;
-    assert.match(definitions[0] ?? "", /^flexible-lead\b.*bundled/iu);
-    assert.match(definitions[1] ?? "", /^orchestrator-lead\b.*bundled/iu);
-    assert.match(definitions[2] ?? "", /^managed-lead\b.*bundled/iu);
+    const definitions = prompts[1]!.options;
     assert.ok(
       definitions.some((option) => /group:Custom.*global/u.test(option)),
     );
@@ -12396,7 +12473,6 @@ test("Definitions is a flat provenance list and selection reopens the list", asy
     );
     assert.ok(definitions.every((option) => !/^---/u.test(option)));
     assert.ok(definitions.every((option) => !/\[project\]|\*/u.test(option)));
-    assert.deepEqual(prompts[0], prompts[2]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     for (const definitionPath of definitionPaths)

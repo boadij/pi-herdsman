@@ -3,6 +3,7 @@ import * as realFs from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { mock, test } from "node:test";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 let deleteBeforeRead = false;
 let failConfigRename = false;
@@ -55,6 +56,7 @@ mock.module("node:fs", {
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: realFs.unlinkSync,
+    utimesSync: realFs.utimesSync,
     watch: realFs.watch,
     writeFileSync: realFs.writeFileSync,
     writeSync: realFs.writeSync,
@@ -69,10 +71,12 @@ const {
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
+  updateProjectOverride,
   validByteLimit,
 } = await import("./config.ts");
 const { herdsmanConfigPath, herdsmanDataRoot } = await import("./storage.ts");
 const { claimProcessLock } = await import("./lock.ts");
+const { lockSync } = await import("proper-lockfile");
 configPath = herdsmanConfigPath();
 
 function resetConfig(): void {
@@ -162,6 +166,161 @@ test("trusted project preferences override only the two supported global values"
         /settings|boolean|unsupported/,
       );
     }
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("project overrides update one trusted preference and preserve Pi settings", () => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-write-"));
+  const path = join(cwd, ".pi", "settings.json");
+  const ctx = { cwd, isProjectTrusted: () => true } as never;
+  try {
+    updateConfig("autoActivateManager", true);
+    updateProjectOverride(ctx, "autoActivateManager", false);
+    updateProjectOverride(ctx, "contextRetirement", true);
+    assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {
+      piHerdsman: { autoActivateManager: false, contextRetirement: true },
+    });
+    assert.equal(readEffectiveConfig(ctx).autoActivateManager, false);
+    assert.equal(realFs.statSync(path).mode & 0o777, 0o600);
+
+    realFs.writeFileSync(
+      path,
+      JSON.stringify({
+        theme: "dark",
+        piHerdsman: { autoActivateManager: false },
+      }),
+    );
+    realFs.chmodSync(path, 0o640);
+    updateProjectOverride(ctx, "contextRetirement", false);
+    assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {
+      theme: "dark",
+      piHerdsman: { autoActivateManager: false, contextRetirement: false },
+    });
+    assert.equal(realFs.statSync(path).mode & 0o777, 0o640);
+
+    updateProjectOverride(ctx, "autoActivateManager", undefined);
+    assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {
+      theme: "dark",
+      piHerdsman: { contextRetirement: false },
+    });
+    updateProjectOverride(ctx, "contextRetirement", undefined);
+    assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {
+      theme: "dark",
+    });
+    assert.equal(readEffectiveConfig(ctx).autoActivateManager, true);
+    assert.equal(readEffectiveConfig(ctx).contextRetirement, true);
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("project overrides coexist with Pi SettingsManager project updates", async () => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-pi-settings-"));
+  const path = join(cwd, ".pi", "settings.json");
+  const ctx = { cwd, isProjectTrusted: () => true } as never;
+  try {
+    const settings = SettingsManager.create(cwd, testAgentDir);
+
+    settings.setProjectExtensionPaths(["./example-extension"]);
+    await settings.flush();
+    updateProjectOverride(ctx, "autoActivateManager", false);
+
+    settings.setProjectPackages(["npm:example-package"]);
+    await settings.flush();
+
+    assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {
+      extensions: ["./example-extension"],
+      packages: ["npm:example-package"],
+      piHerdsman: { autoActivateManager: false },
+    });
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("inheriting on a missing project file does not create it", () => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-empty-"));
+  try {
+    updateProjectOverride(
+      { cwd, isProjectTrusted: () => true } as never,
+      "contextRetirement",
+      undefined,
+    );
+    assert.equal(realFs.existsSync(join(cwd, ".pi")), false);
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("project writes enforce trust and reject invalid data without changing bytes", () => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "pi-herdsman-project-invalid-"),
+  );
+  const path = join(cwd, ".pi", "settings.json");
+  realFs.mkdirSync(dirname(path), { recursive: true });
+  const ctx = { cwd, isProjectTrusted: () => true } as never;
+  try {
+    for (const content of [
+      "{",
+      '{"piHerdsman":{"other":true}}',
+      '{"piHerdsman":{"autoActivateManager":"false"}}',
+    ]) {
+      realFs.writeFileSync(path, content);
+      assert.throws(() =>
+        updateProjectOverride(ctx, "autoActivateManager", true),
+      );
+      assert.equal(realFs.readFileSync(path, "utf8"), content);
+    }
+    const original = realFs.readFileSync(path, "utf8");
+    assert.throws(
+      () =>
+        updateProjectOverride(
+          { cwd, isProjectTrusted: () => false } as never,
+          "autoActivateManager",
+          true,
+        ),
+      /untrusted/,
+    );
+    assert.throws(
+      () => updateProjectOverride(ctx, "unknown" as never, true),
+      /key/,
+    );
+    assert.throws(
+      () => updateProjectOverride(ctx, "autoActivateManager", "true" as never),
+      /value/,
+    );
+    assert.equal(realFs.readFileSync(path, "utf8"), original);
+  } finally {
+    realFs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("project writes reject symlink targets and fail safely on lock contention", () => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-safe-"));
+  const path = join(cwd, ".pi", "settings.json");
+  realFs.mkdirSync(dirname(path), { recursive: true });
+  const ctx = { cwd, isProjectTrusted: () => true } as never;
+  try {
+    const target = join(cwd, "target.json");
+    realFs.writeFileSync(target, '{"other":1}');
+    realFs.symlinkSync(target, path);
+    assert.throws(() => updateProjectOverride(ctx, "contextRetirement", true));
+    assert.equal(realFs.readFileSync(target, "utf8"), '{"other":1}');
+    realFs.unlinkSync(path);
+
+    realFs.writeFileSync(path, "{}");
+    const release = lockSync(path, { realpath: false });
+    try {
+      assert.throws(
+        () => updateProjectOverride(ctx, "contextRetirement", true),
+        (error: NodeJS.ErrnoException) => error.code === "ELOCKED",
+      );
+    } finally {
+      release();
+    }
+    assert.equal(realFs.readFileSync(path, "utf8"), "{}");
   } finally {
     realFs.rmSync(cwd, { recursive: true, force: true });
   }

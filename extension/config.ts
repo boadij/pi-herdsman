@@ -2,6 +2,8 @@ import {
   closeSync,
   chmodSync,
   fsyncSync,
+  lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -11,6 +13,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { lockSync } from "proper-lockfile";
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanConfigPath } from "./storage.ts";
 import {
@@ -128,16 +131,10 @@ export type ProjectOverrides = Partial<
   Pick<HerdsmanConfig, "autoActivateManager" | "contextRetirement">
 >;
 
-export function readProjectOverrides(ctx: ProjectContext): ProjectOverrides {
-  if (!ctx.isProjectTrusted()) return {};
-  const path = join(ctx.cwd, ".pi", "settings.json");
-  let content: string;
-  try {
-    content = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw error;
-  }
+function parseProjectSettings(
+  content: string,
+  path: string,
+): Record<string, unknown> {
   let settings: unknown;
   try {
     settings = JSON.parse(content.replace(/^\uFEFF/, ""));
@@ -148,7 +145,14 @@ export function readProjectOverrides(ctx: ProjectContext): ProjectOverrides {
   }
   if (!settings || typeof settings !== "object" || Array.isArray(settings))
     throw new Error(`Invalid project settings ${path}: expected an object`);
-  const raw = (settings as Record<string, unknown>).piHerdsman;
+  return settings as Record<string, unknown>;
+}
+
+function parseProjectOverrides(
+  settings: Record<string, unknown>,
+  path: string,
+): ProjectOverrides {
+  const raw = settings.piHerdsman;
   if (raw === undefined) return {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new Error(`Invalid ${path}: piHerdsman must be an object`);
@@ -163,11 +167,128 @@ export function readProjectOverrides(ctx: ProjectContext): ProjectOverrides {
   return overrides;
 }
 
+function projectSettingsFile(ctx: ProjectContext): string {
+  return join(ctx.cwd, ".pi", "settings.json");
+}
+
+function assertRegularProjectSettings(path: string): number | undefined {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile())
+      throw new Error(
+        `Invalid project settings ${path}: expected a regular file`,
+      );
+    return stat.mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function acquireProjectSettingsLock(path: string): () => void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return lockSync(path, { realpath: false });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 9)
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
+export function readProjectOverrides(ctx: ProjectContext): ProjectOverrides {
+  if (!ctx.isProjectTrusted()) return {};
+  const path = projectSettingsFile(ctx);
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  return parseProjectOverrides(parseProjectSettings(content, path), path);
+}
+
+export function updateProjectOverride(
+  ctx: ProjectContext,
+  key: keyof ProjectOverrides,
+  value: boolean | undefined,
+): void {
+  if (!ctx.isProjectTrusted())
+    throw new Error("Cannot update project settings for an untrusted project");
+  if (key !== "autoActivateManager" && key !== "contextRetirement")
+    throw new Error(`Invalid project override key ${String(key)}`);
+  if (value !== undefined && typeof value !== "boolean")
+    throw new Error(`Invalid project override value for ${key}`);
+
+  const path = projectSettingsFile(ctx);
+  let mode = assertRegularProjectSettings(path);
+  if (value === undefined && mode === undefined) return;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const release = acquireProjectSettingsLock(path);
+  let changed = false;
+  try {
+    mode = assertRegularProjectSettings(path) ?? 0o600;
+    let settings: Record<string, unknown> = {};
+    try {
+      settings = parseProjectSettings(readFileSync(path, "utf8"), path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const overrides = parseProjectOverrides(settings, path);
+    const alreadySet = Object.hasOwn(overrides, key);
+    if (
+      value === undefined ? !alreadySet : alreadySet && overrides[key] === value
+    ) {
+      changed = false;
+    } else {
+      if (value === undefined) delete overrides[key];
+      else overrides[key] = value;
+      if (Object.keys(overrides).length) settings.piHerdsman = overrides;
+      else delete settings.piHerdsman;
+      writeConfigAtomically(
+        path,
+        `${JSON.stringify(settings, null, 2)}\n`,
+        mode,
+      );
+      changed = true;
+    }
+  } finally {
+    release();
+  }
+  let stored: ProjectOverrides;
+  try {
+    stored = parseProjectOverrides(
+      parseProjectSettings(readFileSync(path, "utf8"), path),
+      path,
+    );
+  } catch (error) {
+    if (
+      !changed &&
+      value === undefined &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    )
+      stored = {};
+    else throw error;
+  }
+  if (
+    value === undefined
+      ? Object.hasOwn(stored, key)
+      : !Object.hasOwn(stored, key) || stored[key] !== value
+  )
+    throw new Error(`Project setting ${key} did not persist to ${path}`);
+}
+
 export function readEffectiveConfig(ctx: ProjectContext): HerdsmanConfig {
   return { ...readConfig(), ...readProjectOverrides(ctx) };
 }
 
-function writeConfigAtomically(path: string, content: string): void {
+function writeConfigAtomically(
+  path: string,
+  content: string,
+  mode = 0o600,
+): void {
   const directory = dirname(path);
   const temporaryPath = join(
     directory,
@@ -180,7 +301,7 @@ function writeConfigAtomically(path: string, content: string): void {
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = undefined;
-    chmodSync(temporaryPath, 0o600);
+    chmodSync(temporaryPath, mode);
     renameSync(temporaryPath, path);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);

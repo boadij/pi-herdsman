@@ -55,12 +55,14 @@ Its running count and current layout are secondary metadata. The root does not
 depend on Agent status or definitions to render.
 
 `Settings` contains `Default Lead execution`, `Manager auto-start`, `Context
-retirement`, and `Message limits`. The default is `Flexible` and applies only
+retirement`, `Project overrides…`, and `Message limits`. The default is `Flexible` and applies only
 when a future ordinary Lead session has no persisted execution choice; changing
 it does not change the current session. Manager auto-start and context
 retirement show their effective values and identify project overrides, when
-present. These controls edit the global defaults only; project overrides are
-edited in the trusted project's `.pi/settings.json` under `piHerdsman`. The
+present. Global controls edit global defaults only. `Project overrides…` lets a trusted
+project choose Inherit, On, or Off for Manager auto-start and Context retirement;
+it writes the existing `.pi/settings.json` `piHerdsman` settings. Invalid or
+untrusted project settings do not prevent global controls from being used. The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
@@ -97,12 +99,11 @@ Ordinary usage retains its owned-session warning.
 
 ## `/herdsman definitions`
 
-Opens a flat native Definitions list of effective definitions, with reserved
-`flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
-first in that order.
-Project definitions are included when Pi considers the
-project trusted. Each definition shows its contributing source or sources as
-`bundled`, `project`, and/or `global`. Edits write global overrides only.
+Opens a native category menu with `Agent definitions` and `Role profiles`.
+Each category lists effective definitions; reserved roles appear in their
+canonical role order. Project definitions are included when Pi considers the
+project trusted. Each definition shows contributing `bundled`, `project`, and/or
+`global` sources. Edits write global overrides only.
 
 All five reserved role definitions are not Agents and remain excluded as
 delegation targets. Manager/Chief profiles may nevertheless list ordinary

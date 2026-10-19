@@ -72,8 +72,8 @@ every `agents` reference.
 are reserved role definitions, not Agents. They are excluded from the Agent
 roster and cannot be selected by `delegate_agent`, referenced as delegation
 targets from `agents`, or disabled. Manager and Chief may themselves declare
-`agents` to allowlist ordinary Agent targets. The Definitions UI lists reserved
-roles first in that order. Runtime profiles
+`agents` to allowlist ordinary Agent targets. The Definitions UI lists reserved roles under `Role profiles`, separately from
+ordinary `Agent definitions`. Runtime profiles
 provide `Details` only; `managed-lead` additionally provides `Model` and
 `Thinking`.
 
