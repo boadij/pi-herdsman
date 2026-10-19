@@ -768,7 +768,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.ok(historicalStaffMessage);
   assert.match(
     (historicalStaffMessage.parameters as any).properties.files.description,
-    /Explicit evidence transfer.*available in this Pi session.*ref mentioned only in text is not transferred evidence/,
+    /Transfer relevant readable files or result refs actually available in this Pi session\. Recipients do not inherit your conversation or attachments\. A ref mentioned only in text is not transferable evidence\./,
   );
   assert.equal(historicalStaffMessage.defaultActive, false);
   assert.equal(typeof historicalStaffMessage.renderCall, "function");
@@ -1968,6 +1968,10 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
 
 test("active chief describes authoritative remote ask projection", async () => {
   setLeadEnvironment();
+  writeFileSync(
+    join(PI_AGENTS_DIR, "chief.md"),
+    "---\nname: chief\nbodyMode: replace\n---\nCustom Chief strategy",
+  );
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -2024,15 +2028,22 @@ test("active chief describes authoritative remote ask projection", async () => {
   for (const operation of [tool, inspectTool, transcriptTool, listTool])
     assertPortableToolSchema(operation);
   for (const [operation, phrase] of [
-    [listTool, "List direct-report supervision state."],
+    [
+      listTool,
+      "when a fresh roster or diagnosis is needed; not for progress polling.",
+    ],
     [inspectTool, "Read bounded live terminal/process evidence"],
     [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
     [
       tool,
-      "Send a message to a direct report; active work is steered cooperatively.",
+      "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively.",
     ],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
+  assert.match(
+    tool.description,
+    /Result refs mentioned only in report text are not automatically transferable evidence\. Attach refs only when available; otherwise request follow-up from the direct report in message text\./,
+  );
   assert.doesNotMatch(
     tool.description,
     /staff_(?:list|inspect|transcript)|List direct-report|Read bounded/i,
@@ -2044,6 +2055,30 @@ test("active chief describes authoritative remote ask projection", async () => {
     (tool.parameters as { properties: { retain: { description: string } } })
       .properties.retain.description,
     "For Manager messages to assigned project Leads: retain both message text and files as required evidence for future Agents. Use for lasting requirements and accepted reviews; omit for temporary communication.",
+  );
+  const delegateTool = pi.tools.find(
+    (candidate) => candidate.name === "delegate_project",
+  );
+  assert.ok(delegateTool);
+  assert.match(
+    delegateTool.description,
+    /initial task and supplied files become required project evidence/,
+  );
+  assert.match(
+    delegateTool.description,
+    /use resume_project for existing work/,
+  );
+  assert.match(
+    (tool.parameters as any).properties.files.description,
+    /Recipients do not inherit your conversation or attachments/,
+  );
+  assert.match(
+    (tool.parameters as any).properties.files.description,
+    /A ref mentioned only in text is not transferable evidence/,
+  );
+  assert.match(
+    (tool.parameters as any).properties.retain.description,
+    /lasting requirements and accepted reviews/,
   );
   assert.equal(
     Value.Check(tool.parameters, {
@@ -2112,12 +2147,11 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.match(String((contextCall.message as any).content), /status="fresh"/);
   assert.match(
     String(chiefPrompt),
-    /Chief coordination is event-driven, not polling/,
+    /Supervision is event-driven\. Do not poll staff tools/,
   );
-  assert.match(
-    String(chiefPrompt),
-    /Do not use list_staff, inspect_staff, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
-  );
+  assert.match(String(chiefPrompt), /verified workspace-neutral Chief/);
+  assert.match(String(chiefPrompt), /Custom Chief strategy/);
+  assert.doesNotMatch(String(chiefPrompt), /You are the active chief/);
   const sessionSchema = (tool.parameters as any).properties.session;
   assert.equal(
     sessionSchema.pattern,
@@ -4003,6 +4037,105 @@ test("delegating agents receive only their allowed definition roster", async () 
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();
+});
+
+test("replaced Manager body keeps its protected prompt contract and tools", async () => {
+  setLeadEnvironment();
+  writeFileSync(
+    join(PI_AGENTS_DIR, "manager.md"),
+    "---\nname: manager\nbodyMode: replace\n---\nCustom Manager strategy",
+  );
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-contract-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const managerIdentity = () => ({
+    pane_id: process.env.HERDR_PANE_ID,
+    tab_id: process.env.HERDR_TAB_ID,
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+  });
+  const pi = fakePi({
+    activeTools: ["read", "bash"],
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [managerIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerIdentity() })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [], panes: [] } })
+                : respond({}),
+  });
+  const context = fakeContext(pi.entries) as any;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.equal(
+      readLeadCoordinationState(
+        supervisionRuntime(),
+        context.sessionManager.getSessionId(),
+      )?.role,
+      "manager",
+      notices.join("\n"),
+    );
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(prompt, /verified Manager for this Pi session/);
+    assert.match(prompt, /Supervision is event-driven/);
+    assert.match(prompt, /Custom Manager strategy/);
+    assert.doesNotMatch(
+      prompt,
+      /Coordinate assigned project work through Leads/,
+    );
+    for (const name of [
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
+      "delegate_project",
+      "resume_project",
+      "stop_lead",
+      "remove_worktree",
+    ])
+      assert.ok(
+        pi.pi.getActiveTools().includes(name),
+        `${name} is active for the Manager`,
+      );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  }
 });
 
 test("delegating agents do not receive Manager supervisor projections", async () => {

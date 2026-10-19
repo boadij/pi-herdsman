@@ -727,6 +727,25 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   const chief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));
   assert.match(chief.body, /Global chief guidance/);
   writeFileSync(
+    managerProject,
+    "---\nname: manager\nbodyMode: replace\n---\nCustom Manager strategy",
+  );
+  unlinkSync(managerGlobal);
+  writeFileSync(
+    chiefGlobal,
+    "---\nname: chief\nbodyMode: replace\n---\nCustom Chief strategy",
+  );
+  const replacedManager = withPiAgentDir(global, () =>
+    discoverRoleDefinition("manager", { projectRoot: project }),
+  );
+  const replacedChief = withPiAgentDir(global, () =>
+    discoverRoleDefinition("chief"),
+  );
+  assert.equal(replacedManager.body, "Custom Manager strategy");
+  assert.equal(replacedChief.body, "Custom Chief strategy");
+  assert.deepEqual(replacedManager.frontmatter.tools, []);
+  assert.deepEqual(replacedChief.frontmatter.tools, []);
+  writeFileSync(
     join(projectAgents, "chief.md"),
     "---\nname: chief\n---\nProject chief guidance",
   );
@@ -1707,23 +1726,6 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "mcp__",
     ].join(","),
   );
-});
-
-test("Manager guidance distinguishes lasting evidence from temporary messages", () => {
-  const manager = discoverRoleDefinition("manager");
-  assert.match(
-    manager.body,
-    /When forwarding accepted review findings, project requirements,\s+or decisions that future Agents must follow, use `message_staff\(\.\.\., retain:\s+true\)` and phrase retained messages as lasting requirements\./,
-  );
-  assert.match(
-    manager.body,
-    /This retains both\s+the message text and supplied files as required project evidence\. Use ordinary\s+messages for temporary instructions, questions, and status updates\./,
-  );
-  assert.match(
-    manager.body,
-    /initial task and files supplied to `delegate_project` become required\s+evidence/,
-  );
-  assert.match(manager.body, /inspect and remove\s+project-owned evidence/);
 });
 
 test("managed launch policy always includes ask_owner", () => {

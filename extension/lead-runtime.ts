@@ -7405,11 +7405,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "delegate_project",
       );
       const requiredEvidence: RequiredEvidence[] = [
-        persistRequiredEvidenceSnapshot(
-          id,
-          "project-brief.txt",
-          operation.task,
-        ),
+        persistRequiredEvidenceSnapshot(id, "project-brief.md", operation.task),
         ...persistRequiredTextFiles(
           id,
           suppliedFiles.filter(
