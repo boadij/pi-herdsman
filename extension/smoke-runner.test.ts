@@ -67,6 +67,7 @@ import {
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
   staffDelegateResults,
+  assertNoFailedProjectDelegation,
   managerAssignmentDiagnostics,
   managerAssignmentIdentity,
   managerAssignmentBranchMismatch,
@@ -3719,6 +3720,108 @@ test("delegate project results retain only valid successful delegation payloads 
       state: "working",
     },
   ]);
+});
+
+test("failed project delegation is correlated, sanitized, and preserves topology capture", async () => {
+  const branch = "smoke/expected";
+  const call = {
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "delegate_project",
+          arguments: { branch },
+        },
+      ],
+    },
+  };
+  const result = (fields = {}) => ({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "delegate_project",
+      toolCallId: "call-1",
+      isError: true,
+      content: [
+        { type: "text", text: "Project assignment lock is in progress" },
+      ],
+      ...fields,
+    },
+  });
+  const transcript = (...entries) => entries.map(JSON.stringify).join("\n");
+  const failed = transcript(call, result());
+
+  assert.throws(
+    () => assertNoFailedProjectDelegation(failed, branch),
+    (error) =>
+      error.code === "SMOKE_DELEGATION_FAILED" &&
+      error.message === "delegate_project failed (assignment_lock_occupied)",
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedProjectDelegation(failed, "smoke/other"),
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedProjectDelegation(
+      transcript(call, result({ toolCallId: "other-call" })),
+      branch,
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedProjectDelegation(transcript(call), branch),
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedProjectDelegation(
+      transcript(
+        call,
+        result({
+          isError: false,
+          details: { ok: true },
+          content: [{ type: "text", text: "delegated" }],
+        }),
+      ),
+      branch,
+    ),
+  );
+  assert.throws(
+    () =>
+      assertNoFailedProjectDelegation(
+        transcript(
+          call,
+          result({
+            isError: false,
+            details: { ok: false },
+            content: [{ type: "text", text: "PRIVATE_TOKEN" }],
+          }),
+        ),
+        branch,
+      ),
+    (error) =>
+      error.code === "SMOKE_DELEGATION_FAILED" &&
+      error.message === "delegate_project failed (tool_error)" &&
+      !error.message.includes("PRIVATE_TOKEN"),
+  );
+
+  const ctx = { rootWorkspaceId: "workspace", owned: {} };
+  const worktree = {
+    branch,
+    path: "/smoke/expected",
+    open_workspace_id: "workspace-2",
+  };
+  await assert.rejects(
+    terminalFailureAssignmentPoll(
+      ctx,
+      branch,
+      async () => ({ contents: failed }),
+      async () => [],
+      async () => ({ worktrees: [worktree] }),
+    ),
+    (error) => error.code === "SMOKE_DELEGATION_FAILED",
+  );
+  assert.equal(ctx.owned.managerWorktreePath, worktree.path);
+  assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
 });
 
 test("Manager history recognizes retained project messages by exact identity", () => {

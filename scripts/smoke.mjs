@@ -692,6 +692,45 @@ export function staffDelegateResults(contents) {
   });
 }
 
+export function assertNoFailedProjectDelegation(contents, branch) {
+  const entries = sessionEntries(contents);
+  const callIds = new Set(
+    entries.flatMap((entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content
+            .filter(
+              (call) =>
+                call?.type === "toolCall" &&
+                call.name === "delegate_project" &&
+                call.arguments?.branch === branch &&
+                typeof call.id === "string",
+            )
+            .map((call) => call.id)
+        : [],
+    ),
+  );
+  const failed = entries.find(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "delegate_project" &&
+      callIds.has(entry.message.toolCallId) &&
+      (entry.message.isError === true || entry.message.details?.ok === false),
+  );
+  if (!failed) return;
+
+  const category =
+    messageText(failed.message.content).trim() ===
+    "Project assignment lock is in progress"
+      ? "assignment_lock_occupied"
+      : "tool_error";
+  const error = new Error(`delegate_project failed (${category})`);
+  error.code = "SMOKE_DELEGATION_FAILED";
+  throw error;
+}
+
 export function managerAssignmentDiagnostics({
   worktree,
   result,
@@ -1061,6 +1100,7 @@ export async function terminalFailureAssignmentPoll(
   } catch {
     // Assignment verification remains authoritative; retain cleanup evidence when observable.
   }
+  if (session) assertNoFailedProjectDelegation(session.contents, branch);
   let child;
   if (delegated.length === 1)
     for (const agent of await agents())
@@ -3399,6 +3439,7 @@ async function runManagerHandoffSmoke(ctx) {
         branch,
       );
       const session = await root();
+      if (session) assertNoFailedProjectDelegation(session.contents, branch);
       const rows = session ? staffDelegateResults(session.contents) : [];
       if (rows.length > 1)
         throw new Error("Manager handoff created multiple project assignments");
@@ -5057,6 +5098,7 @@ async function runManagerRecoverySmoke(ctx) {
     "ready",
     async () => {
       const session = await rootSnapshot();
+      if (session) assertNoFailedProjectDelegation(session.contents, branch);
       const results = session ? staffDelegateResults(session.contents) : [];
       let child;
       if (
