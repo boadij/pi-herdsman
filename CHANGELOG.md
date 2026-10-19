@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.31.0](https://github.com/boadij/pi-herdsman/compare/v0.30.0...v0.31.0) (2026-10-19)
+
+
+### Features
+
+* **coordination:** propagate required assignment evidence ([#450](https://github.com/boadij/pi-herdsman/issues/450)) ([c6e6de1](https://github.com/boadij/pi-herdsman/commit/c6e6de170b7bc70d604482b21dfde57c4cd1dee7))
+* **ui:** clarify definitions and project settings ([#461](https://github.com/boadij/pi-herdsman/issues/461)) ([9317d78](https://github.com/boadij/pi-herdsman/commit/9317d7809fc6c576fa814cd0f4f51087757623a4))
+
+
+### Fixes
+
+* **evidence:** name generated assignment notes as Markdown ([#472](https://github.com/boadij/pi-herdsman/issues/472)) ([8749f82](https://github.com/boadij/pi-herdsman/commit/8749f8263e43b12f404720e0def38026581bfd2d))
+* **evidence:** restrict project retention to Manager ([#467](https://github.com/boadij/pi-herdsman/issues/467)) ([e6c29e2](https://github.com/boadij/pi-herdsman/commit/e6c29e23e260b737d7018a5a79210e72e870dcf7))
+* **evidence:** use Markdown extension for project briefs ([#460](https://github.com/boadij/pi-herdsman/issues/460)) ([801acb1](https://github.com/boadij/pi-herdsman/commit/801acb19a40056238d1324158a9aef2392285d13))
+* **manager:** decouple worktree confirmation from coordination ([#475](https://github.com/boadij/pi-herdsman/issues/475)) ([31561eb](https://github.com/boadij/pi-herdsman/commit/31561ebcde9fd00e923dcc13a4e5434ee359e7aa))
+* **smoke:** fail fast on failed project delegation ([#456](https://github.com/boadij/pi-herdsman/issues/456)) ([74489b0](https://github.com/boadij/pi-herdsman/commit/74489b06c3c8f5c57c645238ea6e4388f9c67fdd)), closes [#454](https://github.com/boadij/pi-herdsman/issues/454)
+* **test:** prevent startup-lock test contamination ([#464](https://github.com/boadij/pi-herdsman/issues/464)) ([717dca7](https://github.com/boadij/pi-herdsman/commit/717dca75603a551152629201782ec6ab20a99c65))
+* **ui:** unify Herdsman menu spacing ([#468](https://github.com/boadij/pi-herdsman/issues/468)) ([758af3e](https://github.com/boadij/pi-herdsman/commit/758af3efbb732261c12579a2becf3d80d05dacd8))
+
+
+### Refactoring
+
+* **instructions:** keep bundled definitions strategy-only ([#473](https://github.com/boadij/pi-herdsman/issues/473)) ([733ca18](https://github.com/boadij/pi-herdsman/commit/733ca18b076fcc6cf12a7cd8c3cc03309b3bcf01))
+* **instructions:** preserve tool contracts across role overrides ([#459](https://github.com/boadij/pi-herdsman/issues/459)) ([1dfbaa3](https://github.com/boadij/pi-herdsman/commit/1dfbaa3476dc4b67db338252fcf9ada1a66a0b71))
+
 ## [0.30.0](https://github.com/boadij/pi-herdsman/compare/v0.29.0...v0.30.0) (2026-10-18)
 
 
