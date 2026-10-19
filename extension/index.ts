@@ -364,6 +364,11 @@ const LEAD_SUPERVISOR_PEER_GUIDANCE =
 const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
+For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
+Ordinary Leads have no automatic required-evidence scope.
+A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
+Only the Manager can designate continuing project requirements.
+Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
 For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
 const SUPERVISION_EVENT_GUIDANCE =
