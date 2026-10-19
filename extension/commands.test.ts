@@ -3430,6 +3430,101 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   }
 });
 
+test("failed Manager activation preserves late inherited tools through rollback", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-inherited-pane";
+  process.env.HERDR_TAB_ID = "manager-inherited-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-inherited-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  let verifyManager = true;
+  const baseline = ["read", "bash"];
+  const pi = fakeChiefPi({
+    activeTools: baseline,
+    allTools: [{ name: "history" }, { name: "notes" }],
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: verifyManager ? [managerAgentIdentity()] : [] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [], panes: [] } })
+                : respond({}),
+  });
+  const context = fakeContext(pi.entries) as any;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    pi.pi.setActiveTools(["read", "bash", "history", "notes"]);
+    verifyManager = false;
+    await pi.commandOptions.get("manager").handler("", context);
+
+    assert.ok(
+      notices.some((message) => message.includes("could not be verified")),
+    );
+    assert.equal(sessionLeadRoleState(pi.entries)?.role, "lead");
+    assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+      "read",
+      "bash",
+      "history",
+      "notes",
+    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "bash",
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
+
+    await agentTool(pi, "delegate").execute(
+      "manager-rollback-reconcile",
+      { definition: "agent", task: "verify ordinary tools remain available" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "bash",
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+      "read",
+      "bash",
+      "history",
+      "notes",
+    ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Manager leave retains its lease and role when persistence fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-pane";

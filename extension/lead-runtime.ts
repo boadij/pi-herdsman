@@ -12512,6 +12512,9 @@ export function createLeadRoleTransitions(
     if (scope.primaryWorkspaceId !== workspaceId)
       throw new Error("/manager is available only in the primary workspace");
     const profile = host.prepareSupervisoryProfile(ctx, "manager");
+    host.captureInheritedTools?.();
+    const previousTools =
+      host.getLeadTools() ?? host.normalizeLeadTools(host.pi.getActiveTools());
     let lease: ManagerLease;
     try {
       lease = host.claimManagerLease({
@@ -12528,8 +12531,6 @@ export function createLeadRoleTransitions(
         throw new Error("This project already has an active Manager");
       throw error;
     }
-    const previousTools =
-      host.getLeadTools() ?? host.normalizeLeadTools(host.pi.getActiveTools());
     try {
       state.managerLease = lease;
       state.controllerRole = "manager";
