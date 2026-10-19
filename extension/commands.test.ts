@@ -5141,6 +5141,11 @@ async function managerDelegateAssignmentTest(
     );
     assert.ok(
       retained.requiredEvidence?.some(
+        (entry) => entry.name === "project-brief.md",
+      ),
+    );
+    assert.ok(
+      !retained.requiredEvidence?.some(
         (entry) => entry.name === "project-brief.txt",
       ),
     );
