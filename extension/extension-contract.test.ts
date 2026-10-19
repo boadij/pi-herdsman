@@ -276,7 +276,7 @@ const SEMANTIC_TOOL_CASES = [
   ["list_agents", {}, { agent: "x" }, []],
   [
     "delegate_agent",
-    { definition: "scout", task: "work", retain: true },
+    { definition: "scout", task: "work" },
     { definition: "scout", task: "work", session: "x" },
     ["definition", "task"],
   ],
@@ -464,6 +464,17 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   for (const removed of ["staff_close", "staff_complete", "staff_discard"])
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
+  const rootDelegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+  assert.equal(rootDelegate.parameters.properties.retain, undefined);
+  for (const retain of [true, false])
+    assert.equal(
+      Value.Check(rootDelegate.parameters, {
+        definition: "scout",
+        task: "work",
+        retain,
+      }),
+      false,
+    );
   for (const [name, valid, invalid, required] of SEMANTIC_TOOL_CASES) {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);

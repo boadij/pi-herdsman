@@ -1145,6 +1145,51 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
+    const nestedDelegate = pi.tools.find(
+      (tool) => tool.name === "delegate_agent",
+    )!;
+    assert.ok(nestedDelegate.parameters.properties.retain);
+    for (const retain of [true, false])
+      assert.equal(
+        Value.Check(nestedDelegate.parameters, {
+          definition: "agent",
+          task: "child task",
+          retain,
+        }),
+        true,
+      );
+    assert.equal(
+      Value.Check(nestedDelegate.parameters, {
+        definition: "agent",
+        task: "child task",
+        retain: "true",
+      }),
+      false,
+    );
+    const failedHandoff = await nestedDelegate.execute(
+      "nested-retained-failed-handoff",
+      {
+        definition: "agent",
+        task: "x".repeat(131072 - requestRecordBytes("agent", "", "")),
+        files: [retainedFile],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(failedHandoff.details.ok, false);
+    assert.match(
+      JSON.stringify(failedHandoff.details),
+      /Required evidence was retained, but Agent delegation failed/,
+    );
+    assert.equal(published, undefined);
+    assert.deepEqual(
+      listProjectAssignments(projectRuntime, "repo-key").find(
+        (item) => item.branch === projectBranch,
+      )?.requiredEvidence,
+      [laterProjectRequirement],
+    );
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -1175,6 +1220,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.match(published!.text, /parent plan body/);
     assert.match(published!.text, /parent review body/);
 
+    assert.deepEqual(
+      listProjectAssignments(projectRuntime, "repo-key").find(
+        (item) => item.branch === projectBranch,
+      )?.requiredEvidence,
+      [laterProjectRequirement],
+    );
     stopConsumer?.();
     published = undefined;
     const ordinaryChild = await pi.tools
@@ -1233,6 +1284,24 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       },
     });
     published = undefined;
+    const unavailableRetention = await nestedDelegate.execute(
+      "nested-without-evidence-authority",
+      {
+        definition: "agent",
+        task: "must not retain",
+        files: [retainedFile],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(unavailableRetention.details.ok, false);
+    assert.match(
+      JSON.stringify(unavailableRetention.details),
+      /Managed-Agent evidence scope is unavailable/,
+    );
+    assert.equal(published, undefined);
     const cleared = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -4535,7 +4604,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   }
 });
 
-test("assigned Lead retains delegation files as project evidence", async () => {
+test("assigned Lead cannot retain project evidence through delegation", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-evidence-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -4635,48 +4704,44 @@ test("assigned Lead retains delegation files as project evidence", async () => {
           definition: "agent",
           label,
           task: "implement plan",
+          files: [retainedFile],
         },
         undefined,
         undefined,
         context,
       );
-    const oversizedTask = "x".repeat(
-      131072 - requestRecordBytes(label, "", ""),
-    );
-    const failedHandoff = await registeredAgentTool(pi, "delegate").execute(
-      "evidence-failed-handoff",
-      {
-        definition: "agent",
-        label,
-        task: oversizedTask,
-        files: [retainedFile],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(failedHandoff.details.ok, false);
-    assert.match(
-      JSON.stringify(failedHandoff.details),
-      /Required evidence was retained, but Agent delegation failed/,
-    );
-    const afterFailedHandoff = listProjectAssignments(runtime, "repo-key").find(
-      (item) => item.branch === branch,
-    )!;
-    assert.deepEqual(
-      afterFailedHandoff.requiredEvidence?.map((entry) =>
-        readRequiredEvidenceSnapshot(afterFailedHandoff.id, entry),
-      ),
-      [
-        "initial brief: preserve backward compatibility",
-        "reviewer finding to retain",
-      ],
-    );
+    for (const retain of [true, false]) {
+      const rejected = await registeredAgentTool(pi, "delegate").execute(
+        "evidence-rejected-retain",
+        {
+          definition: "agent",
+          label,
+          task: "must not launch",
+          files: [retainedFile],
+          retain,
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(rejected.details.ok, false);
+      assert.match(
+        JSON.stringify(rejected.details),
+        /retain is available only to managed Agents/,
+      );
+      assert.equal(accepted, undefined);
+      assert.deepEqual(
+        listProjectAssignments(runtime, "repo-key").find(
+          (item) => item.branch === branch,
+        ),
+        assignment,
+      );
+    }
     const result = await delegate();
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
+    assert.match(accepted!.text, /reviewer finding to retain/);
     assert.match(
       accepted!.text,
       /initial brief: preserve backward compatibility/,
@@ -4685,10 +4750,7 @@ test("assigned Lead retains delegation files as project evidence", async () => {
       accepted!.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(assignment.id, entry),
       ),
-      [
-        "initial brief: preserve backward compatibility",
-        "reviewer finding to retain",
-      ],
+      ["initial brief: preserve backward compatibility"],
     );
     assert.doesNotMatch(
       accepted!.requiredEvidence?.map((entry) => entry.name).join("\n") ?? "",
@@ -4699,7 +4761,7 @@ test("assigned Lead retains delegation files as project evidence", async () => {
       listProjectAssignments(runtime, "repo-key").find(
         (item) => item.branch === branch,
       )?.requiredEvidence?.length,
-      2,
+      1,
     );
     assert.equal(accepted!.evidenceAssignmentId, accepted!.requestId);
   } finally {
@@ -5271,159 +5333,6 @@ test("managed project delegation keeps changed original-path content alongside r
   }
 });
 
-test("retain true delegation delivers the saved snapshot after its source changes", async () => {
-  setLeadEnvironment();
-  const socket = join(tmpdir(), `project-evidence-retain-${randomUUID()}.sock`);
-  process.env.HERDR_SOCKET_PATH = socket;
-  const runtime = supervisionRuntime(socket);
-  const branch = `evidence-retain-${randomUUID()}`;
-  const snapshot = persistRequiredEvidenceSnapshot(
-    LEAD_SESSION_ID,
-    "plan.md",
-    "retained plan body",
-  );
-  const sourcePath = join(tmpdir(), `retain-source-${randomUUID()}.md`);
-  realFs.writeFileSync(sourcePath, "original source bytes");
-  const assignment = {
-    version: 2 as const,
-    id: LEAD_SESSION_ID,
-    repoKey: "repo-key",
-    branch,
-    text: "Implement the assigned project",
-    requiredEvidence: [snapshot],
-  };
-  writeProjectAssignment(runtime, assignment);
-  let accepted: RequestRecord | undefined;
-  let changedSource = false;
-  const priorEvidenceIds = new Set(
-    assignment.requiredEvidence.map((entry) => entry.id),
-  );
-  const label = `rt-${randomUUID().slice(0, 8)}`;
-  const startup = startupExecutor(
-    label,
-    () => DEFAULT_PI_SESSION_ID,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    "/tmp",
-    AGENT_ID,
-    false,
-    true,
-    false,
-    (request) => {
-      accepted = request;
-    },
-  );
-  const pi = fakePi({
-    exec: async (command: string, args: string[]) => {
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              source: {
-                repo_key: "repo-key",
-                repo_name: "project",
-                source_workspace_id: WORKSPACE,
-              },
-              worktrees: [],
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      return startup.exec(command, args);
-    },
-  });
-  const context = fakeContext(pi.entries);
-  context.hasUI = true;
-  const branchEntries: any[] = (
-    context.sessionManager.getBranch as () => any[]
-  )();
-  registerExtension!(pi.pi as never);
-  try {
-    const assignmentMessage = {
-      customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
-      timestamp: Date.now(),
-      content: `Project assignment for branch\n${assignment.text}`,
-    };
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    for (const handler of pi.events.get("agent_start") ?? [])
-      await handler(undefined, context);
-    branchEntries.push({
-      type: "custom_message",
-      customType: assignmentMessage.customType,
-      message: assignmentMessage,
-    });
-    for (const handler of pi.events.get("message_start") ?? [])
-      await handler({ message: assignmentMessage }, context);
-    await assertManagedLeadRole(pi, context);
-
-    const mutateOnSnapshotRead = (_path: unknown) => {
-      if (changedSource) return;
-      support.fileReadHook = undefined;
-      let currentAssignment;
-      try {
-        currentAssignment = listProjectAssignments(runtime, "repo-key").find(
-          (item) => item.branch === branch,
-        )!;
-      } finally {
-        support.fileReadHook = mutateOnSnapshotRead;
-      }
-      const retained = currentAssignment.requiredEvidence?.find(
-        (entry) => !priorEvidenceIds.has(entry.id) && "path" in entry,
-      );
-      if (retained && "path" in retained) {
-        realFs.readFileSync(retained.path);
-        changedSource = true;
-        realFs.writeFileSync(sourcePath, "changed source bytes");
-      }
-    };
-    support.fileReadHook = mutateOnSnapshotRead;
-    const result = await registeredAgentTool(pi, "delegate").execute(
-      "required-evidence-retain-source-change",
-      {
-        definition: "agent",
-        label,
-        task: "implement the retained plan",
-        files: [sourcePath],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(
-      changedSource,
-      true,
-      "retained snapshot read must trigger source mutation",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(accepted);
-    assert.match(accepted!.text, /original source bytes/);
-    assert.doesNotMatch(accepted!.text, /changed source bytes/);
-    assert.deepEqual(
-      accepted!.requiredEvidence?.map((entry) =>
-        readRequiredEvidenceSnapshot(assignment.id, entry),
-      ),
-      ["retained plan body", "original source bytes"],
-    );
-  } finally {
-    support.fileReadHook = undefined;
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    realFs.rmSync(snapshot.path, { force: true });
-    realFs.rmSync(sourcePath, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-  }
-});
-
 test("managed project delegation rejects authority changes during startup without publishing stale evidence", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-evidence-stale-${randomUUID()}.sock`);
@@ -5582,25 +5491,27 @@ test("unassigned Lead delegation does not receive project evidence implicitly", 
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const rejected = await registeredAgentTool(pi, "delegate").execute(
-      "unassigned-lead-retain",
-      {
-        definition: "agent",
-        label,
-        task: "must not launch",
-        files: [foreignEvidence.path],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(rejected.details.ok, false);
-    assert.match(
-      JSON.stringify(rejected.details),
-      /verified project assignment/,
-    );
-    assert.equal(accepted, undefined);
+    for (const retain of [true, false]) {
+      const rejected = await registeredAgentTool(pi, "delegate").execute(
+        "unassigned-lead-retain",
+        {
+          definition: "agent",
+          label,
+          task: "must not launch",
+          files: [foreignEvidence.path],
+          retain,
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(rejected.details.ok, false);
+      assert.match(
+        JSON.stringify(rejected.details),
+        /retain is available only to managed Agents/,
+      );
+      assert.equal(accepted, undefined);
+    }
     const result = await registeredAgentTool(pi, "delegate").execute(
       "unassigned-lead-delegation",
       { definition: "agent", label, task: "unrelated work" },

@@ -121,8 +121,8 @@ record. Inherited baseline requirements are shown as protected and cannot be
 removed there. Removal does not delete snapshots or source files and does not
 change evidence already accepted by Agents. The project menu does not remove
 managed-Agent-local additions; local-addition removal is an internal
-capability, not a separate model-facing tool or UI. Assigned Leads can retain
-project evidence through delegation but have no separate evidence-removal UI.
+capability, not a separate model-facing tool or UI. Project-wide required evidence is controlled only by the Manager; assigned
+Leads use delegation files for recipient-specific evidence.
 
 ## `delegate_project`
 

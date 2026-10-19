@@ -2847,11 +2847,6 @@ export type AgentControllerOptions = {
       }
     | undefined
   >;
-  retainProjectEvidence?(
-    ctx: ExtensionContext,
-    assignment: import("./supervision.ts").ProjectAssignment,
-    additions: RequiredEvidence[],
-  ): Promise<import("./supervision.ts").ProjectAssignment>;
   managedProjectEvidence?(
     ctx: ExtensionContext,
     workspaceId: string,
@@ -5786,6 +5781,16 @@ export function createAgentController(
     if (p.action === "delegate") p.retentionPersisted = false;
     const scope = options.scope;
     validateAssignmentRequest(p);
+    if (
+      p.action === "delegate" &&
+      scope?.kind === "root" &&
+      Object.hasOwn(p, "retain")
+    )
+      fail(
+        "invalid_request",
+        "retain is available only to managed Agents",
+        p.action,
+      );
     const rootAssignment =
       (p.action === "delegate" || p.action === "continue") &&
       scope?.kind === "root";
@@ -6091,6 +6096,12 @@ export function createAgentController(
               ]
             : (projectAssignment?.requiredEvidence ?? []);
         if (p.retain === true) {
+          if (scope.kind !== "managed-agent" || !nestedEvidence)
+            fail(
+              "invalid_request",
+              "Managed-Agent evidence scope is unavailable",
+              p.action,
+            );
           if (!p.files?.length)
             fail(
               "invalid_request",
@@ -6101,6 +6112,16 @@ export function createAgentController(
             fail(
               "invalid_request",
               "Required evidence can be retained only for a verified project assignment",
+              p.action,
+            );
+          const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
+          if (
+            !state?.activeRequestId ||
+            state.projectAssignmentId !== nestedEvidence.projectAssignmentId
+          )
+            fail(
+              "invalid_request",
+              "Managed-Agent assignment changed before evidence retention",
               p.action,
             );
           const supplied = resolveMessageFiles(ctx, p.files, p.action);
@@ -6131,9 +6152,7 @@ export function createAgentController(
           );
           const additions: RequiredEvidence[] = [
             ...persistRequiredTextFiles(
-              continuationEvidence?.evidenceAssignmentId ??
-                nestedEvidence?.evidenceAssignmentId ??
-                projectAssignment!.id,
+              nestedEvidence.evidenceAssignmentId,
               newFiles.filter(
                 (file): file is string => typeof file === "string",
               ),
@@ -6146,74 +6165,42 @@ export function createAgentController(
                 : [{ id: randomUUID(), name: file.ref, result: file }],
             ),
           ];
-          if (scope.kind === "managed-agent") {
-            if (!nestedEvidence)
-              fail(
-                "invalid_request",
-                "Managed-Agent evidence scope is unavailable",
-                p.action,
-              );
-            const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
+          const localEvidence = [...nestedEvidence.localEvidence];
+          for (const addition of additions)
             if (
-              !state?.activeRequestId ||
-              state.projectAssignmentId !== nestedEvidence.projectAssignmentId
-            )
-              fail(
-                "invalid_request",
-                "Managed-Agent assignment changed before evidence retention",
-                p.action,
-              );
-            const localEvidence = [...nestedEvidence.localEvidence];
-            for (const addition of additions)
-              if (
-                !localEvidence.some((entry) =>
-                  "result" in entry && "result" in addition
-                    ? entry.result.ref === addition.result.ref
-                    : "path" in entry && "path" in addition
-                      ? entry.path === addition.path ||
-                        (entry.sourceAssignmentId ===
-                          addition.sourceAssignmentId &&
-                          entry.name === addition.name &&
-                          entry.sha256 === addition.sha256)
-                      : false,
-                )
+              !localEvidence.some((entry) =>
+                "result" in entry && "result" in addition
+                  ? entry.result.ref === addition.result.ref
+                  : "path" in entry && "path" in addition
+                    ? entry.path === addition.path ||
+                      (entry.sourceAssignmentId ===
+                        addition.sourceAssignmentId &&
+                        entry.name === addition.name &&
+                        entry.sha256 === addition.sha256)
+                    : false,
               )
-                localEvidence.push(addition);
-            pi.appendEntry("pi-herdsman-agent-required-evidence", {
-              version: 1,
-              sessionId: ctx.sessionManager.getSessionId(),
-              requestId: state.activeRequestId,
-              runId: state.runId,
-              ownerSessionId: state.ownerSessionId,
-              workspaceId: state.workspaceId,
-              agentLabel: state.agentLabel,
-              paneId: state.paneId,
-              projectAssignmentId: nestedEvidence.projectAssignmentId,
-              evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
-              inheritedEvidence: nestedEvidence.inheritedEvidence,
-              localEvidence,
-            });
-            nestedEvidence = { ...nestedEvidence, localEvidence };
-            requiredEvidence = [
-              ...nestedEvidence.inheritedEvidence,
-              ...localEvidence,
-            ];
-            p.retentionPersisted = true;
-          } else {
-            if (!projectAssignment || !options.retainProjectEvidence)
-              fail(
-                "invalid_request",
-                "Assigned Lead cannot persist project evidence",
-                p.action,
-              );
-            const updated = await options.retainProjectEvidence(
-              ctx,
-              projectAssignment,
-              additions,
-            );
-            requiredEvidence = updated.requiredEvidence ?? [];
-            p.retentionPersisted = true;
-          }
+            )
+              localEvidence.push(addition);
+          pi.appendEntry("pi-herdsman-agent-required-evidence", {
+            version: 1,
+            sessionId: ctx.sessionManager.getSessionId(),
+            requestId: state.activeRequestId,
+            runId: state.runId,
+            ownerSessionId: state.ownerSessionId,
+            workspaceId: state.workspaceId,
+            agentLabel: state.agentLabel,
+            paneId: state.paneId,
+            projectAssignmentId: nestedEvidence.projectAssignmentId,
+            evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
+            inheritedEvidence: nestedEvidence.inheritedEvidence,
+            localEvidence,
+          });
+          nestedEvidence = { ...nestedEvidence, localEvidence };
+          requiredEvidence = [
+            ...nestedEvidence.inheritedEvidence,
+            ...localEvidence,
+          ];
+          p.retentionPersisted = true;
         }
         if (
           scope.kind === "managed-agent" &&
@@ -7114,12 +7101,16 @@ export function createAgentController(
           }),
         ),
         files: FILES_SCHEMA,
-        retain: Type.Optional(
-          Type.Boolean({
-            description:
-              "Retain these files as required evidence for this assignment and its eligible descendants.",
-          }),
-        ),
+        ...(controllerScope.kind === "managed-agent"
+          ? {
+              retain: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "Retain supplied files as continuing requirements for your own descendants only. Project-wide requirements are controlled by the Manager.",
+                }),
+              ),
+            }
+          : {}),
       },
       { additionalProperties: false },
     );

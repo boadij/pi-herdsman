@@ -1,5 +1,9 @@
 # Propagate explicit required assignment evidence
 
+> **Authority update:** [ADR 0026](0026-manager-owns-project-required-evidence.md)
+> supersedes the assigned-Lead project-retention authority in this decision.
+> Required-evidence storage and automatic inheritance remain unchanged.
+
 ## Status
 
 Accepted

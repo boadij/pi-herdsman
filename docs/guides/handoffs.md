@@ -22,13 +22,19 @@ setting `retain: true` on an existing coordination operation:
 
 - A Manager uses `message_staff` to retain the supplied message text and files
   for the target assigned Lead's project assignment.
-- An assigned Lead uses `delegate_agent` to retain the supplied files for the
-  project assignment; its task text is not retained.
 - An eligible managed Agent uses `delegate_agent` to retain supplied files as
   additions to its local assignment for its own descendants. Its task text is
   not retained, and it cannot modify the parent project's evidence set.
 
-Omitted or false `retain` leaves files as evidence for that handoff only.
+The Manager alone controls project-wide requirements. Root Lead delegation
+accepts `files` for the current handoff, without a retention parameter.
+Leads can forward findings directly for immediate correction; when findings
+should become continuing project requirements, send the relevant files or
+result references through `message_supervisor.files` for Manager evaluation.
+Ordinary delegation need not wait for that decision.
+
+On operations that support it, omitted or false `retain` leaves files as
+evidence for that handoff only.
 Retention requires verified assignment authority and eligible evidence;
 failure is explicit and never silently downgraded to an ordinary handoff. The
 operation persists requirements and performs its normal handoff together. If

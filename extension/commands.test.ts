@@ -95,6 +95,8 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   };
   let current = assignment;
   let leaseId = "lease-1";
+  let role = "manager";
+  let changeRoleUnderLock = false;
   const storedSnapshots = new Set([
     "/immutable/a",
     "/immutable/b",
@@ -103,7 +105,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   const acceptedEvidence = [...assignment.requiredEvidence];
   const runtime = createLeadProjectRuntime({
     leadRuntime: { roleSuspended: false } as any,
-    activeRole: () => "manager",
+    activeRole: () => role,
     currentManager: async () => manager,
     managerLease: () => ({ descriptor: { ...manager, leaseId } }),
     sameManagerDescriptor: (left: any, right: any) =>
@@ -119,7 +121,10 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
       _repo: string,
       _branch: string,
       operation: () => Promise<unknown>,
-    ) => operation(),
+    ) => {
+      if (changeRoleUnderLock) role = "lead";
+      return operation();
+    },
     writeProjectAssignment: (_runtime: unknown, next: any) => {
       current = next;
     },
@@ -127,6 +132,35 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
     persistRequiredTextFiles: () => [],
   } as any);
   const ctx = fakeContext() as any;
+  for (const unauthorizedRole of ["lead", "chief"]) {
+    role = unauthorizedRole;
+    await assert.rejects(
+      runtime.updateAssignmentEvidence(
+        "unauthorized",
+        { branch: assignment.branch, remove: ["local-a"] },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /Only the Manager can update project required evidence/,
+    );
+    assert.deepEqual(current, assignment);
+  }
+  role = "manager";
+  changeRoleUnderLock = true;
+  await assert.rejects(
+    runtime.updateAssignmentEvidence(
+      "role-changed",
+      { branch: assignment.branch, remove: ["local-a"] },
+      undefined,
+      undefined,
+      ctx,
+    ),
+    /Manager authority changed/,
+  );
+  assert.deepEqual(current, assignment);
+  changeRoleUnderLock = false;
+  role = "manager";
   const before = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
   assert.equal(
     before.requiredEvidence?.find((item) => item.id === "inherited")
@@ -5075,7 +5109,9 @@ async function managerDelegateAssignmentTest(
       return respond({ agent: managerAgent });
     return respond({});
   };
+  let mutateRetainedSource: (() => void) | undefined;
   const managerExec = (command: string, args: string[]) => {
+    mutateRetainedSource?.();
     if (
       managerUsesRootPane &&
       command === "herdr" &&
@@ -5128,7 +5164,23 @@ async function managerDelegateAssignmentTest(
     const staffMessage = pi.tools.find(
       (tool) => tool.name === "message_staff",
     )!;
-    await staffMessage.execute(
+    let changedSource = false;
+    mutateRetainedSource = () => {
+      if (changedSource) return;
+      const current = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch);
+      if (
+        current?.requiredEvidence?.some(
+          (entry) => entry.name === reviewFile.split("/").at(-1),
+        )
+      ) {
+        changedSource = true;
+        realFs.writeFileSync(reviewFile, "changed review bytes");
+      }
+    };
+    const retainedOutcome = await staffMessage.execute(
       "retain-review",
       {
         session: childSession,
@@ -5140,6 +5192,28 @@ async function managerDelegateAssignmentTest(
       undefined,
       ctx,
     );
+    mutateRetainedSource = undefined;
+    assert.equal(
+      retainedOutcome.details.ok,
+      true,
+      JSON.stringify(retainedOutcome.details),
+    );
+    assert.equal(
+      changedSource,
+      true,
+      "source must change after retention and before delivery completes",
+    );
+    const reviewMessages = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      childSession,
+    )
+      .map((path) => readChiefMessage(path))
+      .filter((message) =>
+        message.text.includes("Address the external review"),
+      );
+    assert.equal(reviewMessages.length, 1);
+    assert.match(reviewMessages[0].text, /external review finding/);
+    assert.doesNotMatch(reviewMessages[0].text, /changed review bytes/);
     const retained = listProjectAssignments(supervisionRuntime(), repoKey).find(
       (item) => item.branch === assignment.branch,
     )!;

@@ -78,10 +78,11 @@ Files supplied to `delegate_project` are retained as required evidence for the
 assignment and delivered to future delegated descendants. To make later
 review material a continuing requirement while sending it to an assigned
 Lead, a Manager uses `message_staff` with `retain: true`; the message text and
-files then become required project evidence. An assigned Lead can retain
-supplied files for the project assignment by using `delegate_agent` with
-`retain: true` while delegating corrections. The task text is not retained.
-Omitted or false `retain` keeps files limited to that handoff. Retention
+files then become required project evidence. The Manager alone controls
+project requirements. Leads delegate corrections with recipient-specific
+`files` and send continuing findings through `message_supervisor.files` for
+Manager evaluation. On supported operations, omitted or false `retain` keeps
+files limited to that handoff. Retention
 requires verified assignment authority and eligible evidence, and failure is
 explicit rather than falling back to an ordinary handoff. Ordinary Leads have
 no automatic evidence scope. See [required assignment evidence](handoffs.md#required-assignment-evidence)

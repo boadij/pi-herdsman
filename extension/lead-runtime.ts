@@ -3416,67 +3416,6 @@ export function registerLeadRuntime(
           ),
       };
     },
-    retainProjectEvidence: async (ctx, assignment, additions) =>
-      roleTransitions.withProjectAssignmentLock(
-        assignment.repoKey,
-        assignment.branch,
-        async () => {
-          const currentLeadAssignment = await currentProjectAssignment(ctx);
-          const current = listProjectAssignments(
-            supervisionRuntime(),
-            assignment.repoKey,
-          ).find((item) => item.branch === assignment.branch);
-          if (
-            !currentLeadAssignment ||
-            currentLeadAssignment.id !== assignment.id ||
-            !current ||
-            current.id !== assignment.id
-          )
-            throw new Error(
-              "Lead assignment changed before evidence retention",
-            );
-          const evidence = [...(current.requiredEvidence ?? [])];
-          const resultBindings = [...(current.resultBindings ?? [])];
-          for (const item of additions) {
-            if (
-              !evidence.some(
-                (existing) =>
-                  ("path" in existing &&
-                    "path" in item &&
-                    (existing.path === item.path ||
-                      (existing.sourceAssignmentId ===
-                        item.sourceAssignmentId &&
-                        existing.name === item.name &&
-                        existing.sha256 === item.sha256))) ||
-                  ("result" in existing &&
-                    "result" in item &&
-                    existing.result.ref === item.result.ref),
-              )
-            )
-              evidence.push(item);
-            if ("result" in item) {
-              const binding = resultBindings.find(
-                (entry) => entry.ref === item.result.ref,
-              );
-              if (binding && binding.canonicalRef !== item.result.canonicalRef)
-                throw new Error(
-                  `Result ref ${item.result.ref} conflicts with the assignment's existing binding`,
-                );
-              if (!binding) resultBindings.push(item.result);
-            }
-          }
-          const updated = {
-            ...current,
-            requiredEvidence: evidence,
-            ...(resultBindings.length ? { resultBindings } : {}),
-          };
-          options.projectHost.writeProjectAssignment(
-            supervisionRuntime(),
-            updated,
-          );
-          return updated;
-        },
-      ),
     managedProjectEvidence: async (ctx, workspaceId, projectAssignmentId) => {
       return roleTransitions.projectEvidenceForWorkspace(
         ctx,
@@ -8329,7 +8268,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   const updateAssignmentEvidence = async (
     _id: string,
     params: {
-      branch?: string;
+      branch: string;
       add?: string[];
       resolvedAdd?: MessageFileInput[];
       text?: string;
@@ -8342,57 +8281,41 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     onPersisted?: (files: RequiredEvidence[]) => void,
   ) => {
-    const role = host.activeRole();
-    let assignment: ProjectAssignment | undefined;
-    let managerAuthority: ManagerDescriptor | undefined;
-    let managerLeaseId: string | undefined;
-    if (role === "manager") {
-      if (!params.branch?.trim())
-        throw new Error(
-          "Manager must provide the exact assigned project branch",
-        );
-      const manager = await host.currentManager(ctx);
-      const lease = host.managerLease();
-      if (
-        !manager ||
-        !lease ||
-        !host.sameManagerDescriptor(manager, lease.descriptor) ||
-        host.leadRuntime.roleSuspended
-      )
-        throw new Error("Manager lease is no longer active");
-      managerAuthority = manager;
-      managerLeaseId = lease.descriptor.leaseId;
-      const scope = await host.worktreeGroupScope(
-        host.pi,
-        ctx,
-        manager.workspaceId,
-        ctx.signal,
-      );
-      if (
-        scope.repoKey !== manager.repoKey ||
-        scope.primaryWorkspaceId !== manager.workspaceId
-      )
-        throw new Error("Manager workspace authority could not be verified");
-      assignment = host.readProjectAssignment(
-        host.supervisionRuntime(),
-        manager.repoKey,
-        params.branch,
-      );
-      if (!assignment)
-        throw new Error(
-          `No current project assignment exists on ${params.branch}`,
-        );
-    } else if (role === "lead") {
-      if (params.branch !== undefined)
-        throw new Error("Assigned Leads must not select a project branch");
-      assignment = await host.currentProjectAssignment(ctx);
-      if (!assignment)
-        throw new Error("This Lead has no verified project assignment");
-    } else {
+    if (host.activeRole() !== "manager")
+      throw new Error("Only the Manager can update project required evidence");
+    if (!params.branch?.trim())
+      throw new Error("Manager must provide the exact assigned project branch");
+    const manager = await host.currentManager(ctx);
+    const lease = host.managerLease();
+    if (
+      !manager ||
+      !lease ||
+      !host.sameManagerDescriptor(manager, lease.descriptor) ||
+      host.leadRuntime.roleSuspended
+    )
+      throw new Error("Manager lease is no longer active");
+    const managerAuthority = manager;
+    const managerLeaseId = lease.descriptor.leaseId;
+    const scope = await host.worktreeGroupScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      ctx.signal,
+    );
+    if (
+      scope.repoKey !== manager.repoKey ||
+      scope.primaryWorkspaceId !== manager.workspaceId
+    )
+      throw new Error("Manager workspace authority could not be verified");
+    const assignment = host.readProjectAssignment(
+      host.supervisionRuntime(),
+      manager.repoKey,
+      params.branch,
+    );
+    if (!assignment)
       throw new Error(
-        "Required evidence can be updated only by an assigned Lead or Manager",
+        `No current project assignment exists on ${params.branch}`,
       );
-    }
 
     const operation = "required_evidence";
     const additions: RequiredEvidence[] = [];
@@ -8430,50 +8353,39 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       assignment.repoKey,
       assignment.branch,
       async () => {
-        if (role === "manager") {
-          const currentManager = await host.currentManager(ctx);
-          const currentLease = host.managerLease();
-          if (
-            !currentManager ||
-            !currentLease ||
-            host.leadRuntime.roleSuspended ||
-            !host.sameManagerDescriptor(currentManager, managerAuthority!) ||
-            currentManager.repoKey !== assignment!.repoKey ||
-            currentLease.descriptor.leaseId !== managerLeaseId
-          )
-            throw new Error(
-              "Manager authority changed before required evidence was updated",
-            );
-          const currentScope = await host.worktreeGroupScope(
-            host.pi,
-            ctx,
-            currentManager.workspaceId,
-            ctx.signal,
+        const currentManager = await host.currentManager(ctx);
+        const currentLease = host.managerLease();
+        if (
+          host.activeRole() !== "manager" ||
+          !currentManager ||
+          !currentLease ||
+          host.leadRuntime.roleSuspended ||
+          !host.sameManagerDescriptor(currentManager, managerAuthority) ||
+          currentManager.repoKey !== assignment.repoKey ||
+          currentLease.descriptor.leaseId !== managerLeaseId
+        )
+          throw new Error(
+            "Manager authority changed before required evidence was updated",
           );
-          if (
-            currentScope.repoKey !== assignment!.repoKey ||
-            currentScope.primaryWorkspaceId !== currentManager.workspaceId
-          )
-            throw new Error(
-              "Manager workspace authority changed before required evidence was updated",
-            );
-        } else {
-          const currentLeadAssignment =
-            await host.currentProjectAssignment(ctx);
-          if (
-            !currentLeadAssignment ||
-            currentLeadAssignment.id !== assignment!.id
-          )
-            throw new Error(
-              "Lead assignment changed before required evidence was updated",
-            );
-        }
+        const currentScope = await host.worktreeGroupScope(
+          host.pi,
+          ctx,
+          currentManager.workspaceId,
+          ctx.signal,
+        );
+        if (
+          currentScope.repoKey !== assignment.repoKey ||
+          currentScope.primaryWorkspaceId !== currentManager.workspaceId
+        )
+          throw new Error(
+            "Manager workspace authority changed before required evidence was updated",
+          );
         const current = host.readProjectAssignment(
           runtime,
-          assignment!.repoKey,
-          assignment!.branch,
+          assignment.repoKey,
+          assignment.branch,
         );
-        if (!current || current.id !== assignment!.id)
+        if (!current || current.id !== assignment.id)
           throw new Error(
             "Project assignment changed before required evidence was updated",
           );
