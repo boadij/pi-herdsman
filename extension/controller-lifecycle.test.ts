@@ -9640,7 +9640,9 @@ test("managed startup accepts matching mailbox state after five seconds", async 
   setLeadEnvironment();
   const label = "delayed-mailbox-startup";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const abort = new AbortController();
   let delayedState: ManagedAgentState | undefined;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
   const pi = fakePi({
     exec: async (command, args, options) => {
       const result = await startup.exec(command, args, options);
@@ -9648,28 +9650,38 @@ test("managed startup accepts matching mailbox state after five seconds", async 
         delayedState = readAgentState(startup.mailbox);
         assert.ok(delayedState);
         realFs.rmSync(startup.mailbox, { recursive: true, force: true });
-        setTimeout(
-          () => writeAgentState(startup.mailbox, delayedState!),
-          6_000,
-        );
+        if (!abort.signal.aborted)
+          restoreTimer = setTimeout(
+            () => writeAgentState(startup.mailbox, delayedState!),
+            6_000,
+          );
       }
       return result;
     },
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
-    const resultPromise = registeredAgentTool(pi, "delegate").execute(
+    pending = registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "wait for delayed mailbox state" },
-      undefined,
+      abort.signal,
       undefined,
       fakeContext(),
     );
-    await t.waitFor(() => assert.ok(delayedState, "agent start did not run"));
-    const result = await resultPromise;
+    void pending.catch(() => {});
+    await t.waitFor(() => assert.ok(delayedState, "agent start did not run"), {
+      timeout: 5_000,
+    });
+    const result = await pending;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
+    abort.abort();
+    if (restoreTimer) clearTimeout(restoreTimer);
+    if (pending) await pending.catch(() => {});
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
@@ -9679,12 +9691,18 @@ test("managed startup waits for the child assignment lock before first submit", 
   setLeadEnvironment();
   const label = "startup-lock-held";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const abort = new AbortController();
   let releaseChildLock: (() => void) | undefined;
   let agentGetCount = 0;
   const pi = fakePi({
     exec: async (command, args, options) => {
       const result = await startup.exec(command, args, options);
-      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "start" &&
+        !abort.signal.aborted
+      )
         releaseChildLock = claimProcessLock(
           assignmentLockPathForTest(startup.mailbox),
         );
@@ -9695,30 +9713,124 @@ test("managed startup waits for the child assignment lock before first submit", 
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
-    const resultPromise = registeredAgentTool(pi, "delegate").execute(
+    pending = registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "wait for child startup lock" },
-      undefined,
+      abort.signal,
       undefined,
       fakeContext(),
     );
-    await t.waitFor(() => {
-      assert.ok(releaseChildLock, "child did not hold its startup lock");
-      assert.ok(
-        agentGetCount >= 2,
-        "initial submit must finish integration validation before acquiring the held lock",
-      );
-    });
+    void pending.catch(() => {});
+    await t
+      .waitFor(
+        () => {
+          assert.ok(releaseChildLock, "child did not hold its startup lock");
+          assert.ok(
+            agentGetCount >= 2,
+            "initial submit must finish integration validation before acquiring the held lock",
+          );
+        },
+        { timeout: 5_000 },
+      )
+      .catch((error) => {
+        t.diagnostic(
+          `startup lock held=${Boolean(releaseChildLock)}, ` +
+            `agent get count=${agentGetCount}`,
+        );
+        throw error;
+      });
     releaseChildLock?.();
     releaseChildLock = undefined;
-    const result = await resultPromise;
+    const result = await pending;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
+    abort.abort();
     releaseChildLock?.();
+    if (pending) await pending.catch(() => {});
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
+});
+
+test("managed startup cleanup releases delegation lock after observation failure", async (t) => {
+  setLeadEnvironment();
+  const label = "startup-lock-failure-cleanup";
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const abort = new AbortController();
+  let releaseChildLock: (() => void) | undefined;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  let restoreTimerFired = false;
+  let delayedState: ManagedAgentState | undefined;
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "start" &&
+        !abort.signal.aborted
+      ) {
+        releaseChildLock = claimProcessLock(
+          assignmentLockPathForTest(startup.mailbox),
+        );
+        delayedState = readAgentState(startup.mailbox);
+        assert.ok(delayedState);
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  let pending: ReturnType<ReturnType<typeof registeredAgentTool>["execute"]>;
+  try {
+    pending = registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "force startup observation failure" },
+      abort.signal,
+      undefined,
+      fakeContext(),
+    );
+    void pending.catch(() => {});
+    await t.waitFor(
+      () => assert.ok(releaseChildLock, "child did not hold its startup lock"),
+      { timeout: 5_000 },
+    );
+    restoreTimer = setTimeout(() => {
+      restoreTimerFired = true;
+      writeAgentState(startup.mailbox, delayedState!);
+    }, 0);
+    assert.throws(
+      () => assert.fail("injected startup observation failure"),
+      /injected startup observation failure/,
+    );
+  } finally {
+    if (restoreTimer)
+      assert.equal(restoreTimerFired, false, "callback fired before teardown");
+    abort.abort();
+    if (restoreTimer) clearTimeout(restoreTimer);
+    releaseChildLock?.();
+    if (pending) await pending.catch(() => {});
+    startup.stopMailboxConsumer();
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+
+  assert.ok(restoreTimer, "delayed fixture callback was not scheduled");
+  const releaseDelegationLock = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
+  );
+  releaseDelegationLock();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(restoreTimerFired, false, "callback fired after cleanup");
+  assert.equal(
+    readAgentState(startup.mailbox),
+    undefined,
+    "a delayed fixture callback must not recreate mailbox state after cleanup",
+  );
 });
 
 test("managed startup rejects a mismatched Agent before its first task and rolls back", async () => {
