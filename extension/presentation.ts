@@ -2977,6 +2977,23 @@ export function renderCoordinationResult(
   const args = (context?.args ?? {}) as Record<string, unknown>;
   hydrateCoordinationAgent(details, context);
   const expanded = humanExpanded(context, options);
+  if (
+    tool === "staff" &&
+    action === "remove" &&
+    details.confirmation_required === true
+  )
+    return new WidthSafeText(
+      statusLine(
+        theme,
+        "warning",
+        "!",
+        expanded
+          ? `Confirmation required\n${resultContent(result)}`
+          : `Confirmation required · ${value(details.branch) || value(args.branch)} · /manager remove ${value(details.branch) || value(args.branch)}`,
+      ),
+      0,
+      0,
+    );
   const failed = details.ok === false || context?.isError === true;
   if (failed && details.error && typeof details.error === "object")
     return new WidthSafeText(

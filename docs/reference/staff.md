@@ -185,8 +185,8 @@ stopping the session or owned Agents.
 
 ## `remove_worktree`
 
-Manager only. Remove an exact assigned project's linked checkout after
-interactive human confirmation:
+Manager only. Validate an exact assigned project's linked checkout and request
+independent human confirmation without waiting or removing anything:
 
 ```json
 { "branch": "feat/example" }
@@ -194,6 +194,19 @@ interactive human confirmation:
 
 Use this only for an explicitly requested checkout removal, never as an
 inference from task completion, review, or inactivity. Herdsman requires the
+active Manager's exact current assignment and matching linked checkout and
+checks clean state and occupants. With UI available, a valid request returns
+`confirmation_required: true` and `ok: false`: no removal, execution shutdown,
+locks, or pending approval state is created. This is not a failed removal or
+evidence of checkout removal or assignment retirement; physical outcome fields
+are absent. Headless requests are refused.
+
+Direct the user to `/manager remove <branch>` or `/manager` → Project →
+Remove worktree… and continue unrelated coordination. Do not repeat or poll
+the tool for approval. Each human action validates current authority and target
+afresh; an earlier request confers no authorization.
+
+Both human entry points share one confirmed destructive operation. It requires the
 active Manager's exact current assignment and matching linked checkout, refuses
 ambiguous or dirty targets, and never forces removal. If the assigned Lead is
 running, its proven owned execution is stopped before removal; a paused Lead is
@@ -209,7 +222,7 @@ removal. Type the exact word `remove`; cancellation or any other response has
 no destructive effect. Successful checkout removal is followed by
 the existing assignment reconciliation, which retires the matching assignment
 and pending project messages when authoritative checkout absence is verified.
-The result includes checkout state (`removed`, `present`, or `unknown`) and an
+The human removal outcome includes checkout state (`removed`, `present`, or `unknown`) and an
 `assignment_retired` status. It is true only when checkout absence and
 assignment retirement are both confirmed; when checkout state is `unknown`, a
 false value is not proof that the assignment remains. Overall success requires

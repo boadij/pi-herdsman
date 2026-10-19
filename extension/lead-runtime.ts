@@ -6751,9 +6751,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
     await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
     const answer = await ctx.ui.input(
-      `Remove worktree for branch ${branch} at ${candidate.checkoutPath} from project ${candidate.manager.repoKey}? ` +
-        "This removes the checkout and associated Herdr workspace; running managed execution may be stopped. " +
-        "The Git branch and Pi conversation remain, and the project assignment is retired after removal. Type remove to confirm.",
+      [
+        "Remove worktree",
+        "",
+        `Branch: ${branch}`,
+        `Checkout: ${candidate.checkoutPath}`,
+        "",
+        "Removes this checkout and Herdr workspace.",
+        "Running managed execution may be stopped.",
+        "Preserves the Git branch and Pi conversation.",
+        "Retires the assignment after verified removal.",
+        "",
+        "Type remove to confirm.",
+      ].join("\n"),
       undefined,
       { signal: operationSignal },
     );
@@ -7840,7 +7850,30 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action === "remove") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can remove project worktrees");
-      return removeWorktree(params.branch, ctx, signal);
+      if (!ctx.hasUI)
+        throw new Error("Worktree removal requires interactive confirmation");
+      const operationSignal = signal ?? ctx.signal;
+      operationSignal?.throwIfAborted();
+      const target = await inspectRemovalTarget(
+        params.branch,
+        ctx,
+        operationSignal,
+      );
+      await assertNoUnrelatedPiExecution(target, ctx, operationSignal);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No worktree was removed. To confirm removal of ${params.branch}, use /manager remove ${params.branch} or /manager → Project → Remove worktree….`,
+          },
+        ],
+        details: {
+          ok: false,
+          action: "remove",
+          branch: params.branch,
+          confirmation_required: true,
+        },
+      };
     }
     if (params.action === "stop") {
       if (activeRole() !== "manager")

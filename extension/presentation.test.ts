@@ -1520,6 +1520,37 @@ test("compact successful worktree removal reports the branch and retirement", ()
   assert.doesNotMatch(output, /sent to lead/);
 });
 
+test("worktree removal requests show confirmation instructions without physical outcomes", () => {
+  for (const expanded of [false, true]) {
+    const output = renderedText(
+      renderCoordinationResult(
+        "staff",
+        "remove",
+        {
+          content: [
+            {
+              type: "text",
+              text: "No worktree was removed. Use /manager remove feat/example or /manager → Project → Remove worktree….",
+            },
+          ],
+          details: {
+            ok: false,
+            action: "remove",
+            branch: "feat/example",
+            confirmation_required: true,
+          },
+        },
+        { expanded },
+        presentationTheme,
+      ),
+    );
+    assert.match(output, /Confirmation required/);
+    assert.match(output, /\/manager remove feat\/example/);
+    assert.doesNotMatch(output, /✗|checkout:|assignment:|unknown|failed/);
+    if (expanded) assert.match(output, /Project → Remove worktree/);
+  }
+});
+
 test("worktree removal calls and expanded results identify the checkout and assignment outcome", () => {
   assert.equal(
     renderedText(

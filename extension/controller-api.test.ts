@@ -1990,6 +1990,21 @@ for (const reachable of [true, false]) {
         const retired = listProjectAssignments(runtime, "repo-key").find(
           (assignment) => assignment.id === leadId,
         )!;
+        managerHistory.push({
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolName: "remove_worktree",
+            details: {
+              ok: false,
+              action: "remove",
+              branch,
+              confirmation_required: true,
+              repo_key: retired.repoKey,
+              assignment_id: retired.id,
+            },
+          },
+        });
         assert.equal(retireProjectAssignment(runtime, retired), true);
         await t.waitFor(() =>
           assert.equal(
@@ -4731,7 +4746,7 @@ async function runManagerStartupScenario(
         await t!.waitFor(() => {
           assert.match(
             removalPrompt ?? "",
-            /Remove worktree for branch smoke\/recover/u,
+            /Remove worktree\n\nBranch: smoke\/recover/u,
           );
           assert.match(removalPrompt ?? "", /Type remove to confirm/u);
         });

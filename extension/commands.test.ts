@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -4354,6 +4355,7 @@ async function managerRemovalFixture(
     missingSessionProvenance?: boolean;
     primaryWorkspaceInitially?: boolean;
     primaryWorkspaceAfterConfirmation?: boolean;
+    replaceManagerAfterConfirmation?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -4392,6 +4394,8 @@ async function managerRemovalFixture(
     ? manager.workspaceId
     : workspaceId;
   let assignmentLockHeld = false;
+  let lockCount = 0;
+  let managerReplaced = false;
   let confirmationCount = 0;
   const removals: string[] = [];
   const calls: string[][] = [];
@@ -4432,7 +4436,8 @@ async function managerRemovalFixture(
     leadRuntime: { managerLease: { descriptor: manager } } as any,
     managerLease: () => ({ descriptor: manager }),
     activeRole: () => "manager",
-    currentManager: async () => manager,
+    currentManager: async () =>
+      managerReplaced ? { ...manager, leaseId: "replacement-lease" } : manager,
     sameManagerDescriptor: (left: any, right: any) => left === right,
     worktreeGroupScope: async () => ({
       repoKey,
@@ -4516,8 +4521,10 @@ async function managerRemovalFixture(
       stoppedLeadCount++;
       leadRunning = false;
     },
-    withProjectWorkLock: async (_key: string, operation: () => unknown) =>
-      operation(),
+    withProjectWorkLock: async (_key: string, operation: () => unknown) => {
+      lockCount++;
+      return operation();
+    },
     withProjectAssignmentLock: async (
       _repoKey: string,
       _branch: string,
@@ -4540,7 +4547,9 @@ async function managerRemovalFixture(
   const ctx = fakeContext([]) as any;
   ctx.hasUI = true;
   ctx.ui.input = async () => {
+    assert.equal(lockCount, 0, "no operation lock may span human confirmation");
     confirmationCount++;
+    if (options.replaceManagerAfterConfirmation) managerReplaced = true;
     if (options.changeAssignmentAfterConfirmation)
       assignment = { ...assignment, id: "replacement-assignment" };
     if (options.primaryWorkspaceAfterConfirmation)
@@ -4556,8 +4565,74 @@ async function managerRemovalFixture(
     removals,
     confirmationCount: () => confirmationCount,
     stoppedLeadCount: () => stoppedLeadCount,
+    lockCount: () => lockCount,
   };
 }
+
+test("Manager removal requests leave running and closed worktrees untouched", async (t) => {
+  for (const options of [{ runningLead: true }, { closedWorkspace: true }]) {
+    const fixture = await managerRemovalFixture(t, options);
+    fixture.ctx.ui.input = async () => {
+      throw new Error("Model removal must not prompt");
+    };
+    for (let request = 0; request < 2; request++) {
+      const result = await fixture.runtime.executeStaff(
+        "request",
+        { action: "remove", branch: "feat/remove-test" },
+        undefined,
+        undefined,
+        fixture.ctx,
+      );
+      assert.equal(result.details.confirmation_required, true);
+      assert.equal(result.details.ok, false);
+      assert.equal(result.details.checkout_removed, undefined);
+      assert.equal(result.details.checkout_state, undefined);
+      assert.equal(result.details.assignment_retired, undefined);
+    }
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.equal(fixture.lockCount(), 0);
+    assert.equal(fixture.confirmationCount(), 0);
+    assert.ok(fixture.assignment());
+    assert.ok(existsSync(fixture.checkoutPath));
+    assert.ok(fixture.calls.every((args) => args[1] === "list"));
+  }
+});
+
+test("Manager removal rejects a replaced Manager after confirmation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    replaceManagerAfterConfirmation: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Manager lease is no longer active/,
+  );
+  assert.equal(fixture.confirmationCount(), 1);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+});
+
+test("Manager removal requires the exact confirmation word", async (t) => {
+  const fixture = await managerRemovalFixture(t, { runningLead: true });
+  for (const answer of [
+    undefined,
+    "",
+    "Remove",
+    " remove",
+    "remove ",
+    "cancel",
+  ]) {
+    fixture.ctx.ui.input = async () => answer;
+    const result = await fixture.runtime.removeWorktree(
+      "feat/remove-test",
+      fixture.ctx,
+    );
+    assert.equal(result.details.cancelled, true);
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.deepEqual(fixture.removals, []);
+    assert.ok(fixture.assignment());
+    assert.ok(existsSync(fixture.checkoutPath));
+  }
+});
 
 test("Manager removal covers paused, running, and reopened checkout lifecycles", async (t) => {
   for (const scenario of [
@@ -5313,21 +5388,37 @@ async function managerDelegateAssignmentTest(
     );
     assert.equal(confirmationPrompts, 0);
     gitStatusOutput = "";
-    const cancelledTool = await removeTool.execute(
+    const requestedTool = await removeTool.execute(
       "remove",
       { branch: assignment.branch },
       undefined,
       undefined,
       ctx,
     );
-    assert.equal(cancelledTool.details.cancelled, true);
-    assert.equal(confirmationPrompts, 1);
+    assert.deepEqual(requestedTool.details, {
+      ok: false,
+      action: "remove",
+      branch: assignment.branch,
+      confirmation_required: true,
+    });
+    assert.equal(confirmationPrompts, 0);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "stop"),
+      false,
+    );
+    assert.ok(
+      readProjectAssignment(supervisionRuntime(), repoKey, assignment.branch),
+    );
+    const afterRequest = await pi.tools
+      .find((tool) => tool.name === "list_staff")!
+      .execute("after-removal-request", {}, undefined, undefined, ctx);
+    assert.equal(afterRequest.details.ok, true);
     await managerCommand.handler(`remove ${assignment.branch}`, ctx);
-    assert.equal(confirmationPrompts, 2);
+    assert.equal(confirmationPrompts, 1);
     assert.equal(
       pi.calls.some((args) => args[0] === "worktree" && args[1] === "remove"),
       false,
-      "both public entry points share confirmation and cancellation has no destructive effect",
+      "the model request and human cancellation have no destructive effect",
     );
     assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
     assert.equal(assignment!.branch.includes(assignment!.id), false);
