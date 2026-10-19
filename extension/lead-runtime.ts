@@ -8294,7 +8294,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       additions.push(
         persistRequiredEvidenceSnapshot(
           assignment.id,
-          "assignment-note.txt",
+          "assignment-note.md",
           params.text,
         ),
       );

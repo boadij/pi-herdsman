@@ -5217,6 +5217,7 @@ async function managerDelegateAssignmentTest(
     const retained = listProjectAssignments(supervisionRuntime(), repoKey).find(
       (item) => item.branch === assignment.branch,
     )!;
+    assert.equal(retained.requiredEvidence?.[2].name, "assignment-note.md");
     assert.deepEqual(
       retained.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(retained.id, entry),
