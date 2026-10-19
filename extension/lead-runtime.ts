@@ -4019,7 +4019,7 @@ export function registerLeadRuntime(
     if (assignment) nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
     let saved: LeadExecutionSessionState | undefined;
     try {
-      saved = sessionLeadExecutionState(ctx.sessionManager.getEntries());
+      saved = sessionLeadExecutionState(ctx.sessionManager.getBranch());
     } catch (error) {
       if (signal.aborted) return;
       leadToolState.setLeadTools(currentBaseline());
@@ -4149,7 +4149,20 @@ export function registerLeadRuntime(
       leadExecution = previousExecution;
       try {
         if (shouldActivate) pi.setActiveTools(previousTools);
+        inheritedProjection =
+          shouldActivate &&
+          previousExecution?.valid &&
+          !previousExecution.managed &&
+          previousExecution.definition.frontmatter.tools === undefined &&
+          sameToolSelection(pi.getActiveTools(), previousTools)
+            ? {
+                mode: previousExecution.mode,
+                excluded: configuredToolPolicy(previousExecution.definition, [])
+                  .excluded,
+              }
+            : undefined;
       } catch {
+        inheritedProjection = undefined;
         leadExecution = { mode, valid: false, managed: false };
         try {
           pi.setActiveTools(leadToolState.normalizeLeadTools([]));
@@ -12725,7 +12738,16 @@ export function createLeadRoleTransitions(
           "pi_herdsman_state_error",
           error,
         );
-      return;
+      // Retry only while the current execution still authorizes inheritance;
+      // restoration can invalidate it without clearing the previous marker.
+      const inheritingExecution = host.inheritedProjection?.();
+      const canRetryCapture =
+        !state.roleSuspended &&
+        state.chiefMode === "inactive" &&
+        activeLeadRole(state) === "lead" &&
+        inheritingExecution !== undefined;
+      if (canRetryCapture) return;
+      host.setInheritedProjection?.(undefined);
     }
     if (state.controllerRole === "manager" && !state.roleSuspended) {
       let held = false;

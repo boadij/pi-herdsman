@@ -927,6 +927,47 @@ test("ordinary mode activation rolls back state and tools when projection fails"
   }
 });
 
+test("ordinary mode persistence rollback restores inherited tool tracking", async () => {
+  setLeadEnvironment();
+  const entries: any[] = [];
+  const pi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "history" }],
+    entries,
+  });
+  const context = fakeContext(entries) as any;
+  const appendEntry = pi.pi.appendEntry;
+  pi.pi.appendEntry = (type: string, data: any) => {
+    if (type === "pi-herdsman-lead-execution" && data?.mode === "orchestrate")
+      throw new Error("mode persistence failed");
+    appendEntry(type, data);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", ...leadTools]);
+    pi.pi.setActiveTools(["read", "history"]);
+    await agentTool(pi, "delegate").execute(
+      "rollback-inherited-tools",
+      {
+        definition: "agent",
+        task: "verify inherited tool tracking after rollback",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history", ...leadTools]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      "read",
+      "history",
+    ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("failed ordinary mode rollback invalidates execution and fails closed", async () => {
   setLeadEnvironment();
   const entries: any[] = [];
@@ -1123,6 +1164,77 @@ test("failed inherited-tool persistence keeps the live selection and retries", a
   }
 });
 
+test("failed inherited capture still enforces invalid-profile fail-closed tools", async (t) => {
+  setLeadEnvironment();
+  const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+  const definition = join(cwd, ".pi", "agents", "flexible-lead.md");
+  writeFileSync(definition, "---\nname: flexible-lead\n---\nflexible\n");
+  const entries: any[] = [];
+  const pi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "history" }],
+    entries,
+  });
+  const context = fakeContext(entries) as any;
+  context.cwd = cwd;
+  const appendEntry = pi.pi.appendEntry;
+  let failPersistence = false;
+  pi.pi.appendEntry = (type: string, data: unknown) => {
+    if (type === "pi-herdsman-lead-execution" && failPersistence)
+      throw new Error("baseline write failed");
+    appendEntry(type, data);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    writeFileSync(definition, "---\nname: [malformed\n---\nbad\n");
+    pi.pi.setActiveTools(["read", "history"]);
+    failPersistence = true;
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("failed capture cannot preserve tools after inherited execution becomes invalid", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const pi = fakePi({ activeTools: ["read", "history"] });
+  let executionValid = true;
+  let marker: any = { mode: "flexible", excluded: [] };
+  const state: any = {
+    controllerRole: "lead",
+    roleSuspended: false,
+    chiefMode: "inactive",
+    chiefModeGeneration: 0,
+  };
+  const transitions = createLeadRoleTransitions(state, {
+    controllerScope: { kind: "root" },
+    pi: pi.pi,
+    captureInheritedTools: () => {
+      assert.ok(marker);
+      throw new Error("baseline persistence failed");
+    },
+    inheritedProjection: () => (executionValid ? marker : undefined),
+    setInheritedProjection: (projection: any) => {
+      marker = projection;
+    },
+    appendDurableError: () => {},
+    getLeadTools: () => ["read", "bash"],
+    executionTools: () => (executionValid ? ["read", "bash"] : []),
+    normalizeLeadTools: (tools: string[]) => tools,
+    normalizeBaseTools: (tools: string[]) => tools,
+  } as any);
+
+  executionValid = false;
+  transitions.reconcileRoleTools();
+
+  assert.deepEqual(pi.pi.getActiveTools(), []);
+  assert.equal(marker, undefined);
+});
+
 test("session tree navigation restores each branch's execution mode, baseline, and guidance", async () => {
   setLeadEnvironment();
   const branchEntry = (mode: string, leadTools: string[]) => [
@@ -1169,6 +1281,30 @@ test("session tree navigation restores each branch's execution mode, baseline, a
       "read",
       "edit",
     ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("session startup restores execution from the selected branch only", async () => {
+  setLeadEnvironment();
+  const branchEntry = (mode: string, tools: string[]) => [
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: { mode, leadTools: tools },
+    },
+  ];
+  const selected = branchEntry("flexible", ["read", "bash"]);
+  const sibling = branchEntry("orchestrate", ["read", "edit"]);
+  const entries = [...selected, ...sibling];
+  const pi = fakeChiefPi({ activeTools: ["read", "edit"], entries });
+  const context = fakeContext(entries) as any;
+  context.sessionManager.getBranch = () => selected;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", ...leadTools]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
