@@ -15,9 +15,10 @@ carries evidence, not runtime capability.
 ## Required assignment evidence
 
 A verified managed project assignment can retain **required evidence** for
-future delegated Agents. Initial files supplied to `delegate_project` become
-required evidence. Later evidence is retained as part of a handoff by setting
-`retain: true` on an existing coordination operation:
+future delegated Agents. The initial `delegate_project` task is preserved
+unchanged as `project-brief.md`; files supplied to `delegate_project` also
+become required evidence. Later evidence is retained as part of a handoff by
+setting `retain: true` on an existing coordination operation:
 
 - A Manager uses `message_staff` to retain the supplied message text and files
   for the target assigned Lead's project assignment.
