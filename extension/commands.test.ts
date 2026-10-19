@@ -1095,19 +1095,19 @@ test("live Flexible tool changes are inherited while exclusions stay saved", asy
   }
 });
 
-test("failed inherited-tool persistence keeps the live selection and retries", async (t) => {
+test("failed inherited-tool persistence enforces policy and retries", async (t) => {
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-failure-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
   writeFileSync(
     join(cwd, ".pi", "agents", "flexible-lead.md"),
-    "---\nname: flexible-lead\n---\nflexible\n",
+    "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
   const pi = fakeChiefPi({
     activeTools: ["read", "bash"],
-    allTools: [{ name: "history" }],
+    allTools: [{ name: "history" }, { name: "notes" }],
     entries,
   });
   const context = fakeContext(entries) as any;
@@ -1125,7 +1125,7 @@ test("failed inherited-tool persistence keeps the live selection and retries", a
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    pi.pi.setActiveTools(["read", "history"]);
+    pi.pi.setActiveTools(["read", "bash", "history", "notes"]);
 
     failPersistence = true;
     await agentTool(pi, "delegate").execute(
@@ -1140,7 +1140,12 @@ test("failed inherited-tool persistence keeps the live selection and retries", a
     );
 
     assert.ok(persistenceAttempts > 0);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history"]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       "read",
       "bash",
@@ -1154,10 +1159,17 @@ test("failed inherited-tool persistence keeps the live selection and retries", a
       undefined,
       context,
     );
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history", ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       "read",
       "history",
+      "notes",
+      "bash",
     ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

@@ -97,7 +97,11 @@ profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`
 
 An omitted `tools` field inherits the value from lower-precedence definition
 layers. The bundled Flexible Lead leaves this field unspecified, preserving the
-ordinary Lead baseline. Bundled Orchestrate Lead, Manager, and Chief definitions
+ordinary Lead baseline. While that inheriting ordinary Lead projection is
+active, observed changes to Pi's active ordinary tools update the saved
+baseline before subsequent role reconciliation. Explicit allowlists and
+`excludeTools` remain authoritative, and restrictive roles do not supply the
+ordinary baseline. Bundled Orchestrate Lead, Manager, and Chief definitions
 explicitly select `tools: []`, disabling ordinary tools by default. Explicit
 effective allowlists select matching registered ordinary tools; required
 coordination tools remain available independently. `excludeTools` is applied

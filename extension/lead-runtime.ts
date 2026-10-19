@@ -12746,7 +12746,20 @@ export function createLeadRoleTransitions(
         state.chiefMode === "inactive" &&
         activeLeadRole(state) === "lead" &&
         inheritingExecution !== undefined;
-      if (canRetryCapture) return;
+      if (canRetryCapture) {
+        const current = host.pi.getActiveTools();
+        const permitted = host.normalizeLeadTools(
+          current.filter(
+            (name) =>
+              !inheritingExecution.excluded.some((pattern) =>
+                matchesToolPattern(pattern, name),
+              ),
+          ),
+        );
+        if (!sameToolSelection(current, permitted))
+          host.pi.setActiveTools(permitted);
+        return;
+      }
       host.setInheritedProjection?.(undefined);
     }
     if (state.controllerRole === "manager" && !state.roleSuspended) {
