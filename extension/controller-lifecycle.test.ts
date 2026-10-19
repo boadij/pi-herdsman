@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
+import type { TestContext } from "node:test";
 import { Value } from "typebox/value";
 import type {
   BeforeAgentStartEvent,
@@ -9687,9 +9688,11 @@ test("managed startup accepts matching mailbox state after five seconds", async 
   }
 });
 
-test("managed startup waits for the child assignment lock before first submit", async (t) => {
+async function exerciseStartupLock(t: TestContext, failObservation = false) {
   setLeadEnvironment();
-  const label = "startup-lock-held";
+  const label = failObservation
+    ? "startup-lock-failure-cleanup"
+    : "startup-lock-held";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const abort = new AbortController();
   let releaseChildLock: (() => void) | undefined;
@@ -9715,6 +9718,8 @@ test("managed startup waits for the child assignment lock before first submit", 
   await pi.events.get("session_start")![0](undefined, fakeContext());
   let pending:
     ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
+  let observationError: unknown;
+  let injectedObservationFailure = false;
   try {
     pending = registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -9724,8 +9729,8 @@ test("managed startup waits for the child assignment lock before first submit", 
       fakeContext(),
     );
     void pending.catch(() => {});
-    await t
-      .waitFor(
+    try {
+      await t.waitFor(
         () => {
           assert.ok(releaseChildLock, "child did not hold its startup lock");
           assert.ok(
@@ -9734,18 +9739,33 @@ test("managed startup waits for the child assignment lock before first submit", 
           );
         },
         { timeout: 5_000 },
-      )
-      .catch((error) => {
-        t.diagnostic(
-          `startup lock held=${Boolean(releaseChildLock)}, ` +
-            `agent get count=${agentGetCount}`,
+      );
+    } catch (error) {
+      t.diagnostic(
+        `startup lock held=${Boolean(releaseChildLock)}, ` +
+          `agent get count=${agentGetCount}`,
+      );
+      throw error;
+    }
+    if (failObservation) {
+      try {
+        await t.waitFor(
+          () => {
+            injectedObservationFailure = true;
+            assert.fail("injected startup observation failure");
+          },
+          { timeout: 20 },
         );
-        throw error;
-      });
-    releaseChildLock?.();
-    releaseChildLock = undefined;
-    const result = await pending;
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      } catch (error) {
+        observationError = error;
+      }
+      if (!observationError) throw new Error("observation unexpectedly passed");
+    } else {
+      releaseChildLock?.();
+      releaseChildLock = undefined;
+      const result = await pending;
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    }
   } finally {
     abort.abort();
     releaseChildLock?.();
@@ -9754,82 +9774,30 @@ test("managed startup waits for the child assignment lock before first submit", 
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
+  return {
+    mailbox: startup.mailbox,
+    observationError,
+    injectedObservationFailure,
+  };
+}
+
+test("managed startup waits for the child assignment lock before first submit", async (t) => {
+  await exerciseStartupLock(t);
 });
 
 test("managed startup cleanup releases delegation lock after observation failure", async (t) => {
-  setLeadEnvironment();
-  const label = "startup-lock-failure-cleanup";
-  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
-  const abort = new AbortController();
-  let releaseChildLock: (() => void) | undefined;
-  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
-  let restoreTimerFired = false;
-  let delayedState: ManagedAgentState | undefined;
-  const pi = fakePi({
-    exec: async (command, args, options) => {
-      const result = await startup.exec(command, args, options);
-      if (
-        command === "herdr" &&
-        args[0] === "agent" &&
-        args[1] === "start" &&
-        !abort.signal.aborted
-      ) {
-        releaseChildLock = claimProcessLock(
-          assignmentLockPathForTest(startup.mailbox),
-        );
-        delayedState = readAgentState(startup.mailbox);
-        assert.ok(delayedState);
-      }
-      return result;
-    },
-  });
-  registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
-  let pending: ReturnType<ReturnType<typeof registeredAgentTool>["execute"]>;
-  try {
-    pending = registeredAgentTool(pi, "delegate").execute(
-      "id",
-      { definition: "agent", label, task: "force startup observation failure" },
-      abort.signal,
-      undefined,
-      fakeContext(),
-    );
-    void pending.catch(() => {});
-    await t.waitFor(
-      () => assert.ok(releaseChildLock, "child did not hold its startup lock"),
-      { timeout: 5_000 },
-    );
-    restoreTimer = setTimeout(() => {
-      restoreTimerFired = true;
-      writeAgentState(startup.mailbox, delayedState!);
-    }, 0);
-    assert.throws(
-      () => assert.fail("injected startup observation failure"),
-      /injected startup observation failure/,
-    );
-  } finally {
-    if (restoreTimer)
-      assert.equal(restoreTimerFired, false, "callback fired before teardown");
-    abort.abort();
-    if (restoreTimer) clearTimeout(restoreTimer);
-    releaseChildLock?.();
-    if (pending) await pending.catch(() => {});
-    startup.stopMailboxConsumer();
-    pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(startup.mailbox);
-  }
-
-  assert.ok(restoreTimer, "delayed fixture callback was not scheduled");
+  const { mailbox, observationError, injectedObservationFailure } =
+    await exerciseStartupLock(t, true);
+  assert.equal(injectedObservationFailure, true);
+  assert.match(String(observationError), /waitFor\(\) timed out/);
   const releaseDelegationLock = claimProcessLock(
     delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
   );
   releaseDelegationLock();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(restoreTimerFired, false, "callback fired after cleanup");
   assert.equal(
-    readAgentState(startup.mailbox),
+    readAgentState(mailbox),
     undefined,
-    "a delayed fixture callback must not recreate mailbox state after cleanup",
+    "fixture cleanup must leave no mailbox state after delegation settles",
   );
 });
 
