@@ -1,4 +1,5 @@
 import {
+  DynamicBorder,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
@@ -19,6 +20,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
 import type {
+  Theme,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -45,6 +47,28 @@ import type {
   WorkspaceProvenance,
 } from "./supervision.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
+
+export function populateMenuFrame(
+  container: Container,
+  theme: Pick<Theme, "fg" | "bold">,
+  title: string,
+  body: Component,
+  footer: string,
+  help?: Component,
+): void {
+  container.clear();
+  container.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+  container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+  container.addChild(new Spacer(1));
+  container.addChild(body);
+  if (help) {
+    container.addChild(new Spacer(1));
+    container.addChild(help);
+  }
+  container.addChild(new Spacer(1));
+  container.addChild(new Text(theme.fg("dim", footer), 1, 0));
+  container.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+}
 
 export function hasWorkspaceWorktree(workspace: any): boolean {
   const worktree =

@@ -6,8 +6,9 @@ import { basename, dirname, extname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Box } from "@earendil-works/pi-tui";
+import { Box, Container } from "@earendil-works/pi-tui";
 import {
+  populateMenuFrame,
   collapseDisplayText,
   nameSessionIfUnset,
   displayHomePath,
@@ -58,6 +59,49 @@ import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
+
+test("menu frames preserve structural gaps and replace previous content at narrow widths", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const container = new Container();
+  for (const width of [80, 12]) {
+    for (const withHelp of [false, true]) {
+      container.addChild(new Text("obsolete", 0, 0));
+      populateMenuFrame(
+        container,
+        theme,
+        "Title",
+        new Text("Choice", 0, 0),
+        "Footer",
+        withHelp ? new Text("Help", 1, 0) : undefined,
+      );
+      const rendered = container.render(width);
+      const lines = rendered.map((line) =>
+        stripVTControlCharacters(line).trim(),
+      );
+      assert.ok(rendered.every((line) => visibleWidth(line) <= width));
+      assert.ok(!lines.includes("obsolete"));
+      assert.equal(lines[1], "Title");
+      assert.equal(lines[2], "");
+      assert.equal(lines[3], "Choice");
+      assert.equal(lines[4], "");
+      if (withHelp) {
+        assert.equal(lines[5], "Help");
+        assert.equal(lines[6], "");
+      }
+      assert.equal(lines.at(-2), "Footer");
+      assert.match(lines[0], /^─+$/u);
+      assert.match(lines.at(-1)!, /^─+$/u);
+      assert.equal(lines.length, withHelp ? 9 : 7);
+      assert.ok(stripVTControlCharacters(rendered[1]).startsWith(" Title"));
+      assert.ok(
+        stripVTControlCharacters(rendered.at(-2)!).startsWith(" Footer"),
+      );
+    }
+  }
+});
 
 test("automatic session names preserve existing Pi naming decisions", () => {
   const entries: { type: string; name?: string }[] = [];

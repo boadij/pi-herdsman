@@ -7,7 +7,6 @@ import type {
 import { contentText, StringEnum } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
-  DynamicBorder,
   getAgentDir,
   getSelectListTheme,
   SessionManager,
@@ -272,6 +271,7 @@ import {
 } from "./lead-runtime.ts";
 
 import {
+  populateMenuFrame,
   collapseDisplayText,
   formatToolModelResult,
   formatAgentDefinitions,
@@ -1072,7 +1072,6 @@ export default function (pi: ExtensionAPI): void {
     contextType: SUPERVISION_CONTEXT_TYPE,
     tui: {
       Container,
-      DynamicBorder,
       Key,
       matchesKey,
       SelectList,
@@ -1458,13 +1457,25 @@ export default function (pi: ExtensionAPI): void {
             minPrimaryColumnWidth: 12,
             maxPrimaryColumnWidth,
           });
-          const help = new TuiText("", 1, 1);
+          const hasHelp = items.some((item) =>
+            collapseDisplayText(item.help, 160),
+          );
+          const helpArea = hasHelp ? new Container() : undefined;
+          const helpText = new TuiText("", 1, 0);
+          const emptyHelp = new Spacer(1);
           const updateHelp = (item: SelectItem | null): void => {
+            if (!helpArea) return;
             const text = collapseDisplayText(
               (item as MenuItem | null)?.help,
               160,
             );
-            help.setText(text ? theme.fg("dim", text) : "");
+            helpArea.clear();
+            if (text) {
+              helpText.setText(theme.fg("dim", text));
+              helpArea.addChild(helpText);
+            } else {
+              helpArea.addChild(emptyHelp);
+            }
           };
           const index = items.findIndex((item) => item.value === selectedValue);
           if (index >= 0) list.setSelectedIndex(index);
@@ -1473,24 +1484,13 @@ export default function (pi: ExtensionAPI): void {
           list.onCancel = () => done(undefined);
           list.onSelectionChange = updateHelp;
           const container = new Container();
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
-          );
-          container.addChild(
-            new TuiText(theme.fg("accent", theme.bold(title)), 1, 0),
-          );
-          container.addChild(new Spacer(1));
-          container.addChild(list);
-          container.addChild(help);
-          container.addChild(
-            new TuiText(
-              theme.fg("dim", "↑↓ navigate · Enter select · Esc close"),
-              1,
-              0,
-            ),
-          );
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
+          populateMenuFrame(
+            container,
+            theme,
+            title,
+            list,
+            "↑↓ navigate · Enter select · Esc close",
+            helpArea,
           );
           return {
             render: (width: number) => container.render(width),
@@ -1552,27 +1552,15 @@ export default function (pi: ExtensionAPI): void {
           input.onEscape = () => done(undefined);
           rebuildList();
           const container = new Container();
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
-          );
-          container.addChild(
-            new TuiText(theme.fg("accent", theme.bold("Model")), 1, 0),
-          );
-          container.addChild(new Spacer(1));
-          container.addChild(input);
-          container.addChild(listContainer);
-          container.addChild(
-            new TuiText(
-              theme.fg(
-                "dim",
-                "Type to filter · ↑↓ navigate · Enter select · Esc back",
-              ),
-              1,
-              0,
-            ),
-          );
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
+          const body = new Container();
+          body.addChild(input);
+          body.addChild(listContainer);
+          populateMenuFrame(
+            container,
+            theme,
+            "Model",
+            body,
+            "Type to filter · ↑↓ navigate · Enter select · Esc back",
           );
           return {
             get focused() {
