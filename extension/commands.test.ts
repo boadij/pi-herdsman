@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -5173,7 +5173,7 @@ async function managerDelegateAssignmentTest(
       ).find((item) => item.branch === assignment.branch);
       if (
         current?.requiredEvidence?.some(
-          (entry) => entry.name === reviewFile.split("/").at(-1),
+          (entry) => entry.name === basename(reviewFile),
         )
       ) {
         changedSource = true;
