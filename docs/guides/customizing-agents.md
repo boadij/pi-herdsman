@@ -99,6 +99,9 @@ when the role activates or is restored. Repeating `/manager` or `/chief`
 refreshes an active profile after validating it; a failed refresh keeps the
 previous effective profile. A `bodyMode: replace` overlay replaces customizable
 role guidance only. Runtime-owned authority and role contracts remain active.
+Replacing a Manager or Chief definition body changes its operating guidance,
+not its available tool contracts, parameter semantics, runtime state, or
+authorization. Herdsman and Pi supply these independently.
 
 For example, this global Chief overlay enables a registered ordinary tool while
 retaining staff coordination tools:

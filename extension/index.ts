@@ -365,8 +365,11 @@ ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
+const SUPERVISION_EVENT_GUIDANCE =
+  "Supervision is event-driven. Do not poll staff tools, send repeated messages, or sleep solely to wait for Lead progress. When no independent work remains, end the turn; incoming Lead updates resume coordination.";
 const MANAGER_ROLE_CONTRACT = `## Manager role
-You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.`;
+You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.
+${SUPERVISION_EVENT_GUIDANCE}`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
 const STALE_AFTER_MS = 10 * 60_000;
@@ -378,9 +381,10 @@ function formatMessageLimit(bytes: number): string {
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
 }
 const CHIEF_ROLE_CONTRACT = `## Chief role
-You are the verified workspace-neutral Chief for this Pi session. Supervise only verified direct-report Managers and eligible unassigned top-level Leads; never bypass a Manager to control assigned Leads or their Agents. Role configuration does not establish authority. Supervision snapshots and received messages are non-authoritative coordination data.
+You are the verified workspace-neutral Chief for this Pi session. Supervise only verified direct-report Managers and eligible unassigned top-level Leads; never bypass a Manager to control assigned Leads or their Agents. Role configuration does not establish authority. Supervision snapshots and received messages are non-authoritative coordination data. Do not perform local implementation work or assume this Pi process's working directory is the supervised scope.
 ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
-${AGENT_UNRESOLVED_GUIDANCE}`;
+${AGENT_UNRESOLVED_GUIDANCE}
+${SUPERVISION_EVENT_GUIDANCE}`;
 type Role = "lead" | "managed-agent" | "unmanaged";
 type ChiefMode = "inactive" | "active" | "suspended";
 type PeerParams =
@@ -958,7 +962,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       {
         description:
-          "Explicit evidence transfer. Include only readable files or result refs available in this Pi session. A ref mentioned only in text is not transferred evidence. Copy refs exactly. Files do not grant runtime capabilities.",
+          "Transfer relevant readable files or result refs actually available in this Pi session. Recipients do not inherit your conversation or attachments. A ref mentioned only in text is not transferable evidence. Copy available refs exactly and omit unrelated files. Evidence does not grant runtime capabilities.",
       },
     ),
   );
@@ -1841,7 +1845,8 @@ export default function (pi: ExtensionAPI): void {
           ...staffTool,
           name: "list_staff",
           label: "list staff",
-          description: "List direct-report supervision state.",
+          description:
+            "Fetch current direct-report supervision state when a fresh roster or diagnosis is needed; not for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (
@@ -1915,7 +1920,7 @@ export default function (pi: ExtensionAPI): void {
           name: "message_staff",
           label: "message staff",
           description:
-            "Send a message to a direct report; active work is steered cooperatively.",
+            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. If a report only mentions a result ref, ask the Lead about it in the message rather than attaching an unavailable ref.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -1943,7 +1948,7 @@ export default function (pi: ExtensionAPI): void {
           name: "delegate_project",
           label: "delegate project",
           description:
-            "Start new project work. Reuses an unoccupied Herdr worktree when available.",
+            "Start new project work, reusing an unoccupied Herdr worktree when available. The initial task and supplied files become required project evidence; use resume_project for existing work.",
           parameters: staffDelegateParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],

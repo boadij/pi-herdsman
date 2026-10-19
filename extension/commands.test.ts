@@ -2765,15 +2765,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(managerPrompt, undefined);
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /Manager role[\s\S]*Manage project work by branch[\s\S]*delegate_project with a task and optional branch\s+to start new project work\. Use resume_project with its branch to resume existing\s+project work\.[\s\S]*Project execution belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+message_supervisor/i,
-    );
-    assert.match(
-      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /mention the reference in\s+message_staff\.message without attaching it/,
-    );
-    assert.match(
-      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /message_staff\.files for relevant\s+readable local files, canonical result refs already supplied as evidence, or\s+semantic result refs resolvable on the current Pi branch through a direct Agent\s+completion or explicitly imported result binding/,
+      /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Set priorities, review outcomes, resolve decisions, request corrections, and\s+integrate accepted work/i,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -10034,7 +10026,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  Flexible",
-    "Manager auto-start  Global off · Effective off",
+    "Manager auto-start  Global off · Effective off · Project",
     "Context retirement  Global on · Effective on",
     "Message limits",
   ]);
@@ -10659,7 +10651,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  Flexible",
-      "Manager auto-start  Global off · Effective off",
+      "Manager auto-start  Global off · Effective off · Project",
       "Context retirement  Global on · Effective on",
       "Message limits",
     ]);
