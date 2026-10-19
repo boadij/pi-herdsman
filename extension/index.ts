@@ -1920,7 +1920,7 @@ export default function (pi: ExtensionAPI): void {
           name: "message_staff",
           label: "message staff",
           description:
-            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. If a report only mentions a result ref, ask the Lead about it in the message rather than attaching an unavailable ref.",
+            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],

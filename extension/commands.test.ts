@@ -10001,6 +10001,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   const command = pi.commandOptions.get("herdsman");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
+  context.isProjectTrusted = () => false;
   context.hasUI = true;
   context.mode = "rpc";
   context.ui.select = async (label: string, options: string[]) => {
@@ -10026,7 +10027,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  Flexible",
-    "Manager auto-start  Global off · Effective off · Project",
+    "Manager auto-start  Global off · Effective off",
     "Context retirement  Global on · Effective on",
     "Message limits",
   ]);
@@ -10633,6 +10634,7 @@ test("settings navigation exposes message limits and one rough token formatter",
   const prompts: { label: string; options: string[] }[] = [];
   const notices: string[] = [];
   const context = fakeContext() as any;
+  context.isProjectTrusted = () => false;
   context.hasUI = true;
   context.mode = "rpc";
   context.ui.notify = (message: string) => notices.push(message);
@@ -10651,7 +10653,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  Flexible",
-      "Manager auto-start  Global off · Effective off · Project",
+      "Manager auto-start  Global off · Effective off",
       "Context retirement  Global on · Effective on",
       "Message limits",
     ]);

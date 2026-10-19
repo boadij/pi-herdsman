@@ -2040,6 +2040,10 @@ test("active chief describes authoritative remote ask projection", async () => {
     ],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
+  assert.match(
+    tool.description,
+    /Result refs mentioned only in report text are not automatically transferable evidence\. Attach refs only when available; otherwise request follow-up from the direct report in message text\./,
+  );
   assert.doesNotMatch(
     tool.description,
     /staff_(?:list|inspect|transcript)|List direct-report|Read bounded/i,
