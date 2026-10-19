@@ -4702,6 +4702,14 @@ async function runManagerStartupScenario(
           .handler("", ctx);
         await t!.waitFor(() => assert.equal(components.length, 1));
         const overview = components[0];
+        const lines = overview.render(120);
+        assert.match(lines[1].trimStart(), /^Pi Herdsman/u);
+        assert.equal(lines[2].trim(), "");
+        const footer = lines.findIndex((line: string) =>
+          line.includes("Enter actions"),
+        );
+        assert.equal(lines[footer - 1].trim(), "");
+        assert.match(lines[footer].trimStart(), /^Enter actions/u);
         const initial = overview.render(120).join("\n");
         assert.match(initial, /smoke\/recover · active · unknown/);
         assert.deepEqual(

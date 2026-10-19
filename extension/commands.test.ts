@@ -6057,6 +6057,14 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     overview.handleInput(" ");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
+    const peekLines = overview.render(120);
+    assert.match(peekLines[1], /^ Peek ·/u);
+    assert.equal(peekLines[2].trim(), "");
+    const peekFooter = peekLines.findIndex((line: string) =>
+      line.includes("Esc back · Enter focus"),
+    );
+    assert.equal(peekLines[peekFooter - 1].trim(), "");
+    assert.match(peekLines[peekFooter], /^ Esc back/u);
     assert.match(
       overview.render(120).join("\n"),
       /bounded ordinary live output/,
@@ -9022,6 +9030,14 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(customCalls, 1);
   assert.ok(overview);
+  const overviewLines = overview.render(120);
+  assert.match(overviewLines[1], /^ Pi Herdsman/u);
+  assert.equal(overviewLines[2].trim(), "");
+  const overviewFooter = overviewLines.findIndex((line: string) =>
+    line.includes("Space peek"),
+  );
+  assert.equal(overviewLines[overviewFooter - 1].trim(), "");
+  assert.match(overviewLines[overviewFooter], /^ Space peek/u);
   assert.match(overview.render(120).join("\n"), /Pi Herdsman ·/);
   assert.doesNotMatch(overview.render(120).join("\n"), /Pi Chief/);
   assert.doesNotMatch(overview.render(120).join("\n"), /├─|└─/);
@@ -10258,6 +10274,16 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
         line.includes(`Pi Herdsman · v${packageMetadata.version}`),
       ),
     );
+    for (const lines of renders) {
+      assert.equal(lines[2].trim(), "");
+      const footer = lines.findIndex((line) => line.includes("↑↓ navigate"));
+      assert.equal(lines[footer - 1].trim(), "");
+    }
+    // Execution has no help region: exactly one blank row after its last option.
+    const executionFooter = renders[1].findIndex((line) =>
+      line.includes("↑↓ navigate"),
+    );
+    assert.match(renders[1][executionFooter - 2], /Orchestrate/u);
     assert.ok(renders[1]?.some((line) => /^→ Flexible\s+current/u.test(line)));
     assert.ok(renders[2]?.some((line) => /^→ Orchestrate/u.test(line)));
     assert.ok(
@@ -10297,6 +10323,16 @@ test("Herdsman root contextual help follows the selected row", async () => {
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
+    const footerRows = observed.map((lines) =>
+      lines.findIndex((line) => line.includes("↑↓ navigate")),
+    );
+    assert.ok(footerRows.every((row) => row === footerRows[0]));
+    for (const lines of observed) {
+      assert.equal(lines[2].trim(), "");
+      const footer = lines.findIndex((line) => line.includes("↑↓ navigate"));
+      assert.equal(lines[footer - 1].trim(), "");
+      assert.equal(lines[footer - 3].trim(), "");
+    }
     const help = (index: number) =>
       observed[index]?.find((line) =>
         /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and role definitions|Configure future-session/u.test(
@@ -10330,6 +10366,8 @@ test("Herdsman root contextual help follows the selected row", async () => {
 
 test("Definitions contextual help uses the selected definition description", async () => {
   setLeadEnvironment();
+  const noHelpPath = join(PI_AGENTS_DIR, "aaa-no-help.md");
+  realFs.writeFileSync(noHelpPath, "---\nname: aaa-no-help\n---\n");
   const selectedName = "generalist";
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -10394,12 +10432,30 @@ test("Definitions contextual help uses the selected definition description", asy
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
+    const withoutHelp = observed.find((lines) =>
+      lines.some((line) => /^→ aaa-no-help/u.test(line)),
+    );
+    assert.ok(
+      withoutHelp,
+      "mixed-help picker visits the definition without help",
+    );
+    const footerRow = withoutHelp.findIndex((line) =>
+      line.includes("↑↓ navigate"),
+    );
+    assert.equal(withoutHelp[footerRow - 2].trim(), "");
+    assert.ok(
+      observed.every(
+        (lines) =>
+          lines.findIndex((line) => line.includes("↑↓ navigate")) === footerRow,
+      ),
+    );
     assert.equal(typeof expectedHelp, "string");
     assert.ok(
       observed.some((rendered) => rendered.includes(expectedHelp as string)),
       `Expected Definitions help to render ${JSON.stringify(expectedHelp)}`,
     );
   } finally {
+    realFs.rmSync(noHelpPath, { force: true });
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
@@ -10628,7 +10684,15 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
         case 3:
           for (const character of "zulu 46") component.handleInput(character);
           {
+            component.focused = true;
+            assert.equal(component.focused, true);
             const rendered = component.render(200);
+            assert.equal(rendered[2].trim(), "");
+            const footer = rendered.findIndex((line: string) =>
+              line.includes("Type to filter"),
+            );
+            assert.equal(rendered[footer - 1].trim(), "");
+            assert.match(rendered[footer - 2], /claude-sonnet-4-6/u);
             const selected = rendered.find((line: string) =>
               line.trimStart().startsWith("→"),
             );

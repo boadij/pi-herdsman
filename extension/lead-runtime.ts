@@ -104,6 +104,7 @@ import {
 import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
+  populateMenuFrame,
   compactModelToken,
   nameSessionIfUnset,
   buildStatusRows,
@@ -763,7 +764,6 @@ type LeadSupervisionHost = {
   statSync: typeof statSync;
   tui: {
     Container: typeof import("@earendil-works/pi-tui").Container;
-    DynamicBorder: typeof import("@earendil-works/pi-tui").DynamicBorder;
     Key: typeof import("@earendil-works/pi-tui").Key;
     matchesKey: typeof import("@earendil-works/pi-tui").matchesKey;
     SelectList: typeof import("@earendil-works/pi-tui").SelectList;
@@ -5248,45 +5248,20 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               });
             };
             list.onCancel = finish;
-            container.clear();
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) =>
-                theme.fg("border", line),
-              ),
-            );
-            container.addChild(
-              new host.tui.Text(
-                theme.bold(
-                  theme.fg(
-                    "accent",
-                    status === "unavailable"
-                      ? "Pi Herdsman · unavailable"
-                      : host.activeRole() === "manager" && "project" in snapshot
-                        ? `Pi Herdsman · ${snapshot.project}`
-                        : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
-                  ),
-                ),
-                0,
-                0,
-              ),
-            );
-            container.addChild(list);
-            container.addChild(
-              new host.tui.Text(
-                theme.fg(
-                  "muted",
-                  host.activeRole() === "manager"
-                    ? "Enter actions · Esc close"
-                    : "Space peek · Enter focus · Esc close",
-                ),
-                0,
-                0,
-              ),
-            );
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) =>
-                theme.fg("border", line),
-              ),
+            const title =
+              status === "unavailable"
+                ? "Pi Herdsman · unavailable"
+                : host.activeRole() === "manager" && "project" in snapshot
+                  ? `Pi Herdsman · ${snapshot.project}`
+                  : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`;
+            populateMenuFrame(
+              container,
+              theme,
+              title,
+              list,
+              host.activeRole() === "manager"
+                ? "Enter actions · Esc close"
+                : "Space peek · Enter focus · Esc close",
             );
             renderedLeads = [
               status,
@@ -5301,43 +5276,20 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             ].join("\0");
           };
           const showPeek = (): void => {
-            container.clear();
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) =>
-                theme.fg("border", line),
-              ),
+            if (!peekLead) return;
+            const body = new host.tui.Text(
+              host
+                .renderSupervisionPeek(peekLead, peekEvidence, 10_000)
+                .join("\n"),
+              1,
+              0,
             );
-            if (peekLead)
-              container.addChild(
-                new host.tui.Text(
-                  theme.bold(
-                    theme.fg("accent", `Peek · ${peekLead.displayName}`),
-                  ),
-                  0,
-                  0,
-                ),
-              );
-            if (peekLead)
-              container.addChild(
-                new host.tui.Text(
-                  host
-                    .renderSupervisionPeek(peekLead, peekEvidence, 10_000)
-                    .join("\n"),
-                  0,
-                  0,
-                ),
-              );
-            container.addChild(
-              new host.tui.Text(
-                theme.fg("muted", "Esc back · Enter focus · Ctrl+C close"),
-                0,
-                0,
-              ),
-            );
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) =>
-                theme.fg("border", line),
-              ),
+            populateMenuFrame(
+              container,
+              theme,
+              `Peek · ${peekLead.displayName}`,
+              body,
+              "Esc back · Enter focus · Ctrl+C close",
             );
           };
           const component = {
