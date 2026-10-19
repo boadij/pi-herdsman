@@ -6,9 +6,10 @@ Any coordination operation whose schema accepts `files` uses it as the explicit
 evidence channel across session boundaries.
 
 Pass user-supplied or already-available artifacts through `files` when they are
-relevant to what the recipient must do or decide and are not already registered
-as required evidence for that recipient's verified assignment. Do not assume
-the recipient inherits arbitrary conversation or attachments. Preserve exact
+relevant to what the recipient must do or decide, unless the recipient already
+inherits the same evidence version as required evidence. Forward changed
+versions explicitly. Do not assume the recipient inherits arbitrary
+conversation or attachments. Preserve exact
 supplied result refs when forwarding them and omit unrelated evidence. `files`
 carries evidence, not runtime capability.
 

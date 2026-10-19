@@ -37,8 +37,9 @@ export const MANAGED_AGENT_BOOTSTRAP_EVENT =
 export const FILE_HANDOFF_GUIDANCE =
   "Pass user-supplied or already-available artifacts relevant to the " +
   "recipient's assignment, decisions, integration, validation, or onward " +
-  "handoff through `files`, except evidence already registered as required " +
-  "for that recipient's verified assignment. Do not assume the recipient " +
+  "handoff through `files`, unless the recipient already inherits the same " +
+  "evidence version as required evidence. Forward changed versions " +
+  "explicitly. Do not assume the recipient " +
   "inherits the sender's conversation or arbitrary attachments. Preserve " +
   "exact supplied result refs when forwarding them and omit unrelated " +
   "evidence. `files` carries evidence, not runtime capability.";

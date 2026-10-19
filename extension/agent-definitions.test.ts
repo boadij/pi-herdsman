@@ -68,12 +68,26 @@ test("bundled definition bodies do not prescribe coordination APIs", () => {
     ...discoverRoleDefinitions(),
     ...discoverAgentDefinitions(),
   ]);
+  const contractToolNames = [
+    ...AGENT_COORDINATION_TOOLS,
+    "ask_owner",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
+    "delegate_project",
+    "resume_project",
+    "stop_lead",
+    "remove_worktree",
+  ];
+  const contractPattern = new RegExp(
+    `\\b(?:${contractToolNames.join("|")})\\b|\\.files\\b|retain:\\s*(?:true|false)`,
+  );
   for (const { name, body } of definitions)
-    assert.doesNotMatch(
-      body,
-      /\b(?:delegate_agent|continue_agent|delegate_project|resume_project|message_supervisor|message_staff)\b|\.files\b|retain:\s*(?:true|false)/,
-      name,
-    );
+    assert.doesNotMatch(body, contractPattern, name);
 });
 
 test("parses scalar frontmatter fields and applies defaults", () => {

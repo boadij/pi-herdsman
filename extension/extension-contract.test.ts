@@ -3789,7 +3789,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       const tool = pi.tools.find((candidate) => candidate.name === name)!;
       assert.match(
         tool.promptGuidelines.join(" "),
-        /except evidence already registered as required for that recipient's verified assignment/,
+        /unless the recipient already inherits the same evidence version as required evidence\. Forward changed versions explicitly\./,
       );
     }
   } finally {
