@@ -1660,7 +1660,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSection = section;
         const sectionDefinitions =
           section === "agents" ? "definitions" : "roleDefinitions";
-        const selectedDefinitionsForSection = selectedDefinitions[section];
         definitionList: while (true) {
           const loaded = await loadDefinitions();
           const availableDefinitions = loaded[sectionDefinitions];
@@ -1701,7 +1700,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ctx,
             section === "agents" ? "Agent definitions" : "Role profiles",
             options,
-            selectedDefinitionsForSection,
+            selectedDefinitions[section],
           );
           if (selected === undefined) break definitionList;
           if (!selected) continue;
@@ -2119,22 +2118,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       while (true) {
         const config = host.readConfig();
         const project = loadProjectState();
-        let effective: ReturnType<typeof host.readConfig> | undefined;
-        if (project.trusted && !("error" in project)) {
-          try {
-            effective = host.readEffectiveConfig(ctx);
-          } catch {
-            /* project value remains unavailable */
-          }
-        }
         const projectDescription = (
           key: "autoActivateManager" | "contextRetirement",
         ) =>
           !project.trusted
-            ? "Project value unavailable (untrusted)"
-            : "error" in project || !effective
+            ? `Effective ${config[key] ? "on" : "off"} (global; untrusted project)`
+            : "error" in project
               ? "Project value unavailable"
-              : `Effective ${effective![key] ? "on" : "off"}${Object.hasOwn(project.overrides, key) ? " (project)" : " (global)"}`;
+              : `Effective ${(Object.hasOwn(project.overrides, key) ? project.overrides[key] : config[key]) ? "on" : "off"}${Object.hasOwn(project.overrides, key) ? " (project)" : " (global)"}`;
         const selected = await host.selectMenu(
           ctx,
           "Settings",

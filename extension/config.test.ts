@@ -183,7 +183,11 @@ test("project overrides update one trusted preference and preserve Pi settings",
       piHerdsman: { autoActivateManager: false, contextRetirement: true },
     });
     assert.equal(readEffectiveConfig(ctx).autoActivateManager, false);
-    assert.equal(realFs.statSync(path).mode & 0o777, 0o600);
+    assert.equal(realFs.statSync(path).isFile(), true);
+    realFs.accessSync(path, realFs.constants.R_OK | realFs.constants.W_OK);
+    if (process.platform !== "win32") {
+      assert.equal(realFs.statSync(path).mode & 0o777, 0o600);
+    }
 
     realFs.writeFileSync(
       path,
@@ -198,7 +202,11 @@ test("project overrides update one trusted preference and preserve Pi settings",
       theme: "dark",
       piHerdsman: { autoActivateManager: false, contextRetirement: false },
     });
-    assert.equal(realFs.statSync(path).mode & 0o777, 0o640);
+    assert.equal(realFs.statSync(path).isFile(), true);
+    realFs.accessSync(path, realFs.constants.R_OK | realFs.constants.W_OK);
+    if (process.platform !== "win32") {
+      assert.equal(realFs.statSync(path).mode & 0o777, 0o640);
+    }
 
     updateProjectOverride(ctx, "autoActivateManager", undefined);
     assert.deepEqual(JSON.parse(realFs.readFileSync(path, "utf8")), {

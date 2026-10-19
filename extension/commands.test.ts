@@ -1753,7 +1753,13 @@ const writePeerLeadRecord = (runtime: any, record: any) =>
     group: record.group ?? null,
     build: record.build ?? HERDSMAN_BUILD,
   });
-const { readConfig, updateConfig } = await import("./config.ts");
+const {
+  readConfig,
+  readEffectiveConfig,
+  readProjectOverrides,
+  updateConfig,
+  updateProjectOverride,
+} = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find(
     (candidate) =>
@@ -10027,6 +10033,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
+  context.isProjectTrusted = () => false;
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     if (prompts.length === 1)
@@ -10050,8 +10057,8 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  Flexible",
-    "Manager auto-start  Global off · Effective off (project)",
-    "Context retirement  Global on · Effective on (global)",
+    "Manager auto-start  Global off · Effective off (global; untrusted project)",
+    "Context retirement  Global on · Effective on (global; untrusted project)",
     "Message limits",
     "Project overrides…",
   ]);
@@ -10670,6 +10677,7 @@ test("settings navigation exposes message limits and one rough token formatter",
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
+  context.isProjectTrusted = () => false;
   context.ui.notify = (message: string) => notices.push(message);
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
@@ -10686,8 +10694,8 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  Flexible",
-      "Manager auto-start  Global off · Effective off (project)",
-      "Context retirement  Global on · Effective on (global)",
+      "Manager auto-start  Global off · Effective off (global; untrusted project)",
+      "Context retirement  Global on · Effective on (global; untrusted project)",
       "Message limits",
       "Project overrides…",
     ]);
@@ -10785,6 +10793,193 @@ test("Manager auto-start menu toggle does not change the running role", async ()
     updateConfig("autoActivateManager", undefined);
     await pi.events.get("session_shutdown")?.[0]();
   }
+});
+
+test("Project override menu edits Off then Inherit without changing global Manager auto-start", async () => {
+  const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
+  const menus: { title: string; selected?: string }[] = [];
+  const values: string[] = [];
+  const overrides: { autoActivateManager?: boolean } = {};
+  const global = { ...readConfig(), autoActivateManager: true };
+  const answers = [
+    "project-overrides",
+    "autoActivateManager",
+    "off",
+    undefined,
+    "project-overrides",
+    "autoActivateManager",
+    "inherit",
+    undefined,
+    undefined,
+  ];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => global,
+    readProjectOverrides: () => ({ ...overrides }),
+    updateProjectOverride: (
+      _ctx: unknown,
+      _key: string,
+      value: boolean | undefined,
+    ) => {
+      if (value === undefined) delete overrides.autoActivateManager;
+      else overrides.autoActivateManager = value;
+      values.push(value === undefined ? "inherit" : value ? "on" : "off");
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      const answer = answers.shift();
+      menus.push({
+        title,
+        selected: items.find(({ value }) => value === answer)?.value,
+      });
+      return answer;
+    },
+  } as any);
+  await runtime.openSettingsMenu({
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  } as any);
+  assert.deepEqual(values, ["off", "inherit"]);
+  assert.equal(Object.hasOwn(overrides, "autoActivateManager"), false);
+  assert.equal(global.autoActivateManager, true);
+  assert.deepEqual(
+    menus.map(({ title }) => title),
+    [
+      "Settings",
+      "Project overrides",
+      "Manager auto-start",
+      "Project overrides",
+      "Settings",
+      "Project overrides",
+      "Manager auto-start",
+      "Project overrides",
+      "Settings",
+    ],
+  );
+});
+
+test("registered RPC command edits project Manager auto-start Off then Inherit", async () => {
+  setLeadEnvironment();
+  const previousGlobal = readConfig().autoActivateManager;
+  const cwd = mkdtempSync(join(tmpdir(), "herdsman-project-menu-rpc-"));
+  updateConfig("autoActivateManager", true);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = cwd;
+  context.hasUI = true;
+  context.mode = "rpc";
+  let selections = [
+    "Settings",
+    "Project overrides…",
+    "Manager auto-start",
+    "Off for this project",
+    undefined,
+    undefined,
+    undefined,
+  ];
+  const prompts: { label: string; options: string[] }[] = [];
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
+    const selection = selections.shift();
+    return options.find((option) => option === selection);
+  };
+  try {
+    await pi.commandOptions.get("herdsman").handler("", context);
+    assert.deepEqual(prompts[3]?.options, [
+      "Inherit global (on)",
+      "On for this project",
+      "Off for this project",
+    ]);
+    assert.equal(readProjectOverrides(context).autoActivateManager, false);
+    assert.equal(readConfig().autoActivateManager, true);
+    assert.equal(readEffectiveConfig(context).autoActivateManager, false);
+
+    selections = [
+      "Settings",
+      "Project overrides…",
+      "Manager auto-start",
+      "Inherit global (on)",
+      undefined,
+      undefined,
+      undefined,
+    ];
+    await pi.commandOptions.get("herdsman").handler("", context);
+    assert.equal(
+      Object.hasOwn(readProjectOverrides(context), "autoActivateManager"),
+      false,
+    );
+    assert.equal(readConfig().autoActivateManager, true);
+    assert.equal(readEffectiveConfig(context).autoActivateManager, true);
+    assert.deepEqual(
+      prompts.filter(({ label }) => label === "Manager auto-start").length,
+      2,
+    );
+  } finally {
+    updateConfig("autoActivateManager", previousGlobal);
+    await pi.events.get("session_shutdown")?.[0]();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Settings isolates malformed project settings and untrusted projects inherit global values", async () => {
+  const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
+  const menus: { label: string; options: string[] }[] = [];
+  const notices: string[] = [];
+  const updates: boolean[] = [];
+  let trusted = true;
+  let reads = 0;
+  let settingSelection = 0;
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({ ...readConfig(), autoActivateManager: true }),
+    readProjectOverrides: () => {
+      reads++;
+      throw new Error("malformed project settings");
+    },
+    updateConfig: (_key: string, value: boolean) => updates.push(value),
+    selectMenu: async (_ctx: unknown, label: string, items: any[]) => {
+      menus.push({
+        label,
+        options: items.map(({ label, description }) =>
+          description ? `${label}  ${description}` : label,
+        ),
+      });
+      if (label === "Settings")
+        return settingSelection++ === 0
+          ? trusted
+            ? "auto-activate-manager"
+            : "project-overrides"
+          : undefined;
+      return undefined;
+    },
+  } as any);
+  const context = {
+    isProjectTrusted: () => trusted,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any;
+  await runtime.openSettingsMenu(context);
+  assert.match(
+    menus[0]?.options[1] ?? "",
+    /Global on · Project value unavailable/u,
+  );
+  assert.deepEqual(updates, [false], "global settings remain editable");
+  assert.equal(
+    reads,
+    2,
+    "the trusted settings menu reloads its project snapshot after edits",
+  );
+
+  trusted = false;
+  settingSelection = 0;
+  menus.length = 0;
+  await runtime.openSettingsMenu(context);
+  assert.match(
+    menus[0]?.options[1] ?? "",
+    /Effective on \(global; untrusted project\)/u,
+  );
+  assert.equal(reads, 2, "untrusted projects do not read project settings");
+  assert.deepEqual(notices, [
+    "Global Manager auto-start: off",
+    "Project overrides are unavailable because this project is not trusted.",
+  ]);
 });
 
 test("message limit edits stay in the submenu with the edited field selected", async () => {
@@ -12478,6 +12673,47 @@ test("Definitions separates Agent definitions and preserves provenance", async (
     for (const definitionPath of definitionPaths)
       realFs.rmSync(definitionPath, { force: true });
   }
+});
+
+test("Definitions retains the last selected Agent when returning to its list", async () => {
+  const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
+  const { RESERVED_ROLE_DEFINITION_NAMES } =
+    await import("./agent-definitions.ts");
+  const second = { name: "second", frontmatter: { name: "second" } } as any;
+  const first = { name: "first", frontmatter: { name: "first" } } as any;
+  const roleDefinitions = RESERVED_ROLE_DEFINITION_NAMES.map((name) => ({
+    name,
+    frontmatter: { name },
+  })) as any[];
+  const selections: { title: string; selected?: string }[] = [];
+  const results = ["agents", "second", undefined, undefined, undefined];
+  const runtime = createLeadCommandRuntime({
+    contextAgentDefinitions: async () => ({
+      definitions: [first, second],
+      roleDefinitions,
+      projectTrusted: true,
+    }),
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      _items: any[],
+      selected?: string,
+    ) => {
+      selections.push({ title, selected });
+      return results.shift();
+    },
+    agentDefinitionEnabled: () => true,
+    getThinkingLevel: () => "high",
+  } as any);
+  await runtime.openDefinitionsMenu({
+    ui: { notify: () => undefined },
+  } as any);
+  assert.deepEqual(
+    selections
+      .filter(({ title }) => title === "Agent definitions")
+      .map(({ selected }) => selected),
+    [undefined, "second"],
+  );
 });
 
 test("lead agents stop reports an empty owned inventory safely", async () => {
