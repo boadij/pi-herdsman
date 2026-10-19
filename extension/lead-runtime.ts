@@ -217,6 +217,13 @@ type LeadTransitionHost = {
 };
 
 type LeadRoleTransitionHost = LeadTransitionHost & {
+  captureInheritedTools?(): void;
+  inheritedProjection?():
+    { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
+  setInheritedProjection?(
+    projection:
+      { mode: LeadExecutionMode; excluded: readonly string[] } | undefined,
+  ): void;
   ownedAgentManagementTools(ctx: ExtensionContext): string[];
   supervisoryTools(
     ctx: ExtensionContext,
@@ -874,6 +881,9 @@ export function createLeadToolState(
     },
   };
 }
+
+const sameToolSelection = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length && left.every((name, i) => name === right[i]);
 
 export type LeadExecutionSessionState = Readonly<{
   mode: LeadExecutionMode;
@@ -2538,6 +2548,8 @@ export function registerLeadRuntime(
     | undefined;
   let leadExecutionPending = false;
   let supervisoryProfile: SupervisoryProfile | undefined;
+  let inheritedProjection:
+    { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
   const prepareSupervisoryProfile = (
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -2752,6 +2764,29 @@ export function registerLeadRuntime(
       mode,
       leadTools: [...tools],
     });
+  };
+  const captureInheritedTools = (): void => {
+    const projection = inheritedProjection;
+    if (!projection) return;
+
+    const saved = leadToolState.getLeadTools() ?? [];
+    const excluded = (name: string) =>
+      projection.excluded.some((pattern) => matchesToolPattern(pattern, name));
+    const active = leadToolState
+      .normalizeBaseTools(pi.getActiveTools())
+      .filter((name) => !excluded(name));
+    const next = leadToolState.normalizeBaseTools([
+      ...active,
+      ...saved.filter(excluded),
+    ]);
+    if (sameToolSelection(saved, next)) {
+      inheritedProjection = undefined;
+      return;
+    }
+
+    persistLeadExecution(projection.mode, next);
+    leadToolState.setLeadTools(next);
+    inheritedProjection = undefined;
   };
   let roleTransitions!: ReturnType<typeof createLeadRoleTransitions>;
   let identityRuntime!: ReturnType<typeof createLeadIdentityRuntime>;
@@ -3183,6 +3218,7 @@ export function registerLeadRuntime(
       });
   };
   const persistRole = (role: SessionRole): void => {
+    captureInheritedTools();
     const tools = leadToolState.getLeadTools();
     if (!tools) throw new Error("Lead tool baseline is unavailable");
     pi.appendEntry("pi-herdsman-role", { role, leadTools: [...tools] });
@@ -3256,6 +3292,20 @@ export function registerLeadRuntime(
     setCoordinationHealthy: (healthy: boolean) =>
       coordinationRuntime.setCoordinationHealthy(healthy),
     normalizeBaseTools: leadToolState.normalizeBaseTools,
+    captureInheritedTools,
+    inheritedProjection: () =>
+      leadExecution?.valid &&
+      !leadExecution.managed &&
+      leadExecution.definition.frontmatter.tools === undefined
+        ? {
+            mode: leadExecution.mode,
+            excluded: configuredToolPolicy(leadExecution.definition, [])
+              .excluded,
+          }
+        : undefined,
+    setInheritedProjection: (projection) => {
+      inheritedProjection = projection;
+    },
     appendRegisteredTools: leadToolState.appendRegisteredTools,
     normalizeLeadTools: leadToolState.normalizeLeadTools,
     executionTools,
@@ -4070,18 +4120,11 @@ export function registerLeadRuntime(
     if (leadExecution?.managed) await restoreLeadExecution(ctx);
     await ctx.waitForIdle();
     const definition = resolveExecutionDefinition(ctx, mode);
+    captureInheritedTools();
     const saved =
       leadToolState.getLeadTools() ??
       leadToolState.normalizeBaseTools(pi.getActiveTools());
-    const baseline =
-      leadExecution?.mode === "flexible" &&
-      !leadExecution.managed &&
-      leadExecution.valid &&
-      leadExecution.definition.frontmatter.tools === undefined &&
-      leadExecution.definition.frontmatter.excludeTools === undefined &&
-      activeLeadRole(leadRuntime) === "lead"
-        ? leadToolState.normalizeBaseTools(pi.getActiveTools())
-        : [...saved];
+    const baseline = [...saved];
     const targetTools = leadToolState.projectLeadTools(baseline, definition);
     const previousExecution = leadExecution;
     const previousTools = pi.getActiveTools();
@@ -4092,6 +4135,15 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, baseline);
       leadToolState.setLeadTools(baseline);
       leadExecution = { mode, definition, valid: true, managed: false };
+      inheritedProjection =
+        shouldActivate &&
+        definition.frontmatter.tools === undefined &&
+        sameToolSelection(pi.getActiveTools(), targetTools)
+          ? {
+              mode,
+              excluded: configuredToolPolicy(definition, []).excluded,
+            }
+          : undefined;
       statusRuntime.requestRefresh();
     } catch (error) {
       leadExecution = previousExecution;
@@ -4150,6 +4202,7 @@ export function registerLeadRuntime(
     return true;
   };
   const reconcileBranchExecution = async (ctx: ExtensionContext) => {
+    inheritedProjection = undefined;
     let saved: LeadExecutionSessionState | undefined;
     try {
       saved = sessionLeadExecutionState(ctx.sessionManager.getBranch());
@@ -4264,9 +4317,10 @@ export function registerLeadRuntime(
   pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
     agentEvents.toolCall(event, ctx),
   );
-  pi.on("session_start", (_event: unknown, ctx: ExtensionContext) =>
-    sessionStart.sessionStart(ctx),
-  );
+  pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
+    inheritedProjection = undefined;
+    return sessionStart.sessionStart(ctx);
+  });
   pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
     if (!roleTransitions.chiefModeInactive()) return;
     if (!options.hasPane()) return;
@@ -4283,12 +4337,14 @@ export function registerLeadRuntime(
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
     options.queueLeadPresentation(ctx),
   );
-  pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) =>
-    sessionTree.sessionTree(ctx),
-  );
-  pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) =>
-    shutdown.shutdown(ctx),
-  );
+  pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
+    inheritedProjection = undefined;
+    return sessionTree.sessionTree(ctx);
+  });
+  pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) => {
+    inheritedProjection = undefined;
+    return shutdown.shutdown(ctx);
+  });
   return {
     roleTransitions,
     publishLeadRole,
@@ -12659,6 +12715,18 @@ export function createLeadRoleTransitions(
   };
   const reconcileRoleTools = (): void => {
     if (host.controllerScope?.kind !== "root") return;
+    try {
+      host.captureInheritedTools?.();
+    } catch (error) {
+      if (state.leadContext)
+        host.appendDurableError(
+          host.pi,
+          state.leadContext,
+          "pi_herdsman_state_error",
+          error,
+        );
+      return;
+    }
     if (state.controllerRole === "manager" && !state.roleSuspended) {
       let held = false;
       try {
@@ -12686,6 +12754,7 @@ export function createLeadRoleTransitions(
       }
     }
     if (state.roleSuspended || state.chiefMode === "suspended") {
+      host.setInheritedProjection?.(undefined);
       const baseline = host.normalizeBaseTools(
         host.getLeadTools() ?? host.pi.getActiveTools(),
       );
@@ -12696,6 +12765,7 @@ export function createLeadRoleTransitions(
       return;
     }
     if (activeLeadRole(state) === "chief") {
+      host.setInheritedProjection?.(undefined);
       host.pi.setActiveTools(
         (state.leadContext &&
           host.supervisoryTools(state.leadContext, "chief")) ?? [
@@ -12704,17 +12774,29 @@ export function createLeadRoleTransitions(
       );
       return;
     }
+    if (activeLeadRole(state) === "manager") {
+      host.setInheritedProjection?.(undefined);
+      const managerTools = (state.leadContext &&
+        host.supervisoryTools(state.leadContext, "manager")) ?? [
+        ...host.managerTools,
+      ];
+      if (!sameToolSelection(host.pi.getActiveTools(), managerTools))
+        host.pi.setActiveTools(managerTools);
+      return;
+    }
     const current = host.pi.getActiveTools();
     const source = host.getLeadTools()
       ? [...host.getLeadTools()!]
       : host.normalizeBaseTools(current);
-    host.pi.setActiveTools(
-      activeLeadRole(state) === "manager"
-        ? ((state.leadContext &&
-            host.supervisoryTools(state.leadContext, "manager")) ?? [
-            ...host.managerTools,
-          ])
-        : (host.executionTools?.() ?? host.normalizeLeadTools(source)),
+    const next = host.executionTools?.() ?? host.normalizeLeadTools(source);
+    if (!sameToolSelection(current, next)) host.pi.setActiveTools(next);
+    const projection = host.inheritedProjection?.();
+    host.setInheritedProjection?.(
+      !state.roleSuspended &&
+        projection !== undefined &&
+        sameToolSelection(host.pi.getActiveTools(), next)
+        ? projection
+        : undefined,
     );
   };
   const resolveControllerRole = (

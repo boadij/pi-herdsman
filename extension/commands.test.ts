@@ -991,6 +991,138 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
   }
 });
 
+test("live Flexible tool changes are inherited while exclusions stay saved", async (t) => {
+  setLeadEnvironment();
+  const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi", "agents", "flexible-lead.md"),
+    "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
+  );
+  const entries: any[] = [];
+  const pi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "history" }, { name: "notes" }],
+    entries,
+  });
+  const context = fakeContext(entries) as any;
+  context.cwd = cwd;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    pi.pi.setActiveTools(["read", "history", "notes"]);
+    await agentTool(pi, "delegate").execute(
+      "late-tool-change",
+      {
+        definition: "agent",
+        task: "verify inherited tools survive reconciliation",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      "read",
+      "history",
+      "notes",
+      "bash",
+    ]);
+    pi.pi.setActiveTools(["read", "history", ...leadTools]);
+    await agentTool(pi, "delegate").execute(
+      "removed-tool-change",
+      { definition: "agent", task: "verify removed tools stay removed" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history", ...leadTools]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      "read",
+      "history",
+      "bash",
+    ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("failed inherited-tool persistence keeps the live selection and retries", async (t) => {
+  setLeadEnvironment();
+  const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-failure-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi", "agents", "flexible-lead.md"),
+    "---\nname: flexible-lead\n---\nflexible\n",
+  );
+  const entries: any[] = [];
+  const pi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "history" }],
+    entries,
+  });
+  const context = fakeContext(entries) as any;
+  context.cwd = cwd;
+  const appendEntry = pi.pi.appendEntry;
+  let failPersistence = false;
+  let persistenceAttempts = 0;
+  pi.pi.appendEntry = (type: string, data: unknown) => {
+    if (type === "pi-herdsman-lead-execution" && failPersistence) {
+      persistenceAttempts++;
+      throw new Error("simulated baseline persistence failure");
+    }
+    appendEntry(type, data);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    pi.pi.setActiveTools(["read", "history"]);
+
+    failPersistence = true;
+    await agentTool(pi, "delegate").execute(
+      "failed-tool-capture",
+      {
+        definition: "agent",
+        task: "exercise failed inherited-tool persistence",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    assert.ok(persistenceAttempts > 0);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history"]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      "read",
+      "bash",
+    ]);
+
+    failPersistence = false;
+    await agentTool(pi, "delegate").execute(
+      "retry-tool-capture",
+      { definition: "agent", task: "retry inherited-tool persistence" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "history", ...leadTools]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+      "read",
+      "history",
+    ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("session tree navigation restores each branch's execution mode, baseline, and guidance", async () => {
   setLeadEnvironment();
   const branchEntry = (mode: string, leadTools: string[]) => [
@@ -1059,6 +1191,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   const baseline = ["read", "bash"];
   const pi = fakeChiefPi({
     activeTools: baseline,
+    allTools: [{ name: "history" }, { name: "notes" }],
     exec: (_command, args) =>
       args[0] === "workspace" && args[1] === "get"
         ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
@@ -1144,6 +1277,21 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       ...baseline,
     ]);
+    pi.pi.setActiveTools([...baseline, "history", "notes", ...leadTools]);
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+      ...baseline,
+      "history",
+      "notes",
+    ]);
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: [read]\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
@@ -1163,11 +1311,21 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     const refresh = pi.commandOptions.get("manager").handler("", context);
     await waiting;
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
     releaseIdle();
     await refresh;
     assert.ok(notices.some((message) => message.includes("mode changed")));
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      "history",
+      "notes",
+      ...leadTools,
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -2446,6 +2604,9 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
       [
         ...new Set([
           ...initialTools,
+          ...(Array.isArray(options.allTools)
+            ? options.allTools.map((tool: any) => tool.name)
+            : []),
           "read",
           "bash",
           "ls",
@@ -7927,6 +8088,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   pi.pi.setActiveTools = (next: string[]) => {
     if (next.includes("list_staff")) {
       activationAttempted = true;
+      setActiveTools(next);
       throw new Error("Chief activation failed");
     }
     if (
