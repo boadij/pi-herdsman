@@ -3120,7 +3120,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(managerPrompt, undefined);
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Set priorities, review outcomes, resolve decisions, request corrections, and\s+integrate accepted work/i,
+      /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Leave technical investigation, implementation, review, validation, and\s+integration to that Lead and its Agents rather than doing or delegating\s+the work yourself/i,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
