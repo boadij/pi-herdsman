@@ -1258,6 +1258,77 @@ test("project Lead observes Manager availability across turnover without exposin
       ),
       false,
     );
+    const assignmentPath = projectAssignmentPath(
+      runtime,
+      "repo-key",
+      assignment.branch,
+    );
+    writeFileSync(assignmentPath, "{ malformed assignment");
+    try {
+      await assert.rejects(
+        pi.tools
+          .find((tool) => tool.name === "message_supervisor")!
+          .execute(
+            "message",
+            { message: "LOOKUP_FAILURE" },
+            undefined,
+            undefined,
+            ctx,
+          ),
+        (
+          error: Error & { detail?: { category?: string }; cause?: unknown },
+        ) => {
+          assert.match(error.message, /project assignment/u);
+          assert.equal(error.detail?.category, "internal_failure");
+          assert.equal((error as any).cause instanceof Error, true);
+          assert.equal((error as any).cause.message, error.message);
+          return true;
+        },
+      );
+      assert.equal(
+        listProjectMessages(runtime, "repo-key", assignment.branch).some(
+          (message) => message.text === "LOOKUP_FAILURE",
+        ),
+        false,
+      );
+    } finally {
+      writeProjectAssignment(runtime, assignment);
+    }
+    const messagesDirectory = assignmentPath.replace(/\.json$/u, ".messages");
+    const messagesBackup = `${messagesDirectory}.backup`;
+    realFs.renameSync(messagesDirectory, messagesBackup);
+    writeFileSync(messagesDirectory, "block directory creation");
+    try {
+      await assert.rejects(
+        pi.tools
+          .find((tool) => tool.name === "message_supervisor")!
+          .execute(
+            "message",
+            { message: "PUBLICATION_FAILURE" },
+            undefined,
+            undefined,
+            ctx,
+          ),
+        (
+          error: Error & { detail?: { category?: string }; cause?: unknown },
+        ) => {
+          assert.match(error.message, /ENOTDIR|EISDIR/u);
+          assert.equal(error.detail?.category, "internal_failure");
+          assert.equal((error as any).cause instanceof Error, true);
+          assert.match((error as any).cause.message, /ENOTDIR|EISDIR/u);
+          return true;
+        },
+      );
+    } finally {
+      realFs.rmSync(messagesDirectory, { force: true });
+      realFs.renameSync(messagesBackup, messagesDirectory);
+    }
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", assignment.branch).some(
+        (message) => message.text === "PUBLICATION_FAILURE",
+      ),
+      false,
+    );
     replacement.release();
     replacement = undefined;
   } finally {

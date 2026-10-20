@@ -1375,7 +1375,11 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
         toolCallId: "PRIVATE_CALL_ID",
         isError: true,
         details: {
-          error: { category: "agent_busy", message: "PRIVATE_ERROR" },
+          error: {
+            category: "internal_failure",
+            message: "PRIVATE_ERROR",
+            cause: "PRIVATE_CAUSE",
+          },
         },
         content: "PRIVATE_RESULT_BODY",
       },
@@ -1390,10 +1394,14 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   assert.deepEqual(correlated, {
     supervisorCallObserved: true,
     supervisorResultState: "error",
-    supervisorErrorCategory: "agent_busy",
+    supervisorErrorCategory: "internal_failure",
   });
+  assert.doesNotMatch(
+    JSON.stringify(correlated),
+    /PRIVATE_ERROR|PRIVATE_CAUSE/u,
+  );
   const unknownCategory = supervisorMessageDiagnostics(
-    contents.replace('"agent_busy"', '"PRIVATE_UNLISTED_CATEGORY"'),
+    contents.replace('"internal_failure"', '"PRIVATE_UNLISTED_CATEGORY"'),
     "MANAGER_HANDOFF_READY",
   );
   assert.equal(unknownCategory.supervisorErrorCategory, "tool_error");
@@ -1402,7 +1410,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     /PRIVATE_ERROR|PRIVATE_UNLISTED/u,
   );
   const mappedSupervisorError = supervisorMessageDiagnostics(
-    contents.replace('"agent_busy"', '"invalid_request"'),
+    contents.replace('"internal_failure"', '"invalid_request"'),
     "MANAGER_HANDOFF_READY",
   );
   assert.equal(

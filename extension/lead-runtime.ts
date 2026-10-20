@@ -9726,6 +9726,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         rollbackOccurred: false,
         retryAttempted: false,
       });
+    const boundaryError = (error: unknown): OperationError => {
+      if (error instanceof OperationError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const wrapped = structuredError("internal_failure", message);
+      Object.defineProperty(wrapped, "cause", { value: error });
+      return wrapped;
+    };
     if (controllerScope.kind !== "root" || leadRuntime.chiefMode !== "inactive")
       throw structuredError(
         "invalid_request",
@@ -9748,14 +9755,29 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const sessionId = ctx.sessionManager.getSessionId();
       const scope =
         activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
-      const assignment = scope && projectAssignmentForScope(scope, sessionId);
+      let assignment: ProjectAssignment | undefined;
+      try {
+        assignment = scope && projectAssignmentForScope(scope, sessionId);
+      } catch (error) {
+        throw boundaryError(error);
+      }
       if (assignment) {
-        const published = await publishProjectMessage(
+        const files = resolveMessageFiles(
           ctx,
-          assignment,
-          params.message,
-          resolveMessageFiles(ctx, params.files, "message_supervisor"),
+          params.files,
+          "message_supervisor",
         );
+        let published: ProjectMessage | undefined;
+        try {
+          published = await publishProjectMessage(
+            ctx,
+            assignment,
+            params.message,
+            files,
+          );
+        } catch (error) {
+          throw boundaryError(error);
+        }
         if (!published)
           throw structuredError(
             "invalid_request",
