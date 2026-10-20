@@ -32,13 +32,11 @@ delegation is disabled.
   "definition": "implementer",
   "label": "approved-change",
   "task": "Implement the approved change",
-  "files": ["result:reviewer#2"],
-  "retain": true
+  "files": ["result:reviewer#2"]
 }
 ```
 
-Call `delegate_agent` with `definition`, `task`, and optional `label`, `files`,
-and `retain`. The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets
+Call `delegate_agent` with `definition`, `task`, and optional `label` and `files`. The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets
 the requested logical agent label; an existing live-label collision fails.
 Fresh delegation runs in the calling controller's cwd.
 The definition is resolved from the effective roster and delegating agent
@@ -47,17 +45,17 @@ still require trusted project approval. A fresh delegation starts a new Pi
 session.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
-`retain` defaults to `false`; omitted or false means `files` apply only to this
-handoff. With `retain: true`, the supplied files become required evidence for
-future descendants only when the caller has verified assignment authority:
-an assigned Lead adds them to the project assignment, while an eligible
-managed Agent adds them only to its local assignment. Task text is not retained
-by this operation. Inherited requirements remain project-owned and cannot be
-removed or changed by a managed Agent. Retention validates authority and
-evidence and fails explicitly rather than falling back to an ordinary
-delegation; if retention is persisted but delivery fails, the result reports
-that partial outcome. A result or file is retained only when explicitly
-included in `files` with `retain: true`.
+Root controllers do not expose or accept `retain`, including `retain: false`.
+Project-wide requirements are controlled by the Manager.
+
+Eligible managed-Agent controllers additionally accept optional boolean
+`retain`, defaulting to `false`. Omitted or false means `files` apply only
+to this handoff. With `retain: true`, supplied files become required evidence
+in the Agent's local assignment for its own descendants only. Task text is not
+retained. Inherited project requirements cannot be removed or changed by a
+managed Agent. Retention validates assignment authority and evidence and fails
+explicitly rather than falling back to ordinary delegation; if retention is
+persisted but delivery fails, the result reports that partial outcome.
 
 ## Managed-agent bootstrap extension contract
 
@@ -375,8 +373,7 @@ descendants; inherited evidence remains owned by the project assignment.
 exact saved managed-agent Pi history and its verified assignment evidence.
 The Manager's project-assignment **Required evidence** menu is limited to
 project-owned requirements; it does not remove an Agent's local additions.
-Assigned Leads can retain project evidence through delegation but have no
-separate evidence-removal UI. Managed Agents likewise have no separate
+Assigned Leads have no project-evidence retention or removal capability. Managed Agents likewise have no separate
 model-facing evidence-removal tool or UI; local-addition removal remains an
 internal capability.
 

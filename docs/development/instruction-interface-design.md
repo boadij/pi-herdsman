@@ -39,6 +39,23 @@ Every representation must preserve the same semantics. When practical, projectio
 
 When representations drift or conflict, fix the underlying invariant and its projections rather than adding clarification around the inconsistency.
 
+## Keep replaceable definitions strategy-only
+
+Bundled Agent and role definition bodies describe specialization,
+discretionary working strategy, priorities, and output expectations.
+
+Operational contracts belong to authoritative runtime instructions,
+tool descriptions, schemas, validated state, and runtime enforcement.
+Definition bodies must not independently define tool semantics,
+parameter usage, authorization, evidence propagation, or lifecycle rules.
+
+Replacing a bundled definition body must not remove essential
+operational meaning.
+
+Definition frontmatter remains the supported configuration surface
+for launch policy and capabilities. Custom user instructions remain
+subject to the established definition composition rules.
+
 ## Fix ambiguity at the source
 
 When behavior is confusing or error-prone, identify the earliest source of ambiguity and correct it there.

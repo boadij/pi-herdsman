@@ -35,10 +35,12 @@ export const MANAGED_AGENT_BOOTSTRAP_EVENT =
   "pi-herdsman:managed-agent-bootstrap";
 
 export const FILE_HANDOFF_GUIDANCE =
-  "Pass every user-supplied or already-available artifact relevant to the " +
+  "Pass user-supplied or already-available artifacts relevant to the " +
   "recipient's assignment, decisions, integration, validation, or onward " +
-  "handoff through `files`; do not assume the recipient inherits the " +
-  "sender's conversation or attachments. Preserve " +
+  "handoff through `files`, unless the recipient already inherits the same " +
+  "evidence version as required evidence. Forward changed versions " +
+  "explicitly. Do not assume the recipient " +
+  "inherits the sender's conversation or arbitrary attachments. Preserve " +
   "exact supplied result refs when forwarding them and omit unrelated " +
   "evidence. `files` carries evidence, not runtime capability.";
 

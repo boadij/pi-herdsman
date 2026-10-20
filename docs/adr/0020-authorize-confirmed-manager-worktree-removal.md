@@ -21,6 +21,11 @@ entry point for removing a project checkout. Herdsman validates the exact
 current Manager assignment and checkout authority; Herdr remains the physical
 worktree lifecycle authority and performs checkout removal without force.
 
+Model-facing worktree-removal requests must not wait for human confirmation.
+They return a confirmation-required outcome without initiating removal. Actual
+removal is performed only through an explicitly confirmed human action, after
+fresh validation of the exact current target.
+
 After authoritative checkout removal, project assignments and pending project
 messages continue to retire under [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md).
 Exact Manager assignment authority and fail-closed identity validation remain
@@ -36,6 +41,9 @@ interface. It does not supersede ADR 0013's decision that Herdr owns physical
 worktree removal or its branch-preservation rationale.
 
 ## Consequences
+
+- Confirmation-required results are neither removal outcomes nor durable
+  pending-removal records; they confer no authority on a later human action.
 
 - Manager/user access does not add a Git or filesystem deletion authority to
   Herdsman; Herdr remains responsible for removing the worktree.

@@ -285,6 +285,16 @@ Herdr removes the checkout without force; the Git branch and Pi conversation
 remain, and the confirmation explains that the assignment is retired only
 after authoritative removal is verified. Cancellation makes no changes.
 
+The native multiline confirmation identifies the branch and absolute checkout
+path, separates what is removed from what is preserved, and requires the exact
+word `remove`. Escape, empty input, or any other response cancels. No operation
+lock is held while waiting; authority, target identity, and safety are checked
+again under the existing locks after confirmation.
+
+The model-facing `remove_worktree` tool only validates and returns instructions
+for these independent human actions; it never opens this prompt or queues a
+removal. See [Staff tools](staff.md#remove_worktree) for the result contract.
+
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` refreshes its validated profile after the current turn
 becomes idle and then opens the overview; a failed refresh keeps the previous

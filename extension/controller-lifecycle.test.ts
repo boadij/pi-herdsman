@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
+import type { TestContext } from "node:test";
 import { Value } from "typebox/value";
 import type {
   BeforeAgentStartEvent,
@@ -1144,6 +1145,51 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
+    const nestedDelegate = pi.tools.find(
+      (tool) => tool.name === "delegate_agent",
+    )!;
+    assert.ok(nestedDelegate.parameters.properties.retain);
+    for (const retain of [true, false])
+      assert.equal(
+        Value.Check(nestedDelegate.parameters, {
+          definition: "agent",
+          task: "child task",
+          retain,
+        }),
+        true,
+      );
+    assert.equal(
+      Value.Check(nestedDelegate.parameters, {
+        definition: "agent",
+        task: "child task",
+        retain: "true",
+      }),
+      false,
+    );
+    const failedHandoff = await nestedDelegate.execute(
+      "nested-retained-failed-handoff",
+      {
+        definition: "agent",
+        task: "x".repeat(131072 - requestRecordBytes("agent", "", "")),
+        files: [retainedFile],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(failedHandoff.details.ok, false);
+    assert.match(
+      JSON.stringify(failedHandoff.details),
+      /Required evidence was retained, but Agent delegation failed/,
+    );
+    assert.equal(published, undefined);
+    assert.deepEqual(
+      listProjectAssignments(projectRuntime, "repo-key").find(
+        (item) => item.branch === projectBranch,
+      )?.requiredEvidence,
+      [laterProjectRequirement],
+    );
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -1174,6 +1220,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.match(published!.text, /parent plan body/);
     assert.match(published!.text, /parent review body/);
 
+    assert.deepEqual(
+      listProjectAssignments(projectRuntime, "repo-key").find(
+        (item) => item.branch === projectBranch,
+      )?.requiredEvidence,
+      [laterProjectRequirement],
+    );
     stopConsumer?.();
     published = undefined;
     const ordinaryChild = await pi.tools
@@ -1232,6 +1284,24 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       },
     });
     published = undefined;
+    const unavailableRetention = await nestedDelegate.execute(
+      "nested-without-evidence-authority",
+      {
+        definition: "agent",
+        task: "must not retain",
+        files: [retainedFile],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(unavailableRetention.details.ok, false);
+    assert.match(
+      JSON.stringify(unavailableRetention.details),
+      /Managed-Agent evidence scope is unavailable/,
+    );
+    assert.equal(published, undefined);
     const cleared = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -4534,7 +4604,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   }
 });
 
-test("assigned Lead retains delegation files as project evidence", async () => {
+test("assigned Lead cannot retain project evidence through delegation", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-evidence-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -4634,48 +4704,44 @@ test("assigned Lead retains delegation files as project evidence", async () => {
           definition: "agent",
           label,
           task: "implement plan",
+          files: [retainedFile],
         },
         undefined,
         undefined,
         context,
       );
-    const oversizedTask = "x".repeat(
-      131072 - requestRecordBytes(label, "", ""),
-    );
-    const failedHandoff = await registeredAgentTool(pi, "delegate").execute(
-      "evidence-failed-handoff",
-      {
-        definition: "agent",
-        label,
-        task: oversizedTask,
-        files: [retainedFile],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(failedHandoff.details.ok, false);
-    assert.match(
-      JSON.stringify(failedHandoff.details),
-      /Required evidence was retained, but Agent delegation failed/,
-    );
-    const afterFailedHandoff = listProjectAssignments(runtime, "repo-key").find(
-      (item) => item.branch === branch,
-    )!;
-    assert.deepEqual(
-      afterFailedHandoff.requiredEvidence?.map((entry) =>
-        readRequiredEvidenceSnapshot(afterFailedHandoff.id, entry),
-      ),
-      [
-        "initial brief: preserve backward compatibility",
-        "reviewer finding to retain",
-      ],
-    );
+    for (const retain of [true, false]) {
+      const rejected = await registeredAgentTool(pi, "delegate").execute(
+        "evidence-rejected-retain",
+        {
+          definition: "agent",
+          label,
+          task: "must not launch",
+          files: [retainedFile],
+          retain,
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(rejected.details.ok, false);
+      assert.match(
+        JSON.stringify(rejected.details),
+        /retain is available only to managed Agents/,
+      );
+      assert.equal(accepted, undefined);
+      assert.deepEqual(
+        listProjectAssignments(runtime, "repo-key").find(
+          (item) => item.branch === branch,
+        ),
+        assignment,
+      );
+    }
     const result = await delegate();
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
+    assert.match(accepted!.text, /reviewer finding to retain/);
     assert.match(
       accepted!.text,
       /initial brief: preserve backward compatibility/,
@@ -4684,10 +4750,7 @@ test("assigned Lead retains delegation files as project evidence", async () => {
       accepted!.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(assignment.id, entry),
       ),
-      [
-        "initial brief: preserve backward compatibility",
-        "reviewer finding to retain",
-      ],
+      ["initial brief: preserve backward compatibility"],
     );
     assert.doesNotMatch(
       accepted!.requiredEvidence?.map((entry) => entry.name).join("\n") ?? "",
@@ -4698,7 +4761,7 @@ test("assigned Lead retains delegation files as project evidence", async () => {
       listProjectAssignments(runtime, "repo-key").find(
         (item) => item.branch === branch,
       )?.requiredEvidence?.length,
-      2,
+      1,
     );
     assert.equal(accepted!.evidenceAssignmentId, accepted!.requestId);
   } finally {
@@ -5270,159 +5333,6 @@ test("managed project delegation keeps changed original-path content alongside r
   }
 });
 
-test("retain true delegation delivers the saved snapshot after its source changes", async () => {
-  setLeadEnvironment();
-  const socket = join(tmpdir(), `project-evidence-retain-${randomUUID()}.sock`);
-  process.env.HERDR_SOCKET_PATH = socket;
-  const runtime = supervisionRuntime(socket);
-  const branch = `evidence-retain-${randomUUID()}`;
-  const snapshot = persistRequiredEvidenceSnapshot(
-    LEAD_SESSION_ID,
-    "plan.md",
-    "retained plan body",
-  );
-  const sourcePath = join(tmpdir(), `retain-source-${randomUUID()}.md`);
-  realFs.writeFileSync(sourcePath, "original source bytes");
-  const assignment = {
-    version: 2 as const,
-    id: LEAD_SESSION_ID,
-    repoKey: "repo-key",
-    branch,
-    text: "Implement the assigned project",
-    requiredEvidence: [snapshot],
-  };
-  writeProjectAssignment(runtime, assignment);
-  let accepted: RequestRecord | undefined;
-  let changedSource = false;
-  const priorEvidenceIds = new Set(
-    assignment.requiredEvidence.map((entry) => entry.id),
-  );
-  const label = `rt-${randomUUID().slice(0, 8)}`;
-  const startup = startupExecutor(
-    label,
-    () => DEFAULT_PI_SESSION_ID,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    "/tmp",
-    AGENT_ID,
-    false,
-    true,
-    false,
-    (request) => {
-      accepted = request;
-    },
-  );
-  const pi = fakePi({
-    exec: async (command: string, args: string[]) => {
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              source: {
-                repo_key: "repo-key",
-                repo_name: "project",
-                source_workspace_id: WORKSPACE,
-              },
-              worktrees: [],
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      return startup.exec(command, args);
-    },
-  });
-  const context = fakeContext(pi.entries);
-  context.hasUI = true;
-  const branchEntries: any[] = (
-    context.sessionManager.getBranch as () => any[]
-  )();
-  registerExtension!(pi.pi as never);
-  try {
-    const assignmentMessage = {
-      customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
-      timestamp: Date.now(),
-      content: `Project assignment for branch\n${assignment.text}`,
-    };
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    for (const handler of pi.events.get("agent_start") ?? [])
-      await handler(undefined, context);
-    branchEntries.push({
-      type: "custom_message",
-      customType: assignmentMessage.customType,
-      message: assignmentMessage,
-    });
-    for (const handler of pi.events.get("message_start") ?? [])
-      await handler({ message: assignmentMessage }, context);
-    await assertManagedLeadRole(pi, context);
-
-    const mutateOnSnapshotRead = (_path: unknown) => {
-      if (changedSource) return;
-      support.fileReadHook = undefined;
-      let currentAssignment;
-      try {
-        currentAssignment = listProjectAssignments(runtime, "repo-key").find(
-          (item) => item.branch === branch,
-        )!;
-      } finally {
-        support.fileReadHook = mutateOnSnapshotRead;
-      }
-      const retained = currentAssignment.requiredEvidence?.find(
-        (entry) => !priorEvidenceIds.has(entry.id) && "path" in entry,
-      );
-      if (retained && "path" in retained) {
-        realFs.readFileSync(retained.path);
-        changedSource = true;
-        realFs.writeFileSync(sourcePath, "changed source bytes");
-      }
-    };
-    support.fileReadHook = mutateOnSnapshotRead;
-    const result = await registeredAgentTool(pi, "delegate").execute(
-      "required-evidence-retain-source-change",
-      {
-        definition: "agent",
-        label,
-        task: "implement the retained plan",
-        files: [sourcePath],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(
-      changedSource,
-      true,
-      "retained snapshot read must trigger source mutation",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(accepted);
-    assert.match(accepted!.text, /original source bytes/);
-    assert.doesNotMatch(accepted!.text, /changed source bytes/);
-    assert.deepEqual(
-      accepted!.requiredEvidence?.map((entry) =>
-        readRequiredEvidenceSnapshot(assignment.id, entry),
-      ),
-      ["retained plan body", "original source bytes"],
-    );
-  } finally {
-    support.fileReadHook = undefined;
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    realFs.rmSync(snapshot.path, { force: true });
-    realFs.rmSync(sourcePath, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-  }
-});
-
 test("managed project delegation rejects authority changes during startup without publishing stale evidence", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-evidence-stale-${randomUUID()}.sock`);
@@ -5581,25 +5491,27 @@ test("unassigned Lead delegation does not receive project evidence implicitly", 
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const rejected = await registeredAgentTool(pi, "delegate").execute(
-      "unassigned-lead-retain",
-      {
-        definition: "agent",
-        label,
-        task: "must not launch",
-        files: [foreignEvidence.path],
-        retain: true,
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(rejected.details.ok, false);
-    assert.match(
-      JSON.stringify(rejected.details),
-      /verified project assignment/,
-    );
-    assert.equal(accepted, undefined);
+    for (const retain of [true, false]) {
+      const rejected = await registeredAgentTool(pi, "delegate").execute(
+        "unassigned-lead-retain",
+        {
+          definition: "agent",
+          label,
+          task: "must not launch",
+          files: [foreignEvidence.path],
+          retain,
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(rejected.details.ok, false);
+      assert.match(
+        JSON.stringify(rejected.details),
+        /retain is available only to managed Agents/,
+      );
+      assert.equal(accepted, undefined);
+    }
     const result = await registeredAgentTool(pi, "delegate").execute(
       "unassigned-lead-delegation",
       { definition: "agent", label, task: "unrelated work" },
@@ -9640,7 +9552,9 @@ test("managed startup accepts matching mailbox state after five seconds", async 
   setLeadEnvironment();
   const label = "delayed-mailbox-startup";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const abort = new AbortController();
   let delayedState: ManagedAgentState | undefined;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
   const pi = fakePi({
     exec: async (command, args, options) => {
       const result = await startup.exec(command, args, options);
@@ -9648,43 +9562,61 @@ test("managed startup accepts matching mailbox state after five seconds", async 
         delayedState = readAgentState(startup.mailbox);
         assert.ok(delayedState);
         realFs.rmSync(startup.mailbox, { recursive: true, force: true });
-        setTimeout(
-          () => writeAgentState(startup.mailbox, delayedState!),
-          6_000,
-        );
+        if (!abort.signal.aborted)
+          restoreTimer = setTimeout(
+            () => writeAgentState(startup.mailbox, delayedState!),
+            6_000,
+          );
       }
       return result;
     },
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
-    const resultPromise = registeredAgentTool(pi, "delegate").execute(
+    pending = registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "wait for delayed mailbox state" },
-      undefined,
+      abort.signal,
       undefined,
       fakeContext(),
     );
-    await t.waitFor(() => assert.ok(delayedState, "agent start did not run"));
-    const result = await resultPromise;
+    void pending.catch(() => {});
+    await t.waitFor(() => assert.ok(delayedState, "agent start did not run"), {
+      timeout: 5_000,
+    });
+    const result = await pending;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
+    abort.abort();
+    if (restoreTimer) clearTimeout(restoreTimer);
+    if (pending) await pending.catch(() => {});
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
 });
 
-test("managed startup waits for the child assignment lock before first submit", async (t) => {
+async function exerciseStartupLock(t: TestContext, failObservation = false) {
   setLeadEnvironment();
-  const label = "startup-lock-held";
+  const label = failObservation
+    ? "startup-lock-failure-cleanup"
+    : "startup-lock-held";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const abort = new AbortController();
   let releaseChildLock: (() => void) | undefined;
   let agentGetCount = 0;
   const pi = fakePi({
     exec: async (command, args, options) => {
       const result = await startup.exec(command, args, options);
-      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "start" &&
+        !abort.signal.aborted
+      )
         releaseChildLock = claimProcessLock(
           assignmentLockPathForTest(startup.mailbox),
         );
@@ -9695,30 +9627,89 @@ test("managed startup waits for the child assignment lock before first submit", 
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
+  let observationError: unknown;
+  let injectedObservationFailure = false;
   try {
-    const resultPromise = registeredAgentTool(pi, "delegate").execute(
+    pending = registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "wait for child startup lock" },
-      undefined,
+      abort.signal,
       undefined,
       fakeContext(),
     );
-    await t.waitFor(() => {
-      assert.ok(releaseChildLock, "child did not hold its startup lock");
-      assert.ok(
-        agentGetCount >= 2,
-        "initial submit must finish integration validation before acquiring the held lock",
+    void pending.catch(() => {});
+    try {
+      await t.waitFor(
+        () => {
+          assert.ok(releaseChildLock, "child did not hold its startup lock");
+          assert.ok(
+            agentGetCount >= 2,
+            "initial submit must finish integration validation before acquiring the held lock",
+          );
+        },
+        { timeout: 5_000 },
       );
-    });
-    releaseChildLock?.();
-    releaseChildLock = undefined;
-    const result = await resultPromise;
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    } catch (error) {
+      t.diagnostic(
+        `startup lock held=${Boolean(releaseChildLock)}, ` +
+          `agent get count=${agentGetCount}`,
+      );
+      throw error;
+    }
+    if (failObservation) {
+      try {
+        await t.waitFor(
+          () => {
+            injectedObservationFailure = true;
+            assert.fail("injected startup observation failure");
+          },
+          { timeout: 20 },
+        );
+      } catch (error) {
+        observationError = error;
+      }
+      if (!observationError) throw new Error("observation unexpectedly passed");
+    } else {
+      releaseChildLock?.();
+      releaseChildLock = undefined;
+      const result = await pending;
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    }
   } finally {
+    abort.abort();
     releaseChildLock?.();
+    if (pending) await pending.catch(() => {});
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
+  return {
+    mailbox: startup.mailbox,
+    observationError,
+    injectedObservationFailure,
+  };
+}
+
+test("managed startup waits for the child assignment lock before first submit", async (t) => {
+  await exerciseStartupLock(t);
+});
+
+test("managed startup cleanup releases delegation lock after observation failure", async (t) => {
+  const { mailbox, observationError, injectedObservationFailure } =
+    await exerciseStartupLock(t, true);
+  assert.equal(injectedObservationFailure, true);
+  assert.match(String(observationError), /waitFor\(\) timed out/);
+  const releaseDelegationLock = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
+  );
+  releaseDelegationLock();
+  assert.equal(
+    readAgentState(mailbox),
+    undefined,
+    "fixture cleanup must leave no mailbox state after delegation settles",
+  );
 });
 
 test("managed startup rejects a mismatched Agent before its first task and rolls back", async () => {

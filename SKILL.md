@@ -42,9 +42,11 @@ Use these high-salience rules for the model-facing agent boundary:
   evidence that must remain required downstream, set `retain: true` on
   `message_staff` (Manager, retaining its message text and files for the
   target project assignment) or `delegate_agent` (retaining its files, not its
-  task text). Assigned Leads add to project requirements; eligible managed
-  Agents add only to their local assignment for their descendants. Omitted or
-  false `retain` keeps files one-time. Never assume retention if it fails.
+  task text, eligible managed Agents only, for their own descendants).
+  Project-wide requirements are controlled only by the Manager. Leads forward
+  continuing findings through `message_supervisor.files` for Manager evaluation;
+  ordinary delegation files remain recipient-specific. On supported operations,
+  omitted or false `retain` keeps files one-time. Never assume retention if it fails.
   Ordinary Leads without a verified project assignment have no automatic
   required-evidence scope.
 - When agent work is unresolved, handle required agent control, then continue

@@ -99,9 +99,6 @@ when the role activates or is restored. Repeating `/manager` or `/chief`
 refreshes an active profile after validating it; a failed refresh keeps the
 previous effective profile. A `bodyMode: replace` overlay replaces customizable
 role guidance only. Runtime-owned authority and role contracts remain active.
-Replacing a Manager or Chief definition body changes its operating guidance,
-not its available tool contracts, parameter semantics, runtime state, or
-authorization. Herdsman and Pi supply these independently.
 
 For example, this global Chief overlay enables a registered ordinary tool while
 retaining staff coordination tools:
@@ -245,6 +242,11 @@ frontmatter.
 
 ## Runtime system-prompt composition
 
+Across bundled Agent and role definitions, replacing a body replaces its
+configurable operating strategy, not Herdsman's runtime authority, mandatory
+coordination capabilities, or tool semantics. Herdsman supplies these
+independently of the replaceable body.
+
 `bodyMode` and `systemPromptMode` solve different problems:
 
 ```text
@@ -264,7 +266,8 @@ prompt.
 Bundled Herdsman definitions use `append` so their specialization does not
 replace Pi's normal prompt or runtime/tool guidance. Ordinary custom definitions
 may explicitly choose `replace`; the reserved `managed-lead` role is
-append-only and rejects `replace`.
+append-only and rejects `replace`. A custom replacement prompt does not
+automatically preserve Pi's normal system-prompt rules or tool guidelines.
 
 Managed agents additionally receive shared herdr agent guidance at launch,
 including the `ask_owner` contract. This shared guidance is infrastructure and

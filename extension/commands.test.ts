@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -95,6 +96,8 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   };
   let current = assignment;
   let leaseId = "lease-1";
+  let role = "manager";
+  let changeRoleUnderLock = false;
   const storedSnapshots = new Set([
     "/immutable/a",
     "/immutable/b",
@@ -103,7 +106,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   const acceptedEvidence = [...assignment.requiredEvidence];
   const runtime = createLeadProjectRuntime({
     leadRuntime: { roleSuspended: false } as any,
-    activeRole: () => "manager",
+    activeRole: () => role,
     currentManager: async () => manager,
     managerLease: () => ({ descriptor: { ...manager, leaseId } }),
     sameManagerDescriptor: (left: any, right: any) =>
@@ -119,7 +122,10 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
       _repo: string,
       _branch: string,
       operation: () => Promise<unknown>,
-    ) => operation(),
+    ) => {
+      if (changeRoleUnderLock) role = "lead";
+      return operation();
+    },
     writeProjectAssignment: (_runtime: unknown, next: any) => {
       current = next;
     },
@@ -127,6 +133,35 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
     persistRequiredTextFiles: () => [],
   } as any);
   const ctx = fakeContext() as any;
+  for (const unauthorizedRole of ["lead", "chief"]) {
+    role = unauthorizedRole;
+    await assert.rejects(
+      runtime.updateAssignmentEvidence(
+        "unauthorized",
+        { branch: assignment.branch, remove: ["local-a"] },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /Only the Manager can update project required evidence/,
+    );
+    assert.deepEqual(current, assignment);
+  }
+  role = "manager";
+  changeRoleUnderLock = true;
+  await assert.rejects(
+    runtime.updateAssignmentEvidence(
+      "role-changed",
+      { branch: assignment.branch, remove: ["local-a"] },
+      undefined,
+      undefined,
+      ctx,
+    ),
+    /Manager authority changed/,
+  );
+  assert.deepEqual(current, assignment);
+  changeRoleUnderLock = false;
+  role = "manager";
   const before = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
   assert.equal(
     before.requiredEvidence?.find((item) => item.id === "inherited")
@@ -4724,6 +4759,7 @@ async function managerRemovalFixture(
     missingSessionProvenance?: boolean;
     primaryWorkspaceInitially?: boolean;
     primaryWorkspaceAfterConfirmation?: boolean;
+    replaceManagerAfterConfirmation?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -4762,6 +4798,8 @@ async function managerRemovalFixture(
     ? manager.workspaceId
     : workspaceId;
   let assignmentLockHeld = false;
+  let lockCount = 0;
+  let managerReplaced = false;
   let confirmationCount = 0;
   const removals: string[] = [];
   const calls: string[][] = [];
@@ -4802,7 +4840,8 @@ async function managerRemovalFixture(
     leadRuntime: { managerLease: { descriptor: manager } } as any,
     managerLease: () => ({ descriptor: manager }),
     activeRole: () => "manager",
-    currentManager: async () => manager,
+    currentManager: async () =>
+      managerReplaced ? { ...manager, leaseId: "replacement-lease" } : manager,
     sameManagerDescriptor: (left: any, right: any) => left === right,
     worktreeGroupScope: async () => ({
       repoKey,
@@ -4886,8 +4925,10 @@ async function managerRemovalFixture(
       stoppedLeadCount++;
       leadRunning = false;
     },
-    withProjectWorkLock: async (_key: string, operation: () => unknown) =>
-      operation(),
+    withProjectWorkLock: async (_key: string, operation: () => unknown) => {
+      lockCount++;
+      return operation();
+    },
     withProjectAssignmentLock: async (
       _repoKey: string,
       _branch: string,
@@ -4910,7 +4951,9 @@ async function managerRemovalFixture(
   const ctx = fakeContext([]) as any;
   ctx.hasUI = true;
   ctx.ui.input = async () => {
+    assert.equal(lockCount, 0, "no operation lock may span human confirmation");
     confirmationCount++;
+    if (options.replaceManagerAfterConfirmation) managerReplaced = true;
     if (options.changeAssignmentAfterConfirmation)
       assignment = { ...assignment, id: "replacement-assignment" };
     if (options.primaryWorkspaceAfterConfirmation)
@@ -4926,8 +4969,74 @@ async function managerRemovalFixture(
     removals,
     confirmationCount: () => confirmationCount,
     stoppedLeadCount: () => stoppedLeadCount,
+    lockCount: () => lockCount,
   };
 }
+
+test("Manager removal requests leave running and closed worktrees untouched", async (t) => {
+  for (const options of [{ runningLead: true }, { closedWorkspace: true }]) {
+    const fixture = await managerRemovalFixture(t, options);
+    fixture.ctx.ui.input = async () => {
+      throw new Error("Model removal must not prompt");
+    };
+    for (let request = 0; request < 2; request++) {
+      const result = await fixture.runtime.executeStaff(
+        "request",
+        { action: "remove", branch: "feat/remove-test" },
+        undefined,
+        undefined,
+        fixture.ctx,
+      );
+      assert.equal(result.details.confirmation_required, true);
+      assert.equal(result.details.ok, false);
+      assert.equal(result.details.checkout_removed, undefined);
+      assert.equal(result.details.checkout_state, undefined);
+      assert.equal(result.details.assignment_retired, undefined);
+    }
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.equal(fixture.lockCount(), 0);
+    assert.equal(fixture.confirmationCount(), 0);
+    assert.ok(fixture.assignment());
+    assert.ok(existsSync(fixture.checkoutPath));
+    assert.ok(fixture.calls.every((args) => args[1] === "list"));
+  }
+});
+
+test("Manager removal rejects a replaced Manager after confirmation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    replaceManagerAfterConfirmation: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Manager lease is no longer active/,
+  );
+  assert.equal(fixture.confirmationCount(), 1);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+});
+
+test("Manager removal requires the exact confirmation word", async (t) => {
+  const fixture = await managerRemovalFixture(t, { runningLead: true });
+  for (const answer of [
+    undefined,
+    "",
+    "Remove",
+    " remove",
+    "remove ",
+    "cancel",
+  ]) {
+    fixture.ctx.ui.input = async () => answer;
+    const result = await fixture.runtime.removeWorktree(
+      "feat/remove-test",
+      fixture.ctx,
+    );
+    assert.equal(result.details.cancelled, true);
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.deepEqual(fixture.removals, []);
+    assert.ok(fixture.assignment());
+    assert.ok(existsSync(fixture.checkoutPath));
+  }
+});
 
 test("Manager removal covers paused, running, and reopened checkout lifecycles", async (t) => {
   for (const scenario of [
@@ -5479,7 +5588,9 @@ async function managerDelegateAssignmentTest(
       return respond({ agent: managerAgent });
     return respond({});
   };
+  let mutateRetainedSource: (() => void) | undefined;
   const managerExec = (command: string, args: string[]) => {
+    mutateRetainedSource?.();
     if (
       managerUsesRootPane &&
       command === "herdr" &&
@@ -5532,7 +5643,23 @@ async function managerDelegateAssignmentTest(
     const staffMessage = pi.tools.find(
       (tool) => tool.name === "message_staff",
     )!;
-    await staffMessage.execute(
+    let changedSource = false;
+    mutateRetainedSource = () => {
+      if (changedSource) return;
+      const current = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch);
+      if (
+        current?.requiredEvidence?.some(
+          (entry) => entry.name === basename(reviewFile),
+        )
+      ) {
+        changedSource = true;
+        realFs.writeFileSync(reviewFile, "changed review bytes");
+      }
+    };
+    const retainedOutcome = await staffMessage.execute(
       "retain-review",
       {
         session: childSession,
@@ -5544,9 +5671,32 @@ async function managerDelegateAssignmentTest(
       undefined,
       ctx,
     );
+    mutateRetainedSource = undefined;
+    assert.equal(
+      retainedOutcome.details.ok,
+      true,
+      JSON.stringify(retainedOutcome.details),
+    );
+    assert.equal(
+      changedSource,
+      true,
+      "source must change after retention and before delivery completes",
+    );
+    const reviewMessages = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      childSession,
+    )
+      .map((path) => readChiefMessage(path))
+      .filter((message) =>
+        message.text.includes("Address the external review"),
+      );
+    assert.equal(reviewMessages.length, 1);
+    assert.match(reviewMessages[0].text, /external review finding/);
+    assert.doesNotMatch(reviewMessages[0].text, /changed review bytes/);
     const retained = listProjectAssignments(supervisionRuntime(), repoKey).find(
       (item) => item.branch === assignment.branch,
     )!;
+    assert.equal(retained.requiredEvidence?.[2].name, "assignment-note.md");
     assert.deepEqual(
       retained.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(retained.id, entry),
@@ -5642,21 +5792,37 @@ async function managerDelegateAssignmentTest(
     );
     assert.equal(confirmationPrompts, 0);
     gitStatusOutput = "";
-    const cancelledTool = await removeTool.execute(
+    const requestedTool = await removeTool.execute(
       "remove",
       { branch: assignment.branch },
       undefined,
       undefined,
       ctx,
     );
-    assert.equal(cancelledTool.details.cancelled, true);
-    assert.equal(confirmationPrompts, 1);
+    assert.deepEqual(requestedTool.details, {
+      ok: false,
+      action: "remove",
+      branch: assignment.branch,
+      confirmation_required: true,
+    });
+    assert.equal(confirmationPrompts, 0);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "stop"),
+      false,
+    );
+    assert.ok(
+      readProjectAssignment(supervisionRuntime(), repoKey, assignment.branch),
+    );
+    const afterRequest = await pi.tools
+      .find((tool) => tool.name === "list_staff")!
+      .execute("after-removal-request", {}, undefined, undefined, ctx);
+    assert.equal(afterRequest.details.ok, true);
     await managerCommand.handler(`remove ${assignment.branch}`, ctx);
-    assert.equal(confirmationPrompts, 2);
+    assert.equal(confirmationPrompts, 1);
     assert.equal(
       pi.calls.some((args) => args[0] === "worktree" && args[1] === "remove"),
       false,
-      "both public entry points share confirmation and cancellation has no destructive effect",
+      "the model request and human cancellation have no destructive effect",
     );
     assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
     assert.equal(assignment!.branch.includes(assignment!.id), false);
@@ -6461,6 +6627,14 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     overview.handleInput(" ");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
+    const peekLines = overview.render(120);
+    assert.match(peekLines[1], /^ Peek ·/u);
+    assert.equal(peekLines[2].trim(), "");
+    const peekFooter = peekLines.findIndex((line: string) =>
+      line.includes("Esc back · Enter focus"),
+    );
+    assert.equal(peekLines[peekFooter - 1].trim(), "");
+    assert.match(peekLines[peekFooter], /^ Esc back/u);
     assert.match(
       overview.render(120).join("\n"),
       /bounded ordinary live output/,
@@ -9427,6 +9601,14 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(customCalls, 1);
   assert.ok(overview);
+  const overviewLines = overview.render(120);
+  assert.match(overviewLines[1], /^ Pi Herdsman/u);
+  assert.equal(overviewLines[2].trim(), "");
+  const overviewFooter = overviewLines.findIndex((line: string) =>
+    line.includes("Space peek"),
+  );
+  assert.equal(overviewLines[overviewFooter - 1].trim(), "");
+  assert.match(overviewLines[overviewFooter], /^ Space peek/u);
   assert.match(overview.render(120).join("\n"), /Pi Herdsman ·/);
   assert.doesNotMatch(overview.render(120).join("\n"), /Pi Chief/);
   assert.doesNotMatch(overview.render(120).join("\n"), /├─|└─/);
@@ -10663,6 +10845,16 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
         line.includes(`Pi Herdsman · v${packageMetadata.version}`),
       ),
     );
+    for (const lines of renders) {
+      assert.equal(lines[2].trim(), "");
+      const footer = lines.findIndex((line) => line.includes("↑↓ navigate"));
+      assert.equal(lines[footer - 1].trim(), "");
+    }
+    // Execution has no help region: exactly one blank row after its last option.
+    const executionFooter = renders[1].findIndex((line) =>
+      line.includes("↑↓ navigate"),
+    );
+    assert.match(renders[1][executionFooter - 2], /Orchestrate/u);
     assert.ok(renders[1]?.some((line) => /^→ Flexible\s+current/u.test(line)));
     assert.ok(renders[2]?.some((line) => /^→ Orchestrate/u.test(line)));
     assert.ok(
@@ -10702,6 +10894,16 @@ test("Herdsman root contextual help follows the selected row", async () => {
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
+    const footerRows = observed.map((lines) =>
+      lines.findIndex((line) => line.includes("↑↓ navigate")),
+    );
+    assert.ok(footerRows.every((row) => row === footerRows[0]));
+    for (const lines of observed) {
+      assert.equal(lines[2].trim(), "");
+      const footer = lines.findIndex((line) => line.includes("↑↓ navigate"));
+      assert.equal(lines[footer - 1].trim(), "");
+      assert.equal(lines[footer - 3].trim(), "");
+    }
     const help = (index: number) =>
       observed[index]?.find((line) =>
         /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and role definitions|Configure future-session/u.test(
@@ -10735,6 +10937,8 @@ test("Herdsman root contextual help follows the selected row", async () => {
 
 test("Definitions contextual help uses the selected definition description", async () => {
   setLeadEnvironment();
+  const noHelpPath = join(PI_AGENTS_DIR, "aaa-no-help.md");
+  realFs.writeFileSync(noHelpPath, "---\nname: aaa-no-help\n---\n");
   const selectedName = "generalist";
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -10799,12 +11003,30 @@ test("Definitions contextual help uses the selected definition description", asy
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
+    const withoutHelp = observed.find((lines) =>
+      lines.some((line) => /^→ aaa-no-help/u.test(line)),
+    );
+    assert.ok(
+      withoutHelp,
+      "mixed-help picker visits the definition without help",
+    );
+    const footerRow = withoutHelp.findIndex((line) =>
+      line.includes("↑↓ navigate"),
+    );
+    assert.equal(withoutHelp[footerRow - 2].trim(), "");
+    assert.ok(
+      observed.every(
+        (lines) =>
+          lines.findIndex((line) => line.includes("↑↓ navigate")) === footerRow,
+      ),
+    );
     assert.equal(typeof expectedHelp, "string");
     assert.ok(
       observed.some((rendered) => rendered.includes(expectedHelp as string)),
       `Expected Definitions help to render ${JSON.stringify(expectedHelp)}`,
     );
   } finally {
+    realFs.rmSync(noHelpPath, { force: true });
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
@@ -11033,7 +11255,15 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
         case 3:
           for (const character of "zulu 46") component.handleInput(character);
           {
+            component.focused = true;
+            assert.equal(component.focused, true);
             const rendered = component.render(200);
+            assert.equal(rendered[2].trim(), "");
+            const footer = rendered.findIndex((line: string) =>
+              line.includes("Type to filter"),
+            );
+            assert.equal(rendered[footer - 1].trim(), "");
+            assert.match(rendered[footer - 2], /claude-sonnet-4-6/u);
             const selected = rendered.find((line: string) =>
               line.trimStart().startsWith("→"),
             );

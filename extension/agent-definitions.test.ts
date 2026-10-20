@@ -62,6 +62,34 @@ function assertPosixMode(path: string, expected: number): void {
   if (process.platform !== "win32") assert.equal(actual, expected);
 }
 
+test("bundled definition bodies do not prescribe coordination APIs", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-bundled-contracts-"));
+  const definitions = withPiAgentDir(root, () => [
+    ...discoverRoleDefinitions(),
+    ...discoverAgentDefinitions(),
+  ]);
+  const contractToolNames = [
+    ...AGENT_COORDINATION_TOOLS,
+    "ask_owner",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
+    "delegate_project",
+    "resume_project",
+    "stop_lead",
+    "remove_worktree",
+  ];
+  const contractPattern = new RegExp(
+    `\\b(?:${contractToolNames.join("|")})\\b|\\.files\\b|retain:\\s*(?:true|false)`,
+  );
+  for (const { name, body } of definitions)
+    assert.doesNotMatch(body, contractPattern, name);
+});
+
 test("parses scalar frontmatter fields and applies defaults", () => {
   const definition = discoverAgentDefinitionsWithContents(
     "---\nname: custom\ninheritSkills: false\n---\n\nPrompt\n",
@@ -566,6 +594,18 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
 
+  writeFileSync(
+    globalPath,
+    "---\nname: managed-lead\nbodyMode: replace\n---\nCustom strategy",
+  );
+  const replaced = withPiAgentDir(global, () =>
+    discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+      projectRoot: project,
+    }),
+  );
+  assert.equal(replaced.body, "Custom strategy");
+  assert.equal(replaced.frontmatter.systemPromptMode, "append");
+
   writeFileSync(projectPath, "---\nname: managed-lead\nenabled: false\n---");
   writeFileSync(globalPath, "---\nname: managed-lead\nthinking: high\n---");
   assert.throws(
@@ -651,6 +691,15 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
   assert.deepEqual(orchestrator!.frontmatter.tools, []);
+  writeFileSync(
+    join(agents, "orchestrator-lead.md"),
+    "---\nname: orchestrator-lead\nbodyMode: replace\n---\nCustom strategy",
+  );
+  const replaced = withPiAgentDir(global, () =>
+    discoverRoleDefinition(ORCHESTRATOR_LEAD_DEFINITION_NAME),
+  );
+  assert.equal(replaced.body, "Custom strategy");
+  assert.deepEqual(replaced.frontmatter.tools, orchestrator!.frontmatter.tools);
   assert.deepEqual(
     withPiAgentDir(
       global,

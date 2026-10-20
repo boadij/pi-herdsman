@@ -16,9 +16,5 @@ assignments only after their prerequisites resolve.
 Retain decomposition, architecture, technical direction, review, integration,
 conflict resolution, acceptance, and final technical decisions.
 
-The initial project brief and required evidence for this verified project
-assignment are supplied to new managed-Agent assignments automatically. Use
-`delegate_agent(..., retain: true)` to retain supplied files as requirements
-for future descendants; ordinary delegation task text remains specific to its
-recipient. Use `files` for additional recipient-specific evidence. Do not
-treat evidence availability as execution authority.
+Surface findings that may change continuing project requirements to the
+Manager for evaluation.

@@ -7,7 +7,6 @@ import type {
 import { contentText, StringEnum } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
-  DynamicBorder,
   getAgentDir,
   getSelectListTheme,
   SessionManager,
@@ -272,6 +271,7 @@ import {
 } from "./lead-runtime.ts";
 
 import {
+  populateMenuFrame,
   collapseDisplayText,
   formatToolModelResult,
   formatAgentDefinitions,
@@ -364,12 +364,17 @@ const LEAD_SUPERVISOR_PEER_GUIDANCE =
 const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
+For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
+Ordinary Leads have no automatic required-evidence scope.
+A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
+Only the Manager can designate continuing project requirements.
+Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
 For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
 const SUPERVISION_EVENT_GUIDANCE =
   "Supervision is event-driven. Do not poll staff tools, send repeated messages, or sleep solely to wait for Lead progress. When no independent work remains, end the turn; incoming Lead updates resume coordination.";
 const MANAGER_ROLE_CONTRACT = `## Manager role
-You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The user must confirm interactively.
+You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The tool returns confirmation_required without removal or waiting for input. Direct the user to /manager remove <branch> or the Manager overview for independent human confirmation, then continue unrelated coordination. Do not repeat or poll the tool for confirmation; its result is not evidence of removal.
 ${SUPERVISION_EVENT_GUIDANCE}`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
@@ -1072,7 +1077,6 @@ export default function (pi: ExtensionAPI): void {
     contextType: SUPERVISION_CONTEXT_TYPE,
     tui: {
       Container,
-      DynamicBorder,
       Key,
       matchesKey,
       SelectList,
@@ -1458,13 +1462,25 @@ export default function (pi: ExtensionAPI): void {
             minPrimaryColumnWidth: 12,
             maxPrimaryColumnWidth,
           });
-          const help = new TuiText("", 1, 1);
+          const hasHelp = items.some((item) =>
+            collapseDisplayText(item.help, 160),
+          );
+          const helpArea = hasHelp ? new Container() : undefined;
+          const helpText = new TuiText("", 1, 0);
+          const emptyHelp = new Spacer(1);
           const updateHelp = (item: SelectItem | null): void => {
+            if (!helpArea) return;
             const text = collapseDisplayText(
               (item as MenuItem | null)?.help,
               160,
             );
-            help.setText(text ? theme.fg("dim", text) : "");
+            helpArea.clear();
+            if (text) {
+              helpText.setText(theme.fg("dim", text));
+              helpArea.addChild(helpText);
+            } else {
+              helpArea.addChild(emptyHelp);
+            }
           };
           const index = items.findIndex((item) => item.value === selectedValue);
           if (index >= 0) list.setSelectedIndex(index);
@@ -1473,24 +1489,13 @@ export default function (pi: ExtensionAPI): void {
           list.onCancel = () => done(undefined);
           list.onSelectionChange = updateHelp;
           const container = new Container();
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
-          );
-          container.addChild(
-            new TuiText(theme.fg("accent", theme.bold(title)), 1, 0),
-          );
-          container.addChild(new Spacer(1));
-          container.addChild(list);
-          container.addChild(help);
-          container.addChild(
-            new TuiText(
-              theme.fg("dim", "↑↓ navigate · Enter select · Esc close"),
-              1,
-              0,
-            ),
-          );
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
+          populateMenuFrame(
+            container,
+            theme,
+            title,
+            list,
+            "↑↓ navigate · Enter select · Esc close",
+            helpArea,
           );
           return {
             render: (width: number) => container.render(width),
@@ -1552,27 +1557,15 @@ export default function (pi: ExtensionAPI): void {
           input.onEscape = () => done(undefined);
           rebuildList();
           const container = new Container();
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
-          );
-          container.addChild(
-            new TuiText(theme.fg("accent", theme.bold("Model")), 1, 0),
-          );
-          container.addChild(new Spacer(1));
-          container.addChild(input);
-          container.addChild(listContainer);
-          container.addChild(
-            new TuiText(
-              theme.fg(
-                "dim",
-                "Type to filter · ↑↓ navigate · Enter select · Esc back",
-              ),
-              1,
-              0,
-            ),
-          );
-          container.addChild(
-            new DynamicBorder((line) => theme.fg("border", line)),
+          const body = new Container();
+          body.addChild(input);
+          body.addChild(listContainer);
+          populateMenuFrame(
+            container,
+            theme,
+            "Model",
+            body,
+            "Type to filter · ↑↓ navigate · Enter select · Esc back",
           );
           return {
             get focused() {
@@ -1755,6 +1748,9 @@ export default function (pi: ExtensionAPI): void {
               );
               ctx.ui.notify(
                 result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
+                result.details.ok || result.details.cancelled
+                  ? "info"
+                  : "warning",
               );
               return;
             }
@@ -2005,7 +2001,7 @@ export default function (pi: ExtensionAPI): void {
           name: "remove_worktree",
           label: "remove worktree",
           description:
-            "Remove an exact assigned project worktree with human confirmation. Preserves its Git branch and Pi conversation; never forces removal.",
+            "Request human confirmation for an explicitly requested assigned project checkout removal. Validates without removing or waiting; the user completes removal through /manager remove <branch> or the Manager overview. Continue unrelated coordination without repeating or polling this tool.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (

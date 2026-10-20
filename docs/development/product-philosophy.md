@@ -83,6 +83,26 @@ Optional power should remain unobtrusive until needed. Installing or enabling
 Herdsman should not force users away from familiar Pi workflows unless the
 orchestration behavior they explicitly choose requires it.
 
+## Keep human interactions off unrelated execution paths
+
+Human interaction must not unnecessarily suspend a Herdsman role or Agent.
+
+An operation may wait for human input only when the answer is genuinely required
+for its next meaningful step. That wait must not prevent unrelated coordination
+or independently executable work from continuing.
+
+When human approval protects an independent operation, separate the approval
+lifecycle from the Agent's execution lifecycle. Return or hand off promptly
+instead of holding an unrelated model operation open.
+
+Pending, absent, cancelled or stale approval never authorizes destructive
+execution. Revalidate identity, authority and safety conditions before executing
+an approved operation.
+
+Prefer existing Pi and Herdr interaction mechanisms. Introduce approval
+persistence or additional UI infrastructure only when demonstrated lifecycle
+requirements make them necessary.
+
 ## Keep the core small and correct
 
 Prefer deletion, consolidation, native platform capabilities, and existing

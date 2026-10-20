@@ -237,7 +237,7 @@ function assertPortableToolSchema(tool: any): void {
     );
     assert.match(
       guidance,
-      /do not assume the recipient inherits the sender's conversation or attachments/,
+      /Do not assume the recipient inherits the sender's conversation or arbitrary attachments/,
       tool.name,
     );
     assert.match(guidance, /omit unrelated evidence/, tool.name);
@@ -276,7 +276,7 @@ const SEMANTIC_TOOL_CASES = [
   ["list_agents", {}, { agent: "x" }, []],
   [
     "delegate_agent",
-    { definition: "scout", task: "work", retain: true },
+    { definition: "scout", task: "work" },
     { definition: "scout", task: "work", session: "x" },
     ["definition", "task"],
   ],
@@ -464,6 +464,17 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   for (const removed of ["staff_close", "staff_complete", "staff_discard"])
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
+  const rootDelegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+  assert.equal(rootDelegate.parameters.properties.retain, undefined);
+  for (const retain of [true, false])
+    assert.equal(
+      Value.Check(rootDelegate.parameters, {
+        definition: "scout",
+        task: "work",
+        retain,
+      }),
+      false,
+    );
   for (const [name, valid, invalid, required] of SEMANTIC_TOOL_CASES) {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);
@@ -3694,6 +3705,99 @@ test("chief guidance carries the lead coordination contract", () => {
     pi.tools.some((candidate) => candidate.name === "message_supervisor"),
   );
   delete process.env.HERDR_PANE_ID;
+});
+
+test("replaced Lead strategy keeps its protected charter and coordination tools", async () => {
+  setLeadEnvironment();
+  const overlay = join(PI_AGENTS_DIR, "orchestrator-lead.md");
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `lead-contract-${randomUUID()}.sock`,
+  );
+  writeFileSync(
+    overlay,
+    "---\nname: orchestrator-lead\nbodyMode: replace\n---\nCustom Lead strategy",
+  );
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const pi = fakePi({
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => ({
+      stdout: JSON.stringify({
+        id: AGENT_ID,
+        result: isApiSnapshot(args)
+          ? { snapshot: { agents: [], panes: [] } }
+          : {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+      }),
+      stderr: "",
+      code: 0,
+    }),
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const sections = event.systemPromptOptions.sections;
+    assert.match(
+      sections.pi_herdsman_lead_execution ?? "",
+      /Custom Lead strategy/,
+      notices.join("\n"),
+    );
+    assert.doesNotMatch(
+      sections.pi_herdsman_lead_execution,
+      /Partition delegable work/,
+    );
+    const charter = sections.pi_herdsman_role;
+    assert.match(
+      charter,
+      /required project evidence is automatically inherited/,
+    );
+    assert.match(
+      charter,
+      /Ordinary Leads have no automatic required-evidence scope/,
+    );
+    assert.match(
+      charter,
+      /Only the Manager can designate continuing project requirements/,
+    );
+    assert.match(
+      charter,
+      /delegation task and ordinary files are recipient-specific/,
+    );
+    assert.match(charter, /`files` carries evidence, not runtime capability/);
+    for (const name of [
+      "delegate_agent",
+      "continue_agent",
+      "message_supervisor",
+    ]) {
+      assert.ok(pi.pi.getActiveTools().includes(name), name);
+      const tool = pi.tools.find((candidate) => candidate.name === name)!;
+      assert.match(
+        tool.promptGuidelines.join(" "),
+        /unless the recipient already inherits the same evidence version as required evidence\. Forward changed versions explicitly\./,
+      );
+    }
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(overlay, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+  }
 });
 
 test("ordinary Lead custom startup receives the exact-session definition roster", async () => {

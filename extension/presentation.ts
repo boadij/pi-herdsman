@@ -1,4 +1,5 @@
 import {
+  DynamicBorder,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
@@ -19,6 +20,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
 import type {
+  Theme,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -45,6 +47,28 @@ import type {
   WorkspaceProvenance,
 } from "./supervision.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
+
+export function populateMenuFrame(
+  container: Container,
+  theme: Pick<Theme, "fg" | "bold">,
+  title: string,
+  body: Component,
+  footer: string,
+  help?: Component,
+): void {
+  container.clear();
+  container.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+  container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+  container.addChild(new Spacer(1));
+  container.addChild(body);
+  if (help) {
+    container.addChild(new Spacer(1));
+    container.addChild(help);
+  }
+  container.addChild(new Spacer(1));
+  container.addChild(new Text(theme.fg("dim", footer), 1, 0));
+  container.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+}
 
 export function hasWorkspaceWorktree(workspace: any): boolean {
   const worktree =
@@ -2953,6 +2977,23 @@ export function renderCoordinationResult(
   const args = (context?.args ?? {}) as Record<string, unknown>;
   hydrateCoordinationAgent(details, context);
   const expanded = humanExpanded(context, options);
+  if (
+    tool === "staff" &&
+    action === "remove" &&
+    details.confirmation_required === true
+  )
+    return new WidthSafeText(
+      statusLine(
+        theme,
+        "warning",
+        "!",
+        expanded
+          ? `Confirmation required\n${resultContent(result)}`
+          : `Confirmation required · ${value(details.branch) || value(args.branch)} · /manager remove ${value(details.branch) || value(args.branch)}`,
+      ),
+      0,
+      0,
+    );
   const failed = details.ok === false || context?.isError === true;
   if (failed && details.error && typeof details.error === "object")
     return new WidthSafeText(
