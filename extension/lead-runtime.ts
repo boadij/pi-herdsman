@@ -190,6 +190,14 @@ type LeadTransitionHost = {
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
   findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
   acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
+  afterProjectAssignmentLockAcquired?(
+    repoKey: string,
+    branch: string,
+  ): Promise<void>;
+  afterProjectAssignmentLockOccupied?(
+    repoKey: string,
+    branch: string,
+  ): Promise<void>;
   projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   readManagerDescriptorStatus: typeof import("./supervision.ts").readManagerDescriptorStatus;
@@ -527,6 +535,7 @@ type LeadProjectHost = {
     repoKey: string,
     branch: string,
     operation: () => Promise<T> | T,
+    signal?: AbortSignal,
   ): Promise<T>;
   stopOwnedAgentsForSession(
     ctx: ExtensionContext,
@@ -2804,7 +2813,14 @@ export function registerLeadRuntime(
       repoKey: string,
       branch: string,
       operation: () => Promise<T> | T,
-    ) => roleTransitions.withProjectAssignmentLock(repoKey, branch, operation),
+      signal?: AbortSignal,
+    ) =>
+      roleTransitions.withProjectAssignmentLock(
+        repoKey,
+        branch,
+        operation,
+        signal,
+      ),
     ...options.coordinationHost,
     workspaceId: () => options.roleTransitionHost.workspaceId(),
     currentManager: (
@@ -7091,6 +7107,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   const persistLeadSessionFile = async (
     assignment: ProjectAssignment,
     piSessionFile: string,
+    signal?: AbortSignal,
   ): Promise<ProjectAssignment> =>
     host.withProjectAssignmentLock(
       assignment.repoKey,
@@ -7114,14 +7131,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         host.writeProjectAssignment(host.supervisionRuntime(), bound);
         return bound;
       },
+      signal,
     );
   const bindLeadSessionFile = async (
     assignment: ProjectAssignment,
     lead: HerdrRecord,
+    signal?: AbortSignal,
   ): Promise<ProjectAssignment> => {
     const piSessionFile = supervisedSessionFile(lead, assignment.id);
     return piSessionFile
-      ? persistLeadSessionFile(assignment, piSessionFile)
+      ? persistLeadSessionFile(assignment, piSessionFile, signal)
       : assignment;
   };
   type ProjectLeadActivation =
@@ -7800,7 +7819,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationName,
         `Lead ${assignment.id}`,
       );
-      assignment = await bindLeadSessionFile(assignment, lead);
+      assignment = await bindLeadSessionFile(assignment, lead, signal);
       writeChiefMessage({
         version: 2,
         build: HERDSMAN_BUILD,
@@ -7864,7 +7883,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       await assertManagerCurrent();
-      await bindLeadSessionFile(assignment, rediscovered);
+      await bindLeadSessionFile(assignment, rediscovered, signal);
       return {
         content: [
           {
@@ -11468,12 +11487,37 @@ export function createLeadRoleTransitions(
     repoKey: string,
     branch: string,
     operation: () => Promise<T> | T,
+    signal?: AbortSignal,
   ): Promise<T> => {
-    const lease = host.acquireProcessLock(
-      `${host.projectAssignmentPath(host.supervisionRuntime(), repoKey, branch)}.lock`,
-      { name: "project assignment lock" },
-    );
+    const path = `${host.projectAssignmentPath(host.supervisionRuntime(), repoKey, branch)}.lock`;
+    const deadline = Date.now() + 2_000;
+    let lease: ReturnType<typeof host.acquireProcessLock>;
+    while (true) {
+      signal?.throwIfAborted();
+      if (Date.now() >= deadline)
+        throw new ProcessLockOccupiedError(
+          "Project assignment lock is in progress",
+        );
+      try {
+        lease = host.acquireProcessLock(path, {
+          name: "project assignment lock",
+        });
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof ProcessLockOccupiedError) ||
+          Date.now() >= deadline
+        )
+          throw error;
+        await host.afterProjectAssignmentLockOccupied?.(repoKey, branch);
+        await host.delay(Math.min(25, deadline - Date.now()), undefined, {
+          signal,
+        });
+      }
+    }
     try {
+      if (host.afterProjectAssignmentLockAcquired)
+        await host.afterProjectAssignmentLockAcquired(repoKey, branch);
       return await operation();
     } finally {
       lease.release();
@@ -11571,6 +11615,7 @@ export function createLeadRoleTransitions(
         host.writeProjectMessage(record, runtime);
         return record;
       },
+      ctx.signal,
     );
   };
   const managerForScope = (

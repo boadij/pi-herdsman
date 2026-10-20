@@ -680,7 +680,26 @@ type StopReportCallbacks = {
   onCleanupFailure?: (label: string, message: string) => void;
 };
 
+type TestProjectAssignmentLockHooks = {
+  afterAcquired?: (repoKey: string, branch: string) => Promise<void>;
+  afterOccupied?: (repoKey: string, branch: string) => Promise<void>;
+};
+
+export function registerExtensionForTest(
+  pi: ExtensionAPI,
+  lockHooks: TestProjectAssignmentLockHooks,
+): void {
+  registerExtensionImpl(pi, lockHooks);
+}
+
 export default function (pi: ExtensionAPI): void {
+  registerExtensionImpl(pi);
+}
+
+function registerExtensionImpl(
+  pi: ExtensionAPI,
+  lockHooks?: TestProjectAssignmentLockHooks,
+): void {
   let leadRuntimes!: ReturnType<typeof registerLeadRuntime>;
   let leadStatusRuntime: ReturnType<
     typeof registerLeadRuntime
@@ -1271,6 +1290,8 @@ export default function (pi: ExtensionAPI): void {
       leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
     projectMessageBytes,
     writeProjectMessage,
+    afterProjectAssignmentLockAcquired: lockHooks?.afterAcquired,
+    afterProjectAssignmentLockOccupied: lockHooks?.afterOccupied,
     releaseProjectAssignment,
     retireProjectAssignment,
     removeProjectMessagesForAssignment,
