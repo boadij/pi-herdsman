@@ -97,9 +97,11 @@ steering does not abort the current operation or interrupt an in-flight tool
 call. Authorized Manager messages to ordinary Leads use the same cooperative
 steering behavior, whether the Lead is active or idle.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
-result refs already supplied as evidence. Attachments are prepared at
-submission; the coordination record carries the prepared text and any hidden
-semantic-result bindings needed for the recipient to forward them.
+result refs already supplied as evidence. Supported UTF-8 text must fit both
+configured per-file and complete-message limits or the handoff fails. The
+compact coordination record carries the prepared message body separately when
+needed, along with hidden semantic-result bindings for the recipient to
+forward.
 `retain` is optional and defaults to `false`. Set it to `true` only when the
 message text and supplied files should become continuing required evidence
 for the target's verified project assignment. The target must be an assigned

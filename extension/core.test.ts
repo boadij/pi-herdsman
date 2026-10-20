@@ -46,16 +46,25 @@ mock.module("node:fs", {
     existsSync: realFs.existsSync,
     fstatSync: (...args: any[]) => {
       if (candidateReadFd !== undefined && args[0] === candidateReadFd) {
-        const stat = realFs.fstatSync(args[0]);
+        const stat = realFs.fstatSync(args[0], args[1]);
+        const value = (
+          override: number | undefined,
+          actual: number | bigint,
+        ) =>
+          override === undefined
+            ? actual
+            : typeof actual === "bigint"
+              ? BigInt(override)
+              : override;
         return {
           ...stat,
           isFile: () => candidateReadIsFile,
-          size: candidateReadSize ?? stat.size,
-          dev: candidateReadDev ?? stat.dev,
-          ino: candidateReadIno ?? stat.ino,
+          size: value(candidateReadSize, stat.size),
+          dev: value(candidateReadDev, stat.dev),
+          ino: value(candidateReadIno, stat.ino),
         };
       }
-      return realFs.fstatSync(...args);
+      return realFs.fstatSync(args[0], args[1]);
     },
     fsyncSync: realFs.fsyncSync,
     mkdirSync: realFs.mkdirSync,
@@ -751,6 +760,32 @@ test("keeps a reference when the candidate descriptor has a different identity",
   }
 });
 
+test("rejects a same-size in-place mutation while reading an attachment", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-mutated-"));
+  const path = join(cwd, "candidate");
+  writeFileSync(path, "AAAA");
+  let changed = false;
+  snapshotReadHook = () => {
+    if (!changed) {
+      changed = true;
+      realFs.writeFileSync(path, "BBBB");
+    }
+  };
+  try {
+    assert.throws(
+      () =>
+        prepareMessageInput("check", [path], cwd, "message_staff", "Message", {
+          requireInline: true,
+        }),
+      /Attachment changed while being read/,
+    );
+    assert.ok(changed);
+  } finally {
+    snapshotReadHook = undefined;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("rejects required evidence when its identity changes before preparation", () => {
   const cwd = mkdtempSync(
     join(tmpdir(), "pi-herdsman-required-evidence-identity-"),
@@ -887,7 +922,7 @@ test("embedded message text is a submission-time snapshot", () => {
     "assign",
     "Task",
   );
-  writeFileSync(path, "after");
+  realFs.unlinkSync(path);
   assert.match(prepared.text, /before/);
   assert.doesNotMatch(prepared.text, /after/);
 });
@@ -1031,6 +1066,44 @@ test("message preparation uses exact serialized envelope boundaries", () => {
     serializedBytes: serialize,
   });
   assert.equal(prepared.text, referenceText);
+});
+
+test("strict message preparation rejects reference-only attachments", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-strict-"));
+  const path = join(cwd, "candidate");
+  writeFileSync(path, "x".repeat(100));
+  assert.throws(
+    () =>
+      prepareMessageInput("check", [path], cwd, "message_staff", "Message", {
+        inlineLimitBytes: 10,
+        requireInline: true,
+      }),
+    /could not be fully embedded within the configured limits/,
+  );
+  for (const bytes of [Buffer.from([0xff]), Buffer.from([0])]) {
+    writeFileSync(path, bytes);
+    assert.throws(
+      () =>
+        prepareMessageInput("check", [path], cwd, "message_staff", "Message", {
+          requireInline: true,
+        }),
+      /not supported UTF-8 text/,
+    );
+  }
+  writeFileSync(path, "x".repeat(100));
+  const prepared = prepareMessageInput(
+    "check",
+    [path],
+    cwd,
+    "message_staff",
+    "Message",
+    {
+      inlineLimitBytes: 200,
+      mailboxLimitBytes: 1_000,
+      requireInline: true,
+    },
+  );
+  assert.match(prepared.text, /x{100}/);
 });
 
 test("message preparation rejects a candidate read failure", () => {

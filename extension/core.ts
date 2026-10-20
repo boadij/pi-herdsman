@@ -261,6 +261,7 @@ export type MessagePreparationOptions = {
     resultBindings: readonly ResultBinding[],
   ) => number;
   verifiedEvidence?: readonly Pick<RequiredEvidence, "path" | "sha256">[];
+  requireInline?: boolean;
 };
 
 function escapeMessageFileName(path: string): string {
@@ -354,6 +355,7 @@ export function prepareMessageInput(
         constants.O_RDONLY | constants.O_NONBLOCK,
       );
       const current = fstatSync(fd);
+      const readVersion = fstatSync(fd, { bigint: true });
       if (!current.isFile()) throw new Error("not a regular file");
       const verified = options.verifiedEvidence?.find(
         (entry) => realpathSync(entry.path) === file.canonicalPath,
@@ -367,6 +369,12 @@ export function prepareMessageInput(
           fail(
             "invalid_request",
             `Required evidence identity check failed: ${file.input}`,
+            operation,
+          );
+        if (options.requireInline)
+          fail(
+            "invalid_request",
+            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
             operation,
           );
         continue;
@@ -387,7 +395,15 @@ export function prepareMessageInput(
               .join("\n\n"),
             resultBindings,
           ));
-      if (cannotInline && !verified) continue;
+      if (cannotInline && !verified) {
+        if (options.requireInline)
+          fail(
+            "invalid_request",
+            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
+            operation,
+          );
+        continue;
+      }
       bytes = Buffer.allocUnsafe(current.size);
       let offset = 0;
       while (offset < current.size) {
@@ -401,8 +417,23 @@ export function prepareMessageInput(
         if (!count) break;
         offset += count;
       }
-      if (offset !== current.size || fstatSync(fd).size !== current.size)
+      const afterRead = fstatSync(fd, { bigint: true });
+      if (
+        offset !== current.size ||
+        afterRead.size !== readVersion.size ||
+        afterRead.dev !== readVersion.dev ||
+        afterRead.ino !== readVersion.ino ||
+        afterRead.mtimeNs !== readVersion.mtimeNs ||
+        afterRead.ctimeNs !== readVersion.ctimeNs
+      ) {
+        if (options.requireInline)
+          fail(
+            "invalid_request",
+            `Attachment changed while being read: ${file.input}`,
+            operation,
+          );
         continue;
+      }
       bytes = bytes.subarray(0, offset);
       if (
         verified &&
@@ -413,7 +444,15 @@ export function prepareMessageInput(
           `Required evidence integrity check failed: ${file.input}`,
           operation,
         );
-      if (cannotInline) continue;
+      if (cannotInline) {
+        if (options.requireInline)
+          fail(
+            "invalid_request",
+            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
+            operation,
+          );
+        continue;
+      }
     } catch (error) {
       if (error instanceof OperationError) throw error;
       if (
@@ -421,6 +460,12 @@ export function prepareMessageInput(
         (error as NodeJS.ErrnoException).code === "ENOENT"
       )
         failUnknownResultRef(file.input, operation);
+      if (options.requireInline)
+        fail(
+          "invalid_request",
+          `Attachment could not be fully embedded: ${file.input}`,
+          operation,
+        );
       fail(
         "invalid_request",
         `Cannot read file ${file.input}: ${error instanceof Error ? error.message : String(error)}`,
@@ -429,15 +474,37 @@ export function prepareMessageInput(
     } finally {
       if (fd !== undefined) closeSync(fd);
     }
-    if (bytes.includes(0)) continue;
+    if (bytes.includes(0)) {
+      if (options.requireInline)
+        fail(
+          "invalid_request",
+          `Attachment is not supported UTF-8 text: ${file.input}`,
+          operation,
+        );
+      continue;
+    }
     let content: string;
     try {
       content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch {
+      if (options.requireInline)
+        fail(
+          "invalid_request",
+          `Attachment is not supported UTF-8 text: ${file.input}`,
+          operation,
+        );
       continue;
     }
     sections[index] = renderMessageFile(file, content);
-    if (!fits(rendered(), resultBindings)) sections[index] = prior;
+    if (!fits(rendered(), resultBindings)) {
+      sections[index] = prior;
+      if (options.requireInline)
+        fail(
+          "invalid_request",
+          `Attachment could not be fully embedded within the configured limits: ${file.input}`,
+          operation,
+        );
+    }
   }
   return {
     text: rendered(),

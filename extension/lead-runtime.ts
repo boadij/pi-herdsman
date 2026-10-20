@@ -14,6 +14,7 @@ import type {
   ManagerLease,
   ProjectAssignment,
   ProjectMessage,
+  ProjectMessageHeader,
   ChiefMessageRecord,
   ChiefInboxDrainOptions,
   ChiefMessageKind,
@@ -34,6 +35,8 @@ import {
   listProjectMessages,
   readChiefMessage,
   removeChiefMessage,
+  listProjectMessageHeaders,
+  readProjectMessage,
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
@@ -601,7 +604,8 @@ type LeadCoordinationBaseHost = {
   matchesExpectedSession: typeof import("./herdr.ts").matchesExpectedSession;
   isPiAgent(agent: HerdrRecord): boolean;
   listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
-  listProjectMessages: typeof import("./supervision.ts").listProjectMessages;
+  listProjectMessageHeaders: typeof import("./supervision.ts").listProjectMessageHeaders;
+  readProjectMessage: typeof import("./supervision.ts").readProjectMessage;
   removeProjectMessage: typeof import("./supervision.ts").removeProjectMessage;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   importResultBindings: typeof import("./agent-controller.ts").importResultBindings;
@@ -9000,12 +9004,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     removeChiefMessage,
     quarantineChiefMessage,
     listProjectAssignments,
-    listProjectMessages,
+    listProjectMessageHeaders,
+    readProjectMessage,
     removeProjectMessage,
     readProjectAssignment,
     importResultBindings,
   } = host;
   const reportedProjectMessageCleanupErrors = new Set<string>();
+  const reportedProjectMessageReadErrors = new Set<string>();
   const reportedRetirementErrors = new Set<string>();
   const retirementCursors = new Map<string, string>();
   const readLeadSessionIdsFromHost = (
@@ -9030,10 +9036,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const limits = await host.messageLimits(ctx);
     return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
       inlineLimitBytes: limits.inline.bytes,
-      mailboxLimitBytes: Math.min(
-        limits.mailbox.bytes,
-        host.coordinationMessageMaxBytes,
-      ),
+      mailboxLimitBytes: limits.mailbox.bytes,
+      requireInline: true,
       serializedBytes: (
         candidate: string,
         resultBindings: readonly ResultBinding[],
@@ -10294,6 +10298,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       try {
         removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
         reportedProjectMessageCleanupErrors.delete(record.id);
+        reportedProjectMessageReadErrors.delete(record.id);
       } catch (error) {
         if (!reportedProjectMessageCleanupErrors.has(record.id)) {
           reportedProjectMessageCleanupErrors.add(record.id);
@@ -10302,11 +10307,18 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       }
     };
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
-      for (const record of listProjectMessages(
-        runtime,
-        manager.repoKey,
-        assignment.branch,
-      )) {
+      let pending: ProjectMessageHeader[];
+      try {
+        pending = listProjectMessageHeaders(
+          runtime,
+          manager.repoKey,
+          assignment.branch,
+        );
+      } catch (error) {
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        return 0;
+      }
+      for (const record of pending) {
         if (record.fromSessionId !== assignment.id) continue;
         if (hasProjectMessageReceipt(record)) {
           consumeProjectMessage(record);
@@ -10326,27 +10338,48 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           stillAssigned.id !== assignment.id
         )
           return 0;
-        importResultBindings(pi, ctx, record.resultBindings, "project_message");
-        const backlog = record.createdAt < manager.createdAt;
+        let message: ProjectMessage;
+        try {
+          message = readProjectMessage(
+            runtime,
+            record.repoKey,
+            record.branch,
+            record.id,
+          );
+          reportedProjectMessageReadErrors.delete(record.id);
+        } catch (error) {
+          if (!reportedProjectMessageReadErrors.has(record.id)) {
+            reportedProjectMessageReadErrors.add(record.id);
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+          }
+          continue;
+        }
+        importResultBindings(
+          pi,
+          ctx,
+          message.resultBindings,
+          "project_message",
+        );
+        const backlog = message.createdAt < manager.createdAt;
         const actionableFailure =
-          backlog && record.kind === "execution_failure";
+          backlog && message.kind === "execution_failure";
         pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
-            content: `Project ${record.branch} from lead ${record.fromSessionId}:\n\n${record.text}`,
+            content: `Project ${message.branch} from lead ${message.fromSessionId}:\n\n${message.text}`,
             display: true,
             details: {
-              id: record.id,
-              repoKey: record.repoKey,
-              branch: record.branch,
-              fromSessionId: record.fromSessionId,
+              id: message.id,
+              repoKey: message.repoKey,
+              branch: message.branch,
+              fromSessionId: message.fromSessionId,
             },
           },
           backlog && !actionableFailure
             ? { triggerTurn: false }
             : { deliverAs: "followUp", triggerTurn: true },
         );
-        if (hasProjectMessageReceipt(record)) consumeProjectMessage(record);
+        if (hasProjectMessageReceipt(message)) consumeProjectMessage(message);
         return 1;
       }
     }
@@ -11946,11 +11979,19 @@ export function createLeadRoleTransitions(
           assignment.branch,
         );
         if (!latest || latest.id !== sessionId) return undefined;
-        const existing = listProjectMessages(
+        const existingHeader = listProjectMessageHeaders(
           runtime,
           assignment.repoKey,
           assignment.branch,
         ).find((candidate) => candidate.id === id);
+        const existing = existingHeader
+          ? readProjectMessage(
+              runtime,
+              assignment.repoKey,
+              assignment.branch,
+              existingHeader.id,
+            )
+          : undefined;
         if (existing) {
           if (
             existing.fromSessionId !== sessionId ||
