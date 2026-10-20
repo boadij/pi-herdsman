@@ -152,6 +152,25 @@ Remove distinctions once they no longer carry meaningful semantics.
 
 Do not expose implementation details merely because they exist internally.
 
+## Minimize model-facing reference burden
+
+Treat file paths, identifiers, and artifact references exposed to models as
+interface design decisions, not incidental storage details. Prefer omitting
+or deriving an identity from verified runtime state; otherwise reuse a short,
+stable, unambiguous semantic reference instead of exposing long absolute
+paths, UUID-containing paths, generated filenames, or internal directory
+layouts. Do not require models to construct, remember, or transcribe
+information the system already knows.
+
+Shorter strings are not inherently better. Do not add aliases, registries, or
+lookup rules merely to hide complexity, or sacrifice identity, authority,
+security, recoverability, or interoperability. Retain exact physical paths
+and opaque IDs when required by the underlying tool or boundary, and resolve
+simplified references deterministically against authoritative state.
+
+For each model-facing reference, ask: **Does the model need to supply this,
+and what is the simplest reliable way to identify it?**
+
 ## Do not accumulate defensive guidance
 
 A model mistake is evidence to investigate, not automatically evidence that another instruction is needed.

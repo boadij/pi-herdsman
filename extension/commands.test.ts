@@ -6001,6 +6001,15 @@ async function managerDelegateAssignmentTest(
       }
       return;
     }
+    assert.equal(assignment.text.match(/Implement focused change/g)?.length, 1);
+    const brief = assignment.requiredEvidence?.find(
+      (entry) => entry.name === "project-brief.md",
+    );
+    assert.ok(brief && "path" in brief);
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignment.id, brief),
+      "Implement focused change",
+    );
     const reviewFile = join(tmpdir(), `manager-review-${randomUUID()}.md`);
     t.after(() => rmSync(reviewFile, { force: true }));
     realFs.writeFileSync(reviewFile, "external review finding");
@@ -16263,25 +16272,41 @@ test("project assignment lock waits are bounded, cancellable, and revalidate aft
     name: "project assignment lock",
   });
   const controller = new AbortController();
+  let cancelBlocked!: () => void;
+  let releaseCancelBlock!: () => void;
+  const blockedOnLock = new Promise<void>((resolve) => {
+    cancelBlocked = resolve;
+  });
+  const cancelBlock = new Promise<void>((resolve) => {
+    releaseCancelBlock = resolve;
+  });
   const cancelTransitions = makeTransitions({
-    afterProjectAssignmentLockOccupied: async () => controller.abort(),
+    afterProjectAssignmentLockOccupied: async () => {
+      cancelBlocked();
+      await cancelBlock;
+    },
   });
   mutated = false;
+  const cancellation = assert.rejects(
+    cancelTransitions.withProjectAssignmentLock(
+      repoKey,
+      branch,
+      () => {
+        mutated = true;
+      },
+      controller.signal,
+    ),
+    (error: unknown) => error instanceof Error && error.name === "AbortError",
+  );
   try {
-    await assert.rejects(
-      cancelTransitions.withProjectAssignmentLock(
-        repoKey,
-        branch,
-        () => {
-          mutated = true;
-        },
-        controller.signal,
-      ),
-      (error: unknown) => error instanceof Error && error.name === "AbortError",
-    );
+    await blockedOnLock;
+    controller.abort();
+    releaseCancelBlock();
+    await cancellation;
     assert.equal(mutated, false);
     assert.equal(readLiveProcessLock(lockPath).id, cancelLease.claim.id);
   } finally {
+    releaseCancelBlock();
     cancelLease.release();
   }
   assert.equal(existsSync(lockPath), false);
