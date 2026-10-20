@@ -9534,6 +9534,50 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(steerSubmitted?.kind, "steer");
   assert.match(steerSubmitted?.text ?? "", /steer evidence/);
   assert.equal(steerSubmitted?.requestId, steer.details.request_id);
+
+  const oversizedRequestId = randomUUID();
+  const oversizedResult = resultPath(oversizedRequestId);
+  realFs.mkdirSync(resolve(oversizedResult, ".."), { recursive: true });
+  realFs.writeFileSync(oversizedResult, "x".repeat(1024 * 1024), "utf8");
+  accepting.entries.push({
+    customType: "pi-herdsman-agent-result",
+    details: {
+      agentLabel: "reviewer",
+      resultIndex: 1,
+      requestId: oversizedRequestId,
+      resultRef: resultRef(oversizedRequestId),
+      status: "completed",
+    },
+  });
+  const requestsBeforeOversizedSteer = realFs
+    .readdirSync(mailbox)
+    .filter((name) => name.startsWith("request-") && name.endsWith(".json"));
+  const oversizedSteer = await accepting.tools
+    .find((candidate) => candidate.name === "steer_agent")!
+    .execute(
+      "id",
+      {
+        agent: label,
+        message: "Review this result",
+        files: ["result:reviewer#1"],
+      },
+      undefined,
+      undefined,
+      fakeContext(accepting.entries),
+    );
+  assert.equal(oversizedSteer.details.ok, false);
+  assert.match(
+    oversizedSteer.details.error.message,
+    /Attachment could not be fully embedded within the configured limits/,
+  );
+  assert.deepEqual(
+    realFs
+      .readdirSync(mailbox)
+      .filter((name) => name.startsWith("request-") && name.endsWith(".json")),
+    requestsBeforeOversizedSteer,
+    "an uninspectable semantic attachment must not be queued",
+  );
+  realFs.rmSync(oversizedResult, { force: true });
   assert.match(
     (steer.content[0] as { text: string }).text,
     new RegExp(`Session: ${identity.piSessionId}`),

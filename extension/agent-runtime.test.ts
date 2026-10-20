@@ -1726,6 +1726,81 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   realFs.rmSync(askFile, { force: true });
 });
 
+test("agent ask_owner rejects oversized semantic results without persisting an ask", async () => {
+  const mailbox = setAgentEnvironment();
+  const requestId = randomUUID();
+  const canonicalRef = resultRef(requestId);
+  const artifact = resultPath(requestId);
+  let agent: ReturnType<typeof fakePi> | undefined;
+  try {
+    realFs.mkdirSync(resolve(artifact, ".."), { recursive: true });
+    realFs.writeFileSync(artifact, Buffer.alloc(512 * 1024, 97));
+    const semanticRef = "result:reviewer#1";
+    agent = fakePi();
+    registerExtension!(agent.pi as never);
+    const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
+    assert.ok(askTool);
+    const resultEntry = {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: { ref: semanticRef, canonicalRef },
+    };
+    const branch: unknown[] = [
+      resultEntry,
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "ask_owner" }],
+        },
+      },
+    ];
+    const context = fakeAgentContext([resultEntry], branch);
+    await agent.events.get("session_start")![0](undefined, context);
+    const assignment: RequestRecord = {
+      version: 5,
+      runId: AGENT_ID,
+      requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: WORKSPACE,
+      agentLabel: "registered-agent",
+      paneId: "registered-pane",
+      kind: "task",
+      text: "choose",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, assignment);
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(assignment.requestId) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    removeRequest(mailbox, assignment.requestId);
+
+    await assert.rejects(
+      askTool.execute(
+        "oversized-result",
+        {
+          question: "Review this result",
+          files: [semanticRef],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+      /could not be fully embedded/i,
+    );
+    assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
+    assert.equal(realFs.existsSync(join(mailbox, "ask.json")), false);
+  } finally {
+    agent?.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
 test("message limits do not consult project trust", async () => {
   const mailbox = setAgentEnvironment();
   const agent = fakePi();

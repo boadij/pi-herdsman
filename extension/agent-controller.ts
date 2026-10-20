@@ -4386,6 +4386,7 @@ export function createAgentController(
       {
         inlineLimitBytes: limits.inlineAttachmentLimitBytes,
         mailboxLimitBytes: limits.mailboxPayloadLimitBytes,
+        requireInline: true,
         fits: (text, resultBindings) =>
           mailboxRecordBytes({
             version: 5,

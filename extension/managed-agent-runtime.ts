@@ -2685,6 +2685,7 @@ export function registerManagedAgentRuntime(
           {
             inlineLimitBytes: limits.inline.bytes,
             mailboxLimitBytes: limits.mailbox.bytes,
+            requireInline: true,
             serializedBytes: (text, bindings) =>
               askRecordBytes(
                 state,

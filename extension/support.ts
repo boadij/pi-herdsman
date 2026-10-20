@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { watch, type FSWatcher } from "node:fs";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { after, mock, test } from "node:test";
+import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
@@ -19,7 +18,6 @@ import { assignmentLockPath, claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
 import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
-import { hrtime } from "node:process";
 
 export const watchedMailboxDirectories = new Map<string, Set<Function>>();
 export let failNextMailboxWatch = false;
@@ -98,23 +96,6 @@ const systemTmpDir = tmpdir();
 export const testTmpRoot = realFs.mkdtempSync(
   join(systemTmpDir, "pi-herdsman-test-"),
 );
-const testTmpRootTraceStart = hrtime.bigint();
-const windowsTestTmpRootTrace = process.platform === "win32";
-export function traceTestTmpRoot(event: string): void {
-  if (!windowsTestTmpRootTrace) return;
-  const elapsedMs = Number(hrtime.bigint() - testTmpRootTraceStart) / 1e6;
-  process.stderr.write(
-    `[testTmpRoot] ${event} +${elapsedMs.toFixed(3)}ms exists=${realFs.existsSync(testTmpRoot)}\n`,
-  );
-}
-traceTestTmpRoot("created");
-let testTmpRootWatcher: FSWatcher | undefined;
-if (windowsTestTmpRootTrace) {
-  const rootName = basename(testTmpRoot);
-  testTmpRootWatcher = watch(systemTmpDir, (event, filename) => {
-    if (filename?.toString() === rootName) traceTestTmpRoot(`parent-${event}`);
-  });
-}
 export const PI_AGENT_ROOT = realFs.mkdtempSync(
   join(systemTmpDir, "pi-herdsman-pi-agent-"),
 );
@@ -141,16 +122,10 @@ const {
   parseSessionEntries: nativeParseSessionEntries,
   truncateTail: nativeTruncateTail,
 } = await import("@earendil-works/pi-coding-agent");
-after(() => {
-  traceTestTmpRoot("after-entry");
-  traceTestTmpRoot("after-start");
+process.on("exit", () => {
   realFs.rmSync(testTmpRoot, { recursive: true, force: true });
-  traceTestTmpRoot("after-end");
-  testTmpRootWatcher?.close();
+  realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true });
 });
-process.on("exit", () =>
-  realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true }),
-);
 mock.module("node:fs", {
   namedExports: {
     accessSync: realFs.accessSync,
