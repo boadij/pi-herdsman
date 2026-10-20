@@ -26,6 +26,26 @@ is uncertain, or adding delegation overhead can increase the burden instead.
 For each model-facing change, ask: **Which decision does this leave to the
 model, and does that decision require its judgment?**
 
+## Compose model-facing context for salience
+
+Information placement can affect how reliably models use long context:
+relevant material may be easier to use at the beginning or end than in the
+middle ([Lost in the Middle](https://aclanthology.org/2024.tacl-1.9/)).
+This is a tendency, not an instruction hierarchy. Position alone does not
+change instruction authority or make newer evidence binding.
+
+When composing new model-facing context, clearly delimit supporting material
+and, where semantics permit, place the current task or decision request and
+its essential constraints near the end. Preserve meaningful source order,
+provenance, and established instruction precedence. Avoid burying critical
+information in lengthy middle sections or duplicating it solely for recency.
+
+Optimize at composition time, not by rewriting previously delivered context.
+Preserve reusable prompt prefixes and append-only Pi history per
+[ADR 0009](../adr/0009-preserve-prompt-cache-continuity.md).
+Prefer clear, deterministic composition over attention scoring or
+provider-specific ordering heuristics.
+
 ## One invariant, one meaning
 
 Every behavioral invariant should have one authoritative meaning. Runtime
