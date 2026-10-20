@@ -744,7 +744,6 @@ export function managerAssignmentDiagnostics({
   supervisorCallObserved,
   supervisorResultState,
   supervisorErrorCategory,
-  supervisorToolOffered,
   readinessDeliveryObserved,
   candidateProcessCount,
   provenanceMatch,
@@ -763,11 +762,6 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
-    supervisorToolOffered: ["offered", "not_offered", "not_observed"].includes(
-      supervisorToolOffered,
-    )
-      ? supervisorToolOffered
-      : "not_observed",
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
@@ -818,7 +812,24 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
           .map((call) => ({ call, index }))
       : [],
   );
-  const match = calls.at(-1);
+  const candidate = calls.length === 1 ? calls[0] : undefined;
+  const matchingCallIdCount = candidate
+    ? entries.reduce(
+        (count, entry) =>
+          count +
+          (entry.type === "message" && entry.message?.role === "assistant"
+            ? (Array.isArray(entry.message.content)
+                ? entry.message.content
+                : []
+              ).filter(
+                (block) =>
+                  block?.type === "toolCall" && block.id === candidate.call.id,
+              ).length
+            : 0),
+        0,
+      )
+    : 0;
+  const match = matchingCallIdCount === 1 ? candidate : undefined;
   const call = match?.call;
   const correlatedResults = call
     ? entries.flatMap((entry, index) =>
@@ -829,34 +840,13 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
           : [],
       )
     : [];
-  const results = correlatedResults
-    .filter(({ message }) => message.toolName === "message_supervisor")
-    .map(({ message }) => message);
-  const matchingCallCount = call
-    ? entries.reduce(
-        (count, entry) =>
-          count +
-          (entry.type === "message" && entry.message?.role === "assistant"
-            ? (Array.isArray(entry.message.content)
-                ? entry.message.content
-                : []
-              ).filter(
-                (block) => block?.type === "toolCall" && block.id === call.id,
-              ).length
-            : 0),
-        0,
-      )
-    : 0;
-  const supervisorToolOffered =
-    call &&
-    matchingCallCount === 1 &&
+  const matchingResult =
     correlatedResults.length === 1 &&
     correlatedResults[0].message.toolName === "message_supervisor" &&
-    typeof correlatedResults[0].message.isError === "boolean" &&
     correlatedResults[0].index > match.index
-      ? replayToolAvailability(entries, match.index)
-      : "not_observed";
-  const result = results.length === 1 ? results[0] : undefined;
+      ? correlatedResults[0].message
+      : undefined;
+  const result = matchingResult;
   const success = result && !result.isError && result.details?.ok !== false;
   const failed =
     result && (result.isError === true || result.details?.ok === false)
@@ -878,7 +868,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
         ? "success"
         : failed
           ? "error"
-          : results.length === 0
+          : correlatedResults.length === 0
             ? "pending"
             : "not_observed",
     supervisorErrorCategory:
@@ -896,35 +886,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
       categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
         ? category
         : "not_observed",
-    supervisorToolOffered,
   };
-}
-
-function replayToolAvailability(entries, throughIndex) {
-  const available = new Set();
-  let sawDelta = false;
-  for (const entry of entries.slice(0, throughIndex)) {
-    const message = entry.type === "message" ? entry.message : undefined;
-    if (message?.role !== "system") continue;
-    for (const [key, operation] of [
-      ["toolsRemoved", (name) => available.delete(name)],
-      ["toolsAdded", (name) => available.add(name)],
-    ]) {
-      if (!Object.hasOwn(message, key)) continue;
-      sawDelta = true;
-      if (!Array.isArray(message[key])) return "not_observed";
-      for (const tool of message[key]) {
-        if (!tool || typeof tool.name !== "string" || !tool.name)
-          return "not_observed";
-        operation(tool.name);
-      }
-    }
-  }
-  return sawDelta
-    ? available.has("message_supervisor")
-      ? "offered"
-      : "not_offered"
-    : "not_observed";
 }
 
 function emptySupervisorMessageDiagnostics(headerMatches) {
@@ -936,7 +898,6 @@ function emptySupervisorMessageDiagnostics(headerMatches) {
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
-    supervisorToolOffered: "not_observed",
   };
 }
 
@@ -7939,13 +7900,6 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
           managerProgress.supervisorPersistedErrorCategory,
         )
           ? managerProgress.supervisorPersistedErrorCategory
-          : "not_observed",
-        supervisorToolOffered: [
-          "offered",
-          "not_offered",
-          "not_observed",
-        ].includes(managerProgress.supervisorToolOffered)
-          ? managerProgress.supervisorToolOffered
           : "not_observed",
         readinessDeliveryObserved:
           typeof managerProgress.readinessDeliveryObserved === "boolean"

@@ -9833,6 +9833,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       });
     const boundaryError = (error: unknown): OperationError => {
       if (error instanceof OperationError) throw error;
+      if (error instanceof Error && error.name === "AbortError") throw error;
       const message = error instanceof Error ? error.message : String(error);
       const wrapped = structuredError("internal_failure", message);
       Object.defineProperty(wrapped, "cause", { value: error });
@@ -9898,6 +9899,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             assignment,
             params.message,
             files,
+            undefined,
+            undefined,
+            undefined,
+            signal,
           );
         } catch (error) {
           throw boundaryError(error);

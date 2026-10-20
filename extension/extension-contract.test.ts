@@ -31,8 +31,11 @@ import {
   readPeerLeadRecord,
   removePeerLeadRecord,
   removeProjectAssignment,
+  removeProjectMessage,
   removeChiefMessage,
   readChiefMessage,
+  listProjectMessageHeaders,
+  readProjectMessage,
   writeChiefMessage,
   supervisionRuntime,
   readLeadCoordinationState,
@@ -4963,7 +4966,6 @@ test("registered message_supervisor projects OperationError categories to tool r
       {
         supervisorSessionHeaderMatches: true,
         supervisorCallObserved: true,
-        supervisorToolOffered: "not_observed",
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
         supervisorHandlerBranchStatus: "operation_error_returned",
@@ -5052,6 +5054,96 @@ test("registered message_supervisor projects OperationError categories to tool r
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  }
+});
+
+test("registered message_supervisor publishes for a Lead initialized from its exact assignment", async () => {
+  setLeadEnvironment();
+  const sessionId = randomUUID();
+  const repoKey = `registered-managed-${randomUUID()}`;
+  const branch = `registered-managed-${randomUUID()}`;
+  process.env.HERDR_PANE_ID = "managed-lead-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `registered-managed-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: sessionId,
+    repoKey,
+    branch,
+    text: "registered message supervisor integration test",
+  });
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  repo_key: repoKey,
+                  repo_name: repoKey,
+                  source_workspace_id: WORKSPACE,
+                },
+                worktrees: [{ branch, open_workspace_id: WORKSPACE }],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  try {
+    await sessionStart(undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-session-kind" &&
+          entry.data?.sessionId === sessionId &&
+          entry.data?.kind === "managed" &&
+          entry.data?.repoKey === repoKey &&
+          entry.data?.branch === branch,
+      ),
+      "session_start should establish Managed identity from the current assignment",
+    );
+    const tool = pi.tools.find(
+      (candidate) => candidate.name === "message_supervisor",
+    );
+    assert.ok(tool);
+    const result = await tool.execute(
+      "call-id",
+      { message: "registered managed supervisor publication" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.isError, undefined);
+    const messages = listProjectMessageHeaders(runtime, repoKey, branch);
+    assert.equal(messages.length, 1);
+    const message = readProjectMessage(
+      runtime,
+      repoKey,
+      branch,
+      messages[0]!.id,
+    );
+    assert.equal(message?.fromSessionId, sessionId);
+    assert.equal(message?.text, "registered managed supervisor publication");
+  } finally {
+    await sessionShutdown();
+    for (const message of listProjectMessageHeaders(runtime, repoKey, branch))
+      removeProjectMessage(runtime, repoKey, branch, message.id);
+    removeProjectAssignment(runtime, repoKey, branch);
     setLeadEnvironment();
   }
 });

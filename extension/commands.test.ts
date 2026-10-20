@@ -6543,7 +6543,6 @@ async function managerDelegateAssignmentTest(
       repoKey,
       assignment!.branch,
     );
-    const assignmentSnapshot = readFileSync(assignmentFile);
     const assignmentDeliveryPath = paths.find(
       (path) => readChiefMessage(path).kind === "project_assignment",
     )!;
@@ -6598,30 +6597,28 @@ async function managerDelegateAssignmentTest(
       }
     };
     try {
-      // Keep the verified assignment and its delivery unavailable until after
-      // startup, so the first role publication must name the ordinary Lead.
-      unlinkSync(assignmentFile);
-      unlinkSync(paths[0]!);
+      // Keep assignment delivery unavailable until after startup while the
+      // persisted assignment establishes immutable Managed Lead identity.
+      unlinkSync(assignmentDeliveryPath);
       if (!leadStarted) {
         await lead.events.get("session_start")![0](undefined, leadCtx);
         leadStarted = true;
       }
-      await waitForStage("initial Lead tab rename", () =>
+      await waitForStage("initial Managed Lead tab rename", () =>
         assert.ok(
           tabCommands.some(
             (args) =>
               args[0] === "tab" &&
               args[1] === "rename" &&
               args[2] === "child-tab" &&
-              args[3] === "Lead",
+              args[3] === "Managed Lead",
           ),
         ),
       );
-      assert.equal(tabLabels.get("child-tab"), "Lead");
+      assert.equal(tabLabels.get("child-tab"), "Managed Lead");
       assert.equal(lead.pi.getSessionName(), "Existing session name");
 
-      writeFileSync(assignmentFile, assignmentSnapshot);
-      writeFileSync(paths[0]!, deliverySnapshot);
+      writeFileSync(assignmentDeliveryPath, deliverySnapshot);
       await waitForStage("assignment delivery", () =>
         assert.ok(
           lead.sent.some(
@@ -6652,17 +6649,15 @@ async function managerDelegateAssignmentTest(
         assignmentDelivery.content!,
         /If the Manager needs coordination, a question, clarification, warning, or FYI[\s\S]*use message_supervisor\. If it can wait, let[\s\S]*the automatic result handoff carry it\./,
       );
-      await waitForStage("Managed Lead tab rename", () =>
-        assert.ok(
-          tabCommands.some(
-            (args) =>
-              args[0] === "tab" &&
-              args[1] === "rename" &&
-              args[3] === "Managed Lead",
-          ),
-        ),
-      );
       assert.equal(tabLabels.get("child-tab"), "Managed Lead");
+      assert.equal(
+        tabCommands.some(
+          (args) =>
+            args[0] === "tab" && args[1] === "rename" && args[3] === "Lead",
+        ),
+        false,
+        "assignment delivery must not promote an ordinary Lead session",
+      );
       assert.equal(lead.pi.getSessionName(), "Existing session name");
       tabCommands.length = 0;
       holdChildPaneGet = true;

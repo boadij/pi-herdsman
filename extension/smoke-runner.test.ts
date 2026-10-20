@@ -1540,7 +1540,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorHandlerBranchStatus: "operation_error_returned",
     supervisorPersistedErrorCategoryPresent: true,
     supervisorPersistedErrorCategory: "internal_failure",
-    supervisorToolOffered: "not_observed",
   });
   assert.doesNotMatch(
     JSON.stringify(correlated),
@@ -1599,7 +1598,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
-    supervisorToolOffered: "not_observed",
   });
   const successfulSupervisor = await diagnose(
     contents
@@ -1615,7 +1613,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
-    supervisorToolOffered: "not_observed",
   });
   await rm(sessionDir, { recursive: true, force: true });
 
@@ -1735,7 +1732,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       supervisorHandlerBranchStatus: "not_observed",
       supervisorPersistedErrorCategoryPresent: false,
       supervisorPersistedErrorCategory: "not_observed",
-      supervisorToolOffered: "not_observed",
       readinessDeliveryObserved: true,
       worktreeIdentityState: "verified",
       errorCategory: "none",
@@ -1749,17 +1745,11 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   }
 });
 
-test("manager readiness correlates only the latest active-branch call in the assigned session", async () => {
+test("manager readiness correlates one active-branch call with its following result", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-branch-"));
   try {
     const source = SessionManager.create(process.cwd(), sessionDir);
     const root = source.appendMessage({ role: "user", content: "root" });
-    source.appendMessage({
-      role: "system",
-      content: "",
-      toolsAdded: [{ name: "message_supervisor" }],
-      timestamp: 1,
-    });
     source.appendMessage({
       role: "assistant",
       content: [
@@ -1788,43 +1778,8 @@ test("manager readiness correlates only the latest active-branch call in the ass
         {
           type: "toolCall",
           name: "message_supervisor",
-          id: "ACTIVE_NO_DELTA_CALL_ID",
-          arguments: { message: "ACTIVE_BRANCH_NO_DELTA" },
-        },
-      ],
-    });
-    source.appendMessage({
-      role: "toolResult",
-      toolName: "message_supervisor",
-      toolCallId: "ACTIVE_NO_DELTA_CALL_ID",
-      isError: false,
-    });
-    source.appendMessage({
-      role: "system",
-      content: "",
-      toolsAdded: [{ name: "message_supervisor" }],
-      timestamp: 2,
-    });
-    source.appendMessage({
-      role: "system",
-      content: "",
-      toolsRemoved: [{ name: "message_supervisor" }],
-      timestamp: 3,
-    });
-    source.appendMessage({
-      role: "system",
-      content: "",
-      toolsAdded: [{ name: "message_supervisor" }],
-      timestamp: 4,
-    });
-    source.appendMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          name: "message_supervisor",
           id: "OLD_BRANCH_CALL_ID",
-          arguments: { message: "MANAGER_HANDOFF_READY" },
+          arguments: { message: "OLDER_BRANCH_READINESS" },
         },
       ],
     });
@@ -1873,14 +1828,6 @@ test("manager readiness correlates only the latest active-branch call in the ass
       fork.getSessionId(),
       "MANAGER_HANDOFF_READY",
     );
-    assert.equal(
-      supervisorMessageDiagnostics(
-        fork.getSessionFile(),
-        fork.getSessionId(),
-        "ACTIVE_BRANCH_NO_DELTA",
-      ).supervisorToolOffered,
-      "not_observed",
-    );
     assert.deepEqual(diagnostics, {
       supervisorSessionHeaderMatches: true,
       supervisorCallObserved: true,
@@ -1889,7 +1836,6 @@ test("manager readiness correlates only the latest active-branch call in the ass
       supervisorHandlerBranchStatus: "not_observed",
       supervisorPersistedErrorCategoryPresent: true,
       supervisorPersistedErrorCategory: "not_observed",
-      supervisorToolOffered: "offered",
     });
     assert.doesNotMatch(
       JSON.stringify(diagnostics),
@@ -1903,7 +1849,6 @@ test("manager readiness correlates only the latest active-branch call in the ass
     assert.equal(mismatchedHeader.supervisorSessionHeaderMatches, false);
     assert.equal(mismatchedHeader.supervisorCallObserved, false);
     assert.equal(mismatchedHeader.supervisorResultState, "not_observed");
-    assert.equal(mismatchedHeader.supervisorToolOffered, "not_observed");
     assert.doesNotMatch(
       JSON.stringify(mismatchedHeader),
       /WRONG_EXPECTED_SESSION_ID/u,
@@ -1913,43 +1858,75 @@ test("manager readiness correlates only the latest active-branch call in the ass
   }
 });
 
-test("manager readiness ignores a matching tool result before its call", async () => {
-  const sessionDir = await mkdtemp(
-    join(tmpdir(), "herdsman-smoke-manager-order-"),
-  );
-  try {
+test("manager readiness rejects preceding, duplicate, and ambiguous tool evidence", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-order-"));
+  const call = (id: string) => ({
+    role: "assistant" as const,
+    content: [
+      {
+        type: "toolCall" as const,
+        name: "message_supervisor",
+        id,
+        arguments: { message: "MANAGER_HANDOFF_READY" },
+      },
+    ],
+  });
+  const result = (id: string) => ({
+    role: "toolResult" as const,
+    toolName: "message_supervisor",
+    toolCallId: id,
+    isError: false,
+  });
+  const diagnose = async (messages: unknown[]) => {
     const session = SessionManager.create(process.cwd(), sessionDir);
-    session.appendMessage({
-      role: "system",
-      content: "",
-      toolsAdded: [{ name: "message_supervisor" }],
-    });
-    session.appendMessage({
-      role: "toolResult",
-      toolName: "message_supervisor",
-      toolCallId: "CALL_ID",
-      isError: false,
-    });
-    session.appendMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          name: "message_supervisor",
-          id: "CALL_ID",
-          arguments: { message: "MANAGER_HANDOFF_READY" },
-        },
-      ],
-    });
-
-    assert.equal(
-      supervisorMessageDiagnostics(
-        session.getSessionFile(),
-        session.getSessionId(),
-        "MANAGER_HANDOFF_READY",
-      ).supervisorToolOffered,
-      "not_observed",
+    for (const message of messages) session.appendMessage(message as any);
+    return supervisorMessageDiagnostics(
+      session.getSessionFile(),
+      session.getSessionId(),
+      "MANAGER_HANDOFF_READY",
     );
+  };
+  try {
+    const precedingResult = await diagnose([
+      result("CALL_ID"),
+      call("CALL_ID"),
+    ]);
+    assert.equal(precedingResult.supervisorCallObserved, true);
+    assert.equal(precedingResult.supervisorResultState, "not_observed");
+
+    const duplicateCalls = await diagnose([
+      call("CALL_ID"),
+      call("CALL_ID_2"),
+      result("CALL_ID_2"),
+    ]);
+    assert.equal(duplicateCalls.supervisorCallObserved, false);
+    assert.equal(duplicateCalls.supervisorResultState, "missing");
+
+    const ambiguousCallId = await diagnose([
+      call("CALL_ID"),
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "message_supervisor",
+            id: "CALL_ID",
+            arguments: { message: "different message" },
+          },
+        ],
+      },
+      result("CALL_ID"),
+    ]);
+    assert.equal(ambiguousCallId.supervisorCallObserved, false);
+    assert.equal(ambiguousCallId.supervisorResultState, "missing");
+
+    const duplicateResults = await diagnose([
+      call("CALL_ID"),
+      result("CALL_ID"),
+      result("CALL_ID"),
+    ]);
+    assert.equal(duplicateResults.supervisorCallObserved, true);
+    assert.equal(duplicateResults.supervisorResultState, "not_observed");
   } finally {
     await rm(sessionDir, { recursive: true, force: true });
   }
