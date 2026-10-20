@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.31.1](https://github.com/boadij/pi-herdsman/compare/v0.31.0...v0.31.1) (2026-10-20)
+
+
+### Fixes
+
+* **agent:** restore scoped continuation after mailbox cleanup ([#482](https://github.com/boadij/pi-herdsman/issues/482)) ([8df4f2d](https://github.com/boadij/pi-herdsman/commit/8df4f2d4fa91fcbfb645c3abd197e08ecf628f6e))
+* **coordination:** deliver complete text evidence within configured limits ([#481](https://github.com/boadij/pi-herdsman/issues/481)) ([cadad11](https://github.com/boadij/pi-herdsman/commit/cadad11fdadd43c4288c7b7518424655dc94c450))
+* **lead:** preserve live inherited tools across reconciliation ([#463](https://github.com/boadij/pi-herdsman/issues/463)) ([4aa5a3e](https://github.com/boadij/pi-herdsman/commit/4aa5a3e7a0c7297b0fb0cc73b87d9a593e55efbc))
+
+
+### Tests
+
+* **ci:** make attachment mutation regression portable ([#485](https://github.com/boadij/pi-herdsman/issues/485)) ([73b33af](https://github.com/boadij/pi-herdsman/commit/73b33af08d37aa461528e299460dd04c877e88ad))
+
 ## [0.31.0](https://github.com/boadij/pi-herdsman/compare/v0.30.0...v0.31.0) (2026-10-19)
 
 
