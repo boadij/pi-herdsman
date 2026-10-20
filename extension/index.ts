@@ -135,6 +135,8 @@ import { reportLeadMetadata } from "./herdr.ts";
 import {
   managedAgentEnvironmentError,
   managedAgentEnvironmentIdentity,
+  managedAgentRequiredEvidence,
+  readEvidencePage,
   registerManagedAgentRuntime,
   runtimeIdentityState,
   sameManagedAgentIdentity,
@@ -1124,6 +1126,7 @@ export default function (pi: ExtensionAPI): void {
     ...LEAD_SUPERVISOR_TOOLS,
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
+    "read_evidence",
     "delegate_project",
     "resume_project",
     "stop_lead",
@@ -2329,6 +2332,45 @@ export default function (pi: ExtensionAPI): void {
     }
   }
   if (processRole !== "managed-agent") return;
+  pi.registerTool({
+    name: "read_evidence",
+    label: "Read accepted evidence",
+    exposure: "model-only",
+    description:
+      "Read a bounded page from evidence accepted by this managed Agent.",
+    parameters: Type.Object(
+      {
+        ref: Type.String({ minLength: 1 }),
+        offset: Type.Optional(Type.Integer({ minimum: 1 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+        byteOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (
+      _id: string,
+      params: any,
+      _signal: AbortSignal | undefined,
+      _update: unknown,
+      ctx: ExtensionContext,
+    ) => {
+      try {
+        const accepted = managedAgentRequiredEvidence(ctx);
+        if (!accepted) throw new Error();
+        const page = readEvidencePage(
+          accepted.effectiveEvidence,
+          params.ref,
+          params,
+        );
+        return {
+          content: [{ type: "text", text: page.content }],
+          details: page,
+        };
+      } catch {
+        throw new Error("Evidence reference unavailable or invalid");
+      }
+    },
+  });
   registerManagedAgentRuntime(pi, {
     build: HERDSMAN_BUILD,
     shellTimeoutSeconds: STALE_AFTER_MS / 1000,

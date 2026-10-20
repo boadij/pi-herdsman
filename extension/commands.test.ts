@@ -6177,7 +6177,11 @@ async function managerDelegateAssignmentTest(
           message.includes("scope lookup failure"),
         ),
       );
-      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(lead.pi.getActiveTools(), [
+        "read",
+        ...leadTools,
+        "read_evidence",
+      ]);
       unavailableScope = true;
       const unavailableNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => unavailableNotices.push(message);
@@ -6187,7 +6191,11 @@ async function managerDelegateAssignmentTest(
           message.includes("Cannot verify the current project assignment"),
         ),
       );
-      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(lead.pi.getActiveTools(), [
+        "read",
+        ...leadTools,
+        "read_evidence",
+      ]);
       unavailableScope = false;
       leadCtx.mode = "rpc";
       let managedPresentation: string[] = [];
@@ -6222,9 +6230,17 @@ async function managerDelegateAssignmentTest(
         false,
         "retained checkout keeps both the assignment and Managed Lead tab label",
       );
-      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(lead.pi.getActiveTools(), [
+        "read",
+        ...leadTools,
+        "read_evidence",
+      ]);
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
-      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(lead.pi.getActiveTools(), [
+        "read",
+        ...leadTools,
+        "read_evidence",
+      ]);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
@@ -9507,6 +9523,7 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
 test("Chief activation replaces the lead widget and overview selection is interactive", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = `chief-tab-${randomUUID()}`;
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `supervision-${randomUUID()}.sock`,
@@ -9592,6 +9609,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
     await pi.events.get("session_shutdown")?.[0]();
     globalThis.setInterval = originalSetInterval;
     delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
     setLeadEnvironment();
   });
   registerExtension!(pi.pi as never);
@@ -9599,6 +9617,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+  assert.equal(pi.pi.getActiveTools().includes("read_evidence"), false);
   assert.ok(widgetKeys.includes("pi-herdsman"));
   assert.ok(widgetKeys.includes("pi-herdsman-staff"));
   assert.equal(

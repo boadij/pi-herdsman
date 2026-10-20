@@ -31,6 +31,7 @@ import {
   removePendingRetirement,
   removeProjectMessagesForAssignment,
   listProjectAssignments,
+  migrateProjectAssignmentEvidence,
   listProjectMessageHeaders,
   readProjectMessage,
   supervisionRuntime,
@@ -3262,7 +3263,10 @@ export function registerLeadRuntime(
     if (leadExecutionPending) return leadToolState.normalizeLeadTools([]);
     if (!leadExecution) return leadToolState.normalizeLeadTools(baseline);
     if (leadExecution.managed)
-      return leadToolState.normalizeLeadTools(baseline);
+      return leadToolState.appendRegisteredTools(
+        leadToolState.normalizeLeadTools(baseline),
+        ["read_evidence"],
+      );
     if (!leadExecution.valid) return leadToolState.normalizeLeadTools([]);
     return leadToolState.projectLeadTools(baseline, leadExecution.definition);
   };
@@ -7243,7 +7247,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         true,
         branch,
       );
-    const existing = readProjectAssignment(runtime, manager.repoKey, branch);
+    const existing =
+      operation.action === "resume"
+        ? migrateProjectAssignmentEvidence(runtime, manager.repoKey, branch)
+        : readProjectAssignment(runtime, manager.repoKey, branch);
     if (existing && existing.repoKey !== manager.repoKey)
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && existing)

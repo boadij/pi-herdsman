@@ -1009,8 +1009,8 @@ export function agentLaunchArgs(
   const requiredTools = [
     ...(managedAgent
       ? agentDefinitionDelegationEnabled(agent)
-        ? [...AGENT_COORDINATION_TOOLS, "ask_owner"]
-        : ["ask_owner"]
+        ? [...AGENT_COORDINATION_TOOLS, "ask_owner", "read_evidence"]
+        : ["ask_owner", "read_evidence"]
       : []),
     ...(options.requiredTools ?? []),
   ].filter((tool, index, all) => all.indexOf(tool) === index);

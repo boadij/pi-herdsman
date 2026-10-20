@@ -2563,9 +2563,34 @@ test("project assignments are scoped by repository and branch, strict, and remov
     ],
   };
   writeProjectAssignment(runtime, withEvidence);
+  const persistedWithEvidence = readProjectAssignment(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  )!;
+  assert.deepEqual(persistedWithEvidence, {
+    ...withEvidence,
+    requiredEvidence: [
+      {
+        ...withEvidence.requiredEvidence[0],
+        ref: "evidence:plan#1",
+      },
+    ],
+  });
   assert.deepEqual(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
-    withEvidence,
+    {
+      id: persistedWithEvidence.requiredEvidence![0].id,
+      name: persistedWithEvidence.requiredEvidence![0].name,
+      sourceAssignmentId:
+        persistedWithEvidence.requiredEvidence![0].sourceAssignmentId,
+      path: persistedWithEvidence.requiredEvidence![0].path,
+      sha256: persistedWithEvidence.requiredEvidence![0].sha256,
+    },
+    withEvidence.requiredEvidence[0],
+  );
+  assert.equal(
+    persistedWithEvidence.requiredEvidence![0].ref,
+    "evidence:plan#1",
   );
   writeProjectAssignment(runtime, assignment);
   assert.equal(
@@ -2632,7 +2657,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
           ...assignment,
           ...invalid,
         } as never),
-      /Invalid project assignment/,
+      /Invalid project assignment|invalid required evidence/,
     );
   assert.throws(() =>
     writeProjectAssignment(runtime, {

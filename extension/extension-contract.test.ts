@@ -258,6 +258,7 @@ const REGISTERED_ROLE_TOOLS = [
     "close_agent",
     "inspect_agent",
     "read_agent_transcript",
+    "read_evidence",
     "message_supervisor",
     "list_peers",
     "message_peer",
@@ -513,6 +514,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     pi.tools.map((tool) => tool.name).sort(),
     [
       ...semanticNames,
+      "read_evidence",
       "list_staff",
       "inspect_staff",
       "read_staff_transcript",
@@ -565,8 +567,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
-    leaf.tools.map((tool) => tool.name),
-    ["ask_owner"],
+    leaf.tools.map((tool) => tool.name).sort(),
+    ["ask_owner", "read_evidence"].sort(),
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
   assertPortableToolSchema(askOwner);
@@ -844,6 +846,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "list_staff",
       "inspect_staff",
       "read_staff_transcript",
+      "read_evidence",
       "message_staff",
       "delegate_project",
       "resume_project",
@@ -857,6 +860,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   for (const tool of lead.tools) {
     assertPortableToolSchema(tool);
+    if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
     assert.equal(typeof tool.renderCall, "function");
     assert.equal(typeof tool.renderResult, "function");
@@ -5558,7 +5562,7 @@ test("delivered owner asks retain the question in visible message details", asyn
   }
 });
 
-test("registered delegate embeds text and references binary evidence", async () => {
+test("registered delegate rejects binary evidence without path-only delivery", async () => {
   setLeadEnvironment();
   const label = "mixed-files-agent";
   const textPath = join(testTmpRoot, `${label}.md`);
@@ -5594,16 +5598,9 @@ test("registered delegate embeds text and references binary evidence", async () 
         undefined,
         fakeContext(),
       );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(submittedRequest?.kind, "task");
-    assert.match(submittedRequest?.text ?? "", /complete evidence/);
-    assert.match(
-      submittedRequest?.text ?? "",
-      new RegExp(
-        `<file name=${JSON.stringify(realFs.realpathSync(binaryPath))} bytes="3" />`,
-      ),
-    );
-    assert.equal(prompted, submittedRequest?.text);
+    assert.equal(result.details.ok, false, JSON.stringify(result.details));
+    assert.equal(submittedRequest, undefined);
+    assert.equal(prompted, "");
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);

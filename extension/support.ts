@@ -361,6 +361,9 @@ mock.module("@earendil-works/pi-coding-agent", {
               },
             ],
           getBranch: () => session?.entries ?? [],
+          appendCustomEntry: (customType: string, data: unknown) => {
+            session?.entries.push({ type: "custom", customType, data });
+          },
           buildContextEntries: () =>
             session?.contextEntries ??
             session?.entries ?? [

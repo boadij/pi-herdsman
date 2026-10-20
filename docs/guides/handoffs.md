@@ -50,7 +50,7 @@ See the [staff-tool reference](../reference/staff.md#message_staff) and
 
 Each new descendant assignment receives the effective required-evidence set
 when that assignment is accepted, merged with explicit `files` for that
-handoff and deduplicated by canonical path and result binding. Project
+handoff and deduplicated by verified version and result binding. Project
 descendants inherit project requirements; nested descendants also inherit
 relevant additions owned by their Agent parent. Siblings do not inherit one
 another's local additions. An inherited snapshot keeps its original
@@ -61,24 +61,27 @@ already-running child's accepted evidence set; continuation resumes the saved
 assignment evidence and still requires valid ownership authority. Retired
 project assignments cannot be resumed.
 
-For managed-Agent assignments without `retain: true`, explicitly supplied
-per-handoff evidence is considered for inline embedding before automatically
-inherited required evidence. With `retain: true`, supplied evidence becomes
-required evidence and follows the existing required-evidence ordering. All
-accepted requirements remain part of the assignment even when represented by
-verified references; presentation order does not change requirement authority.
-Initial project briefs are delivered as task text and separately retained for
-future descendants without duplicating their content in the initial message.
+For each managed-Agent assignment, the task and current files are presented
+before historical requirements. Explicitly supplied files and evidence newly
+retained by that handoff are current evidence and use the existing complete
+content preparation. Previously accepted requirements are listed as short
+semantic references, regardless of their size; they are not automatically
+embedded. Selecting an accepted reference through `files` presents that exact
+version as current evidence without retaining it again. All accepted
+requirements remain part of the assignment; presentation does not change their
+authority or ownership. The initial project brief is delivered as task text
+and separately retained for descendants without duplicating it in the initial
+message.
 
 Required file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
-fails explicitly. A supported snapshot that exceeds the inline delivery limit
-is delivered by reference to the preserved snapshot; the recipient must read
-referenced required evidence before proceeding. Small supported text is
-embedded directly. Result evidence preserves its semantic binding, embedding
-content when it fits or referencing its resolved artifact otherwise. These
-delivery paths continue to use the configured inline and mailbox budgets;
-required evidence is not silently omitted for exceeding an inline threshold.
+fails explicitly. Current evidence must fit complete-content delivery limits;
+it is not replaced with a path-only reference. Historical required evidence is
+identified by a stable semantic `evidence:` reference. The authorized
+recipient can use `read_evidence` to retrieve bounded content for references
+in its accepted evidence set. Agent results preserve their existing semantic
+`result:` bindings. Historical references do not grant access by themselves,
+and internal snapshot paths are not exposed as evidence identities.
 Ordinary files supplied to `message_staff`, `message_supervisor`, or
 `message_peer` are delivered as complete supported UTF-8 text within the
 configured per-file and complete-message budgets; unsupported, changed, or

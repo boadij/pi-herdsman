@@ -84,8 +84,13 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
-const { AGENT_REQUIRED_EVIDENCE_ENTRY, managedAgentRequiredEvidence } =
-  await import("./managed-agent-runtime.ts");
+const {
+  AGENT_REQUIRED_EVIDENCE_ENTRY,
+  managedAgentRequiredEvidence,
+  readEvidencePage,
+  READ_EVIDENCE_MAX_BYTES,
+  READ_EVIDENCE_MAX_LINES,
+} = await import("./managed-agent-runtime.ts");
 const {
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
@@ -908,6 +913,10 @@ test("registered agent writes state, handles input, and settles one result", asy
   registerExtension!(agent.pi as never);
   assert.equal(
     agent.tools.filter((tool) => tool.name === "ask_owner").length,
+    1,
+  );
+  assert.equal(
+    agent.tools.filter((tool) => tool.name === "read_evidence").length,
     1,
   );
   const askSchema = agent.tools.find(
@@ -3876,8 +3885,137 @@ test("required evidence restore verifies the accepted managed assignment identit
   );
 });
 
-test("managed task acceptance rejects missing or corrupt required evidence snapshots", async () => {
-  for (const failure of ["missing", "corrupt"] as const) {
+test("read_evidence resolves only one exact supplied reference and hides failures", () => {
+  const evidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "private-plan.md",
+    "secret plan\n",
+  );
+  const unavailable = "Evidence reference unavailable or invalid";
+  assert.equal(
+    readEvidencePage([evidence], evidence.ref!, {}).content,
+    "secret plan\n",
+  );
+  for (const [set, ref] of [
+    [[evidence], "evidence:other#1"],
+    [[], evidence.ref!],
+    [[evidence, evidence], evidence.ref!],
+  ] as const) {
+    assert.throws(
+      () => readEvidencePage(set, ref),
+      (error: Error) => {
+        assert.equal(error.message, unavailable);
+        assert.doesNotMatch(
+          error.message,
+          /private-plan|secret|[0-9a-f]{8}-[0-9a-f-]{27}/i,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("read_evidence rejects forged and swapped snapshot references without disclosure", () => {
+  const first = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "private-first.md",
+    "first secret\n",
+  );
+  const second = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "private-second.md",
+    "second secret\n",
+  );
+  const unavailable = "Evidence reference unavailable or invalid";
+  for (const forged of [
+    { ...first, ref: "evidence:unreserved#1" },
+    { ...first, ref: second.ref },
+  ]) {
+    assert.throws(
+      () => readEvidencePage([forged], forged.ref!),
+      (error: Error) => {
+        assert.equal(error.message, unavailable);
+        assert.doesNotMatch(
+          error.message,
+          /private-first|first secret|evidence:unreserved|evidence:private/i,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("read_evidence rejects tampered snapshots and invalid page options", () => {
+  const evidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "integrity.md",
+    "original\n",
+  );
+  writeFileSync(evidence.path, "changed\n");
+  assert.throws(
+    () => readEvidencePage([evidence], evidence.ref!),
+    /Evidence reference unavailable or invalid/,
+  );
+  const intact = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "pages.md",
+    "😀one\ntwo\n",
+  );
+  for (const options of [
+    { offset: 0 },
+    { offset: 1.5 },
+    { limit: 0 },
+    { limit: READ_EVIDENCE_MAX_LINES + 1 },
+    { byteOffset: -1 },
+  ])
+    assert.throws(
+      () => readEvidencePage([intact], intact.ref!, options),
+      /Evidence page unavailable/,
+    );
+  assert.throws(
+    () => readEvidencePage([intact], intact.ref!, { byteOffset: 1 }),
+    /Evidence reference unavailable or invalid/,
+  );
+});
+
+test("read_evidence bounds pages and safely resumes long UTF-8 lines", () => {
+  const large = `${"a".repeat(READ_EVIDENCE_MAX_BYTES - 1)}😀${"b".repeat(1000)}\n${"line\n".repeat(READ_EVIDENCE_MAX_LINES)}`;
+  const evidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "long.md",
+    large,
+  );
+  const first = readEvidencePage([evidence], evidence.ref!);
+  assert.ok(Buffer.byteLength(first.content) <= READ_EVIDENCE_MAX_BYTES);
+  assert.equal(first.nextOffset, 1);
+  assert.ok(first.nextByteOffset);
+  assert.ok(first.nextByteOffset < READ_EVIDENCE_MAX_BYTES);
+  const resumed = readEvidencePage([evidence], evidence.ref!, {
+    offset: first.nextOffset,
+    byteOffset: first.nextByteOffset,
+  });
+  assert.ok(Buffer.byteLength(resumed.content) <= READ_EVIDENCE_MAX_BYTES);
+  assert.ok(!resumed.content.includes("\ufffd"));
+  assert.equal(
+    (first.content + resumed.content).slice(0, READ_EVIDENCE_MAX_BYTES),
+    large.slice(0, READ_EVIDENCE_MAX_BYTES),
+  );
+  const capped = readEvidencePage([evidence], evidence.ref!, {
+    limit: READ_EVIDENCE_MAX_LINES,
+  });
+  assert.ok(capped.content.split("\n").length - 1 <= READ_EVIDENCE_MAX_LINES);
+  const manyLines = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "many-lines.md",
+    "x\n".repeat(READ_EVIDENCE_MAX_LINES + 2),
+  );
+  const linePage = readEvidencePage([manyLines], manyLines.ref!);
+  assert.equal(linePage.content, "x\n".repeat(READ_EVIDENCE_MAX_LINES));
+  assert.equal(linePage.nextOffset, READ_EVIDENCE_MAX_LINES + 1);
+});
+
+test("managed task acceptance rejects unavailable or unreserved required evidence before acceptance", async () => {
+  for (const failure of ["missing", "corrupt", "forged", "swapped"] as const) {
     const mailbox = setAgentEnvironment(`evidence-${failure}-agent`);
     const agent = fakePi();
     const context = fakeAgentContext(agent.entries);
@@ -3886,13 +4024,24 @@ test("managed task acceptance rejects missing or corrupt required evidence snaps
       await agent.events.get("session_start")![0](undefined, context);
       const state = readAgentState(mailbox)!;
       const projectAssignmentId = randomUUID();
-      const evidence = persistRequiredEvidenceSnapshot(
+      let evidence = persistRequiredEvidenceSnapshot(
         projectAssignmentId,
         "plan.md",
         "approved plan\n",
       );
       if (failure === "missing") unlinkSync(evidence.path);
       else writeFileSync(evidence.path, "substituted plan\n");
+      if (failure === "forged")
+        evidence = { ...evidence, ref: "evidence:unreserved-acceptance#1" };
+      if (failure === "swapped")
+        evidence = {
+          ...evidence,
+          ref: persistRequiredEvidenceSnapshot(
+            randomUUID(),
+            "other-plan.md",
+            "other plan\n",
+          ).ref,
+        };
       const request: RequestRecord = {
         version: 5,
         runId: state.runId,
@@ -3991,6 +4140,98 @@ test("managed task acceptance verifies valid inline and reference-only evidence 
   }
 });
 
+test("acceptance upgrades legacy evidence durably without rewriting saved continuation provenance", async () => {
+  const mailbox = setAgentEnvironment("legacy-evidence-acceptance");
+  const agent = fakePi();
+  const context = fakeAgentContext(agent.entries);
+  registerExtension!(agent.pi as never);
+  let snapshotPath: string | undefined;
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const projectAssignmentId = randomUUID();
+    const snapshot = persistRequiredEvidenceSnapshot(
+      projectAssignmentId,
+      "accepted-plan.md",
+      "legacy accepted plan\n",
+    );
+    snapshotPath = snapshot.path;
+    const { ref: _ref, ...legacyEvidence } = snapshot;
+    const priorRequestId = randomUUID();
+    const priorEntry = {
+      type: "custom",
+      customType: AGENT_REQUIRED_EVIDENCE_ENTRY,
+      data: {
+        version: 1,
+        sessionId: context.sessionManager.getSessionId(),
+        requestId: priorRequestId,
+        runId: state.runId,
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        projectAssignmentId,
+        evidenceAssignmentId: priorRequestId,
+        inheritedEvidence: [legacyEvidence],
+        localEvidence: [],
+      },
+    };
+    agent.entries.push(priorEntry);
+    const request: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "Continue using the accepted plan",
+      projectAssignmentId,
+      evidenceAssignmentId: "",
+      requiredEvidence: [legacyEvidence],
+      inheritedEvidence: [legacyEvidence],
+      localEvidence: [],
+      createdAt: Date.now(),
+    };
+    request.evidenceAssignmentId = request.requestId;
+    writeRequest(mailbox, request);
+
+    agent.events.get("input")![0](
+      { text: controlMarker(request.requestId) },
+      context,
+    );
+
+    assert.equal(readAgentState(mailbox)?.lastAck?.accepted, true);
+    assert.deepEqual(request.requiredEvidence, [legacyEvidence]);
+    assert.deepEqual(priorEntry.data.inheritedEvidence, [legacyEvidence]);
+    const acceptedEntry = agent.entries
+      .filter(
+        (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
+      )
+      .at(-1) as any;
+    assert.deepEqual(acceptedEntry.data.inheritedEvidence, [
+      { ...legacyEvidence, ref: snapshot.ref },
+    ]);
+
+    const reloaded = fakePi({ entries: agent.entries });
+    const reloadedContext = fakeAgentContext(reloaded.entries);
+    assert.deepEqual(
+      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence,
+      [{ ...legacyEvidence, ref: snapshot.ref }],
+    );
+    assert.equal(
+      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0]?.ref,
+      snapshot.ref,
+    );
+    assert.deepEqual(priorEntry.data.inheritedEvidence, [legacyEvidence]);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    if (snapshotPath) unlinkSync(snapshotPath);
+  }
+});
+
 test("managed task acceptance validates required result backing files before importing bindings", async () => {
   for (const failure of ["missing", "nonregular", "valid"] as const) {
     const mailbox = setAgentEnvironment(`required-result-${failure}`);
@@ -4066,7 +4307,62 @@ test("managed task acceptance validates required result backing files before imp
         ),
         failure === "valid",
       );
-      if (failure === "valid") assert.equal(fileContentReads, 0);
+      if (failure === "valid") {
+        assert.equal(fileContentReads, 0);
+        const acceptedEvidence =
+          managedAgentRequiredEvidence(context)!.effectiveEvidence;
+        assert.deepEqual(acceptedEvidence, [evidence]);
+        const page = readEvidencePage(acceptedEvidence, evidence.result.ref);
+        assert.equal(page.content, "a".repeat(READ_EVIDENCE_MAX_BYTES));
+        assert.equal(page.nextOffset, 1);
+        assert.equal(page.nextByteOffset, READ_EVIDENCE_MAX_BYTES);
+        const tool = agent.tools.find(
+          (candidate) => candidate.name === "read_evidence",
+        );
+        const toolPage = await tool.execute(
+          "read",
+          { ref: evidence.result.ref },
+          undefined,
+          undefined,
+          context,
+        );
+        assert.equal(toolPage.content[0].text, page.content);
+        await assert.rejects(
+          tool.execute(
+            "read",
+            { ref: evidence.result.ref },
+            undefined,
+            undefined,
+            fakeAgentContext(),
+          ),
+          /Evidence reference unavailable or invalid/,
+        );
+        const acceptedState = readAgentState(mailbox)!;
+        writeAgentState(mailbox, {
+          ...acceptedState,
+          activeRequestId: randomUUID(),
+        });
+        await assert.rejects(
+          tool.execute(
+            "read",
+            { ref: evidence.result.ref },
+            undefined,
+            undefined,
+            context,
+          ),
+          (error: Error) => {
+            assert.equal(
+              error.message,
+              "Evidence reference unavailable or invalid",
+            );
+            assert.doesNotMatch(
+              error.message,
+              /required-result|resultPath|[0-9a-f]{8}-[0-9a-f-]{27}/i,
+            );
+            return true;
+          },
+        );
+      }
     } finally {
       support.fileReadHook = undefined;
       agent.events.get("session_shutdown")?.[0]();

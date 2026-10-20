@@ -11066,6 +11066,121 @@ test("root discovery fails closed without policy and preserves explicit unrestri
   );
 });
 
+test("read_evidence revalidates project authority at execution and denies stale scope", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const { persistRequiredEvidenceSnapshot } = await import("./storage.ts");
+  const pi = fakePi();
+  const evidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "assigned.md",
+    "accepted secret\n",
+  );
+  const assignment = { id: randomUUID(), requiredEvidence: [evidence] } as any;
+  let active = true;
+  let revalidated = 0;
+  const controller = createAgentController(
+    pi.pi as never,
+    {
+      scope: { kind: "root" },
+      build: HERDSMAN_BUILD,
+      extensionPath: "test",
+      isContextRetired: () => false,
+      snapshotDependencies: {
+        runtimeForLabel: () => undefined,
+        readLeadSessionIds: () => [],
+        staleAfterMs: 60_000,
+      },
+      persistedTranscriptReady: () => false,
+      workspaceId: () => WORKSPACE,
+      sendResultMessage: () => undefined,
+      sendAskMessage: () => undefined,
+      sessionRetired: () => false,
+      appendError: () => undefined,
+      onChanged: () => undefined,
+      onWorkChanged: () => undefined,
+      reportWatcherError: () => undefined,
+      projectEvidence: async () =>
+        active
+          ? {
+              assignment,
+              revalidate: async (operation: () => void) => {
+                revalidated++;
+                if (!active) throw new Error("retired");
+                await operation();
+              },
+            }
+          : undefined,
+    } as any,
+  );
+  controller.registerTools();
+  const tool = pi.tools.find((candidate) => candidate.name === "read_evidence");
+  assert.ok(tool);
+  const context = fakeContext() as any;
+  const response = await tool.execute(
+    "read",
+    { ref: evidence.ref },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(response.content[0].text, "accepted secret\n");
+  assert.equal(revalidated, 1);
+  await assert.rejects(
+    tool.execute(
+      "read",
+      { ref: "evidence:foreign#1" },
+      undefined,
+      undefined,
+      context,
+    ),
+    /Evidence reference unavailable or invalid/,
+  );
+  assert.equal(revalidated, 2);
+  active = false;
+  await assert.rejects(
+    tool.execute("read", { ref: evidence.ref }, undefined, undefined, context),
+    (error: Error) => {
+      assert.equal(error.message, "Evidence reference unavailable or invalid");
+      assert.doesNotMatch(
+        error.message,
+        /accepted secret|assigned\.md|[0-9a-f]{8}-[0-9a-f-]{27}/i,
+      );
+      return true;
+    },
+  );
+  assert.equal(revalidated, 2);
+});
+
+test("managed restricted tool policies add read_evidence without unrelated tools", async () => {
+  const { agentLaunchArgs } = await import("./agent-definitions.ts");
+  const cases = [
+    {
+      frontmatter: { noTools: true },
+      expected: ["ask_owner", "read_evidence"],
+    },
+    {
+      frontmatter: { tools: ["read"] },
+      expected: ["read", "ask_owner", "read_evidence"],
+    },
+  ];
+  for (const { frontmatter, expected } of cases) {
+    const args = agentLaunchArgs(
+      {
+        name: "restricted",
+        path: "/restricted.md",
+        body: "",
+        frontmatter,
+      } as any,
+      { managedAgent: true },
+    );
+    const selected = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+    assert.ok(args.includes("--no-tools") || args.includes("--tools"));
+    for (const required of expected)
+      assert.ok(selected.includes(required), `${required} should be selected`);
+    assert.ok(selected.every((name) => [...expected, "mcp__"].includes(name)));
+  }
+});
+
 test("root assignments reject a generation owned by a different session", async () => {
   const { createAgentController } = await import("./agent-controller.ts");
   const context = fakeContext() as any;
