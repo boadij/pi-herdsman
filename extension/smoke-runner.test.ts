@@ -1704,10 +1704,12 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
           inactiveMs: 120_000,
           lastProgress: {
             ...resolvedProgress,
+            supervisorUnstructuredErrorClass: "unstructured_error_unknown",
             prompt: "PRIVATE_PROGRESS_PROMPT",
             args: "PRIVATE_ARGS",
             body: "PRIVATE_BODY",
             error: "PRIVATE_RAW_ERROR",
+            supervisorRawError: "PRIVATE_SUPERVISOR_ERROR",
             transcript: contents,
           },
         },
@@ -1732,6 +1734,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       supervisorHandlerBranchStatus: "not_observed",
       supervisorPersistedErrorCategoryPresent: false,
       supervisorPersistedErrorCategory: "not_observed",
+      supervisorUnstructuredErrorClass: "unstructured_error_unknown",
       readinessDeliveryObserved: true,
       worktreeIdentityState: "verified",
       errorCategory: "none",
@@ -1836,6 +1839,7 @@ test("manager readiness correlates one active-branch call with its following res
       supervisorHandlerBranchStatus: "not_observed",
       supervisorPersistedErrorCategoryPresent: true,
       supervisorPersistedErrorCategory: "not_observed",
+      supervisorUnstructuredErrorClass: "unstructured_error_unknown",
     });
     assert.doesNotMatch(
       JSON.stringify(diagnostics),

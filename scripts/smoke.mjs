@@ -859,6 +859,30 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
     errorDetails !== null &&
     typeof errorDetails === "object" &&
     Object.hasOwn(errorDetails, "category");
+  const resultText =
+    typeof result?.content === "string"
+      ? result.content
+      : Array.isArray(result?.content)
+        ? result.content
+            .filter((block) => block?.type === "text")
+            .map((block) => block.text)
+            .filter((value) => typeof value === "string")
+            .join("\n")
+        : "";
+  const unstructuredErrorClass =
+    failed?.isError === true &&
+    !STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) &&
+    resultText
+      ? /\bAbortError\b/u.test(resultText)
+        ? "abort_error"
+        : /\bProcessLockOccupiedError\b/u.test(resultText)
+          ? "lock_occupied"
+          : /\btool\s+["']?message_supervisor["']?\s+(?:was\s+)?not found\b|\bmessage_supervisor\b.{0,40}\b(?:not found|unavailable)\b/iu.test(
+                resultText,
+              )
+            ? "dispatch_error"
+            : "unstructured_error_unknown"
+      : "not_applicable";
   return {
     supervisorSessionHeaderMatches: true,
     supervisorCallObserved: !!call,
@@ -886,6 +910,9 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
       categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
         ? category
         : "not_observed",
+    ...(unstructuredErrorClass !== "not_applicable"
+      ? { supervisorUnstructuredErrorClass: unstructuredErrorClass }
+      : {}),
   };
 }
 
@@ -5548,9 +5575,22 @@ async function runManagerRecoverySmoke(ctx) {
   assert.doesNotMatch(record.text, new RegExp(contextMarker));
   assert.equal(typeof record.piSessionFile, "string");
   assert.ok(record.piSessionFile.length > 0);
-  assert.deepEqual(
-    Object.keys(record).sort(),
-    ["branch", "id", "piSessionFile", "repoKey", "text", "version"].sort(),
+  const requiredAssignmentKeys = [
+    "branch",
+    "id",
+    "piSessionFile",
+    "repoKey",
+    "text",
+    "version",
+  ];
+  const allowedAssignmentKeys = [
+    ...requiredAssignmentKeys,
+    "requiredEvidence",
+    "resultBindings",
+  ];
+  assert.ok(requiredAssignmentKeys.every((key) => Object.hasOwn(record, key)));
+  assert.ok(
+    Object.keys(record).every((key) => allowedAssignmentKeys.includes(key)),
   );
   const assertUnchangedAssignment = async () =>
     assert.equal(
@@ -7901,6 +7941,17 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         )
           ? managerProgress.supervisorPersistedErrorCategory
           : "not_observed",
+        ...([
+          "abort_error",
+          "lock_occupied",
+          "dispatch_error",
+          "unstructured_error_unknown",
+        ].includes(managerProgress.supervisorUnstructuredErrorClass)
+          ? {
+              supervisorUnstructuredErrorClass:
+                managerProgress.supervisorUnstructuredErrorClass,
+            }
+          : {}),
         readinessDeliveryObserved:
           typeof managerProgress.readinessDeliveryObserved === "boolean"
             ? managerProgress.readinessDeliveryObserved
