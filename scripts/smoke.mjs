@@ -739,6 +739,7 @@ export function managerAssignmentDiagnostics({
   lead,
   supervisorCall,
   supervisorSuccess,
+  supervisorResult,
   readiness,
   supervisorCallObserved,
   supervisorResultState,
@@ -757,6 +758,7 @@ export function managerAssignmentDiagnostics({
     matchedLead: lead ?? "not_observed",
     messageSupervisorCall: supervisorCall ?? "not_observed",
     messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
+    messageSupervisorResult: supervisorResult ?? "not_called",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
@@ -1431,6 +1433,34 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
         !entry.message.isError,
     ),
   );
+}
+
+export function supervisorMessageCallStatus(contents, text) {
+  const entries = sessionEntries(contents);
+  const calls = entries.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content.filter(
+          (block) =>
+            block?.type === "toolCall" &&
+            block.name === "message_supervisor" &&
+            block.arguments?.message === text,
+        )
+      : [],
+  );
+  if (!calls.length) return "not_called";
+  for (const call of calls) {
+    const result = entries.find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "message_supervisor" &&
+        entry.message.toolCallId === call.id,
+    );
+    if (result) return result.message.isError ? "error" : "success";
+  }
+  return "pending";
 }
 
 export function leadReadyCompleted(contents, text) {
@@ -3793,6 +3823,7 @@ async function runManagerHandoffSmoke(ctx) {
             entry.content ===
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
+      const supervisorResult = supervisor.supervisorResultState;
       if (!ready || !readyEntry)
         return {
           done: false,
@@ -3804,6 +3835,7 @@ async function runManagerHandoffSmoke(ctx) {
             ...supervisor,
             supervisorCall: String(supervisor.supervisorCallObserved),
             supervisorSuccess: String(ready),
+            supervisorResult,
             readiness: String(!!readyEntry),
             readinessDeliveryObserved: !!readyEntry,
           }),

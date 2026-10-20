@@ -22,12 +22,18 @@ import type {
   ResultRecord,
   ManagedAgentState,
 } from "./mailbox.ts";
-import { acquireProcessLock, claimProcessLock } from "./lock.ts";
+import {
+  acquireProcessLock,
+  claimProcessLock,
+  ProcessLockOccupiedError,
+  readLiveProcessLock,
+} from "./lock.ts";
 import {
   claimChiefLease as claimChiefLeaseRaw,
   globalProjectAssignmentSnapshot,
   listPendingRetirements,
   listProjectAssignments,
+  listProjectMessages,
   projectAssignmentPath,
   listCoordinationMessagePaths,
   managerDescriptorPath,
@@ -47,6 +53,7 @@ import {
   writeLeadCoordinationState as writeLeadCoordinationStateRaw,
   writeProjectAssignment,
   removeProjectAssignment,
+  removeProjectMessagesForAssignment,
   writeChiefMessage as writeChiefMessageRaw,
   writeCoordinationMessage as writeCoordinationMessageRaw,
   writePeerLeadRecord as writePeerLeadRecordRaw,
@@ -780,6 +787,7 @@ import support, {
   realFs,
   recoveryIdentity,
   registerExtension,
+  registerExtensionForTest,
   renderRunningOptions,
   resetAgentMailbox,
   leadExec,
@@ -3644,7 +3652,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(managerPrompt, undefined);
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Set priorities, review outcomes, resolve decisions, request corrections, and\s+integrate accepted work/i,
+      /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Leave technical investigation, implementation, review, validation, and\s+integration to that Lead and its Agents rather than doing or delegating\s+the work yourself/i,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -5524,6 +5532,7 @@ test("Manager removal confirmation is dismissed by an aborted tool/context signa
 async function managerDelegateAssignmentTest(
   t: TestContext,
   projectTrusted: boolean,
+  lockOrder?: "manager-first" | "lead-first",
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -5549,6 +5558,33 @@ async function managerDelegateAssignmentTest(
     "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
   );
   let childSession = `lead-${randomUUID()}`;
+  let lead: any;
+  let leadCtx: any;
+  let leadStarted = false;
+  let initializeLeadRuntime!: () => Promise<void>;
+  let lockPhase = "";
+  let leadToolError: unknown;
+  let leadToolResult: unknown;
+  let leadPublication: Promise<void> | undefined;
+  let managerLockClaim: ReturnType<typeof readLiveProcessLock> | undefined;
+  let leadLockClaim: ReturnType<typeof readLiveProcessLock> | undefined;
+  let lockedAssignmentSnapshot: unknown;
+  let releaseLeadLock!: () => void;
+  const leadLockRelease = new Promise<void>((resolve) => {
+    releaseLeadLock = resolve;
+  });
+  let signalLeadLock!: () => void;
+  const leadLockHeld = new Promise<void>((resolve) => {
+    signalLeadLock = resolve;
+  });
+  let signalManagerWait!: () => void;
+  const managerWaitStarted = new Promise<void>((resolve) => {
+    signalManagerWait = resolve;
+  });
+  let signalLeadWait!: () => void;
+  const leadWaitStarted = new Promise<void>((resolve) => {
+    signalLeadWait = resolve;
+  });
   let primaryWorkspace = WORKSPACE;
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
@@ -5894,7 +5930,7 @@ async function managerDelegateAssignmentTest(
     return respond({});
   };
   let mutateRetainedSource: (() => void) | undefined;
-  const managerExec = (command: string, args: string[]) => {
+  const managerExec = async (command: string, args: string[]) => {
     mutateRetainedSource?.();
     if (
       managerUsesRootPane &&
@@ -5911,14 +5947,181 @@ async function managerDelegateAssignmentTest(
           cwd: "/tmp/manager-root",
         },
       });
-    return exec(command, args);
+    const result = await exec(command, args);
+    if (
+      lockOrder === "lead-first" &&
+      command === "herdr" &&
+      args[0] === "agent" &&
+      args[1] === "start"
+    ) {
+      await initializeLeadRuntime();
+      lockPhase = "lead-publish";
+      const messageTool = lead.tools.find(
+        (tool: any) => tool.name === "message_supervisor",
+      )!;
+      leadPublication = messageTool
+        .execute(
+          "contention-ready",
+          { message: "ready under assignment contention" },
+          undefined,
+          undefined,
+          leadCtx,
+        )
+        .then((value: unknown) => {
+          leadToolResult = value;
+        })
+        .catch((error: unknown) => {
+          leadToolError = error;
+        });
+      await leadLockHeld;
+      lockPhase = "manager-bind";
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+      process.env.HERDR_PANE_ID = "root-pane";
+      process.env.HERDR_TAB_ID = "root-tab";
+    } else if (
+      lockOrder &&
+      command === "herdr" &&
+      args[0] === "agent" &&
+      args[1] === "start"
+    ) {
+      lockPhase = "manager-bind";
+    }
+    return result;
   };
   const pi = fakeChiefPi({
     activeTools: ["read"],
     exec: managerExec,
     persistMessages: true,
   });
-  registerExtension!(pi.pi as never);
+  const managerLockHooks = {
+    afterOccupied: async (lockedRepo: string) => {
+      if (lockedRepo === repoKey && lockOrder === "lead-first")
+        signalManagerWait();
+    },
+    afterAcquired: async (lockedRepo: string, branch: string) => {
+      if (
+        lockedRepo !== repoKey ||
+        !lockOrder ||
+        !listProjectAssignments(supervisionRuntime(), repoKey).some(
+          (assignment) => assignment.branch === branch,
+        )
+      )
+        return;
+      if (lockOrder === "manager-first" && lockPhase === "manager-bind") {
+        lockPhase = "manager-held";
+        managerLockClaim = readLiveProcessLock(
+          `${projectAssignmentPath(supervisionRuntime(), repoKey, branch)}.lock`,
+        );
+        lockedAssignmentSnapshot = readProjectAssignment(
+          supervisionRuntime(),
+          repoKey,
+          branch,
+        );
+        try {
+          await initializeLeadRuntime();
+          const messageTool = lead.tools.find(
+            (tool: any) => tool.name === "message_supervisor",
+          )!;
+          leadPublication = messageTool
+            .execute(
+              "contention-ready",
+              { message: "ready under assignment contention" },
+              undefined,
+              undefined,
+              leadCtx,
+            )
+            .then((value: unknown) => {
+              leadToolResult = value;
+            })
+            .catch((error: unknown) => {
+              leadToolError = error;
+            });
+          await leadWaitStarted;
+        } finally {
+          process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+          process.env.HERDR_PANE_ID = "root-pane";
+          process.env.HERDR_TAB_ID = "root-tab";
+        }
+        return;
+      }
+    },
+  };
+  if (lockOrder) registerExtensionForTest(pi.pi as never, managerLockHooks);
+  else registerExtension!(pi.pi as never);
+  initializeLeadRuntime = async () => {
+    process.env.HERDR_WORKSPACE_ID = childWorkspace;
+    process.env.HERDR_PANE_ID = "child-pane";
+    process.env.HERDR_TAB_ID = "child-tab";
+    managerUsesRootPane = true;
+    if (lead) return;
+    lifecycleServer = createServer((socket) => {
+      lifecycleClients.add(socket);
+      socket.once("close", () => {
+        lifecycleClients.delete(socket);
+        subscribedLifecycleClients.delete(socket);
+      });
+      socket.setEncoding("utf8");
+      let buffer = "";
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const request = JSON.parse(buffer.slice(0, newline));
+        lifecycleSubscriptions++;
+        subscribedLifecycleClients.add(socket);
+        socket.write(
+          `${JSON.stringify({ id: request.id, result: { type: "subscription_started" } })}\n`,
+        );
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      lifecycleServer!.once("error", reject);
+      lifecycleServer!.listen(process.env.HERDR_SOCKET_PATH!, resolve);
+    });
+    lead = fakeChiefPi({
+      activeTools: ["read"],
+      exec,
+      sessionName: "Existing session name",
+      entries: [{ type: "session_info", name: "Existing session name" }],
+    });
+    const leadLockHooks = {
+      afterOccupied: async (lockedRepo: string) => {
+        if (lockOrder === "manager-first" && lockedRepo === repoKey)
+          signalLeadWait();
+      },
+      afterAcquired: async (lockedRepo: string, branch: string) => {
+        if (
+          lockOrder !== "lead-first" ||
+          lockPhase !== "lead-publish" ||
+          lockedRepo !== repoKey ||
+          !listProjectAssignments(supervisionRuntime(), repoKey).some(
+            (assignment) => assignment.branch === branch,
+          )
+        )
+          return;
+        leadLockClaim = readLiveProcessLock(
+          `${projectAssignmentPath(supervisionRuntime(), repoKey, branch)}.lock`,
+        );
+        lockedAssignmentSnapshot = readProjectAssignment(
+          supervisionRuntime(),
+          repoKey,
+          branch,
+        );
+        signalLeadLock();
+        await leadLockRelease;
+      },
+    };
+    if (lockOrder) registerExtensionForTest(lead.pi as never, leadLockHooks);
+    else registerExtension!(lead.pi as never);
+    leadCtx = fakeContext(lead.entries) as any;
+    leadCtx.hasUI = true;
+    leadCtx.sessionManager.getSessionId = () => childSession;
+    leadCtx.sessionManager.getSessionFile = childSessionPath;
+    if (lockOrder && !leadStarted) {
+      await lead.events.get("session_start")![0](undefined, leadCtx);
+      leadStarted = true;
+    }
+  };
   try {
     const ctx = fakeContext(pi.entries) as any;
     ctx.isProjectTrusted = () => projectTrusted;
@@ -5932,16 +6135,177 @@ async function managerDelegateAssignmentTest(
       }),
       false,
     );
-    const outcome = await staff.execute(
+    let outcome: any;
+    let delegationError: unknown;
+    const delegate = staff.execute(
       "delegate",
       { task: "Implement focused change" },
       undefined,
       undefined,
       ctx,
     );
+    if (lockOrder === "lead-first") {
+      const settled = delegate.then(
+        (value: unknown) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          delegationError = error;
+        },
+      );
+      await managerWaitStarted;
+      releaseLeadLock();
+      await settled;
+    } else {
+      try {
+        outcome = await delegate;
+      } catch (error) {
+        delegationError = error;
+      }
+    }
+    if (lockOrder === "lead-first") {
+      assert.equal(delegationError, undefined);
+      assert.equal(outcome.details.ok, true);
+      await leadPublication;
+      const assignment = listProjectAssignments(supervisionRuntime(), repoKey);
+      assert.equal(assignment.length, 1);
+      const boundAssignment = readProjectAssignment(
+        supervisionRuntime(),
+        repoKey,
+        assignment[0]!.branch,
+      );
+      const { piSessionFile: _piSessionFile, ...assignmentIdentity } =
+        boundAssignment!;
+      assert.deepEqual(
+        assignmentIdentity,
+        lockedAssignmentSnapshot,
+        "Manager preserves assignment identity while binding the session",
+      );
+      assert.equal(assignment[0]!.id, childSession);
+      assert.equal(
+        assignment[0]!.piSessionFile,
+        realFs.realpathSync(childSessionPath()),
+      );
+      const assignmentNotifications = listCoordinationMessagePaths(
+        supervisionRuntime(),
+        childSession,
+      )
+        .map((path) => readChiefMessage(path))
+        .filter((message) => message.kind === "project_assignment");
+      assert.equal(assignmentNotifications.length, 1);
+      for (const notification of assignmentNotifications) {
+        assert.equal(notification.id, childSession);
+        assert.equal(notification.branch, assignment[0]!.branch);
+        assert.equal(notification.text, "Project assignment ready.");
+      }
+      assert.equal(leadLockClaim?.pid, process.pid);
+      assert.ok(leadLockClaim?.id);
+      assert.equal(leadToolError, undefined);
+      assert.match(
+        JSON.stringify(leadToolResult),
+        /Project message saved for Manager/,
+      );
+      assert.equal(created, true);
+      assert.equal(
+        pi.calls.filter(
+          (args) => args[0] === "worktree" && args[1] === "create",
+        ).length,
+        1,
+      );
+      const messages = listProjectMessages(
+        supervisionRuntime(),
+        repoKey,
+        assignment[0]!.branch,
+      );
+      assert.ok(
+        messages.length <= 1,
+        "handoff is not published more than once",
+      );
+      if (messages.length) {
+        assert.equal(messages[0]!.fromSessionId, childSession);
+        assert.equal(messages[0]!.repoKey, repoKey);
+        assert.equal(messages[0]!.branch, assignment[0]!.branch);
+        assert.equal(messages[0]!.text, "ready under assignment contention");
+      }
+      assert.match(
+        JSON.stringify(leadToolResult),
+        /Project message saved for Manager/,
+      );
+      assert.equal(leadToolError, undefined);
+      assert.equal(lockPhase, "manager-bind");
+      removeProjectMessagesForAssignment(supervisionRuntime(), assignment[0]!);
+      removeProjectAssignment(
+        supervisionRuntime(),
+        repoKey,
+        assignment[0]!.branch,
+      );
+      assert.equal(
+        existsSync(
+          `${projectAssignmentPath(supervisionRuntime(), repoKey, assignment[0]!.branch)}.lock`,
+        ),
+        false,
+      );
+      return;
+    }
+    assert.equal(delegationError, undefined);
     assert.equal(outcome.details.ok, true);
     const assignment = listProjectAssignments(supervisionRuntime(), repoKey)[0];
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), repoKey).length,
+      1,
+    );
     assert.ok(assignment);
+    if (lockOrder === "manager-first") {
+      await leadPublication;
+      assert.equal(leadToolError, undefined);
+      assert.equal(assignment.id, childSession);
+      assert.ok(assignment.piSessionFile);
+      assert.equal(
+        assignment.piSessionFile,
+        realFs.realpathSync(childSessionPath()),
+      );
+      assert.equal(managerLockClaim?.pid, process.pid);
+      assert.ok(managerLockClaim?.id);
+      const messages = listProjectMessages(
+        supervisionRuntime(),
+        repoKey,
+        assignment.branch,
+      );
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0]!.fromSessionId, childSession);
+      assert.equal(messages[0]!.text, "ready under assignment contention");
+      const readyMessages = listCoordinationMessagePaths(
+        supervisionRuntime(),
+        childSession,
+      )
+        .map((path) => readChiefMessage(path))
+        .filter((message) => message.kind === "project_assignment");
+      assert.equal(readyMessages.length, 1);
+      assert.equal(readyMessages[0]!.id, childSession);
+      assert.equal(readyMessages[0]!.branch, assignment.branch);
+      assert.equal(created, true);
+      assert.equal(
+        pi.calls.filter(
+          (args) => args[0] === "worktree" && args[1] === "create",
+        ).length,
+        1,
+      );
+      assert.equal(
+        existsSync(
+          `${projectAssignmentPath(supervisionRuntime(), repoKey, assignment.branch)}.lock`,
+        ),
+        false,
+      );
+      removeProjectAssignment(supervisionRuntime(), repoKey, assignment.branch);
+      for (const path of listCoordinationMessagePaths(
+        supervisionRuntime(),
+        childSession,
+      )) {
+        const message = readChiefMessage(path);
+        removeChiefMessage(supervisionRuntime(), childSession, message.id);
+      }
+      return;
+    }
     assert.equal(assignment.text.match(/Implement focused change/g)?.length, 1);
     const brief = assignment.requiredEvidence?.find(
       (entry) => entry.name === "project-brief.md",
@@ -6203,45 +6567,7 @@ async function managerDelegateAssignmentTest(
     // Keep the Manager's lifecycle subscription for retirement coverage, but
     // prevent it from draining the retained-message assertion below.
     ctx.isIdle = () => false;
-    process.env.HERDR_WORKSPACE_ID = childWorkspace;
-    process.env.HERDR_PANE_ID = "child-pane";
-    process.env.HERDR_TAB_ID = "child-tab";
-    managerUsesRootPane = true;
-    lifecycleServer = createServer((socket) => {
-      lifecycleClients.add(socket);
-      socket.once("close", () => {
-        lifecycleClients.delete(socket);
-        subscribedLifecycleClients.delete(socket);
-      });
-      socket.setEncoding("utf8");
-      let buffer = "";
-      socket.on("data", (chunk: string) => {
-        buffer += chunk;
-        const newline = buffer.indexOf("\n");
-        if (newline < 0) return;
-        const request = JSON.parse(buffer.slice(0, newline));
-        lifecycleSubscriptions++;
-        subscribedLifecycleClients.add(socket);
-        socket.write(
-          `${JSON.stringify({ id: request.id, result: { type: "subscription_started" } })}\n`,
-        );
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      lifecycleServer!.once("error", reject);
-      lifecycleServer!.listen(process.env.HERDR_SOCKET_PATH!, resolve);
-    });
-    let lead = fakeChiefPi({
-      activeTools: ["read"],
-      exec,
-      sessionName: "Existing session name",
-      entries: [{ type: "session_info", name: "Existing session name" }],
-    });
-    registerExtension!(lead.pi as never);
-    let leadCtx = fakeContext(lead.entries) as any;
-    leadCtx.hasUI = true;
-    leadCtx.sessionManager.getSessionId = () => childSession;
-    leadCtx.sessionManager.getSessionFile = childSessionPath;
+    await initializeLeadRuntime();
     const waitForStage = async (stage: string, assertion: () => void) => {
       try {
         await t.waitFor(assertion);
@@ -6272,8 +6598,30 @@ async function managerDelegateAssignmentTest(
       }
     };
     try {
-      // Managed identity is initialized only from the exact published assignment.
-      await lead.events.get("session_start")![0](undefined, leadCtx);
+      // Keep the verified assignment and its delivery unavailable until after
+      // startup, so the first role publication must name the ordinary Lead.
+      unlinkSync(assignmentFile);
+      unlinkSync(paths[0]!);
+      if (!leadStarted) {
+        await lead.events.get("session_start")![0](undefined, leadCtx);
+        leadStarted = true;
+      }
+      await waitForStage("initial Lead tab rename", () =>
+        assert.ok(
+          tabCommands.some(
+            (args) =>
+              args[0] === "tab" &&
+              args[1] === "rename" &&
+              args[2] === "child-tab" &&
+              args[3] === "Lead",
+          ),
+        ),
+      );
+      assert.equal(tabLabels.get("child-tab"), "Lead");
+      assert.equal(lead.pi.getSessionName(), "Existing session name");
+
+      writeFileSync(assignmentFile, assignmentSnapshot);
+      writeFileSync(paths[0]!, deliverySnapshot);
       await waitForStage("assignment delivery", () =>
         assert.ok(
           lead.sent.some(
@@ -6569,6 +6917,9 @@ async function managerDelegateAssignmentTest(
       await lead.events.get("session_shutdown")?.[0]();
     }
   } finally {
+    releaseLeadLock();
+    if (leadPublication) await leadPublication;
+    if (lockOrder) await lead?.events.get("session_shutdown")?.[0]();
     if (!manager1Shutdown) await pi.events.get("session_shutdown")?.[0]();
     for (const client of lifecycleClients) client.destroy();
     if (lifecycleServer?.listening)
@@ -6592,6 +6943,12 @@ async function managerDelegateAssignmentTest(
 for (const projectTrusted of [true, false])
   test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
     managerDelegateAssignmentTest(t, projectTrusted));
+
+test("Manager session binding holds the assignment lock before Lead publication", (t) =>
+  managerDelegateAssignmentTest(t, false, "manager-first"));
+
+test("Lead publication holds the assignment lock before Manager session binding", (t) =>
+  managerDelegateAssignmentTest(t, false, "lead-first"));
 
 test("Manager supervises project Leads while Chief keeps only unclaimed Leads in scope", async () => {
   setLeadEnvironment();
@@ -16165,6 +16522,158 @@ test("Manager initialization cannot recover messages under stale or invalid loca
   }
 });
 
+test("project assignment lock waits are bounded, cancellable, and revalidate after acquisition", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const runtime = supervisionRuntime(
+    `/tmp/assignment-wait-${randomUUID()}.sock`,
+  );
+  const repoKey = "wait-test";
+  const branch = "feature";
+  const assignmentPath = projectAssignmentPath(runtime, repoKey, branch);
+  const lockPath = `${assignmentPath}.lock`;
+  const makeTransitions = (extra: Record<string, unknown> = {}) =>
+    createLeadRoleTransitions(
+      { controllerRole: "lead" } as any,
+      {
+        supervisionRuntime: () => runtime,
+        projectAssignmentPath,
+        acquireProcessLock,
+        delay: (
+          ms: number,
+          value: unknown,
+          options: { signal?: AbortSignal },
+        ) =>
+          import("node:timers/promises").then(({ setTimeout }) =>
+            setTimeout(ms, value, options),
+          ),
+        ...extra,
+      } as any,
+    );
+
+  const timeoutLease = acquireProcessLock(lockPath, {
+    name: "project assignment lock",
+  });
+  let mutated = false;
+  const timeoutTransitions = makeTransitions();
+  try {
+    await assert.rejects(
+      timeoutTransitions.withProjectAssignmentLock(repoKey, branch, () => {
+        mutated = true;
+      }),
+      (error: unknown) =>
+        error instanceof ProcessLockOccupiedError &&
+        error.code === "PROCESS_LOCK_OCCUPIED",
+    );
+    assert.equal(mutated, false);
+    assert.equal(readLiveProcessLock(lockPath).id, timeoutLease.claim.id);
+  } finally {
+    timeoutLease.release();
+  }
+  assert.equal(existsSync(lockPath), false);
+
+  let delayedLease = acquireProcessLock(lockPath, {
+    name: "project assignment lock",
+  });
+  let delayedMutation = false;
+  const delayedTransitions = makeTransitions({
+    delay: async (
+      _ms: number,
+      value: unknown,
+      options: { signal?: AbortSignal },
+    ) => {
+      setTimeout(() => delayedLease.release(), 10);
+      const { setTimeout: wait } = await import("node:timers/promises");
+      return wait(2_050, value, options);
+    },
+  });
+  await assert.rejects(
+    delayedTransitions.withProjectAssignmentLock(repoKey, branch, () => {
+      delayedMutation = true;
+    }),
+    (error: unknown) =>
+      error instanceof ProcessLockOccupiedError &&
+      error.code === "PROCESS_LOCK_OCCUPIED",
+  );
+  assert.equal(delayedMutation, false);
+  assert.equal(existsSync(lockPath), false);
+
+  const cancelLease = acquireProcessLock(lockPath, {
+    name: "project assignment lock",
+  });
+  const controller = new AbortController();
+  let cancelBlocked!: () => void;
+  let releaseCancelBlock!: () => void;
+  const blockedOnLock = new Promise<void>((resolve) => {
+    cancelBlocked = resolve;
+  });
+  const cancelBlock = new Promise<void>((resolve) => {
+    releaseCancelBlock = resolve;
+  });
+  const cancelTransitions = makeTransitions({
+    afterProjectAssignmentLockOccupied: async () => {
+      cancelBlocked();
+      await cancelBlock;
+    },
+  });
+  mutated = false;
+  const cancellation = assert.rejects(
+    cancelTransitions.withProjectAssignmentLock(
+      repoKey,
+      branch,
+      () => {
+        mutated = true;
+      },
+      controller.signal,
+    ),
+    (error: unknown) => error instanceof Error && error.name === "AbortError",
+  );
+  try {
+    await blockedOnLock;
+    controller.abort();
+    releaseCancelBlock();
+    await cancellation;
+    assert.equal(mutated, false);
+    assert.equal(readLiveProcessLock(lockPath).id, cancelLease.claim.id);
+  } finally {
+    releaseCancelBlock();
+    cancelLease.release();
+  }
+  assert.equal(existsSync(lockPath), false);
+
+  const heldLease = acquireProcessLock(lockPath, {
+    name: "project assignment lock",
+  });
+  let signalWaiting!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    signalWaiting = resolve;
+  });
+  let authority = {
+    id: "original",
+    piSessionFile: undefined as string | undefined,
+  };
+  const authorityTransitions = makeTransitions({
+    afterProjectAssignmentLockOccupied: async () => signalWaiting(),
+  });
+  const operation = authorityTransitions.withProjectAssignmentLock(
+    repoKey,
+    branch,
+    () => {
+      if (authority.id !== "original")
+        throw new Error("Project assignment changed during Lead activation");
+      authority = { ...authority, piSessionFile: "/should-not-bind" };
+    },
+  );
+  try {
+    await waiting;
+    authority = { id: "replacement", piSessionFile: undefined };
+  } finally {
+    heldLease.release();
+  }
+  await assert.rejects(operation, /assignment changed/);
+  assert.deepEqual(authority, { id: "replacement", piSessionFile: undefined });
+  assert.equal(existsSync(lockPath), false);
+});
+
 test("current project handoff publishes despite unrelated global authority contention and survives recovery", async () => {
   const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
   const {
@@ -16173,6 +16682,7 @@ test("current project handoff publishes despite unrelated global authority conte
     listProjectMessageHeaders,
     readProjectMessage,
     projectAssignmentAuthorityLockPath,
+    writeProjectAssignment,
   } = await import("./supervision.ts");
   const runtime = supervisionRuntime(`/tmp/publication-${randomUUID()}.sock`);
   const assignment = {
@@ -16207,6 +16717,7 @@ test("current project handoff publishes despite unrelated global authority conte
     "corrupt",
   );
   let branchLocks = 0;
+  let cancelSignal: AbortController | undefined;
   const transitions = createLeadRoleTransitions(
     { controllerRole: "lead" } as any,
     {
@@ -16217,6 +16728,11 @@ test("current project handoff publishes despite unrelated global authority conte
         branchLocks++;
         return acquireProcessLock(...args);
       },
+      delay: (ms: number, value: unknown, options: { signal?: AbortSignal }) =>
+        import("node:timers/promises").then(({ setTimeout }) =>
+          setTimeout(ms, value, options),
+        ),
+      afterProjectAssignmentLockOccupied: async () => cancelSignal?.abort(),
       prepareCoordinationInput: async (_ctx: unknown, text: string) => ({
         text,
         resultBindings: [],
@@ -16265,4 +16781,53 @@ test("current project handoff publishes despite unrelated global authority conte
     assignment.id,
     "the existing exact-assignment delivery predicate accepts the handoff",
   );
+
+  const cancelledAssignment = {
+    ...assignment,
+    id: randomUUID(),
+    branch: "cancelled-message",
+  };
+  writeProjectAssignment(runtime, cancelledAssignment);
+  const cancelledLockPath = `${projectAssignmentPath(
+    runtime,
+    cancelledAssignment.repoKey,
+    cancelledAssignment.branch,
+  )}.lock`;
+  const cancelledLock = acquireProcessLock(cancelledLockPath, {
+    name: "project assignment lock",
+  });
+  const controller = new AbortController();
+  cancelSignal = controller;
+  ctx.sessionManager.getSessionId = () => cancelledAssignment.id;
+  try {
+    await assert.rejects(
+      transitions.publishProjectMessage(
+        ctx,
+        cancelledAssignment,
+        "must not publish after cancellation",
+        [],
+        undefined,
+        undefined,
+        undefined,
+        controller.signal,
+      ),
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    assert.deepEqual(
+      listProjectMessageHeaders(
+        runtime,
+        cancelledAssignment.repoKey,
+        cancelledAssignment.branch,
+      ),
+      [],
+    );
+    assert.equal(
+      readLiveProcessLock(cancelledLockPath).id,
+      cancelledLock.claim.id,
+    );
+  } finally {
+    cancelledLock.release();
+    cancelSignal = undefined;
+  }
+  assert.equal(existsSync(cancelledLockPath), false);
 });
