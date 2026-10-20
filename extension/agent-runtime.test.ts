@@ -4196,7 +4196,6 @@ test("acceptance upgrades legacy evidence durably without rewriting saved contin
     };
     request.evidenceAssignmentId = request.requestId;
     writeRequest(mailbox, request);
-
     agent.events.get("input")![0](
       { text: controlMarker(request.requestId) },
       context,
@@ -4210,6 +4209,13 @@ test("acceptance upgrades legacy evidence durably without rewriting saved contin
         (entry: any) => entry.customType === AGENT_REQUIRED_EVIDENCE_ENTRY,
       )
       .at(-1) as any;
+    agent.entries.splice(agent.entries.indexOf(acceptedEntry), 0, {
+      ...acceptedEntry,
+      data: {
+        ...acceptedEntry.data,
+        inheritedEvidence: [legacyEvidence],
+      },
+    });
     assert.deepEqual(acceptedEntry.data.inheritedEvidence, [
       { ...legacyEvidence, ref: snapshot.ref },
     ]);
@@ -4224,6 +4230,16 @@ test("acceptance upgrades legacy evidence durably without rewriting saved contin
       managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0]?.ref,
       snapshot.ref,
     );
+    const reader = agent.tools.find((tool) => tool.name === "read_evidence");
+    assert.ok(reader);
+    const read = await reader.execute(
+      "read-legacy-upgrade",
+      { ref: snapshot.ref },
+      undefined,
+      undefined,
+      reloadedContext,
+    );
+    assert.match(read.content[0].text, /legacy accepted plan/);
     assert.deepEqual(priorEntry.data.inheritedEvidence, [legacyEvidence]);
   } finally {
     agent.events.get("session_shutdown")?.[0]();
@@ -4313,9 +4329,9 @@ test("managed task acceptance validates required result backing files before imp
           managedAgentRequiredEvidence(context)!.effectiveEvidence;
         assert.deepEqual(acceptedEvidence, [evidence]);
         const page = readEvidencePage(acceptedEvidence, evidence.result.ref);
-        assert.equal(page.content, "a".repeat(READ_EVIDENCE_MAX_BYTES));
+        assert.ok(page.content.length < READ_EVIDENCE_MAX_BYTES);
         assert.equal(page.nextOffset, 1);
-        assert.equal(page.nextByteOffset, READ_EVIDENCE_MAX_BYTES);
+        assert.equal(page.nextByteOffset, Buffer.byteLength(page.content));
         const tool = agent.tools.find(
           (candidate) => candidate.name === "read_evidence",
         );
@@ -4326,7 +4342,38 @@ test("managed task acceptance validates required result backing files before imp
           undefined,
           context,
         );
-        assert.equal(toolPage.content[0].text, page.content);
+        const firstText = toolPage.content[0].text;
+        assert.match(
+          firstText,
+          new RegExp(
+            `offset=${page.nextOffset}, byteOffset=${page.nextByteOffset}`,
+          ),
+        );
+        assert.ok(Buffer.byteLength(firstText) <= READ_EVIDENCE_MAX_BYTES);
+        let reconstructed = firstText.replace(/\n\[More evidence:.*\]$/, "");
+        let nextCursor = firstText.match(
+          /\[More evidence: call read_evidence with offset=(\d+), byteOffset=(\d+)\]$/,
+        );
+        while (nextCursor) {
+          const nextPage = await tool.execute(
+            "read-next",
+            {
+              ref: evidence.result.ref,
+              offset: Number(nextCursor[1]),
+              byteOffset: Number(nextCursor[2]),
+            },
+            undefined,
+            undefined,
+            context,
+          );
+          const nextText = nextPage.content[0].text;
+          assert.ok(Buffer.byteLength(nextText) <= READ_EVIDENCE_MAX_BYTES);
+          reconstructed += nextText.replace(/\n\[More evidence:.*\]$/, "");
+          nextCursor = nextText.match(
+            /\[More evidence: call read_evidence with offset=(\d+), byteOffset=(\d+)\]$/,
+          );
+        }
+        assert.equal(reconstructed, "a".repeat(512 * 1024));
         await assert.rejects(
           tool.execute(
             "read",

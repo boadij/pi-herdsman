@@ -156,6 +156,13 @@ export type EvidencePage = Readonly<{
   nextByteOffset?: number;
 }>;
 
+const EVIDENCE_CONTINUATION_RESERVE = 128;
+
+export function evidencePageContent(page: EvidencePage): string {
+  if (page.nextOffset === undefined) return page.content;
+  return `${page.content}\n[More evidence: call read_evidence with offset=${page.nextOffset}, byteOffset=${page.nextByteOffset ?? 0}]`;
+}
+
 /** Reads only the caller-provided accepted set; this helper does not authorize that set. */
 export function readEvidencePage(
   authorizedEvidence: readonly RequiredEvidence[],
@@ -217,7 +224,7 @@ export function readEvidencePage(
       throw new Error();
     let lineIndex = offset - 1;
     let cursor = byteOffset;
-    let budget = READ_EVIDENCE_MAX_BYTES;
+    let budget = READ_EVIDENCE_MAX_BYTES - EVIDENCE_CONTINUATION_RESERVE;
     let count = 0;
     const page: Buffer[] = [];
     while (lineIndex < lines.length && count < limit && budget > 0) {
@@ -243,10 +250,16 @@ export function readEvidencePage(
       count++;
     }
     const nextOffset = lineIndex < lines.length ? lineIndex + 1 : undefined;
-    return {
-      content: Buffer.concat(page).toString("utf8"),
+    const nextContent = Buffer.concat(page).toString("utf8");
+    const result = {
+      content: nextContent,
       ...(nextOffset ? { nextOffset, nextByteOffset: 0 } : {}),
     };
+    if (
+      Buffer.byteLength(evidencePageContent(result)) > READ_EVIDENCE_MAX_BYTES
+    )
+      throw new Error();
+    return result;
   } catch {
     throw new Error("Evidence reference unavailable or invalid");
   }
@@ -277,6 +290,22 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
     );
   let latest: AcceptedEvidenceContext | undefined;
   const localEvidenceById = new Map<string, RequiredEvidence>();
+  const sameVerifiedEvidenceAfterRefUpgrade = (
+    previous: RequiredEvidence,
+    current: RequiredEvidence,
+  ): boolean => {
+    if (isDeepStrictEqual(previous, current)) return true;
+    if (
+      "path" in previous &&
+      "path" in current &&
+      previous.ref === undefined &&
+      current.ref !== undefined
+    ) {
+      const { ref: _ref, ...withoutRef } = current;
+      return isDeepStrictEqual(previous, withoutRef);
+    }
+    return false;
+  };
   for (const entry of matches as any[]) {
     const data = entry.data as AcceptedEvidenceContext;
     if (
@@ -328,7 +357,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       );
     for (const item of data.localEvidence) {
       const previous = localEvidenceById.get(item.id);
-      if (previous && !isDeepStrictEqual(previous, item))
+      if (previous && !sameVerifiedEvidenceAfterRefUpgrade(previous, item))
         throw new Error("Conflicting managed-agent required-evidence metadata");
       localEvidenceById.set(item.id, item);
     }
@@ -337,12 +366,22 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       latest.requestId === data.requestId &&
       (latest.projectAssignmentId !== data.projectAssignmentId ||
         latest.evidenceAssignmentId !== data.evidenceAssignmentId ||
-        !isDeepStrictEqual(latest.inheritedEvidence, data.inheritedEvidence) ||
+        latest.inheritedEvidence.length !== data.inheritedEvidence.length ||
+        latest.inheritedEvidence.some(
+          (item, index) =>
+            !sameVerifiedEvidenceAfterRefUpgrade(
+              item,
+              data.inheritedEvidence[index]!,
+            ),
+        ) ||
         latest.localEvidence.some((item) => {
           const retained = data.localEvidence.find(
             (next) => next.id === item.id,
           );
-          return retained !== undefined && !isDeepStrictEqual(item, retained);
+          return (
+            retained !== undefined &&
+            !sameVerifiedEvidenceAfterRefUpgrade(item, retained)
+          );
         }))
     )
       throw new Error("Conflicting managed-agent required-evidence metadata");

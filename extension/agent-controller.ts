@@ -841,6 +841,11 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
       previous.ref === undefined &&
       current.ref !== undefined
     ) {
+      try {
+        verifySemanticEvidenceReservation(current.id, current.ref);
+      } catch {
+        return false;
+      }
       const { ref: _ref, ...upgraded } = current;
       return isDeepStrictEqual(previous, upgraded);
     }
@@ -2215,6 +2220,12 @@ export function resolveAssignmentSession(
         let upgradedInheritedEvidence: RequiredEvidence[];
         let upgradedLocalEvidence: RequiredEvidence[];
         try {
+          for (const item of [
+            ...record.inheritedEvidence,
+            ...record.localEvidence,
+          ])
+            if ("path" in item && item.ref !== undefined)
+              verifySemanticEvidenceReservation(item.id, item.ref);
           upgradedInheritedEvidence = record.inheritedEvidence.map(
             upgradeAndVerifyRequiredEvidence,
           );
@@ -6444,11 +6455,6 @@ export function createAgentController(
           ).map((file) =>
             typeof file === "string" ? promoteMatchingEvidence(file) : file,
           );
-          // Ordinary paths are inputs to retention, not reusable handoff files;
-          // the accepted immutable snapshots below are the child's current files.
-          retainedSelections = supplied.filter(
-            (file) => typeof file !== "string",
-          );
           const existingPaths = new Set(
             requiredEvidence
               .filter(
@@ -6469,28 +6475,33 @@ export function createAgentController(
               )
               .map((entry) => entry.result.ref),
           );
-          const newFiles = supplied.filter((file) =>
-            typeof file === "string"
-              ? !existingPaths.has(resolve(ctx.cwd, file))
-              : "kind" in file
-                ? false
-                : !existingRefs.has(file.ref),
-          );
-          const additions: RequiredEvidence[] = [
-            ...persistRequiredTextFiles(
-              nestedEvidence.evidenceAssignmentId,
-              newFiles.filter(
-                (file): file is string => typeof file === "string",
-              ),
-              ctx.cwd,
-              p.action,
-            ),
-            ...newFiles.flatMap((file) =>
-              typeof file === "string"
-                ? []
-                : [{ id: randomUUID(), name: file.ref, result: file }],
-            ),
-          ];
+          const additions: RequiredEvidence[] = [];
+          retainedSelections = supplied.flatMap((file) => {
+            if (typeof file === "string") {
+              if (existingPaths.has(resolve(ctx.cwd, file))) return [];
+              const [addition] = persistRequiredTextFiles(
+                nestedEvidence.evidenceAssignmentId,
+                [file],
+                ctx.cwd,
+                p.action,
+              );
+              if (!addition) return [];
+              additions.push(addition);
+              return [
+                {
+                  kind: "retainedEvidence" as const,
+                  ref: semanticEvidenceRef(addition),
+                  name: addition.name,
+                  path: addition.path,
+                  sha256: addition.sha256,
+                },
+              ];
+            }
+            if ("kind" in file || existingRefs.has(file.ref)) return [file];
+            const addition = { id: randomUUID(), name: file.ref, result: file };
+            additions.push(addition);
+            return [file];
+          });
           handoffAdditions = additions;
           const localEvidence = [...nestedEvidence.localEvidence];
           for (const addition of additions)
@@ -6615,27 +6626,33 @@ export function createAgentController(
         }
         for (const addition of handoffAdditions)
           selectedEvidenceIds.add(addition.id);
-        const currentRequiredFiles = requiredEvidence.flatMap((entry, index) =>
-          selectedEvidenceIds.has(entry.id) ? [requiredFiles[index]!] : [],
-        );
-        const explicitOnlyFiles = explicitFiles.filter((file) => {
-          if (typeof file === "string") return true;
-          const selected =
-            "kind" in file
-              ? requiredEvidence.some(
-                  (entry) =>
-                    !("result" in entry) &&
-                    entry.ref === file.ref &&
-                    selectedEvidenceIds.has(entry.id),
-                )
-              : requiredEvidence.some(
-                  (entry) =>
-                    "result" in entry &&
-                    entry.result.ref === file.ref &&
-                    selectedEvidenceIds.has(entry.id),
+        const representedEvidenceIds = new Set<string>();
+        const assignmentFiles = explicitFiles.flatMap((file) => {
+          const index =
+            typeof file === "string"
+              ? -1
+              : requiredEvidence.findIndex((entry) =>
+                  "kind" in file
+                    ? !("result" in entry) && entry.ref === file.ref
+                    : "result" in entry && entry.result.ref === file.ref,
                 );
-          return !selected;
+          if (index < 0) return [file];
+          const entry = requiredEvidence[index]!;
+          if (!selectedEvidenceIds.has(entry.id)) return [file];
+          if (representedEvidenceIds.has(entry.id)) return [];
+          representedEvidenceIds.add(entry.id);
+          return [requiredFiles[index]!];
         });
+        for (const addition of handoffAdditions) {
+          if (representedEvidenceIds.has(addition.id)) continue;
+          const index = requiredEvidence.findIndex(
+            (entry) => entry.id === addition.id,
+          );
+          if (index >= 0) {
+            assignmentFiles.push(requiredFiles[index]!);
+            representedEvidenceIds.add(addition.id);
+          }
+        }
         const historicalEvidence = requiredEvidence.filter(
           (entry) => !selectedEvidenceIds.has(entry.id),
         );
@@ -6647,7 +6664,6 @@ export function createAgentController(
               )}\nUse read_evidence when historical details are needed.`
           : "";
         const assignmentTask = `${p.task}${manifest}`;
-        const assignmentFiles = [...explicitOnlyFiles, ...currentRequiredFiles];
         const prepareAssignmentInput = (assignmentLabel: string) =>
           prepareMessageInput(
             assignmentTask,
@@ -7538,7 +7554,7 @@ export function createAgentController(
           try {
             const scope = await options.projectEvidence?.(ctx);
             if (!scope) throw new Error();
-            const { readEvidencePage } =
+            const { evidencePageContent, readEvidencePage } =
               await import("./managed-agent-runtime.ts");
             let page;
             await scope.revalidate(() => {
@@ -7550,7 +7566,7 @@ export function createAgentController(
             });
             if (!page) throw new Error();
             return {
-              content: [{ type: "text", text: page.content }],
+              content: [{ type: "text", text: evidencePageContent(page) }],
               details: page,
             };
           } catch {

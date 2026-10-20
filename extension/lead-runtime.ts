@@ -3456,8 +3456,15 @@ export function registerLeadRuntime(
         return undefined;
       const assignment = await currentProjectAssignment(ctx);
       if (!assignment) return undefined;
+      const migrated = migrateProjectAssignmentEvidence(
+        options.coordinationHost.supervisionRuntime(),
+        assignment.repoKey,
+        assignment.branch,
+        assignment.id,
+      );
+      if (!migrated || migrated.id !== assignment.id) return undefined;
       return {
-        assignment,
+        assignment: migrated,
         revalidate: (operation: () => Promise<void> | void) =>
           roleTransitions.withProjectAssignmentLock(
             assignment.repoKey,

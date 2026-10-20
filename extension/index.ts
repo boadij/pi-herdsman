@@ -136,6 +136,7 @@ import {
   managedAgentEnvironmentError,
   managedAgentEnvironmentIdentity,
   managedAgentRequiredEvidence,
+  evidencePageContent,
   readEvidencePage,
   registerManagedAgentRuntime,
   runtimeIdentityState,
@@ -2363,7 +2364,7 @@ export default function (pi: ExtensionAPI): void {
           params,
         );
         return {
-          content: [{ type: "text", text: page.content }],
+          content: [{ type: "text", text: evidencePageContent(page) }],
           details: page,
         };
       } catch {

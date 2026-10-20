@@ -1121,6 +1121,33 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   // Session startup cleans testTmpRoot; keep this source outside it.
   const retainedFile = join("/tmp", `agent-local-${randomUUID()}.md`);
   realFs.writeFileSync(retainedFile, "agent-local reviewer note");
+  const retainedFileAfterResult = join(
+    "/tmp",
+    `agent-local-after-result-${randomUUID()}.md`,
+  );
+  realFs.writeFileSync(
+    retainedFileAfterResult,
+    "agent-local note after result",
+  );
+  const resultCanonicalRef = resultRef(randomUUID());
+  const resultSemanticRef = "result:reviewer#2";
+  const resultArtifact = resultPath(resultCanonicalRef.slice("result:".length));
+  realFs.mkdirSync(resolve(resultArtifact, ".."), { recursive: true });
+  realFs.writeFileSync(resultArtifact, "interleaved result content");
+  const acceptedResultCanonicalRef = resultRef(randomUUID());
+  const acceptedResultArtifact = resultPath(
+    acceptedResultCanonicalRef.slice("result:".length),
+  );
+  realFs.mkdirSync(resolve(acceptedResultArtifact, ".."), { recursive: true });
+  realFs.writeFileSync(acceptedResultArtifact, "already accepted result");
+  const acceptedResult = {
+    id: randomUUID(),
+    name: "result:reviewer#1",
+    result: {
+      ref: "result:reviewer#1",
+      canonicalRef: acceptedResultCanonicalRef,
+    },
+  } as const;
   const parent = {
     ...managedState(label, parentRequestId),
     projectAssignmentId,
@@ -1203,10 +1230,34 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       projectAssignmentId,
       evidenceAssignmentId: parentRequestId,
       inheritedEvidence: [inherited],
-      localEvidence: [local],
+      localEvidence: [local, acceptedResult],
     },
   };
-  const contextEntries: any[] = [identity, acceptedContext];
+  const { ref: _inheritedRef, ...legacyInherited } = inherited;
+  const { ref: _localRef, ...legacyLocal } = local;
+  const legacyContext = {
+    ...acceptedContext,
+    data: {
+      ...acceptedContext.data,
+      inheritedEvidence: [legacyInherited],
+      localEvidence: [legacyLocal, acceptedResult],
+    },
+  };
+  const contextEntries: any[] = [
+    identity,
+    legacyContext,
+    acceptedContext,
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: acceptedResult.result,
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: { ref: resultSemanticRef, canonicalRef: resultCanonicalRef },
+    },
+  ];
   const context = fakeAgentContext(contextEntries);
   const appendEntry = pi.pi.appendEntry.bind(pi.pi);
   pi.pi.appendEntry = ((customType: string, data: unknown) => {
@@ -1238,6 +1289,17 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       }),
       false,
     );
+    const evidenceReader = pi.tools.find(
+      (tool) => tool.name === "read_evidence",
+    )!;
+    const acceptedRead = await evidenceReader.execute(
+      "read-upgraded-session-evidence",
+      { ref: inherited.ref },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(acceptedRead.content[0].text, /parent plan body/);
     assert.ok(
       realFs.existsSync(retainedFile),
       `fixture missing before retain: ${retainedFile}`,
@@ -1249,7 +1311,7 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
         {
           definition: "agent",
           task: "child task",
-          files: [retainedFile],
+          files: [retainedFile, resultSemanticRef, retainedFileAfterResult],
           retain: true,
         },
         undefined,
@@ -1259,11 +1321,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
     assert.ok(published);
-    assert.equal(published!.requiredEvidence?.length, 3);
+    assert.equal(published!.requiredEvidence?.length, 6);
     assert.equal(
       readRequiredEvidenceSnapshot(
         parentRequestId,
-        published!.requiredEvidence![2]!,
+        published!.requiredEvidence![3]!,
       ),
       "agent-local reviewer note",
     );
@@ -1278,13 +1340,55 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       published!.text.match(/agent-local reviewer note/g)?.length,
       1,
     );
-    assert.ok(!published!.text.includes(published!.requiredEvidence![2]!.path));
+    const orderedCurrent = [
+      "agent-local reviewer note",
+      "result:reviewer#2",
+      "interleaved result content",
+      "agent-local note after result",
+    ].map((content) => published!.text.indexOf(content));
+    assert.ok(
+      orderedCurrent.every((index) => index >= 0),
+      published!.text,
+    );
+    assert.deepEqual(
+      orderedCurrent,
+      [...orderedCurrent].sort((a, b) => a - b),
+      published!.text,
+    );
+    for (const ref of [inherited.ref!, local.ref!]) {
+      assert.ok(published!.text.indexOf(ref) < orderedCurrent[0]!);
+      assert.equal(published!.text.split(ref).length - 1, 1);
+    }
+    assert.equal(published!.text.split("result:reviewer#2").length - 1, 1);
+    assert.ok(!published!.text.includes(published!.requiredEvidence![3]!.path));
     assert.match(published!.text, /evidence:plan#1 — plan\.md/);
     assert.match(published!.text, /evidence:review#1 — review\.md/);
     assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
-    const retained = published!.requiredEvidence![2]!;
+    const retained = published!.requiredEvidence![3]!;
     assert.ok(!("result" in retained));
     realFs.rmSync(retainedFile, { force: true });
+    realFs.rmSync(retainedFileAfterResult, { force: true });
+    realFs.rmSync(resultArtifact, { force: true });
+
+    const retainedBeforeAcceptedResult = join(
+      "/tmp",
+      `agent-local-before-existing-result-${randomUUID()}.md`,
+    );
+    const retainedAfterAcceptedResult = join(
+      "/tmp",
+      `agent-local-after-existing-result-${randomUUID()}.md`,
+    );
+    realFs.writeFileSync(
+      retainedBeforeAcceptedResult,
+      "text before accepted result",
+    );
+    realFs.writeFileSync(
+      retainedAfterAcceptedResult,
+      "text after accepted result",
+    );
+    stopConsumer?.();
+    stopConsumer = undefined;
+    published = undefined;
 
     stopConsumer?.();
     published = undefined;
@@ -1303,7 +1407,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
         {
           definition: "agent",
           task: "ordinary child task",
-          files: [retained.ref!],
+          files: [
+            retainedBeforeAcceptedResult,
+            "result:reviewer#1",
+            retainedAfterAcceptedResult,
+          ],
           retain: true,
         },
         undefined,
@@ -1320,19 +1428,40 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       ordinaryChild.details.agent as string,
     );
     assert.ok(published);
+    const mixedOrder = [
+      "text before accepted result",
+      "result:reviewer#1",
+      "already accepted result",
+      "text after accepted result",
+    ].map((content) => published!.text.indexOf(content));
+    assert.ok(
+      mixedOrder.every((index) => index >= 0),
+      published!.text,
+    );
+    assert.deepEqual(
+      mixedOrder,
+      [...mixedOrder].sort((a, b) => a - b),
+    );
+    assert.equal(published!.text.split("result:reviewer#1").length - 1, 1);
+    assert.equal(
+      published!.text.split("already accepted result").length - 1,
+      1,
+    );
+    realFs.rmSync(retainedBeforeAcceptedResult, { force: true });
+    realFs.rmSync(retainedAfterAcceptedResult, { force: true });
+    realFs.rmSync(acceptedResultArtifact, { force: true });
     assert.deepEqual(published!.requiredEvidence?.slice(0, 2), [
       inherited,
       local,
     ]);
-    assert.equal(published!.requiredEvidence?.length, 3);
-    assert.equal(
-      published!.requiredEvidence![2]!.sourceAssignmentId,
-      parentRequestId,
+    assert.equal(published!.requiredEvidence?.length, 8);
+    assert.ok(
+      published!.requiredEvidence?.some(
+        (entry) =>
+          "result" in entry && entry.result.ref === "result:reviewer#1",
+      ),
     );
-    assert.equal(
-      published!.text.match(/agent-local reviewer note/g)?.length,
-      1,
-    );
+    assert.doesNotMatch(published!.text, /agent-local reviewer note/);
     assert.ok(!published!.text.includes(retained.path));
     assert.match(published!.text, /evidence:plan#1 — plan\.md/);
     assert.match(published!.text, /evidence:review#1 — review\.md/);
@@ -4954,7 +5083,9 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
   }
 });
 
-test("assigned Lead delivers the project brief to reviewers without supplied files", async () => {
+test("assigned Lead migrates legacy project evidence and preserves attachment order", async () => {
+  const { READ_EVIDENCE_MAX_BYTES } =
+    await import("./managed-agent-runtime.ts");
   setLeadEnvironment();
   process.env.HERDR_WORKSPACE_ID = WORKSPACE;
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -4974,13 +5105,35 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     "older-notes.txt",
     "small historical note",
   );
+  const historicalBrief = persistRequiredEvidenceSnapshot(
+    assignedSessionId,
+    "historical-plan.txt",
+    "unselected historical plan",
+  );
+  const longEvidence = persistRequiredEvidenceSnapshot(
+    assignedSessionId,
+    "long-evidence.txt",
+    "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+  );
+  const ordinaryPath = join(PI_AGENTS_DIR, `ordinary-${randomUUID()}.txt`);
+  const ordinaryText = "ordinary current attachment";
+  realFs.writeFileSync(ordinaryPath, ordinaryText, "utf8");
+  const { ref: _snapshotRef, ...legacySnapshot } = snapshot;
+  const { ref: _olderRef, ...legacyOlderBrief } = olderBrief;
+  const { ref: _historicalRef, ...legacyHistoricalBrief } = historicalBrief;
+  const { ref: _longRef, ...legacyLongEvidence } = longEvidence;
   const assignment = {
     version: 2 as const,
     id: assignedSessionId,
     repoKey: "repo-key",
     branch,
     text: brief,
-    requiredEvidence: [snapshot, olderBrief],
+    requiredEvidence: [
+      legacySnapshot,
+      legacyOlderBrief,
+      legacyHistoricalBrief,
+      legacyLongEvidence,
+    ],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -5130,7 +5283,12 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
       branch,
       "exact repo/branch assignment",
     );
-    assert.deepEqual(scopeAssignments[0], assignment);
+    assert.equal(scopeAssignments[0]!.id, assignment.id);
+    assert.deepEqual(
+      scopeAssignments[0]!.requiredEvidence?.map((entry) => entry.ref),
+      [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
+      "normal active-Lead access upgrades legacy evidence without resume_project",
+    );
     assert.ok(
       pi.tools.some((tool) => tool.name === "read_evidence"),
       "assigned Lead reader offer",
@@ -5146,7 +5304,7 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
         definition: "reviewer",
         label,
         task: "Review this project",
-        files: [snapshot.ref!],
+        files: [olderBrief.ref!, ordinaryPath, snapshot.ref!],
       },
       undefined,
       undefined,
@@ -5155,19 +5313,44 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
+    const migratedAssignment = readProjectAssignment(
+      runtime,
+      "repo-key",
+      branch,
+    );
+    assert.deepEqual(
+      migratedAssignment?.requiredEvidence?.map((entry) => entry.id),
+      [snapshot.id, olderBrief.id, historicalBrief.id, longEvidence.id],
+      "active assignment migration preserves existing evidence identities",
+    );
+    assert.deepEqual(
+      migratedAssignment?.requiredEvidence?.map((entry) => entry.ref),
+      [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
+      "active Lead delegation persists stable refs without resume_project",
+    );
     assert.ok(
       accepted!.text.indexOf("Task:\nReview this project") <
         accepted!.text.indexOf("<file "),
     );
+    const orderedCurrent = ["small historical note", ordinaryText, brief].map(
+      (content) => accepted!.text.indexOf(content),
+    );
+    assert.ok(orderedCurrent.every((index) => index >= 0));
+    assert.deepEqual(
+      orderedCurrent,
+      [...orderedCurrent].sort((a, b) => a - b),
+    );
+    for (const content of ["small historical note", ordinaryText, brief])
+      assert.equal(accepted!.text.split(content).length - 1, 1);
     assert.match(
       accepted!.text,
       /initial project brief: preserve backward compatibility/,
     );
     assert.match(
       accepted!.text,
-      new RegExp(`${olderBrief.ref} — older-notes\\.txt`),
+      new RegExp(`${historicalBrief.ref} — historical-plan\\.txt`),
     );
-    assert.doesNotMatch(accepted!.text, /small historical note/);
+    assert.doesNotMatch(accepted!.text, /unselected historical plan/);
     assert.ok(!accepted!.text.includes(LEAD_SESSION_ID));
     assert.ok(!accepted!.text.includes(snapshot.path));
     assert.match(accepted!.text, /Review this project/);
@@ -5175,7 +5358,12 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
       accepted!.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(assignment.id, entry),
       ),
-      [brief, "small historical note"],
+      [
+        brief,
+        "small historical note",
+        "unselected historical plan",
+        "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+      ],
     );
     const reader = pi.tools.find((tool) => tool.name === "read_evidence");
     assert.ok(reader, "assigned Lead must have the scoped evidence reader");
@@ -5190,6 +5378,38 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
       JSON.stringify(read),
       /initial project brief: preserve backward compatibility/,
     );
+    const firstLongRead = await reader.execute(
+      "read-long-evidence",
+      { ref: longEvidence.ref },
+      undefined,
+      undefined,
+      context,
+    );
+    const firstLongText = firstLongRead.content[0].text;
+    assert.ok(Buffer.byteLength(firstLongText) <= READ_EVIDENCE_MAX_BYTES);
+    const cursor = firstLongText.match(
+      /\[More evidence: call read_evidence with offset=(\d+), byteOffset=(\d+)\]$/,
+    );
+    assert.ok(cursor, "root Lead reader exposes model-visible continuation");
+    const secondLongRead = await reader.execute(
+      "read-long-evidence-next",
+      {
+        ref: longEvidence.ref,
+        offset: Number(cursor[1]),
+        byteOffset: Number(cursor[2]),
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const firstChunk = firstLongText.replace(/\n\[More evidence:.*\]$/, "");
+    const secondChunk = secondLongRead.content[0].text;
+    assert.doesNotMatch(secondChunk, /\[More evidence:/);
+    assert.equal(
+      firstChunk + secondChunk,
+      "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+    );
+    assert.ok(Buffer.byteLength(secondChunk) <= READ_EVIDENCE_MAX_BYTES);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
@@ -5197,6 +5417,9 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(olderBrief.path, { force: true });
+    realFs.rmSync(historicalBrief.path, { force: true });
+    realFs.rmSync(longEvidence.path, { force: true });
+    realFs.rmSync(ordinaryPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -8757,6 +8980,20 @@ test("session continuation starts a new agent generation with current prompt con
         ...originalInheritedEvidence,
         ref: forgedRef,
       };
+      writeValidPiSessionFile(session);
+      const persistedEvidenceRecord = realFs
+        .readFileSync(session.path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-agent-required-evidence",
+        );
+      assert.equal(
+        persistedEvidenceRecord.data.inheritedEvidence[0].ref,
+        forgedRef,
+      );
       const forged = await registeredAgentTool(pi, "continue").execute(
         "id",
         { session: session.path, task: "do not accept forged evidence" },
@@ -8777,6 +9014,7 @@ test("session continuation starts a new agent generation with current prompt con
       assert.ok(!JSON.stringify(forged).includes(forgedRef));
     }
     savedEvidenceRecord.data.inheritedEvidence[0] = originalInheritedEvidence;
+    writeValidPiSessionFile(session);
     const unavailableEvidencePath = `${inheritedEvidence.path}.unavailable`;
     realFs.renameSync(inheritedEvidence.path, unavailableEvidencePath);
     try {
@@ -8821,6 +9059,20 @@ test("session continuation starts a new agent generation with current prompt con
     const { ref: _savedRef, ...preReferenceEvidence } =
       savedEvidenceRecord.data.inheritedEvidence[0];
     savedEvidenceRecord.data.inheritedEvidence[0] = preReferenceEvidence;
+    writeValidPiSessionFile(session);
+    const persistedLegacyRecord = realFs
+      .readFileSync(session.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-required-evidence",
+      );
+    assert.equal(
+      "ref" in persistedLegacyRecord.data.inheritedEvidence[0],
+      false,
+    );
     removeAgentMailbox(savedMailbox);
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -8839,15 +9091,6 @@ test("session continuation starts a new agent generation with current prompt con
       }),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(
-      session.entries
-        .filter(
-          (entry: any) =>
-            entry.customType === "pi-herdsman-agent-required-evidence",
-        )
-        .at(-1).data.inheritedEvidence[0].ref,
-      originalInheritedEvidence.ref,
-    );
     assert.equal(launched[0].contents.length, 2);
     assert.equal(bootstrapPrepares, 0);
     assert.equal(result.details.session_id, session.id);

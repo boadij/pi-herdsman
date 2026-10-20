@@ -2194,10 +2194,15 @@ export function migrateProjectAssignmentEvidence(
   runtime: SupervisionRuntime,
   repoKey: string,
   branch: string,
+  expectedAssignmentId?: string,
 ): ProjectAssignment | undefined {
   return withProjectAssignmentLock(() => {
     const current = readProjectAssignment(runtime, repoKey, branch);
-    if (!current) return undefined;
+    if (
+      !current ||
+      (expectedAssignmentId && current.id !== expectedAssignmentId)
+    )
+      return undefined;
     const upgraded = upgradeProjectAssignmentEvidence(current);
     if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
     return upgraded;
