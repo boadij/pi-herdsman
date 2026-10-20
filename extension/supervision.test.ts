@@ -49,6 +49,8 @@ const {
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
+  listProjectMessageHeaders,
+  readProjectMessage,
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
@@ -258,7 +260,7 @@ test("chief message sizing is the exact serialized UTF-8 record size", () => {
   );
 });
 
-test("chief message admission accepts exactly 8 KiB and rejects the next byte", () => {
+test("chief messages keep compact records while storing large bodies", () => {
   const runtime = supervisionRuntime(socket());
   const prefix = "é\t".repeat(32);
   const recordFor = (suffix: string) => message({ text: prefix + suffix });
@@ -274,14 +276,48 @@ test("chief message admission accepts exactly 8 KiB and rejects the next byte", 
     else high = middle - 1;
   }
   const exact = recordFor("x".repeat(low));
-  const over = recordFor("x".repeat(low + 1));
+  const over = {
+    ...recordFor("x".repeat(low + 1)),
+    resultBindings: [
+      { ref: "result:reviewer#1", canonicalRef: `result:${id()}` },
+    ],
+  };
   assert.equal(chiefMessageBytes(exact), COORDINATION_MESSAGE_MAX_BYTES);
-  assert.equal(chiefMessageBytes(over), COORDINATION_MESSAGE_MAX_BYTES + 1);
+  assert.ok(chiefMessageBytes(over) > COORDINATION_MESSAGE_MAX_BYTES);
   writeChiefMessage(exact, runtime);
-  assert.throws(
-    () => writeChiefMessage(over, runtime),
-    /Chief message record is too large/,
-  );
+  const path = writeChiefMessage(over, runtime);
+  assert.ok(statSync(path).size <= COORDINATION_MESSAGE_MAX_BYTES);
+  assert.deepEqual(readChiefMessage(path), over);
+  assert.equal(existsSync(`${path}.body`), true);
+  removeCoordinationMessage(runtime, over.toSessionId, over.id, over);
+  assert.equal(existsSync(`${path}.body`), false);
+});
+
+test("missing or corrupt Chief overflow bodies are retained without Pi submission", async () => {
+  for (const failure of ["missing", "corrupt"] as const) {
+    const runtime = supervisionRuntime(socket());
+    const record = message({ text: "complete body ".repeat(2_000) });
+    const path = writeChiefMessage(record, runtime);
+    const unrelated = message({ text: "unrelated delivery" });
+    writeChiefMessage(unrelated, runtime);
+    if (failure === "missing") unlinkSync(`${path}.body`);
+    else writeFileSync(`${path}.body`, "corrupt", "utf8");
+    const submitted: string[] = [];
+    const reported: unknown[] = [];
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: record.toSessionId,
+      isAuthorized: () => true,
+      isDelivered: () => false,
+      sendMessage: (_message, _options, delivered) =>
+        submitted.push(delivered.id),
+      cleanupError: (error) => reported.push(error),
+    });
+    assert.deepEqual(submitted, [unrelated.id], failure);
+    assert.equal(reported.length, 1, failure);
+    assert.match(String(reported[0]), /Unable to read overflow body/);
+    assert.equal(existsSync(path), true, failure);
+  }
 });
 
 test("coordination records bind branch only for project and assigned Manager messages", () => {
@@ -626,10 +662,9 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
     COORDINATION_MESSAGE_MAX_BYTES + 1,
   );
   writeCoordinationMessage(exact, runtime);
-  assert.throws(
-    () => writeCoordinationMessage(over, runtime),
-    /Chief message record is too large/,
-  );
+  const overPath = writeCoordinationMessage(over, runtime);
+  assert.ok(statSync(overPath).size <= COORDINATION_MESSAGE_MAX_BYTES);
+  assert.deepEqual(readCoordinationMessage(overPath), over);
 });
 
 test("generic coordination transport orders and renders message peers", async () => {
@@ -3172,14 +3207,63 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     listProjectMessages(runtime, "other-repo", assignment.branch),
     [],
   );
+  const large = {
+    ...record,
+    id: id(),
+    text: "x".repeat(29_764),
+    resultBindings: [
+      { ref: "result:reviewer#1", canonicalRef: `result:${id()}` },
+    ],
+  };
+  writeProjectMessage(large, runtime);
+  assert.ok(
+    statSync(
+      join(
+        dirname(
+          projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+        ),
+        `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
+        `${large.id}.json`,
+      ),
+    ).size <= COORDINATION_MESSAGE_MAX_BYTES,
+  );
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch).find(
+      (message) => message.id === large.id,
+    ),
+    large,
+  );
+  const largePath = join(
+    dirname(
+      projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+    ),
+    `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
+    `${large.id}.json`,
+  );
+  writeFileSync(`${largePath}.body`, "corrupt", "utf8");
+  assert.ok(
+    listProjectMessageHeaders(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).some((message) => message.id === large.id && message.bodyRef),
+    "compact enumeration does not open the overflow body",
+  );
   assert.throws(
     () =>
-      writeProjectMessage(
-        { ...record, text: "x".repeat(COORDINATION_MESSAGE_MAX_BYTES) },
+      readProjectMessage(
         runtime,
+        assignment.repoKey,
+        assignment.branch,
+        large.id,
       ),
-    /Invalid project message/,
+    /Unable to read project message/,
   );
+  assert.throws(
+    () => listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    /Unable to read project message/,
+  );
+  assert.equal(existsSync(largePath), true);
   assert.throws(
     () => writeProjectMessage({ ...record, fromSessionId: "" }, runtime),
     /Invalid project message/,
@@ -3328,8 +3412,18 @@ test("project retirement compares exact authority and cleans only its pending me
   writeProjectAssignment(runtime, original);
   writeProjectMessage(pending, runtime);
   writeProjectAssignment(runtime, replacement);
-  const next = { ...pending, id: id(), fromSessionId: replacement.id };
+  const next = {
+    ...pending,
+    id: id(),
+    fromSessionId: replacement.id,
+    text: "other pending message ".repeat(1_000),
+  };
   writeProjectMessage(next, runtime);
+  const nextPath = join(
+    dirname(projectAssignmentPath(runtime, original.repoKey, original.branch)),
+    `${basename(projectAssignmentPath(runtime, original.repoKey, original.branch), ".json")}.messages`,
+    `${next.id}.json`,
+  );
   assert.equal(retireProjectAssignment(runtime, original), false);
   assert.deepEqual(
     readProjectAssignment(runtime, original.repoKey, original.branch),
@@ -3339,11 +3433,14 @@ test("project retirement compares exact authority and cleans only its pending me
     listProjectMessages(runtime, original.repoKey, original.branch).length,
     2,
   );
+  writeFileSync(`${nextPath}.body`, "corrupt", "utf8");
   removeProjectMessagesForAssignment(runtime, original);
   removeProjectMessagesForAssignment(runtime, original);
   assert.deepEqual(
-    listProjectMessages(runtime, original.repoKey, original.branch),
-    [next],
+    listProjectMessageHeaders(runtime, original.repoKey, original.branch).map(
+      ({ id: messageId }) => messageId,
+    ),
+    [next.id],
   );
   assert.equal(retireProjectAssignment(runtime, replacement), true);
   assert.equal(
@@ -3351,17 +3448,13 @@ test("project retirement compares exact authority and cleans only its pending me
     undefined,
   );
   assert.deepEqual(
-    listProjectMessages(runtime, original.repoKey, original.branch),
-    [next],
-    "retirement itself never deletes pending handoffs",
+    listProjectMessageHeaders(runtime, original.repoKey, original.branch).map(
+      ({ id: messageId }) => messageId,
+    ),
+    [next.id],
+    "retirement itself preserves pending handoffs",
   );
   assert.equal(retireProjectAssignment(runtime, replacement), false);
-  recoverStaleProjectMessages(runtime, original.repoKey);
-  recoverStaleProjectMessages(runtime, original.repoKey);
-  assert.deepEqual(
-    listProjectMessages(runtime, original.repoKey, original.branch),
-    [],
-  );
 });
 
 test("project message recovery preserves replacement authority and fails closed on uncertain records", () => {
@@ -3437,6 +3530,66 @@ test("project message recovery preserves replacement authority and fails closed 
       assert.ok(existsSync(messagePath));
       assert.ok(existsSync(join(dirname(messagePath), `${pending.id}.json`)));
     }
+  }
+});
+
+test("stale project-message recovery removes overflow records without reading their bodies", () => {
+  for (const payload of ["corrupt", "missing"] as const) {
+    const runtime = supervisionRuntime(socket());
+    const assignment = {
+      version: 2 as const,
+      id: id(),
+      repoKey: `stale-${payload}`,
+      branch: "feature",
+      text: "current task",
+    };
+    const stale = {
+      version: 2 as const,
+      id: id(),
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      fromSessionId: id(),
+      text: "x".repeat(29_764),
+      createdAt: 1,
+    };
+    const anotherStale = {
+      ...stale,
+      id: id(),
+      text: "stale handoff",
+      createdAt: 2,
+    };
+    const pending = {
+      ...stale,
+      id: id(),
+      fromSessionId: assignment.id,
+      text: "valid pending handoff",
+      createdAt: 3,
+    };
+    writeProjectAssignment(runtime, assignment);
+    writeProjectMessage(stale, runtime);
+    writeProjectMessage(anotherStale, runtime);
+    writeProjectMessage(pending, runtime);
+    const directory = join(
+      dirname(
+        projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
+      ),
+      `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
+    );
+    const stalePath = join(directory, `${stale.id}.json`);
+    const staleBodyPath = `${stalePath}.body`;
+    if (payload === "corrupt") writeFileSync(staleBodyPath, "corrupt", "utf8");
+    else unlinkSync(staleBodyPath);
+
+    recoverStaleProjectMessages(runtime, assignment.repoKey);
+
+    assert.equal(existsSync(stalePath), false);
+    assert.equal(existsSync(staleBodyPath), false);
+    assert.equal(existsSync(join(directory, `${anotherStale.id}.json`)), false);
+    assert.deepEqual(
+      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+      [pending],
+      "stale records are removed while the current assignment's pending message remains deliverable",
+    );
   }
 });
 

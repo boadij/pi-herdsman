@@ -32,6 +32,7 @@ import {
 import {
   listProjectAssignments,
   listProjectMessages,
+  listProjectMessageHeaders,
   projectAssignmentPath,
   managerDescriptorPath,
   readManagerDescriptor,
@@ -5922,6 +5923,17 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     kind: "execution_failure" as const,
     createdAt: oldTimestamp,
   };
+  const corrupt = {
+    ...failure,
+    id: randomUUID(),
+    text: "x".repeat(29_764),
+    createdAt: oldTimestamp - 1,
+  };
+  writeProjectMessage(corrupt, runtime);
+  writeFileSync(
+    `${projectAssignmentPath(runtime, "repo-key", branch).replace(/\.json$/, ".messages")}/${corrupt.id}.json.body`,
+    "corrupt overflow payload",
+  );
   writeProjectMessage(failure, runtime);
 
   const managerSessionFile = join(
@@ -5980,6 +5992,25 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
         ({ message }: any) => message?.details?.id === id,
       );
     await t.waitFor(() => assert.equal(deliveries(failure.id).length, 1));
+    assert.equal(
+      deliveries(corrupt.id).length,
+      0,
+      "a corrupt overflow candidate is not delivered",
+    );
+    assert.ok(
+      listProjectMessageHeaders(runtime, "repo-key", branch).some(
+        (message) => message.id === corrupt.id,
+      ),
+      "the corrupt candidate remains pending while the valid message delivers",
+    );
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_state_error" &&
+          String(entry.data?.error ?? "").includes(corrupt.id),
+      ),
+      "the corrupt candidate is reported as a durable state error",
+    );
     assert.equal(
       (deliveries(failure.id)[0].options as any).triggerTurn,
       true,
@@ -6045,8 +6076,10 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     await pi.events.get("before_agent_start")![0](customStartup, ctx);
     assert.equal(deliveries(activeFailure.id).length, 0);
     assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", branch).map(({ id }) => id),
-      [activeFailure.id],
+      listProjectMessageHeaders(runtime, "repo-key", branch).map(
+        ({ id }) => id,
+      ),
+      [corrupt.id, activeFailure.id],
       "busy custom startup preserves the authorized durable message",
     );
     assert.ok(
@@ -6078,7 +6111,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       "the exact owner transcript contains one delivery receipt",
     );
     assert.equal(
-      listProjectMessages(runtime, "repo-key", branch).some(
+      listProjectMessageHeaders(runtime, "repo-key", branch).some(
         ({ id }) => id === activeFailure.id,
       ),
       false,

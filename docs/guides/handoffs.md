@@ -70,8 +70,14 @@ embedded directly. Result evidence preserves its semantic binding, embedding
 content when it fits or referencing its resolved artifact otherwise. These
 delivery paths continue to use the configured inline and mailbox budgets;
 required evidence is not silently omitted for exceeding an inline threshold.
-Ordinary `files` remain per-message evidence: reference-only ordinary files
-are not copied or snapshotted and may change or disappear.
+Ordinary files supplied to `message_staff`, `message_supervisor`, or
+`message_peer` are delivered as complete supported UTF-8 text within the
+configured per-file and complete-message budgets; unsupported, changed, or
+non-fitting files reject the handoff instead of becoming path-only references.
+Other `files` operations retain their existing preparation behavior. Ordinary
+coordination attachments are per-message evidence and are not added to
+continuing required evidence unless an eligible Manager explicitly sets
+`retain: true`.
 
 This is not general attachment or conversation inheritance. Automatic required
 evidence applies to verified managed project assignments and their nested
@@ -199,7 +205,22 @@ is then exceeded, `delegate` with `definition` returns `invalid_request` without
 rolls back the exact startup attempt (`rollbackOccurred: true` when
 applicable).
 
-For each regular file:
+For ordinary coordination messages (`message_staff`, `message_supervisor`,
+and `message_peer`):
+
+- complete strict UTF-8 text is embedded only when the per-file
+  `inlineAttachmentLimitBytes` and complete logical-message
+  `mailboxPayloadLimitBytes` both fit;
+- unsupported, changed, or non-fitting files reject the handoff explicitly;
+- the physical 8 KiB coordination record does not limit message content;
+  larger accepted bodies are stored separately and verified before Pi
+  delivery.
+
+For other operations that accept `files`, file preparation retains its
+operation-specific behavior. In particular, managed-Agent mailbox and initial
+project-assignment paths continue to use their existing reference behavior.
+
+For those existing preparation paths, each regular file:
 
 - complete strict UTF-8 text without NUL bytes is embedded when the complete
   message fits the effective configured `mailboxPayloadLimitBytes` boundary;
@@ -213,10 +234,10 @@ mailbox records; it does not replace the configured admission limit for new
 messages.
 
 No file is partially embedded. Embedded text is a submission-time snapshot.
-Reference-only files are not copied or snapshotted; their contents may change
-or disappear after submission, and the recipient must already have local
-filesystem/tool access to inspect them. `files` supplies evidence and does not
-grant runtime capabilities.
+Where an operation permits reference-only files, they are not copied or
+snapshotted; their contents may change or disappear after submission, and the
+recipient must already have local filesystem/tool access to inspect them.
+`files` supplies evidence and does not grant runtime capabilities.
 
 Files are read through their canonical `realpath` target. Ordinary file inputs
 are rendered with that canonical path; result references retain the exact

@@ -15851,8 +15851,8 @@ test("current project handoff publishes despite unrelated global authority conte
   const {
     writeProjectMessage,
     readProjectAssignment,
-    listProjectMessages,
-    recoverStaleProjectMessages,
+    listProjectMessageHeaders,
+    readProjectMessage,
     projectAssignmentAuthorityLockPath,
   } = await import("./supervision.ts");
   const runtime = supervisionRuntime(`/tmp/publication-${randomUUID()}.sock`);
@@ -15870,10 +15870,23 @@ test("current project handoff publishes despite unrelated global authority conte
     repoKey: assignment.repoKey,
     branch: assignment.branch,
     fromSessionId: randomUUID(),
-    text: "retired handoff",
+    text: "retired handoff ".repeat(1_000),
     createdAt: 1,
   };
   writeProjectMessage(stale, runtime);
+  const assignmentPath = projectAssignmentPath(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  writeFileSync(
+    join(
+      dirname(assignmentPath),
+      `${basename(assignmentPath, ".json")}.messages`,
+      `${stale.id}.json.body`,
+    ),
+    "corrupt",
+  );
   let branchLocks = 0;
   const transitions = createLeadRoleTransitions(
     { controllerRole: "lead" } as any,
@@ -15890,6 +15903,8 @@ test("current project handoff publishes despite unrelated global authority conte
         resultBindings: [],
       }),
       writeProjectMessage,
+      listProjectMessageHeaders,
+      readProjectMessage,
     } as any,
   );
   const ctx: any = fakeContext();
@@ -15906,17 +15921,25 @@ test("current project handoff publishes despite unrelated global authority conte
     );
     assert.ok(published);
     assert.deepEqual(
-      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-      [stale, published],
+      listProjectMessageHeaders(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+      ).map(({ id }) => id),
+      [stale.id, published.id],
     );
     assert.equal(branchLocks, 1);
   } finally {
     global.release();
   }
-  recoverStaleProjectMessages(runtime, assignment.repoKey);
   assert.deepEqual(
-    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [published],
+    listProjectMessageHeaders(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    ).map(({ id }) => id),
+    [stale.id, published.id],
+    "publishing does not consume unrelated pending records",
   );
   assert.equal(
     published.fromSessionId,

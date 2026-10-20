@@ -58,6 +58,7 @@ mock.module("node:fs", {
       return fd;
     },
     readFileSync: realFs.readFileSync,
+    readSync: realFs.readSync,
     realpathSync: realFs.realpathSync,
     readdirSync: realFs.readdirSync,
     renameSync: (...args: Parameters<typeof realFs.renameSync>) => {
