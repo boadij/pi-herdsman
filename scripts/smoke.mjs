@@ -743,6 +743,7 @@ export function managerAssignmentDiagnostics({
   supervisorCallObserved,
   supervisorResultState,
   supervisorErrorCategory,
+  supervisorObservationChannelStatus,
   readinessDeliveryObserved,
   candidateProcessCount,
   provenanceMatch,
@@ -760,6 +761,8 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
+    supervisorObservationChannelStatus:
+      supervisorObservationChannelStatus ?? "not_observed",
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
@@ -891,6 +894,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
         : handlerBranchStatus === "operation_error_returned"
           ? handlerBranchStatus
           : "not_observed",
+    supervisorObservationChannelStatus: ready ? "ready" : "not_observed",
     supervisorPersistedErrorCategoryPresent: categoryPresent,
     supervisorPersistedErrorCategory:
       categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
@@ -906,6 +910,7 @@ function emptySupervisorMessageDiagnostics(headerMatches) {
     supervisorResultState: headerMatches ? "missing" : "not_observed",
     supervisorErrorCategory: "none",
     supervisorHandlerBranchStatus: "not_observed",
+    supervisorObservationChannelStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   };
@@ -7873,6 +7878,11 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
           "returned_result_mismatch",
         ].includes(managerProgress.supervisorHandlerBranchStatus)
           ? managerProgress.supervisorHandlerBranchStatus
+          : "not_observed",
+        supervisorObservationChannelStatus: ["ready", "not_observed"].includes(
+          managerProgress.supervisorObservationChannelStatus,
+        )
+          ? managerProgress.supervisorObservationChannelStatus
           : "not_observed",
         supervisorPersistedErrorCategoryPresent:
           typeof managerProgress.supervisorPersistedErrorCategoryPresent ===

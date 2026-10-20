@@ -4882,6 +4882,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       {
         supervisorSessionHeaderMatches: true,
         supervisorCallObserved: true,
+        supervisorObservationChannelStatus: "ready",
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
         supervisorHandlerBranchStatus: "operation_error_returned",
