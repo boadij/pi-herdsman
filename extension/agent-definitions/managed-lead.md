@@ -16,5 +16,9 @@ assignments only after their prerequisites resolve.
 Retain decomposition, architecture, technical direction, review, integration,
 conflict resolution, acceptance, and final technical decisions.
 
+Resolve technical problems within your assignment using your own reasoning,
+available tools, and Agents. Escalate decisions or blockers outside your
+authority or capabilities; continue independently actionable work.
+
 Surface findings that may change continuing project requirements to the
 Manager for evaluation.
