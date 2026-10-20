@@ -475,6 +475,7 @@ type LeadHerdRunHost = {
     operation?: string,
     reportId?: string,
     kind?: ProjectMessage["kind"],
+    signal?: AbortSignal,
   ): Promise<ProjectMessage | undefined>;
   publishChiefFailure(
     ctx: ExtensionContext,
@@ -9486,7 +9487,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   const executeSupervisorMessage = async (
     _id: string,
     raw: unknown,
-    _signal: AbortSignal | undefined,
+    signal: AbortSignal | undefined,
     _update: unknown,
     ctx: ExtensionContext,
   ) => {
@@ -9505,11 +9506,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
       const assignment = scope && projectAssignmentForScope(scope, sessionId);
       if (assignment) {
+        const publishSignal =
+          signal && ctx.signal
+            ? AbortSignal.any([signal, ctx.signal])
+            : (signal ?? ctx.signal);
         const published = await publishProjectMessage(
           ctx,
           assignment,
           params.message,
           resolveMessageFiles(ctx, params.files, "message_supervisor"),
+          undefined,
+          undefined,
+          undefined,
+          publishSignal,
         );
         if (!published)
           throw new Error(
@@ -11543,6 +11552,7 @@ export function createLeadRoleTransitions(
     operation = "message_supervisor",
     reportId?: string,
     kind?: ProjectMessage["kind"],
+    signal?: AbortSignal,
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
     const runtime = host.supervisionRuntime();
@@ -11627,7 +11637,7 @@ export function createLeadRoleTransitions(
         host.writeProjectMessage(record, runtime);
         return record;
       },
-      ctx.signal,
+      signal ?? ctx.signal,
     );
   };
   const managerForScope = (

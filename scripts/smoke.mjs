@@ -738,6 +738,7 @@ export function managerAssignmentDiagnostics({
   lead,
   supervisorCall,
   supervisorSuccess,
+  supervisorResult,
   readiness,
   candidateProcessCount,
   provenanceMatch,
@@ -750,6 +751,7 @@ export function managerAssignmentDiagnostics({
     matchedLead: lead ?? "not_observed",
     messageSupervisorCall: supervisorCall ?? "not_observed",
     messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
+    messageSupervisorResult: supervisorResult ?? "not_called",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
@@ -1242,6 +1244,34 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
         !entry.message.isError,
     ),
   );
+}
+
+export function supervisorMessageCallStatus(contents, text) {
+  const entries = sessionEntries(contents);
+  const calls = entries.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content.filter(
+          (block) =>
+            block?.type === "toolCall" &&
+            block.name === "message_supervisor" &&
+            block.arguments?.message === text,
+        )
+      : [],
+  );
+  if (!calls.length) return "not_called";
+  for (const call of calls) {
+    const result = entries.find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "message_supervisor" &&
+        entry.message.toolCallId === call.id,
+    );
+    if (result) return result.message.isError ? "error" : "success";
+  }
+  return "pending";
 }
 
 export function leadReadyCompleted(contents, text) {
@@ -3542,18 +3572,15 @@ async function runManagerHandoffSmoke(ctx) {
             entry.content ===
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
-      const readyCall = sessionEntries(leadSession.contents).some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "assistant" &&
-          Array.isArray(entry.message.content) &&
-          entry.message.content.some(
-            (block) =>
-              block?.type === "toolCall" &&
-              block.name === "message_supervisor" &&
-              block.arguments?.message === "MANAGER_HANDOFF_READY",
-          ),
+      const supervisorResult = supervisorMessageCallStatus(
+        leadSession.contents,
+        "MANAGER_HANDOFF_READY",
       );
+      const readyCall = supervisorResult !== "not_called";
+      if (supervisorResult === "error")
+        throw new Error(
+          `Manager handoff message_supervisor result: ${supervisorResult}`,
+        );
       if (!ready || !readyEntry)
         return {
           done: false,
@@ -3564,6 +3591,7 @@ async function runManagerHandoffSmoke(ctx) {
             errorCategory,
             supervisorCall: String(readyCall),
             supervisorSuccess: String(ready),
+            supervisorResult,
             readiness: String(!!readyEntry),
           }),
         };
@@ -3576,6 +3604,7 @@ async function runManagerHandoffSmoke(ctx) {
           errorCategory,
           supervisorCall: "true",
           supervisorSuccess: "true",
+          supervisorResult,
           readiness: "true",
         }),
         value: { row, lead, leadSession, owner: session },

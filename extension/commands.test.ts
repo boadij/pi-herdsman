@@ -16469,7 +16469,6 @@ test("current project handoff publishes despite unrelated global authority conte
   });
   const controller = new AbortController();
   cancelSignal = controller;
-  ctx.signal = controller.signal;
   ctx.sessionManager.getSessionId = () => cancelledAssignment.id;
   try {
     await assert.rejects(
@@ -16477,6 +16476,11 @@ test("current project handoff publishes despite unrelated global authority conte
         ctx,
         cancelledAssignment,
         "must not publish after cancellation",
+        [],
+        undefined,
+        undefined,
+        undefined,
+        controller.signal,
       ),
       (error: unknown) => error instanceof Error && error.name === "AbortError",
     );
