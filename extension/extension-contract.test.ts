@@ -4767,19 +4767,12 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
 });
 
 test("registered message_supervisor projects OperationError categories to tool results", async () => {
-  const previousActions = process.env.GITHUB_ACTIONS;
-  process.env.GITHUB_ACTIONS = "true";
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
-  context.sessionManager.getHeader = () => ({
-    id: context.sessionManager.getSessionId(),
-  });
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    for (const handler of pi.events.get("session_start")!.slice(1))
-      await handler(undefined, context);
     const tool = pi.tools.find(
       (candidate) => candidate.name === "message_supervisor",
     );
@@ -4823,7 +4816,7 @@ test("registered message_supervisor projects OperationError categories to tool r
     const sessionHeader = {
       type: "session",
       version: 3,
-      id: context.sessionManager.getSessionId(),
+      id: DEFAULT_PI_SESSION_ID,
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
     };
@@ -4856,33 +4849,17 @@ test("registered message_supervisor projects OperationError categories to tool r
     };
     writeFileSync(
       sessionPath,
-      [
-        contents[0],
-        ...pi.entries
-          .filter(
-            (entry: any) =>
-              entry.customType === "pi-herdsman-supervisor-boundary",
-          )
-          .map((entry, index) => ({
-            ...entry,
-            id: `probe-${index}`,
-            parentId: null,
-          })),
-        ...contents.slice(1),
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
+      contents.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
     );
     assert.deepEqual(
       supervisorMessageDiagnostics(
         sessionPath,
-        context.sessionManager.getSessionId(),
+        DEFAULT_PI_SESSION_ID,
         "MANAGER_HANDOFF_READY",
       ),
       {
         supervisorSessionHeaderMatches: true,
         supervisorCallObserved: true,
-        supervisorObservationChannelStatus: "ready",
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
         supervisorHandlerBranchStatus: "operation_error_returned",
@@ -4901,13 +4878,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       },
     );
     await assert.rejects(
-      tool.execute(
-        "throw-call-id",
-        hostileParams,
-        undefined,
-        undefined,
-        context,
-      ),
+      tool.execute("call-id", hostileParams, undefined, undefined, context),
       (error: unknown) => error === nonOperationError,
     );
     const persistedThrownError = {
@@ -4918,7 +4889,7 @@ test("registered message_supervisor projects OperationError categories to tool r
           {
             type: "toolCall",
             name: "message_supervisor",
-            id: "throw-call-id",
+            id: "call-id",
             arguments: { message: "MANAGER_HANDOFF_READY" },
           },
         ],
@@ -4929,7 +4900,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       message: {
         role: "toolResult",
         toolName: "message_supervisor",
-        toolCallId: "throw-call-id",
+        toolCallId: "call-id",
         isError: true,
         content: [{ type: "text", text: nonOperationError.message }],
       },
@@ -4951,32 +4922,17 @@ test("registered message_supervisor projects OperationError categories to tool r
     ];
     writeFileSync(
       sessionPath,
-      [
-        thrownEntries[0],
-        ...pi.entries
-          .filter(
-            (entry: any) =>
-              entry.customType === "pi-herdsman-supervisor-boundary",
-          )
-          .map((entry, index) => ({
-            ...entry,
-            id: `probe-${index}`,
-            parentId: null,
-          })),
-        ...thrownEntries.slice(1),
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
+      thrownEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
     );
     const thrownDiagnostics = supervisorMessageDiagnostics(
       sessionPath,
-      context.sessionManager.getSessionId(),
+      DEFAULT_PI_SESSION_ID,
       "MANAGER_HANDOFF_READY",
     );
     assert.equal(thrownDiagnostics.supervisorResultState, "error");
     assert.equal(
       thrownDiagnostics.supervisorHandlerBranchStatus,
-      "unclassified_throw",
+      "not_observed",
     );
     assert.equal(
       thrownDiagnostics.supervisorPersistedErrorCategoryPresent,
@@ -4990,31 +4946,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       JSON.stringify(thrownDiagnostics),
       /sensitive|PRIVATE/u,
     );
-    assert.doesNotMatch(
-      JSON.stringify(
-        pi.entries.filter(
-          (entry: any) =>
-            entry.customType === "pi-herdsman-supervisor-boundary",
-        ),
-      ),
-      /sensitive|MANAGER_HANDOFF_READY/u,
-    );
-    pi.pi.appendEntry = () => {
-      throw new Error("observation unavailable");
-    };
-    await assert.rejects(
-      tool.execute(
-        "throw-call-id",
-        hostileParams,
-        undefined,
-        undefined,
-        context,
-      ),
-      (error: unknown) => error === nonOperationError,
-    );
   } finally {
-    if (previousActions === undefined) delete process.env.GITHUB_ACTIONS;
-    else process.env.GITHUB_ACTIONS = previousActions;
     await pi.events.get("session_shutdown")?.[0]();
     setLeadEnvironment();
   }

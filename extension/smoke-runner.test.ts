@@ -1431,86 +1431,6 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
   );
 });
 
-test("temporary supervisor boundary compares returned error and success without exposing private data", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "supervisor-boundary-"));
-  try {
-    for (const [status, resultError, persistedError, expected, missing] of [
-      ["returned", false, false, "returned"],
-      ["returned", true, true, "returned"],
-      ["returned", true, false, "returned_result_mismatch"],
-      ["returned", false, true, "returned_result_mismatch"],
-      ["operation_error_returned", true, true, "operation_error_returned"],
-      ["unclassified_throw", undefined, true, "unclassified_throw"],
-      ["entered", undefined, true, "not_observed"],
-      ["returned", false, false, "not_observed", "ready"],
-      ["returned", false, false, "not_observed", "entered"],
-      ["returned", false, false, "not_observed", "duplicate"],
-    ]) {
-      const session = SessionManager.create(process.cwd(), dir);
-      session.appendMessage({ role: "user", content: "fixture" });
-      const sessionId = session.getSessionId();
-      if (missing !== "ready")
-        session.appendCustomEntry("pi-herdsman-supervisor-boundary", {
-          sessionId,
-          status: "ready",
-        });
-      session.appendMessage({
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "private-call",
-            name: "message_supervisor",
-            arguments: { message: "private-text" },
-          },
-        ],
-      });
-      if (missing !== "entered")
-        session.appendCustomEntry("pi-herdsman-supervisor-boundary", {
-          sessionId,
-          toolCallId: "private-call",
-          status: "entered",
-        });
-      if (missing === "duplicate")
-        session.appendCustomEntry("pi-herdsman-supervisor-boundary", {
-          sessionId,
-          toolCallId: "private-call",
-          status: "entered",
-        });
-      if (status !== "entered")
-        session.appendCustomEntry("pi-herdsman-supervisor-boundary", {
-          sessionId,
-          toolCallId: "private-call",
-          status,
-          resultError,
-        });
-      session.appendMessage({
-        role: "toolResult",
-        toolName: "message_supervisor",
-        toolCallId: "private-call",
-        isError: persistedError,
-        content: [{ type: "text", text: "private-result" }],
-      });
-      const diagnostics = supervisorMessageDiagnostics(
-        session.getSessionFile(),
-        sessionId,
-        "private-text",
-      );
-      assert.equal(diagnostics.supervisorHandlerBranchStatus, expected);
-      assert.equal(
-        diagnostics.supervisorObservationChannelStatus,
-        missing === "ready" ? "not_observed" : "ready",
-      );
-      assert.doesNotMatch(
-        JSON.stringify(diagnostics),
-        /private-|pi-herdsman-supervisor-boundary/,
-      );
-    }
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-parser-"));
   const diagnose = async (contents) => {
@@ -1573,7 +1493,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorResultState: "error",
     supervisorErrorCategory: "internal_failure",
     supervisorHandlerBranchStatus: "operation_error_returned",
-    supervisorObservationChannelStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: true,
     supervisorPersistedErrorCategory: "internal_failure",
   });
@@ -1632,7 +1551,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorResultState: "missing",
     supervisorErrorCategory: "none",
     supervisorHandlerBranchStatus: "not_observed",
-    supervisorObservationChannelStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   });
@@ -1648,7 +1566,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorResultState: "success",
     supervisorErrorCategory: "none",
     supervisorHandlerBranchStatus: "not_observed",
-    supervisorObservationChannelStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   });
@@ -1705,10 +1622,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     "none",
   );
   assert.equal(
-    earlyEvidence.managerHandoffProgress.supervisorObservationChannelStatus,
-    "not_observed",
-  );
-  assert.equal(
     earlyEvidence.managerHandoffProgress.readinessDeliveryObserved,
     false,
   );
@@ -1721,7 +1634,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorSuccess: "true",
     readiness: "true",
     ...successfulSupervisor,
-    supervisorObservationChannelStatus: "ready",
     readinessDeliveryObserved: true,
     worktreeIdentityState: "verified",
     candidateProcessCount: 1,
@@ -1773,7 +1685,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       supervisorResultState: "success",
       supervisorErrorCategory: "none",
       supervisorHandlerBranchStatus: "not_observed",
-      supervisorObservationChannelStatus: "ready",
       supervisorPersistedErrorCategoryPresent: false,
       supervisorPersistedErrorCategory: "not_observed",
       readinessDeliveryObserved: true,
@@ -1878,7 +1789,6 @@ test("manager readiness correlates only the latest active-branch call in the ass
       supervisorResultState: "error",
       supervisorErrorCategory: "tool_error",
       supervisorHandlerBranchStatus: "not_observed",
-      supervisorObservationChannelStatus: "not_observed",
       supervisorPersistedErrorCategoryPresent: true,
       supervisorPersistedErrorCategory: "not_observed",
     });

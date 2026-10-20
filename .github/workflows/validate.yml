@@ -148,8 +148,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # TEMPORARY diagnostic isolation: restore all seven scenarios before final validation.
-          for scenario in manager-handoff
+          for scenario in \
+            core \
+            continuation \
+            chief-tree \
+            supervisor-agent \
+            terminal-failure \
+            agent-terminal-failure \
+            manager-handoff
           do
             echo "::group::Simulated smoke: $scenario"
             npm run smoke -- "$scenario" --simulated

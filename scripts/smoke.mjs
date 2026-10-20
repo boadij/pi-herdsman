@@ -743,7 +743,6 @@ export function managerAssignmentDiagnostics({
   supervisorCallObserved,
   supervisorResultState,
   supervisorErrorCategory,
-  supervisorObservationChannelStatus,
   readinessDeliveryObserved,
   candidateProcessCount,
   provenanceMatch,
@@ -761,8 +760,6 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
-    supervisorObservationChannelStatus:
-      supervisorObservationChannelStatus ?? "not_observed",
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
@@ -832,40 +829,6 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
   const category = failed?.details?.error?.category;
   const errorDetails = failed?.details?.error;
   const handlerBranchStatus = errorDetails?.branchStatus;
-  // Temporary independent Actions probe; absence is never proof of non-entry.
-  const observations = session
-    .getEntries()
-    .filter(
-      (entry) =>
-        entry.type === "custom" &&
-        entry.customType === "pi-herdsman-supervisor-boundary" &&
-        entry.data?.sessionId === expectedSessionId,
-    )
-    .map((entry) => entry.data);
-  const ready = observations.some((entry) => entry.status === "ready");
-  const boundary = call
-    ? observations.filter((entry) => entry.toolCallId === call.id)
-    : [];
-  let independentStatus = "not_observed";
-  if (
-    ready &&
-    results.length <= 1 &&
-    boundary.length === 2 &&
-    boundary[0].status === "entered"
-  ) {
-    const terminal = boundary[1];
-    if (terminal.status === "unclassified_throw")
-      independentStatus = "unclassified_throw";
-    else if (
-      ["returned", "operation_error_returned"].includes(terminal.status) &&
-      typeof terminal.resultError === "boolean"
-    ) {
-      const agrees = !!result && terminal.resultError === !!failed;
-      independentStatus = !agrees
-        ? "returned_result_mismatch"
-        : terminal.status;
-    }
-  }
   const categoryPresent =
     errorDetails !== null &&
     typeof errorDetails === "object" &&
@@ -889,12 +852,9 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
           : "tool_error"
         : "none",
     supervisorHandlerBranchStatus:
-      observations.length > 0
-        ? independentStatus
-        : handlerBranchStatus === "operation_error_returned"
-          ? handlerBranchStatus
-          : "not_observed",
-    supervisorObservationChannelStatus: ready ? "ready" : "not_observed",
+      handlerBranchStatus === "operation_error_returned"
+        ? handlerBranchStatus
+        : "not_observed",
     supervisorPersistedErrorCategoryPresent: categoryPresent,
     supervisorPersistedErrorCategory:
       categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
@@ -910,7 +870,6 @@ function emptySupervisorMessageDiagnostics(headerMatches) {
     supervisorResultState: headerMatches ? "missing" : "not_observed",
     supervisorErrorCategory: "none",
     supervisorHandlerBranchStatus: "not_observed",
-    supervisorObservationChannelStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   };
@@ -7871,19 +7830,11 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         ].includes(managerProgress.supervisorErrorCategory)
           ? managerProgress.supervisorErrorCategory
           : "none",
-        supervisorHandlerBranchStatus: [
-          "operation_error_returned",
-          "returned",
-          "unclassified_throw",
-          "returned_result_mismatch",
-        ].includes(managerProgress.supervisorHandlerBranchStatus)
-          ? managerProgress.supervisorHandlerBranchStatus
-          : "not_observed",
-        supervisorObservationChannelStatus: ["ready", "not_observed"].includes(
-          managerProgress.supervisorObservationChannelStatus,
-        )
-          ? managerProgress.supervisorObservationChannelStatus
-          : "not_observed",
+        supervisorHandlerBranchStatus:
+          managerProgress.supervisorHandlerBranchStatus ===
+          "operation_error_returned"
+            ? managerProgress.supervisorHandlerBranchStatus
+            : "not_observed",
         supervisorPersistedErrorCategoryPresent:
           typeof managerProgress.supervisorPersistedErrorCategoryPresent ===
           "boolean"
