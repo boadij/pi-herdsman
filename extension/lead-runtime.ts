@@ -9789,8 +9789,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const releaseCoordinationPublication = await enterCoordinationPublication();
     try {
       const sessionId = ctx.sessionManager.getSessionId();
-      const scope =
-        activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
+      let scope: Awaited<ReturnType<typeof currentWorktreeScope>>;
+      try {
+        scope =
+          activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
+      } catch (error) {
+        if (error instanceof OperationError || !(error instanceof Error))
+          throw error;
+        const wrapped = structuredError("internal_failure", error.message);
+        Object.defineProperty(wrapped, "cause", { value: error });
+        throw wrapped;
+      }
       let assignment: ProjectAssignment | undefined;
       try {
         assignment = scope && projectAssignmentForScope(scope, sessionId);

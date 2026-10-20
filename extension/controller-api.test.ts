@@ -240,7 +240,7 @@ const ownershipResult = (
   },
 });
 
-test("a manually continued assigned Lead stays managed and rejects stale Manager messages", async (t) => {
+test("a manually continued assigned Lead rejects stale Manager messages and structures the malformed-topology probe error", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -268,6 +268,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
   const descriptor = readFileSync(descriptorPath, "utf8");
   let managerReleased = false;
   let managerIdentityUnavailable = false;
+  let malformedWorktreeTopology = false;
   const agents = [
     [chiefId, "chief-pane", "chief-tab", WORKSPACE],
     [managerId, "manager-pane", "manager-tab", WORKSPACE],
@@ -296,14 +297,23 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
         },
       };
     else if (args[0] === "worktree" && args[1] === "list")
-      result = {
-        source: {
-          repo_key: "repo-key",
-          repo_name: "project",
-          source_workspace_id: WORKSPACE,
-        },
-        worktrees: [{ open_workspace_id: "linked-workspace" }],
-      };
+      result = malformedWorktreeTopology
+        ? {
+            source: {
+              repo_key: "repo-key",
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: null,
+          }
+        : {
+            source: {
+              repo_key: "repo-key",
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [{ open_workspace_id: "linked-workspace" }],
+          };
     return {
       stdout: JSON.stringify({ id: AGENT_ID, result }),
       stderr: "",
@@ -350,6 +360,37 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     await t.waitFor(() =>
       assert.match(statusWidget!.render(160)[0], /^● lead · Managed/),
     );
+    const supervisorTool = pi.tools.find(
+      (tool) => tool.name === "message_supervisor",
+    )!;
+    const projectMessagesBeforeProbe = listProjectMessages(
+      runtime,
+      "repo-key",
+      "smoke/routing",
+    );
+    malformedWorktreeTopology = true;
+    const malformedTopologyResult = await supervisorTool.execute(
+      "malformed-topology-probe",
+      { message: "MUST_NOT_PUBLISH" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.equal(malformedTopologyResult.isError, true);
+    assert.deepEqual(malformedTopologyResult.content, [
+      { type: "text", text: "Herdr project topology is unavailable" },
+    ]);
+    assert.deepEqual(malformedTopologyResult.details, {
+      error: {
+        branchStatus: "operation_error_returned",
+        category: "internal_failure",
+      },
+    });
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing"),
+      projectMessagesBeforeProbe,
+    );
+    malformedWorktreeTopology = false;
     ctx.isIdle = () => false;
     const managerMessage = {
       version: 2,
