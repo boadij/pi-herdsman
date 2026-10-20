@@ -4809,9 +4809,24 @@ test("registered message_supervisor projects OperationError categories to tool r
         ...result,
       },
     };
+    const sessionPath = join(
+      testTmpRoot,
+      `supervisor-message-${randomUUID()}.jsonl`,
+    );
+    const sessionHeader = {
+      type: "session",
+      version: 3,
+      id: DEFAULT_PI_SESSION_ID,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
     const contents = [
+      sessionHeader,
       {
         type: "message",
+        id: "call-entry",
+        parentId: null,
+        timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
           content: [
@@ -4825,12 +4840,25 @@ test("registered message_supervisor projects OperationError categories to tool r
         },
       },
       persistedResult,
-    ]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n");
+    ];
+    contents[2] = {
+      ...contents[2],
+      id: "result-entry",
+      parentId: "call-entry",
+      timestamp: new Date().toISOString(),
+    };
+    writeFileSync(
+      sessionPath,
+      contents.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
     assert.deepEqual(
-      supervisorMessageDiagnostics(contents, "MANAGER_HANDOFF_READY"),
+      supervisorMessageDiagnostics(
+        sessionPath,
+        DEFAULT_PI_SESSION_ID,
+        "MANAGER_HANDOFF_READY",
+      ),
       {
+        supervisorSessionHeaderMatches: true,
         supervisorCallObserved: true,
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
@@ -4877,10 +4905,28 @@ test("registered message_supervisor projects OperationError categories to tool r
         content: [{ type: "text", text: nonOperationError.message }],
       },
     };
+    const thrownEntries = [
+      sessionHeader,
+      {
+        ...persistedThrownError,
+        id: "thrown-call-entry",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        ...persistedPiThrownResult,
+        id: "thrown-result-entry",
+        parentId: "thrown-call-entry",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+    writeFileSync(
+      sessionPath,
+      thrownEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
     const thrownDiagnostics = supervisorMessageDiagnostics(
-      [persistedThrownError, persistedPiThrownResult]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
+      sessionPath,
+      DEFAULT_PI_SESSION_ID,
       "MANAGER_HANDOFF_READY",
     );
     assert.equal(thrownDiagnostics.supervisorResultState, "error");

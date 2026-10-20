@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -783,8 +784,17 @@ const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
   "internal_failure",
 ]);
 
-export function supervisorMessageDiagnostics(contents, text) {
-  const entries = sessionEntries(contents);
+export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
+  let session;
+  try {
+    session = SessionManager.open(path);
+  } catch {
+    return emptySupervisorMessageDiagnostics(false);
+  }
+  if (session.getHeader()?.id !== expectedSessionId)
+    return emptySupervisorMessageDiagnostics(false);
+
+  const entries = session.getBranch();
   const calls = entries.flatMap((entry) =>
     entry.type === "message" &&
     entry.message?.role === "assistant" &&
@@ -798,23 +808,24 @@ export function supervisorMessageDiagnostics(contents, text) {
         )
       : [],
   );
-  const results = calls.flatMap((call) =>
-    entries
-      .filter(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "toolResult" &&
-          entry.message.toolName === "message_supervisor" &&
-          entry.message.toolCallId === call.id,
-      )
-      .map((entry) => entry.message),
-  );
-  const success = results.some(
-    (result) => !result.isError && result.details?.ok !== false,
-  );
-  const failed = results.find(
-    (result) => result.isError === true || result.details?.ok === false,
-  );
+  const call = calls.at(-1);
+  const results = call
+    ? entries
+        .filter(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "toolResult" &&
+            entry.message.toolName === "message_supervisor" &&
+            entry.message.toolCallId === call.id,
+        )
+        .map((entry) => entry.message)
+    : [];
+  const result = results.length === 1 ? results[0] : undefined;
+  const success = result && !result.isError && result.details?.ok !== false;
+  const failed =
+    result && (result.isError === true || result.details?.ok === false)
+      ? result
+      : undefined;
   const category = failed?.details?.error?.category;
   const errorDetails = failed?.details?.error;
   const handlerBranchStatus = errorDetails?.branchStatus;
@@ -823,14 +834,17 @@ export function supervisorMessageDiagnostics(contents, text) {
     typeof errorDetails === "object" &&
     Object.hasOwn(errorDetails, "category");
   return {
-    supervisorCallObserved: calls.length > 0,
-    supervisorResultState: !calls.length
+    supervisorSessionHeaderMatches: true,
+    supervisorCallObserved: !!call,
+    supervisorResultState: !call
       ? "missing"
       : success
         ? "success"
         : failed
           ? "error"
-          : "pending",
+          : results.length === 0
+            ? "pending"
+            : "not_observed",
     supervisorErrorCategory:
       failed && !success
         ? STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
@@ -846,6 +860,18 @@ export function supervisorMessageDiagnostics(contents, text) {
       categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
         ? category
         : "not_observed",
+  };
+}
+
+function emptySupervisorMessageDiagnostics(headerMatches) {
+  return {
+    supervisorSessionHeaderMatches: headerMatches,
+    supervisorCallObserved: false,
+    supervisorResultState: headerMatches ? "missing" : "not_observed",
+    supervisorErrorCategory: "none",
+    supervisorHandlerBranchStatus: "not_observed",
+    supervisorPersistedErrorCategoryPresent: false,
+    supervisorPersistedErrorCategory: "not_observed",
   };
 }
 
@@ -3688,7 +3714,8 @@ async function runManagerHandoffSmoke(ctx) {
         errorCategory = "provenance_observation_failed";
       }
       const supervisor = supervisorMessageDiagnostics(
-        leadSession.contents,
+        leadSession.path,
+        row.session,
         "MANAGER_HANDOFF_READY",
       );
       const ready = supervisor.supervisorResultState === "success";

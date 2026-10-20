@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   mkdir,
   mkdtemp,
@@ -1431,6 +1432,21 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
 });
 
 test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-parser-"));
+  const diagnose = async (contents) => {
+    const manager = SessionManager.create(process.cwd(), sessionDir);
+    for (const line of contents.split(/\r?\n/u).filter(Boolean)) {
+      const entry = JSON.parse(line);
+      if (entry.type === "message") manager.appendMessage(entry.message);
+    }
+    if (!manager.getLeafId())
+      manager.appendMessage({ role: "user", content: "fixture" });
+    return supervisorMessageDiagnostics(
+      manager.getSessionFile(),
+      manager.getSessionId(),
+      "MANAGER_HANDOFF_READY",
+    );
+  };
   const contents = [
     {
       type: "message",
@@ -1470,11 +1486,9 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   ]
     .map((entry) => JSON.stringify(entry))
     .join("\n");
-  const correlated = supervisorMessageDiagnostics(
-    contents,
-    "MANAGER_HANDOFF_READY",
-  );
+  const correlated = await diagnose(contents);
   assert.deepEqual(correlated, {
+    supervisorSessionHeaderMatches: true,
     supervisorCallObserved: true,
     supervisorResultState: "error",
     supervisorErrorCategory: "internal_failure",
@@ -1486,9 +1500,8 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     JSON.stringify(correlated),
     /PRIVATE_ERROR|PRIVATE_CAUSE/u,
   );
-  const unknownCategory = supervisorMessageDiagnostics(
+  const unknownCategory = await diagnose(
     contents.replace('"internal_failure"', '"PRIVATE_UNLISTED_CATEGORY"'),
-    "MANAGER_HANDOFF_READY",
   );
   assert.equal(unknownCategory.supervisorErrorCategory, "tool_error");
   assert.equal(unknownCategory.supervisorPersistedErrorCategoryPresent, true);
@@ -1500,7 +1513,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     JSON.stringify(unknownCategory),
     /PRIVATE_ERROR|PRIVATE_UNLISTED/u,
   );
-  const unsupportedBranchStatus = supervisorMessageDiagnostics(
+  const unsupportedBranchStatus = await diagnose(
     contents.replace(
       '"branchStatus":"operation_error_returned"',
       '"branchStatus":"non_operation_error_throw"',
@@ -1523,16 +1536,17 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     JSON.stringify(unsupportedBranchStatus),
     /PRIVATE_CALL_ID|PRIVATE_PROMPT|PRIVATE_ERROR|PRIVATE_CAUSE|PRIVATE_RESULT_BODY/u,
   );
-  const mappedSupervisorError = supervisorMessageDiagnostics(
+  const mappedSupervisorError = await diagnose(
     contents.replace('"internal_failure"', '"invalid_request"'),
-    "MANAGER_HANDOFF_READY",
   );
   assert.equal(
     mappedSupervisorError.supervisorErrorCategory,
     "invalid_request",
   );
   assert.doesNotMatch(JSON.stringify(mappedSupervisorError), /PRIVATE_ERROR/u);
-  assert.deepEqual(supervisorMessageDiagnostics("", "MANAGER_HANDOFF_READY"), {
+  const noCall = await diagnose("");
+  assert.deepEqual(noCall, {
+    supervisorSessionHeaderMatches: true,
     supervisorCallObserved: false,
     supervisorResultState: "missing",
     supervisorErrorCategory: "none",
@@ -1540,13 +1554,14 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   });
-  const successfulSupervisor = supervisorMessageDiagnostics(
+  const successfulSupervisor = await diagnose(
     contents
       .replace('"isError":true', '"isError":false')
       .replace('"PRIVATE_RESULT_BODY"', '"sent"'),
     "MANAGER_HANDOFF_READY",
   );
   assert.deepEqual(successfulSupervisor, {
+    supervisorSessionHeaderMatches: true,
     supervisorCallObserved: true,
     supervisorResultState: "success",
     supervisorErrorCategory: "none",
@@ -1554,6 +1569,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",
   });
+  await rm(sessionDir, { recursive: true, force: true });
 
   const earlyPoll = managerAssignmentDiagnostics({
     worktree: "true",
@@ -1681,6 +1697,119 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     assert.doesNotMatch(persisted, /PRIVATE_CALL_ID|MANAGER_HANDOFF_READY/u);
   } finally {
     await rm(dirname(artifactPath), { recursive: true, force: true });
+  }
+});
+
+test("manager readiness correlates only the latest active-branch call in the assigned session", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-branch-"));
+  try {
+    const source = SessionManager.create(process.cwd(), sessionDir);
+    const root = source.appendMessage({ role: "user", content: "root" });
+    source.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "message_supervisor",
+          id: "FOREIGN_CALL_ID",
+          arguments: {
+            message: "MANAGER_HANDOFF_READY",
+            secret: "PRIVATE_ARGS",
+          },
+        },
+      ],
+    });
+    source.appendMessage({
+      role: "toolResult",
+      toolName: "message_supervisor",
+      toolCallId: "FOREIGN_CALL_ID",
+      isError: false,
+      content: "PRIVATE_SUCCESS_BODY",
+    });
+    source.branch(root);
+    source.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "message_supervisor",
+          id: "OLD_BRANCH_CALL_ID",
+          arguments: { message: "MANAGER_HANDOFF_READY" },
+        },
+      ],
+    });
+    source.appendMessage({
+      role: "toolResult",
+      toolName: "message_supervisor",
+      toolCallId: "OLD_BRANCH_CALL_ID",
+      isError: false,
+    });
+
+    const fork = SessionManager.forkFrom(
+      source.getSessionFile(),
+      process.cwd(),
+      sessionDir,
+    );
+    fork.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "message_supervisor",
+          id: "LATEST_CALL_ID",
+          arguments: {
+            message: "MANAGER_HANDOFF_READY",
+            secret: "LATEST_PRIVATE_ARGS",
+          },
+        },
+      ],
+    });
+    fork.appendMessage({
+      role: "toolResult",
+      toolName: "message_supervisor",
+      toolCallId: "LATEST_CALL_ID",
+      isError: true,
+      details: {
+        error: {
+          category: "UNLISTED_PRIVATE_CATEGORY",
+          message: "PRIVATE_ERROR_TEXT",
+        },
+      },
+      content: "PRIVATE_RESULT_BODY",
+    });
+
+    const diagnostics = supervisorMessageDiagnostics(
+      fork.getSessionFile(),
+      fork.getSessionId(),
+      "MANAGER_HANDOFF_READY",
+    );
+    assert.deepEqual(diagnostics, {
+      supervisorSessionHeaderMatches: true,
+      supervisorCallObserved: true,
+      supervisorResultState: "error",
+      supervisorErrorCategory: "tool_error",
+      supervisorHandlerBranchStatus: "not_observed",
+      supervisorPersistedErrorCategoryPresent: true,
+      supervisorPersistedErrorCategory: "not_observed",
+    });
+    assert.doesNotMatch(
+      JSON.stringify(diagnostics),
+      /FOREIGN_CALL_ID|OLD_BRANCH_CALL_ID|LATEST_CALL_ID|PRIVATE_ARGS|PRIVATE_SUCCESS_BODY|UNLISTED_PRIVATE_CATEGORY|PRIVATE_ERROR_TEXT|PRIVATE_RESULT_BODY/u,
+    );
+    const mismatchedHeader = supervisorMessageDiagnostics(
+      fork.getSessionFile(),
+      "WRONG_EXPECTED_SESSION_ID",
+      "MANAGER_HANDOFF_READY",
+    );
+    assert.equal(mismatchedHeader.supervisorSessionHeaderMatches, false);
+    assert.equal(mismatchedHeader.supervisorCallObserved, false);
+    assert.equal(mismatchedHeader.supervisorResultState, "not_observed");
+    assert.doesNotMatch(
+      JSON.stringify(mismatchedHeader),
+      /WRONG_EXPECTED_SESSION_ID/u,
+    );
+  } finally {
+    await rm(sessionDir, { recursive: true, force: true });
   }
 });
 
