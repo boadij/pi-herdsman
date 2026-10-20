@@ -936,6 +936,20 @@ export function fakePi(
           stderr: "",
           code: 0,
         });
+        // Generic executors model a non-project workspace unless they supply topology.
+        if (
+          command === "herdr" &&
+          args[0] === "worktree" &&
+          args[1] === "list" &&
+          result.stdout === "{}"
+        )
+          result.stdout = JSON.stringify({
+            id: AGENT_ID,
+            error: {
+              code: "not_git_worktree",
+              message: "Fixture is outside a Git worktree",
+            },
+          });
         callResults.push({
           args,
           succeeded: result.code === 0,

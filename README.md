@@ -107,6 +107,13 @@ Project work is durable by Git branch. It does not belong to the Manager session
 that happened to start it, so assignments can be paused, resumed, or retired
 across Manager turnover.
 
+Manager-created project Leads are dedicated Managed Lead sessions: identity stays
+with the exact Pi session, while only a current project assignment authorizes
+execution. Unavailable or retired assignments never enable ordinary Lead tools.
+Use native Pi `/fork` or `/clone` for independent ordinary continuation with copied
+history, not a separate checkout or fresh process configuration. See
+[Project orchestration](docs/guides/project-orchestration.md#dedicated-sessions-and-independent-continuation).
+
 See [Coordination](docs/concepts/coordination.md) for the mental model and
 [Project orchestration](docs/guides/project-orchestration.md) for the Manager
 workflow.

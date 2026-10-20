@@ -1,11 +1,14 @@
 # Commit project retirement before message cleanup
 
+> **Session identity update:** [ADR 0027](0027-use-immutable-managed-lead-session-identity.md) supersedes all
+> takeover and in-place ordinary-continuation decisions in this record.
+> Other decisions remain subject to their noted supersessions.
+
 ## Status
 
 Accepted. The worktree-retirement deletion decision is superseded by
 [ADR 0023](0023-deliver-worktree-retirement-through-pending-manager-context.md).
-Confirmed takeover still deletes the exact assignment; the commit-before-cleanup
-ordering and assignment-scoped cleanup remain in force.
+The commit-before-cleanup ordering and assignment-scoped cleanup remain in force.
 
 ## Decision
 

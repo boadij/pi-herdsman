@@ -153,7 +153,8 @@ export type FocusIntent =
   | { kind: "assigned-manager" };
 type HitRegion = { row: number; from: number; to: number; intent: FocusIntent };
 export type StatusExecution =
-  { kind: "managed" } | { kind: "ordinary"; mode: LeadExecutionMode };
+  | { kind: "managed"; lifecycle?: "assigned" | "unavailable" | "retired" }
+  | { kind: "ordinary"; mode: LeadExecutionMode };
 export interface StatusSnapshot {
   agents: StatusAgent[];
   stale: boolean;
@@ -3830,7 +3831,7 @@ export class StatusWidget {
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
     const execution = s.execution
-      ? ` · ${s.execution.kind === "managed" ? "managed" : s.execution.mode}`
+      ? ` · ${s.execution.kind === "managed" ? `Managed${s.execution.lifecycle === "retired" ? " · Retired" : s.execution.lifecycle === "unavailable" ? " · Unavailable" : ""}` : s.execution.mode === "flexible" ? "Flexible" : "Orchestrate"}`
       : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
@@ -3854,13 +3855,14 @@ export class StatusWidget {
       !s.stale &&
       !s.unavailable &&
       executionFits &&
-      s.execution?.kind === "managed"
+      s.execution?.kind === "managed" &&
+      (!s.execution.lifecycle || s.execution.lifecycle === "assigned")
     ) {
       const from = visibleWidth(breadcrumb) + visibleWidth(" · ");
       this.hits.push({
         row: 0,
         from,
-        to: from + visibleWidth("managed"),
+        to: from + visibleWidth("Managed"),
         intent: { kind: "assigned-manager" },
       });
     }

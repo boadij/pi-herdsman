@@ -67,11 +67,8 @@ Routine information that can wait belongs in the result; there is no
 message/result deduplication. `stop_lead` pauses execution without removing the
 assignment, and `resume_project` resumes it.
 Successful Herdr worktree removal retires the matching project assignment and
-any still-pending project messages. The assigned Lead can also explicitly
-release Manager control with confirmed `/takeover`, which removes the
-assignment and pending project messages while preserving its session, branch,
-worktree, process, and owned Agents. Verified Git worktree inventory showing
-the checkout absent also retires the assignment. Failed or ambiguous inventory
+any still-pending project messages. Verified Git worktree inventory showing
+checkout absence also retires the assignment. Failed or ambiguous inventory
 preserves it. A retired assignment cannot be resumed, but new work may reuse
 its remaining branch.
 

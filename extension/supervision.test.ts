@@ -39,7 +39,6 @@ const {
   listProjectAssignments,
   removeProjectAssignment,
   retireProjectAssignment,
-  releaseProjectAssignment,
   listPendingRetirements,
   removePendingRetirement,
   removeProjectMessagesForAssignment,
@@ -80,7 +79,8 @@ const {
   readLeadCoordinationState,
   readChiefDescriptor,
   serializeSupervision,
-  sessionLeadRoleState,
+  sessionLeadRoleState: readLeadRoleState,
+  readSessionKind,
   writeChiefMessage,
   writeCoordinationMessage,
   writePeerLeadRecord,
@@ -183,6 +183,7 @@ function peerRecord(
     record: {
       version: 2,
       build: BUILD,
+      sessionKind: "ordinary",
       piSessionId,
       paneId: "pane",
       tabId: "tab",
@@ -415,6 +416,31 @@ test("peer authority comparison rejects provenance changes but ignores presentat
         expected,
       ),
       true,
+    );
+  } finally {
+    fixture.release();
+  }
+});
+
+test("peer presence requires an explicit immutable session kind", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime);
+  try {
+    assert.throws(
+      () =>
+        writePeerLeadRecord(runtime, {
+          ...fixture.record,
+          sessionKind: undefined,
+        } as never),
+      /Invalid peer lead record/,
+    );
+    assert.throws(
+      () =>
+        writePeerLeadRecord(runtime, {
+          ...fixture.record,
+          sessionKind: "unknown",
+        } as never),
+      /Invalid peer lead record/,
     );
   } finally {
     fixture.release();
@@ -1015,40 +1041,72 @@ test("queued traffic remains correlated to the exact lead session after restart"
   assert.deepEqual(listChiefMessagePaths(runtime, original.toSessionId), []);
 });
 
-test("lead role state requires a canonical durable tool baseline", () => {
-  const valid = {
+test("role state selects only current-session branch records and rejects malformed matching records", () => {
+  const record = (data: unknown) => ({
     type: "custom",
     customType: "pi-herdsman-role",
-    data: { role: "lead", leadTools: ["read", "bash", "agent", "chief"] },
-  };
-  assert.equal(sessionLeadRoleState([]), undefined);
-  const parsed = sessionLeadRoleState([valid]);
-  assert.deepEqual(parsed, valid.data);
-  assert.notEqual(parsed?.leadTools, valid.data.leadTools);
-  assert.deepEqual(
-    sessionLeadRoleState([
-      { ...valid, data: { role: "chief", leadTools: [] } },
-    ]),
-    { role: "chief", leadTools: [] },
-  );
-  for (const data of [
+    data,
+  });
+  const valid = { sessionId: "session", role: "lead", leadTools: ["read"] };
+  assert.equal(
+    readLeadRoleState(
+      [
+        record({ role: "chief", leadTools: [] }),
+        record({ ...valid, sessionId: "foreign" }),
+      ],
+      "session",
+    ),
     undefined,
-    [],
-    { role: "lead" },
-    { role: "invalid", leadTools: [] },
-    { role: "lead", leadTools: "read" },
-    { role: "lead", leadTools: ["read", "read"] },
-    { role: "lead", leadTools: [""] },
-    { role: "lead", leadTools: [1] },
-    { ...valid.data, extra: true },
-  ]) {
-    const malformed = { ...valid, data };
+  );
+  assert.deepEqual(readLeadRoleState([record(valid)], "session"), {
+    role: "lead",
+    leadTools: ["read"],
+  });
+  for (const data of [
+    { ...valid, role: "invalid" },
+    { ...valid, leadTools: ["read", "read"] },
+    { ...valid, extra: true },
+  ])
     assert.throws(
-      () => sessionLeadRoleState([valid, malformed]),
+      () => readLeadRoleState([record(valid), record(data)], "session"),
       /invalid pi-herdsman-role/,
     );
-    assert.deepEqual(sessionLeadRoleState([malformed, valid]), valid.data);
-  }
+});
+
+test("session identity is exact, session-wide, immutable and strict", () => {
+  const record = (data: unknown) => ({
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data,
+  });
+  const ordinary = {
+    version: 1 as const,
+    sessionId: "session",
+    kind: "ordinary" as const,
+  };
+  const managed = {
+    ...ordinary,
+    kind: "managed" as const,
+    repoKey: "repo",
+    branch: "branch",
+  };
+  assert.equal(readSessionKind([record(managed)], "fork"), undefined);
+  assert.deepEqual(
+    readSessionKind([record(managed), record(managed)], "session"),
+    managed,
+  );
+  assert.deepEqual(readSessionKind([record(ordinary)], "session"), ordinary);
+  assert.throws(
+    () => readSessionKind([record(ordinary), record(managed)], "session"),
+    /conflicting/,
+  );
+  for (const data of [
+    { ...managed, branch: "" },
+    { ...ordinary, version: 2 },
+    { ...ordinary, extra: true },
+    { ...ordinary, kind: "invalid" },
+  ])
+    assert.throws(() => readSessionKind([record(data)], "session"), /invalid/);
 });
 
 test("supervision authority is coordinator state, not metadata", () => {
@@ -3509,7 +3567,7 @@ test("pending retirements preserve exact generations and reject conflicting stor
   writeProjectAssignment(runtime, b);
   assert.throws(() => retireProjectAssignment(runtime, b), /already exists/);
   assert.deepEqual(readProjectAssignment(runtime, b.repoKey, b.branch), b);
-  assert.equal(releaseProjectAssignment(runtime, b), true);
+  removeProjectAssignment(runtime, b.repoKey, b.branch);
   assert.deepEqual(listPendingRetirements(runtime, b.repoKey), [b]);
 });
 
@@ -3884,4 +3942,57 @@ assert.deepEqual(storage.listProjectMessages(runtime, assignment.repoKey, assign
     },
   );
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("native Pi tree, fork and clone keep identity exact-session-bound", () => {
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-native-kind-"));
+  try {
+    const program = `
+      import assert from "node:assert/strict";
+      import {writeFileSync} from "node:fs";
+      import {join} from "node:path";
+      import {SessionManager} from "@earendil-works/pi-coding-agent";
+      import {readSessionKind, sessionLeadRoleState} from ${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)};
+      const directory = process.argv[1];
+      const sessionId = "11111111-1111-4111-8111-111111111111";
+      const identity = {version: 1, sessionId, kind: "managed", repoKey: "repo", branch: "feature"};
+      const timestamp = new Date().toISOString();
+      const path = join(directory, "source.jsonl");
+      const entries = [
+        {type: "session", version: 3, id: sessionId, cwd: directory, timestamp},
+        {type: "message", id: "user", parentId: null, timestamp, message: {role: "user", content: "source", timestamp: Date.now()}},
+        {type: "custom", id: "kind", parentId: "user", timestamp, customType: "pi-herdsman-session-kind", data: identity},
+        {type: "custom", id: "role", parentId: "kind", timestamp, customType: "pi-herdsman-role", data: {sessionId, role: "chief", leadTools: ["bash"]}},
+      ];
+      writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join("\\n") + "\\n");
+      const source = SessionManager.open(path, directory);
+      assert.deepEqual(readSessionKind(source.getEntries(), source.getSessionId()), identity);
+      source.branch("user");
+      assert.equal(readSessionKind(source.getBranch(), sessionId), undefined);
+      assert.deepEqual(readSessionKind(source.getEntries(), sessionId), identity);
+      const fork = SessionManager.forkFrom(path, directory, directory);
+      assert.notEqual(fork.getSessionId(), sessionId);
+      assert.equal(readSessionKind(fork.getEntries(), fork.getSessionId()), undefined);
+      assert.equal(sessionLeadRoleState(fork.getBranch(), fork.getSessionId()), undefined);
+      assert.throws(() => sessionLeadRoleState([
+        ...entries,
+        {type: "custom", id: "bad-role", parentId: "role", timestamp, customType: "pi-herdsman-role", data: {sessionId, role: "not-a-role", leadTools: []}},
+        {type: "custom", id: "good-role", parentId: "bad-role", timestamp, customType: "pi-herdsman-role", data: {sessionId, role: "chief", leadTools: ["bash"]}},
+      ], sessionId), /invalid pi-herdsman-role entry/);
+      const clonePath = source.createBranchedSession("role");
+      const clone = SessionManager.open(clonePath, directory);
+      assert.notEqual(clone.getSessionId(), sessionId);
+      assert.equal(readSessionKind(clone.getEntries(), clone.getSessionId()), undefined);
+      assert.equal(sessionLeadRoleState(clone.getBranch(), clone.getSessionId()), undefined);
+      assert.deepEqual(readSessionKind(SessionManager.open(path, directory).getEntries(), sessionId), identity);
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", program, directory],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

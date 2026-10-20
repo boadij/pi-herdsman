@@ -348,7 +348,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     });
     await pi.events.get("session_start")![0](undefined, ctx);
     await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
+      assert.match(statusWidget!.render(160)[0], /^● lead · Managed/),
     );
     ctx.isIdle = () => false;
     const managerMessage = {
@@ -482,7 +482,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
         },
       ],
     );
-    const staleText = "must be rejected after takeover";
+    const staleText = "must be rejected after retirement";
     writeChiefMessage(
       {
         version: 2,
@@ -621,45 +621,15 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       "Manual continuation result.",
     );
 
-    ctx.hasUI = true;
-    ctx.ui.confirm = async () => true;
-    support.failProjectMessageRemoval = true;
-    try {
-      await pi.commandOptions.get("takeover")!.handler("", ctx);
-      assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
-      assert.deepEqual(
-        listPendingRetirements(runtime, "repo-key"),
-        [],
-        "takeover produces no worktree retirement context",
-      );
-      assert.ok(
-        pi.entries.some(
-          (entry: any) => entry.customType === "pi_herdsman_state_error",
-        ),
-      );
-      assert.equal(
-        listProjectMessages(runtime, "repo-key", "smoke/routing").length,
-        3,
-      );
-    } finally {
-      support.failProjectMessageRemoval = false;
-    }
+    assert.equal(pi.commandOptions.has("takeover"), false);
+    const current = listProjectAssignments(runtime, "repo-key")[0]!;
+    assert.equal(retireProjectAssignment(runtime, current), true);
     recoverStaleProjectMessages(runtime, "repo-key");
     assert.equal(ctx.sessionManager.getSessionId(), leadId);
     assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
-    assert.equal(
-      listProjectMessages(runtime, "repo-key", "smoke/routing").length,
-      0,
-    );
-    await t.waitFor(() =>
-      assert.doesNotMatch(statusWidget!.render(160)[0], /managed/),
-    );
-    await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /^● lead · orchestrate/),
-    );
     await pi.commandOptions.get("lead")!.handler("flexible", ctx);
     await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /^● lead · flexible/),
+      assert.match(statusWidget!.render(160)[0], /Managed/),
     );
 
     for (const handler of pi.events.get("agent_start") ?? [])
@@ -669,7 +639,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       message: {
         role: "assistant",
         timestamp: Date.now(),
-        content: [{ type: "text", text: "Post-takeover local result." }],
+        content: [{ type: "text", text: "Historical managed result." }],
       },
     });
     for (const handler of pi.events.get("agent_settled") ?? [])
@@ -1747,6 +1717,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
         version: 2,
         build: HERDSMAN_BUILD,
         role: "lead",
+        sessionKind: "ordinary",
         piSessionId: senderId,
         paneId: "sender-pane",
         tabId: "sender-tab",
@@ -2048,6 +2019,7 @@ for (const reachable of [true, false]) {
           createdAt: 0,
         };
         writeProjectMessage(backlogRecord, runtime);
+        await pi.events.get("session_start")![0](undefined, ctx);
         await pi.commandOptions.get("manager").handler("", ctx);
         await t.waitFor(() =>
           assert.equal(projectDeliveries(backlogRecord.id).length, 1),
@@ -2073,6 +2045,7 @@ for (const reachable of [true, false]) {
           getEntries: () => managerHistory,
           getBranch: () => managerBranch,
         };
+        await pi.events.get("session_start")![0](undefined, ctx);
         await pi.commandOptions.get("manager").handler("", ctx);
         await new Promise((resolve) => setTimeout(resolve, 650));
         assert.equal(projectDeliveries(liveRecord.id).length, 0);
@@ -2851,7 +2824,7 @@ async function runManagerStartupScenario(
     | "verified-absence-resume"
     | "close-resume"
     | "close-failure"
-    | "close-takeover-race"
+    | "close-retirement-race"
     | "close-tree"
     | "close-tree-failure"
     | "unassigned-close",
@@ -2916,7 +2889,7 @@ async function runManagerStartupScenario(
     [
       "close-resume",
       "close-failure",
-      "close-takeover-race",
+      "close-retirement-race",
       "close-tree",
       "close-tree-failure",
     ].includes(mode);
@@ -3247,7 +3220,7 @@ async function runManagerStartupScenario(
           ...(([
             "close-resume",
             "close-failure",
-            "close-takeover-race",
+            "close-retirement-race",
             "close-tree",
             "close-tree-failure",
             "unassigned-close",
@@ -3300,7 +3273,7 @@ async function runManagerStartupScenario(
             ([
               "close-resume",
               "close-failure",
-              "close-takeover-race",
+              "close-retirement-race",
               "close-tree",
               "close-tree-failure",
               "unassigned-close",
@@ -3363,7 +3336,7 @@ async function runManagerStartupScenario(
         [
           "close-resume",
           "close-failure",
-          "close-takeover-race",
+          "close-retirement-race",
           "close-tree",
           "close-tree-failure",
           "unassigned-close",
@@ -3708,7 +3681,7 @@ async function runManagerStartupScenario(
           ([
             "close-resume",
             "close-failure",
-            "close-takeover-race",
+            "close-retirement-race",
             "close-tree",
             "close-tree-failure",
             "unassigned-close",
@@ -3968,7 +3941,7 @@ async function runManagerStartupScenario(
       "active-closed",
       "close-resume",
       "close-failure",
-      "close-takeover-race",
+      "close-retirement-race",
       "close-tree",
       "close-tree-failure",
     ].includes(mode);
@@ -4058,7 +4031,7 @@ async function runManagerStartupScenario(
         [
           "close-resume",
           "close-failure",
-          "close-takeover-race",
+          "close-retirement-race",
           "close-tree",
           "close-tree-failure",
         ].includes(mode)
@@ -4332,7 +4305,7 @@ async function runManagerStartupScenario(
         [
           "close-resume",
           "close-failure",
-          "close-takeover-race",
+          "close-retirement-race",
           "close-tree",
           "close-tree-failure",
         ].includes(mode)
@@ -4341,14 +4314,14 @@ async function runManagerStartupScenario(
           pi.tools
             .find((tool) => tool.name === name)!
             .execute(name, value, undefined, undefined, ctx);
-        if (mode === "close-takeover-race") {
+        if (mode === "close-retirement-race") {
           const assignment = listProjectAssignments(
             supervisionRuntime(),
             repoKey,
           )[0]!;
           const releaseAssignmentLock = claimProcessLock(
             `${projectAssignmentPath(supervisionRuntime(), repoKey, assignment.branch)}.lock`,
-            { name: "test takeover assignment lock" },
+            { name: "test retirement assignment lock" },
           );
           await assert.rejects(control("stop_lead", { session: staleId }));
           removeProjectAssignment(
@@ -5555,8 +5528,8 @@ test("Manager preserves its Lead after descendant cleanup failure", () =>
   runManagerStartupScenario("close-tree-failure"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
-test("Manager stop cannot race through takeover's assignment lock", () =>
-  runManagerStartupScenario("close-takeover-race"));
+test("Manager stop cannot race through retirement's assignment lock", () =>
+  runManagerStartupScenario("close-retirement-race"));
 test("Manager inspection rejects evidence after assignment revocation", () =>
   runManagerStartupScenario("active-live-inspect-revoked"));
 test("Manager inspection rejects evidence after lease replacement", () =>

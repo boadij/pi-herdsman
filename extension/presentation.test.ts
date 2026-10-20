@@ -2741,12 +2741,12 @@ test("Status widget renders complete execution metadata without changing ownersh
     breadcrumb: [{ text: "lead" }],
   };
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
-  assert.equal(widget.render(160)[0], "● lead · managed");
+  assert.equal(widget.render(160)[0], "● lead · Managed");
   assert.ok(calls.includes("success:● lead"));
-  assert.ok(calls.includes("muted: · managed"));
+  assert.ok(calls.includes("muted: · Managed"));
   for (const [mode, label] of [
-    ["flexible", "flexible"],
-    ["orchestrate", "orchestrate"],
+    ["flexible", "Flexible"],
+    ["orchestrate", "Orchestrate"],
   ] as const) {
     widget.setSnapshot({ ...snapshot, execution: { kind: "ordinary", mode } });
     assert.equal(widget.render(160)[0], `● lead · ${label}`);
@@ -2768,15 +2768,15 @@ test("Status widget renders complete execution metadata without changing ownersh
   });
   assert.equal(
     widget.render(160)[0],
-    "● lead → implementer → scout · managed  [read, bash]",
+    "● lead → implementer → scout · Managed  [read, bash]",
   );
   assert.deepEqual(breadcrumb, [
     { text: "lead" },
     { text: "implementer" },
     { text: "scout" },
   ]);
-  assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
-  assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
+  assert.equal(widget.render(41)[0], "● lead → implementer → scout · Managed");
+  assert.doesNotMatch(widget.render(8)[0]!, /· Managed/);
   for (let width = 0; width <= 160; width++)
     assert.ok(
       widget.render(width).every((line) => visibleWidth(line) <= width),
@@ -2793,7 +2793,7 @@ test("Status widget renders complete execution metadata without changing ownersh
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
-  assert.match(widget.render(160)[0]!, /^● lead · managed  1 blocked$/);
+  assert.match(widget.render(160)[0]!, /^● lead · Managed  1 blocked$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
@@ -2812,7 +2812,7 @@ test("Status widget keeps execution metadata ahead of elapsed time when narrow",
 
   widget.setSnapshot({ ...snapshot, herdRunStartedAt: Date.now() - 30_000 });
   const header = widget.render(width)[0]!;
-  assert.match(header, /· managed/);
+  assert.match(header, /· Managed/);
   assert.doesNotMatch(header, /\d+s/);
   assert.ok(visibleWidth(header) <= width);
 });

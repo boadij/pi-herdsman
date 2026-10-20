@@ -1,5 +1,9 @@
 # Manager owns project assignment resolution
 
+> **Session identity update:** [ADR 0027](0027-use-immutable-managed-lead-session-identity.md) supersedes all
+> takeover and in-place ordinary-continuation decisions in this record.
+> Other decisions remain subject to their noted supersessions.
+
 > **Historical decision; superseded.**
 > [ADR 0013](0013-use-herdr-worktree-removal-for-project-retirement.md)
 > replaced Manager-driven completion/discard with worktree-based retirement,

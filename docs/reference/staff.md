@@ -178,10 +178,9 @@ preserved. Resume the work with
 target. Failed or ambiguous cleanup does not retire an assignment. Successful
 Herdr worktree removal or verified checkout absence retires the assignment and
 removes pending project messages. Failed or ambiguous inventory preserves the
-assignment. The
-assigned Lead may separately release Manager authority through confirmed
-`/takeover`, which removes the assignment and pending project messages without
-stopping the session or owned Agents.
+assignment. Retirement preserves the exact session’s Managed Lead identity and
+Agent ownership. It grants no ordinary execution or fresh delegation authority;
+exact-owner recovery remains independently authorized.
 
 ## `remove_worktree`
 

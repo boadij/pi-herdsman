@@ -201,21 +201,33 @@ kept as a retirement log. An exact successful removal tool result in the receivi
 Manager's history also proves awareness; a UI-only notification does not.
 A crash between delivery and consumption can replay context to a replacement
 Manager. Cleanup failures preserve pending evidence for a later inbox pass.
-Takeover does not generate a worktree-retirement notice.
 
 Successful Herdr worktree removal or verified checkout absence retires the
 matching project assignment and any still-pending messages; the Git branch
 remains. Failed or ambiguous inventory does not imply absence, so the
-assignment is preserved until authoritative evidence is available. An assigned Lead can explicitly
-release Manager control with `/takeover`; after confirmation, the assignment
-and pending project messages are removed while its Pi session, conversation,
-branch, worktree, running process, and owned Agents remain. The continuing
-session becomes an ordinary Lead in `Orchestrate` mode using
-`orchestrator-lead`. This does not change launch-time model, thinking,
-extensions, skills, or context, and does not claim the work is complete or
-accepted. Takeover and worktree removal are distinct explicit assignment
-release paths; settlement, review, and user interaction do not release an
-assignment.
+assignment is preserved until authoritative evidence is available. Settlement,
+review, and user interaction do not release an assignment.
+
+### Dedicated sessions and independent continuation
+
+A Managed Lead keeps its immutable identity for its exact Pi session. Its
+execution state is `Managed` with a current exact assignment,
+`Managed · Unavailable` when evidence is insufficient or contradictory, and
+`Managed · Retired` when authoritative evidence confirms retirement or
+replacement. Missing assignment evidence alone is not proof of retirement.
+Neither inactive state allows fresh delegation, continued Agent work, ordinary
+execution profiles, Manager/Chief activation, or ordinary global peer access.
+History and independently authorized exact-owner Agent recovery remain available.
+Retirement does not stop a live Pi process or imply Agent completion.
+
+Use native Pi `/fork` or `/clone` to continue independently in a new ordinary
+session with copied conversation history. The new exact session inherits
+neither project authority nor Agent ownership, supervisory roles, or saved
+execution policy. `/new` also starts a distinct ordinary session; `/resume`
+preserves the selected session identity, and `/tree` cannot change it.
+Copying history does not create a separate Git checkout, relaunch Pi, or reset
+process-level model, extensions, skills, or filesystem environment. Choose a
+separate checkout or process independently when needed; avoid overlapping writers.
 
 For an explicitly requested checkout removal, an active Manager can use
 `/manager remove <branch>` or the `remove_worktree` staff tool. Both entry

@@ -1,3 +1,4 @@
+import { readSessionKind, type SessionKindEntry } from "./supervision.ts";
 import type {
   BuildSystemPromptOptions,
   ExtensionAPI,
@@ -31,6 +32,8 @@ import {
   removeProjectMessagesForAssignment,
   listProjectAssignments,
   listProjectMessages,
+  readChiefMessage,
+  removeChiefMessage,
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
@@ -174,7 +177,6 @@ type LeadTransitionHost = {
   activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
   reportLeadMetadata: typeof import("./herdr.ts").reportLeadMetadata;
   delay: typeof import("node:timers/promises").setTimeout;
-  releaseProjectAssignment: typeof import("./supervision.ts").releaseProjectAssignment;
   retireProjectAssignment: typeof import("./supervision.ts").retireProjectAssignment;
   removeProjectMessagesForAssignment: typeof import("./supervision.ts").removeProjectMessagesForAssignment;
   recoverStaleProjectMessages: typeof import("./supervision.ts").recoverStaleProjectMessages;
@@ -377,7 +379,11 @@ type LeadCommandHost = {
     ctx: ExtensionCommandContext,
     mode: LeadExecutionMode,
   ): Promise<void>;
-  leadExecutionPresentation(): { managed: boolean; mode: LeadExecutionMode };
+  leadExecutionPresentation(): {
+    managed: boolean;
+    mode: LeadExecutionMode;
+    lifecycle?: "assigned" | "unavailable" | "retired";
+  };
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
   expandAgentBodyFiles(
@@ -882,32 +888,35 @@ export type LeadExecutionSessionState = Readonly<{
 
 export function sessionLeadExecutionState(
   entries: readonly unknown[],
+  sessionId: string,
 ): LeadExecutionSessionState | undefined {
-  const entry = [...entries]
-    .reverse()
-    .find(
-      (candidate: any) =>
-        candidate?.type === "custom" &&
-        candidate.customType === "pi-herdsman-lead-execution",
-    ) as any;
-  if (!entry) return undefined;
-  const data = entry.data;
-  if (
-    !data ||
-    typeof data !== "object" ||
-    Array.isArray(data) ||
-    Object.keys(data).length !== 2 ||
-    !Object.hasOwn(data, "mode") ||
-    !Object.hasOwn(data, "leadTools") ||
-    !isLeadExecutionMode(data.mode) ||
-    !Array.isArray(data.leadTools) ||
-    data.leadTools.some(
-      (name: unknown) => typeof name !== "string" || !name.trim(),
-    ) ||
-    new Set(data.leadTools).size !== data.leadTools.length
-  )
-    throw new Error("invalid pi-herdsman-lead-execution entry");
-  return { mode: data.mode, leadTools: [...data.leadTools] };
+  let state: LeadExecutionSessionState | undefined;
+  for (const candidate of entries as readonly any[]) {
+    if (
+      candidate?.type !== "custom" ||
+      candidate.customType !== "pi-herdsman-lead-execution" ||
+      candidate.data?.sessionId !== sessionId
+    )
+      continue;
+    const data = candidate.data;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      Array.isArray(data) ||
+      Object.keys(data).length !== 3 ||
+      !Object.hasOwn(data, "mode") ||
+      !Object.hasOwn(data, "leadTools") ||
+      !isLeadExecutionMode(data.mode) ||
+      !Array.isArray(data.leadTools) ||
+      data.leadTools.some(
+        (name: unknown) => typeof name !== "string" || !name.trim(),
+      ) ||
+      new Set(data.leadTools).size !== data.leadTools.length
+    )
+      throw new Error("invalid pi-herdsman-lead-execution entry");
+    state = { mode: data.mode, leadTools: [...data.leadTools] };
+  }
+  return state;
 }
 
 type LeadController = ReturnType<typeof createAgentController>;
@@ -1040,8 +1049,13 @@ export function createLeadSessionStartRuntime(host: {
   isRoot(): boolean;
   isManagedAgent(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
+  initializeSessionKind?(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void>;
   sessionLeadRoleState(
     entries: readonly any[],
+    sessionId: string,
   ): { role: SessionRole; leadTools: string[] } | undefined;
   normalizeBaseTools(tools: readonly string[]): string[];
   normalizeLeadTools(tools: readonly string[]): string[];
@@ -1118,12 +1132,20 @@ export function createLeadSessionStartRuntime(host: {
       let malformedRole = false;
       if (isRoot()) {
         const sessionId = ctx.sessionManager.getSessionId();
+        try {
+          await host.initializeSessionKind?.(ctx, sessionSignal);
+        } catch (error) {
+          malformedRole = true;
+          await host.failClosedRole(ctx, error);
+        }
+        if (sessionSignal.aborted) return;
         host.herdRun.restoreSession(ctx.sessionManager.getEntries(), sessionId);
         let persistedRole: SessionRole = "lead";
         let hasPersistedRole = false;
         try {
           const persisted = host.sessionLeadRoleState(
-            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getBranch(),
+            sessionId,
           );
           if (persisted) {
             hasPersistedRole = true;
@@ -1296,6 +1318,8 @@ export function createLeadSessionStartRuntime(host: {
           }
         }
       }
+      if (sessionSignal.aborted) return;
+      await host.leadInboxRuntime.cleanupManagedPeerInbox?.(ctx);
       if (sessionSignal.aborted) return;
       if (isRoot() && host.roleTransitions.chiefModeInactive())
         await host.publishLeadRole(
@@ -2065,8 +2089,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         await host.selectMenu(ctx, "Managed orchestration", [
           {
             value: "managed",
-            label: "managed-lead",
-            help: "This assigned session uses the managed-lead execution profile.",
+            label:
+              execution.lifecycle === "retired"
+                ? "Managed · Retired"
+                : execution.lifecycle === "unavailable"
+                  ? "Managed · Unavailable"
+                  : "Managed",
+            help: "Dedicated Managed Lead. Use Pi /fork or /clone to continue independently; the Git checkout is shared.",
           },
         ]);
         return;
@@ -2336,12 +2365,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "execution",
               label: "Execution",
               description: execution.managed
-                ? "Managed"
+                ? execution.lifecycle === "retired"
+                  ? "Managed · Retired"
+                  : execution.lifecycle === "unavailable"
+                    ? "Managed · Unavailable"
+                    : "Managed"
                 : execution.mode === "flexible"
                   ? "Flexible"
                   : "Orchestrate",
               help: execution.managed
-                ? "This assigned session uses managed-lead. Use /takeover to release Manager authority."
+                ? "This assigned session uses managed-lead. Use Pi /fork or /clone to continue independently (same Git checkout)."
                 : "Choose this ordinary Lead session's execution profile.",
             },
             {
@@ -2536,7 +2569,11 @@ export function registerLeadRuntime(
       }
     | { mode: LeadExecutionMode; valid: false; managed: boolean }
     | undefined;
+  let sessionKind: SessionKindEntry | undefined;
+  let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
   let leadExecutionPending = false;
+  let startupTools: string[] = [];
+  let startupWasManaged = false;
   let supervisoryProfile: SupervisoryProfile | undefined;
   const prepareSupervisoryProfile = (
     ctx: ExtensionContext,
@@ -2676,6 +2713,11 @@ export function registerLeadRuntime(
     verifiedActiveRootRole() as "lead" | "manager" | "chief" | undefined;
   const rootDelegationPolicy = (): RootDelegationPolicy => {
     const role = verifiedActiveRootRole();
+    if (
+      !sessionKind ||
+      (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
+    )
+      return new Set<string>();
     if (role === "lead") return "all";
     if (role === "manager" || role === "chief") {
       const profile = currentSupervisoryProfile(
@@ -2749,6 +2791,7 @@ export function registerLeadRuntime(
     tools: readonly string[],
   ): void => {
     pi.appendEntry("pi-herdsman-lead-execution", {
+      sessionId: sessionKind?.sessionId,
       mode,
       leadTools: [...tools],
     });
@@ -3033,13 +3076,12 @@ export function registerLeadRuntime(
         else if (role === "manager") label = "Manager";
         else {
           try {
-            label = (await currentProjectAssignment(ctx))
-              ? "Managed Lead"
-              : "Lead";
+            await currentProjectAssignment(ctx);
+            label = sessionKind?.kind === "managed" ? "Managed Lead" : "Lead";
           } catch (error) {
             // A verified assignment is required to claim Managed Lead.
             options.sessionStartOptions.appendRoleError(ctx, error);
-            label = "Lead";
+            label = sessionKind?.kind === "managed" ? "Managed Lead" : "Lead";
           }
         }
         if (!current()) return;
@@ -3185,7 +3227,12 @@ export function registerLeadRuntime(
   const persistRole = (role: SessionRole): void => {
     const tools = leadToolState.getLeadTools();
     if (!tools) throw new Error("Lead tool baseline is unavailable");
-    pi.appendEntry("pi-herdsman-role", { role, leadTools: [...tools] });
+    if (!sessionKind) throw new Error("Session identity is unavailable");
+    pi.appendEntry("pi-herdsman-role", {
+      sessionId: sessionKind.sessionId,
+      role,
+      leadTools: [...tools],
+    });
   };
   const leadEntryEffects: LeadEntryEffects = {
     advancePresenceGeneration: () =>
@@ -3220,10 +3267,21 @@ export function registerLeadRuntime(
     enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
   const executionTools = (): string[] => {
     const baseline = leadToolState.getLeadTools() ?? [];
-    if (leadExecutionPending) return leadToolState.normalizeLeadTools([]);
+    if (leadExecutionPending)
+      return leadToolState
+        .normalizeLeadTools([])
+        .filter(
+          (name) => name !== "delegate_agent" && name !== "continue_agent",
+        );
+    if (!sessionKind) return [];
+    if (sessionKind.kind === "managed") {
+      return managedLifecycle === "assigned"
+        ? leadToolState.normalizeLeadTools(baseline)
+        : options.leadRuntime?.leadContext
+          ? ownedAgentManagementTools(options.leadRuntime.leadContext)
+          : [];
+    }
     if (!leadExecution) return leadToolState.normalizeLeadTools(baseline);
-    if (leadExecution.managed)
-      return leadToolState.normalizeLeadTools(baseline);
     if (!leadExecution.valid) return leadToolState.normalizeLeadTools([]);
     return leadToolState.projectLeadTools(baseline, leadExecution.definition);
   };
@@ -3231,6 +3289,14 @@ export function registerLeadRuntime(
     _sessionId: string,
     _role: "Chief" | "Manager",
   ): void => {
+    if (
+      !sessionKind ||
+      sessionKind.sessionId !== _sessionId ||
+      sessionKind.kind === "managed"
+    )
+      throw new Error(
+        "Dedicated Managed Lead sessions cannot activate Manager or Chief.",
+      );
     if (!coordinationRuntime.coordinationHealthy())
       throw new Error("Lead coordination state is unavailable");
   };
@@ -3242,13 +3308,6 @@ export function registerLeadRuntime(
     supervisoryTools,
     fallbackSupervisoryProfile,
     retireProjectAssignment,
-    releaseProjectAssignment: (
-      ...args: Parameters<typeof roleHost.releaseProjectAssignment>
-    ) => {
-      const released = roleHost.releaseProjectAssignment(...args);
-      supervisionUiRuntime.requestRefresh();
-      return released;
-    },
     controllerScope: { kind: "root" },
     activationGuard,
     advancePeerPresenceGeneration: () =>
@@ -3367,8 +3426,9 @@ export function registerLeadRuntime(
     resolveEffectiveSupervisor: (
       ...args: Parameters<typeof roleTransitions.resolveEffectiveSupervisor>
     ) => roleTransitions.resolveEffectiveSupervisor(...args),
-    currentPeerPresenceValid: (ctx: ExtensionContext) =>
-      coordinationRuntime.currentPeerPresenceValid(ctx),
+    currentPeerPresenceValid: async (ctx: ExtensionContext) =>
+      (sessionKind?.kind !== "managed" || managedLifecycle === "assigned") &&
+      (await coordinationRuntime.currentPeerPresenceValid(ctx)),
     drainProjectMessages: (ctx: ExtensionContext) =>
       coordinationRuntime
         .drainRetirementNotices(ctx)
@@ -3398,7 +3458,10 @@ export function registerLeadRuntime(
       )
         return undefined;
       const assignment = await currentProjectAssignment(ctx);
-      if (!assignment) return undefined;
+      if (!assignment)
+        throw new Error(
+          "Managed project execution requires a current exact assignment",
+        );
       return {
         assignment,
         revalidate: (operation: () => Promise<void> | void) =>
@@ -3535,6 +3598,15 @@ export function registerLeadRuntime(
         assignmentVerified = true;
       }
     }
+    if (isLead && sessionKind?.kind === "managed") {
+      const previous = managedLifecycle;
+      try {
+        await currentProjectAssignment(ctx);
+      } catch {
+        managedLifecycle = "unavailable";
+      }
+      if (previous !== managedLifecycle) roleTransitions.reconcileRoleTools();
+    }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
       scope: { kind: "root" },
@@ -3544,13 +3616,11 @@ export function registerLeadRuntime(
       herdStartedAt: () => herdRunRuntime?.startedAt(),
     });
     const execution =
-      isLead && assignmentVerified
-        ? assignment
-          ? { kind: "managed" as const }
-          : leadExecution?.valid
-            ? { kind: "ordinary" as const, mode: leadExecution.mode }
-            : undefined
-        : undefined;
+      isLead && sessionKind?.kind === "managed"
+        ? { kind: "managed" as const, lifecycle: managedLifecycle }
+        : isLead && assignmentVerified && leadExecution?.valid
+          ? { kind: "ordinary" as const, mode: leadExecution.mode }
+          : undefined;
     return { ...snapshot, ...(execution ? { execution } : {}) };
   };
   const focusTarget = async (
@@ -3831,18 +3901,256 @@ export function registerLeadRuntime(
       herdRunRuntime!.maybeFinish(ctx),
     getThinkingLevel: () => pi.getThinkingLevel(),
   });
+  const initializeSessionKind = async (
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const identity = readSessionKind(
+      ctx.sessionManager.getEntries(),
+      sessionId,
+    );
+    // Keep the runtime unavailable until assignment evidence agrees with identity.
+    sessionKind = undefined;
+    let exactAssignments: ReturnType<typeof globalProjectAssignmentSnapshot>;
+    try {
+      exactAssignments = globalProjectAssignmentSnapshot();
+    } catch (error) {
+      throw error;
+    }
+    const socket = process.env.HERDR_SOCKET_PATH;
+    const matches = exactAssignments.get(sessionId) ?? [];
+    if (matches.length > 1)
+      throw new Error("Multiple project assignments match the Lead session");
+    if (
+      matches.length === 1 &&
+      (!socket ||
+        matches[0]!.socketHash !==
+          createHash("sha256").update(socket).digest("hex"))
+    )
+      throw new Error(
+        "Project assignment session identity conflicts with current process",
+      );
+    let assignment: ProjectAssignment | undefined;
+    if (matches.length || identity?.kind === "managed") {
+      let scope: WorktreeScope | undefined;
+      try {
+        scope = await roleTransitions.currentWorktreeScope(ctx);
+        if (signal.aborted) return;
+      } catch (error) {
+        if (identity?.kind !== "managed") throw error;
+        // Keep a validated permanent identity visible, but without scope evidence
+        // it grants no project, profile, role, or fresh-delegation authority.
+        sessionKind = identity;
+        managedLifecycle = "unavailable";
+        options.sessionStartOptions.appendRoleError(ctx, error);
+        return;
+      }
+      assignment = scope
+        ? roleTransitions.projectAssignmentForScope(scope, sessionId)
+        : undefined;
+      if (matches.length && !assignment)
+        throw new Error("Cannot verify exact project assignment scope");
+    }
+    if (signal.aborted) return;
+    if (
+      identity &&
+      assignment &&
+      (identity.kind !== "managed" ||
+        identity.repoKey !== assignment.repoKey ||
+        identity.branch !== assignment.branch)
+    )
+      throw new Error("Session identity conflicts with project assignment");
+    const resolved: SessionKindEntry =
+      identity ??
+      (assignment
+        ? {
+            version: 1,
+            sessionId,
+            kind: "managed",
+            repoKey: assignment.repoKey,
+            branch: assignment.branch,
+          }
+        : { version: 1, sessionId, kind: "ordinary" });
+    if (!identity) pi.appendEntry("pi-herdsman-session-kind", resolved);
+    sessionKind = resolved;
+    if (
+      !identity &&
+      !assignment &&
+      (startupWasManaged ||
+        ctx.sessionManager
+          .getEntries()
+          .some(
+            (entry: any) =>
+              entry?.type === "custom" &&
+              entry.customType === "pi-herdsman-session-kind" &&
+              entry.data?.kind === "managed" &&
+              entry.data?.sessionId !== sessionId,
+          ))
+    ) {
+      // Native forks retain process tools; a managed projection is not an ordinary baseline.
+      leadToolState.setLeadTools([]);
+      const mode = options.commandHost.readConfig().defaultLeadExecution;
+      leadExecution = { mode, valid: false, managed: false };
+      persistLeadExecution(mode, []);
+    }
+    managedLifecycle = assignment ? "assigned" : "unavailable";
+    queueLeadMetadata(ctx);
+  };
   const currentProjectAssignment = async (
     ctx: ExtensionContext,
   ): Promise<ProjectAssignment | undefined> => {
+    if (
+      !sessionKind ||
+      sessionKind.sessionId !== ctx.sessionManager.getSessionId()
+    )
+      throw new Error("Session identity is unavailable");
+    const identity = sessionKind;
+    if (identity.kind === "ordinary") return undefined;
+    if (identity.kind === "managed") managedLifecycle = "unavailable";
+    const replacement = roleHost.readProjectAssignment(
+      roleHost.supervisionRuntime(),
+      identity.repoKey,
+      identity.branch,
+    );
+    if (replacement && replacement.id !== identity.sessionId) {
+      managedLifecycle = "retired";
+      return undefined;
+    }
     const scope = await roleTransitions.currentWorktreeScope(ctx);
-    if (!scope && leadExecution?.managed)
-      throw new Error("Cannot verify the current project assignment");
-    return scope
-      ? roleTransitions.projectAssignmentForScope(
-          scope,
-          ctx.sessionManager.getSessionId(),
-        )
+    if (
+      sessionKind !== identity ||
+      ctx.sessionManager.getSessionId() !== identity.sessionId
+    )
+      throw new Error("Session changed while resolving assignment");
+    const assignment = scope
+      ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
       : undefined;
+    if (!scope || scope.repoKey !== identity.repoKey) {
+      if (
+        !replacement &&
+        listPendingRetirements(
+          roleHost.supervisionRuntime(),
+          identity.repoKey,
+        ).some(
+          (retired) =>
+            retired.id === identity.sessionId &&
+            retired.branch === identity.branch,
+        )
+      ) {
+        const workspaceId = process.env.HERDR_WORKSPACE_ID;
+        if (!workspaceId)
+          throw new Error("Cannot verify retired managed project checkout");
+        const topology = await roleHost.runHerdr(
+          pi,
+          ctx,
+          ["worktree", "list", "--workspace", workspaceId],
+          { signal: ctx.signal },
+        );
+        if (sessionKind !== identity)
+          throw new Error("Session changed while verifying retirement");
+        if (
+          topology?.source?.repo_key === identity.repoKey &&
+          typeof topology.source.source_checkout_path === "string" &&
+          Array.isArray(topology.worktrees) &&
+          !topology.worktrees.some(
+            (worktree: any) => worktree.branch === identity.branch,
+          )
+        ) {
+          const inventory = await pi.exec(
+            "git",
+            ["worktree", "list", "--porcelain", "-z"],
+            {
+              cwd: topology.source.source_checkout_path,
+              signal: ctx.signal,
+              timeout: 10_000,
+            },
+          );
+          const worktrees =
+            inventory.code === 0 &&
+            !inventory.killed &&
+            !inventory.stderr?.trim()
+              ? parseGitWorktreeInventory(inventory.stdout)
+              : undefined;
+          if (sessionKind !== identity)
+            throw new Error("Session changed while verifying retirement");
+          if (
+            worktrees &&
+            !worktrees.some((worktree) => worktree.branch === identity.branch)
+          ) {
+            managedLifecycle = "retired";
+            return undefined;
+          }
+        }
+      }
+      throw new Error("Cannot verify the original managed project scope");
+    }
+    if (assignment) {
+      if (
+        assignment.repoKey !== identity.repoKey ||
+        assignment.branch !== identity.branch
+      )
+        throw new Error(
+          "Project assignment conflicts with permanent session identity",
+        );
+      managedLifecycle = "assigned";
+      return assignment;
+    }
+    if (
+      !replacement &&
+      listPendingRetirements(
+        roleHost.supervisionRuntime(),
+        identity.repoKey,
+      ).some(
+        (retired) =>
+          retired.id === identity.sessionId &&
+          retired.branch === identity.branch,
+      )
+    ) {
+      // The retirement commit is durable; verify checkout absence again before presenting it.
+      const workspaceId =
+        scope?.primaryWorkspaceId ?? process.env.HERDR_WORKSPACE_ID;
+      if (!workspaceId)
+        throw new Error("Cannot verify retired managed project checkout");
+      const topology = await roleHost.runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--workspace", workspaceId],
+        { signal: ctx.signal },
+      );
+      if (sessionKind !== identity)
+        throw new Error("Session changed while verifying retirement");
+      if (
+        topology?.source?.repo_key === identity.repoKey &&
+        typeof topology.source.source_checkout_path === "string" &&
+        Array.isArray(topology.worktrees) &&
+        !topology.worktrees.some(
+          (worktree: any) => worktree.branch === identity.branch,
+        )
+      ) {
+        const inventory = await pi.exec(
+          "git",
+          ["worktree", "list", "--porcelain", "-z"],
+          {
+            cwd: topology.source.source_checkout_path,
+            signal: ctx.signal,
+            timeout: 10_000,
+          },
+        );
+        const worktrees =
+          inventory.code === 0 && !inventory.killed && !inventory.stderr?.trim()
+            ? parseGitWorktreeInventory(inventory.stdout)
+            : undefined;
+        if (sessionKind !== identity)
+          throw new Error("Session changed while verifying retirement");
+        if (
+          worktrees &&
+          !worktrees.some((worktree) => worktree.branch === identity.branch)
+        )
+          managedLifecycle = "retired";
+      }
+    }
+    return undefined;
   };
   const resolveExecutionDefinition = (
     ctx: ExtensionContext,
@@ -3885,7 +4193,7 @@ export function registerLeadRuntime(
       leadExecution = {
         mode: options.commandHost.readConfig().defaultLeadExecution,
         valid: false,
-        managed: false,
+        managed: sessionKind?.kind === "managed",
       };
       return;
     }
@@ -3897,7 +4205,7 @@ export function registerLeadRuntime(
       leadExecution = {
         mode: options.commandHost.readConfig().defaultLeadExecution,
         valid: false,
-        managed: false,
+        managed: sessionKind?.kind === "managed",
       };
       if (skipProfileResolution)
         options.sessionStartOptions.appendRoleError(ctx, error);
@@ -3908,14 +4216,17 @@ export function registerLeadRuntime(
     if (assignment) nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
     let saved: LeadExecutionSessionState | undefined;
     try {
-      saved = sessionLeadExecutionState(ctx.sessionManager.getEntries());
+      saved = sessionLeadExecutionState(
+        ctx.sessionManager.getBranch(),
+        ctx.sessionManager.getSessionId(),
+      );
     } catch (error) {
       if (signal.aborted) return;
       leadToolState.setLeadTools(currentBaseline());
       leadExecution = {
         mode: options.commandHost.readConfig().defaultLeadExecution,
         valid: false,
-        managed: !!assignment,
+        managed: sessionKind?.kind === "managed",
       };
       options.sessionStartOptions.appendDefinitionError(ctx, error);
       return;
@@ -3926,8 +4237,9 @@ export function registerLeadRuntime(
       ? "orchestrate"
       : (saved?.mode ?? options.commandHost.readConfig().defaultLeadExecution);
     leadToolState.setLeadTools(baseline);
-    if (!saved) persistLeadExecution(mode, baseline);
-    if (assignment) {
+    if (!saved && sessionKind?.kind === "ordinary")
+      persistLeadExecution(mode, baseline);
+    if (sessionKind?.kind === "managed") {
       leadExecution = { mode, valid: false, managed: true };
       return;
     }
@@ -3943,7 +4255,7 @@ export function registerLeadRuntime(
         mode,
         definition,
         valid: true,
-        managed: false,
+        managed: sessionKind?.kind === "managed",
       };
     } catch (error) {
       leadExecution = { mode, valid: false, managed: false };
@@ -3960,7 +4272,7 @@ export function registerLeadRuntime(
     try {
       const assignment = await currentProjectAssignment(ctx);
       if (signal?.aborted) return;
-      if (assignment) {
+      if (sessionKind?.kind === "managed") {
         leadExecution = { mode, valid: false, managed: true };
         statusRuntime.requestRefresh();
         publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
@@ -3987,7 +4299,7 @@ export function registerLeadRuntime(
         mode,
         definition,
         valid: true,
-        managed: false,
+        managed: sessionKind?.kind === "managed",
       };
       statusRuntime.requestRefresh();
     } catch (error) {
@@ -4001,13 +4313,18 @@ export function registerLeadRuntime(
     ctx: ExtensionCommandContext,
     mode: LeadExecutionMode,
   ): Promise<void> => {
-    const assignment = await currentProjectAssignment(ctx);
-    if (assignment)
+    if (!sessionKind || sessionKind.kind === "managed")
       throw new Error(
-        "Managed Leads use managed-lead; use /takeover to release Manager authority.",
+        "Managed Leads use managed-lead; use Pi /fork or /clone to continue independently (same Git checkout).",
       );
     if (leadExecution?.managed) await restoreLeadExecution(ctx);
+    const identity = sessionKind;
     await ctx.waitForIdle();
+    if (
+      sessionKind !== identity ||
+      identity.sessionId !== ctx.sessionManager.getSessionId()
+    )
+      throw new Error("Session changed during execution-profile selection");
     const definition = resolveExecutionDefinition(ctx, mode);
     const saved =
       leadToolState.getLeadTools() ??
@@ -4052,46 +4369,18 @@ export function registerLeadRuntime(
       throw error;
     }
   };
-  const takeover = async (ctx: ExtensionCommandContext): Promise<boolean> => {
-    const assignment = await currentProjectAssignment(ctx);
-    if (!assignment) return roleTransitions.takeover(ctx);
-    const definition = resolveExecutionDefinition(ctx, "orchestrate");
-    const baseline =
-      leadToolState.getLeadTools() ??
-      leadToolState.normalizeBaseTools(pi.getActiveTools());
-    const targetTools = leadToolState.projectLeadTools(baseline, definition);
-    if (!(await roleTransitions.takeover(ctx))) return false;
-    publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
-    try {
-      persistLeadExecution("orchestrate", baseline);
-      leadToolState.setLeadTools(baseline);
-      leadExecution = {
-        mode: "orchestrate",
-        definition,
-        valid: true,
-        managed: false,
-      };
-      pi.setActiveTools(targetTools);
-    } catch (error) {
-      leadExecution = { mode: "orchestrate", valid: false, managed: false };
-      try {
-        pi.setActiveTools(leadToolState.normalizeLeadTools([]));
-      } catch {
-        // Preserve the original transition failure.
-      }
-      try {
-        options.sessionStartOptions.appendDefinitionError(ctx, error);
-      } catch {
-        // Preserve the original transition failure.
-      }
-      throw error;
-    }
-    return true;
-  };
   const reconcileBranchExecution = async (ctx: ExtensionContext) => {
+    if (sessionKind?.kind === "managed") {
+      await restoreLeadExecution(ctx);
+      pi.setActiveTools(executionTools());
+      return;
+    }
     let saved: LeadExecutionSessionState | undefined;
     try {
-      saved = sessionLeadExecutionState(ctx.sessionManager.getBranch());
+      saved = sessionLeadExecutionState(
+        ctx.sessionManager.getBranch(),
+        ctx.sessionManager.getSessionId(),
+      );
     } catch (error) {
       leadExecution = {
         mode:
@@ -4142,7 +4431,14 @@ export function registerLeadRuntime(
     prepareLeadExecution,
     discoverSessionDefinitions: (ctx: ExtensionContext) =>
       options.commandHost.contextAgentDefinitions(ctx),
+    initializeSessionKind,
+    activeTools: () =>
+      leadExecutionPending ? startupTools : pi.getActiveTools(),
     clearLeadExecution: () => {
+      startupTools = pi.getActiveTools();
+      startupWasManaged = sessionKind?.kind === "managed";
+      sessionKind = undefined;
+      managedLifecycle = "unavailable";
       leadExecution = undefined;
     },
     setLeadExecutionPending: (pending: boolean) => {
@@ -4247,10 +4543,13 @@ export function registerLeadRuntime(
     remoteChiefAgent,
     liveLead,
     setLeadExecutionMode,
-    takeover,
     leadExecutionPresentation: () =>
-      leadExecution?.managed
-        ? { managed: true, mode: leadExecution.mode }
+      sessionKind?.kind === "managed"
+        ? {
+            managed: true,
+            mode: leadExecution?.mode ?? "orchestrate",
+            lifecycle: managedLifecycle,
+          }
         : { managed: false, mode: leadExecution?.mode ?? "flexible" },
     supervisoryProfileBody: (
       ctx: ExtensionContext,
@@ -8781,6 +9080,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     expectedGeneration: number,
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
+    const kind = readSessionKind(
+      ctx.sessionManager.getEntries(),
+      sessionId,
+    )?.kind;
+    if (!kind) return;
     const isCurrent = (): boolean =>
       expectedGeneration === peerPresenceGeneration &&
       !ctx.signal?.aborted &&
@@ -8813,6 +9117,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         version: 2,
         build: HERDSMAN_BUILD,
         role: activeRole() === "manager" ? "manager" : "lead",
+        sessionKind: kind,
         piSessionId: sessionId,
         paneId,
         tabId,
@@ -8990,13 +9295,22 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     requireFreshGroup = false,
   ): Promise<import("./supervision.ts").PeerContext | undefined> => {
     const role = record.role ?? "lead";
-    if (role === "manager") return { role: "manager" };
+    if (record.sessionKind !== "ordinary" && record.sessionKind !== "managed")
+      return undefined;
     const socket = record.socket;
     const assignments =
       (assignmentSnapshot ?? globalProjectAssignmentSnapshot()).get(
         record.piSessionId,
       ) ?? [];
     if (assignments.length > 1) return undefined;
+    if (role === "manager")
+      return record.sessionKind === "ordinary" && assignments.length === 0
+        ? { role: "manager" }
+        : undefined;
+    if (record.sessionKind === "managed" && assignments.length !== 1)
+      return undefined;
+    if (record.sessionKind === "ordinary" && assignments.length !== 0)
+      return undefined;
     if (assignments.length === 0 && !requireFreshGroup) {
       return {
         role: "lead",
@@ -9082,6 +9396,18 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const source = record.peerSource;
     const assignmentSnapshot =
       source?.role === "lead" ? globalProjectAssignmentSnapshot() : undefined;
+    const sourceAssignments =
+      assignmentSnapshot?.get(record.fromSessionId) ?? [];
+    if (
+      source?.role === "lead" &&
+      (source.managed
+        ? sourceAssignments.length !== 1 ||
+          sourceAssignments[0].assignment.repoKey !== source.group?.repoKey ||
+          sourceAssignments[0].socketHash !==
+            createHash("sha256").update(source.socket).digest("hex")
+        : sourceAssignments.length !== 0)
+    )
+      return false;
     const targetAssignments = assignmentSnapshot?.get(target.piSessionId) ?? [];
     const recipientContext = await peerContext(
       target,
@@ -9900,6 +10226,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     leadSupervisorState,
     livePeerLead,
     currentPeerPresenceValid,
+    currentWorktreeScope,
     authorizePeerRecord,
     peerContext,
     queuePeerRecord,
@@ -10301,6 +10628,41 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       record.leadSessionId === sessionId &&
       record.kind === "manager_message"
     );
+  };
+  const cleanupManagedPeerInbox = async (
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const identity = readSessionKind(
+      ctx.sessionManager.getEntries(),
+      sessionId,
+    );
+    if (!identity || identity.kind !== "managed") return;
+    try {
+      const scope = await currentWorktreeScope(ctx);
+      if (
+        sessionId !== ctx.sessionManager.getSessionId() ||
+        !scope ||
+        scope.repoKey === identity.repoKey
+      )
+        return;
+      for (const path of listChiefMessagePaths(peerRuntime(), sessionId)) {
+        let record: ChiefMessageRecord;
+        try {
+          record = readChiefMessage(path);
+        } catch {
+          continue;
+        }
+        if (
+          record.kind === "peer_message" &&
+          record.toSessionId === sessionId &&
+          sessionId === ctx.sessionManager.getSessionId()
+        )
+          removeChiefMessage(peerRuntime(), sessionId, record.id, record);
+      }
+    } catch {
+      // Incomplete topology or inbox evidence must leave durable messages queued.
+    }
   };
   const startChiefInbox = (ctx: ExtensionContext): void => {
     const generation = ++chiefInboxGeneration;
@@ -10829,6 +11191,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   };
   return {
     start: startChiefInbox,
+    cleanupManagedPeerInbox,
     isStartPreflightHeld: chiefStartPreflightHeld,
     clearStartPreflight,
     consumeStartPreflight,
@@ -11643,6 +12006,18 @@ export function createLeadRoleTransitions(
     if (activeLeadRole(state) === "manager")
       return host.currentChiefAuthority(ctx);
     if (activeLeadRole(state) !== "lead") return undefined;
+    const identity = readSessionKind(
+      ctx.sessionManager.getEntries(),
+      ctx.sessionManager.getSessionId(),
+    );
+    if (identity?.kind === "managed") {
+      const scope = await currentWorktreeScope(ctx);
+      if (!scope || scope.repoKey !== identity.repoKey) return undefined;
+      const assignment = projectAssignmentForScope(scope, identity.sessionId);
+      return assignment && assignment.branch === identity.branch
+        ? currentManager(ctx, scope)
+        : undefined;
+    }
     const scope = await currentWorktreeScope(ctx);
     if (!scope) return host.currentChiefAuthority(ctx);
     const workspaceId = host.workspaceId();
@@ -11661,15 +12036,9 @@ export function createLeadRoleTransitions(
   const removeProjectAssignmentState = (
     assignment: ProjectAssignment,
     ctx: ExtensionContext,
-    takeover = false,
   ): boolean => {
     const runtime = host.supervisionRuntime();
-    if (
-      !(takeover
-        ? host.releaseProjectAssignment(runtime, assignment)
-        : host.retireProjectAssignment(runtime, assignment))
-    )
-      return false;
+    if (!host.retireProjectAssignment(runtime, assignment)) return false;
     try {
       host.removeProjectMessagesForAssignment(runtime, assignment);
     } catch (error) {
@@ -11918,56 +12287,6 @@ export function createLeadRoleTransitions(
       manager.workspaceId,
       topology.source.source_checkout_path,
     );
-  };
-  const takeover = async (ctx: ExtensionCommandContext): Promise<boolean> => {
-    if (
-      activeLeadRole(state) !== "lead" ||
-      state.chiefMode === "active" ||
-      state.roleSuspended
-    )
-      throw new Error("Takeover is available only in Lead mode.");
-    if (!ctx.hasUI) throw new Error("Takeover requires an interactive UI.");
-    const scope = await currentWorktreeScope(ctx);
-    if (!scope) throw new Error("Current project scope is unavailable");
-    const sessionId = ctx.sessionManager.getSessionId();
-    const assignment = projectAssignmentForScope(scope, sessionId);
-    if (!assignment) {
-      ctx.ui.notify("This Lead is not managed.", "info");
-      return false;
-    }
-    if (
-      !(await ctx.ui.confirm(
-        "Take over this managed Lead?",
-        "Manager control and automatic project-result forwarding will stop.\nThe Pi session, conversation, branch, worktree, and owned Agents will remain.",
-      ))
-    )
-      return false;
-    await withProjectWorkLock(
-      `${assignment.repoKey}\0${assignment.branch}`,
-      () =>
-        withProjectAssignmentLock(
-          assignment.repoKey,
-          assignment.branch,
-          async () => {
-            const currentScope = await currentWorktreeScope(ctx);
-            const current =
-              currentScope && currentScope.repoKey === assignment.repoKey
-                ? projectAssignmentForScope(currentScope, sessionId)
-                : undefined;
-            if (
-              !current ||
-              current.branch !== assignment.branch ||
-              !removeProjectAssignmentState(assignment, ctx, true)
-            )
-              throw new Error("Project assignment changed during takeover");
-          },
-        ),
-    );
-    ctx.ui.notify(
-      "Lead taken over. Manager control and automatic project-result forwarding ended.",
-      "info",
-    );
-    return true;
   };
   const retireRemovedProjectWork = async (
     removed: { repoKey: string; branch: string },
@@ -12519,7 +12838,10 @@ export function createLeadRoleTransitions(
   const reconcileBranchRole = async (ctx: ExtensionContext): Promise<void> => {
     let branchRole;
     try {
-      branchRole = host.sessionLeadRoleState(ctx.sessionManager.getBranch());
+      branchRole = host.sessionLeadRoleState(
+        ctx.sessionManager.getBranch(),
+        ctx.sessionManager.getSessionId(),
+      );
     } catch (error) {
       await failClosedRole(ctx, error);
       return;
@@ -12805,7 +13127,6 @@ export function createLeadRoleTransitions(
     currentChiefAuthority,
     currentSupervisor,
     resolveEffectiveSupervisor,
-    takeover,
     retireRemovedProjectWork,
     reconcileProjectAssignments,
     clearLeadContext: () => {

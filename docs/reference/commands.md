@@ -26,7 +26,6 @@ Herdsman package version.
 /manager remove <branch>
 /chief
 /chief leave
-/takeover
 ```
 
 For the Herdsman commands above, replacing `/herdsman` with `/agents` is
@@ -38,16 +37,17 @@ version. Its seven destinations are `Execution`, `Agents`, `Project manager`,
 metadata; the TUI updates contextual help for the selected row.
 
 `Execution` shows the current ordinary Lead mode (`Flexible` or `Orchestrate`).
-Selecting it opens the same selector as `/lead`. A Lead with an exact current
-project assignment instead shows `Managed`; its contextual help identifies
-`managed-lead` and offers no ordinary mode choices.
+Selecting it opens the same selector as `/lead`. A dedicated Managed Lead
+shows `Managed`, `Managed · Unavailable`, or `Managed · Retired` according to
+verified assignment evidence, and offers no ordinary mode choices.
 
 `/lead` opens the Execution selector. `/lead flexible` and `/lead orchestrate`
 select that mode directly; repeating the current mode explicitly refreshes its
 effective definition. Ordinary mode changes are persisted for the current
-session. An assigned Lead uses `managed-lead`; `/lead flexible` or
-`/lead orchestrate` cannot change that policy, and `/takeover` is the way to
-release Manager authority. In Manager or Chief mode, `/lead` changes the
+session. Managed Leads reject `/lead flexible` and `/lead orchestrate`, and
+cannot activate Manager or Chief, including after retirement. Use native Pi
+`/fork` or `/clone` for a new ordinary session with copied history, not a
+separate Git checkout or fresh process configuration. In Manager or Chief mode, `/lead` changes the
 underlying ordinary Lead preference without replacing the active role tools.
 
 Selecting `Agents` opens the focused `Running`, `Layout`, and `Stop all…` menu.
@@ -308,7 +308,7 @@ assignments alone grant project execution authority.
 
 In Herdr, Herdsman best-effort names an eligible Lead controller's tab by its
 current role: `Lead`, `Managed Lead`, `Manager`, or `Chief`. `Managed Lead`
-requires an exact current project assignment. These labels are presentation
+reflects permanent exact-session identity, not current assignment availability. These labels are presentation
 only and do not grant or change role authority. Herdsman updates tabs currently
 named with their 1-based workspace position or one of those canonical role
 labels; other custom names are preserved. Herdr does not record who set a name,
@@ -317,28 +317,6 @@ it. Herdsman cannot restore automatic tab numbering. The last role label may
 remain after Pi exits or while no eligible role is available to update it.
 Independent Pi controllers sharing a tab have no coordinated naming ownership
 and can disagree over its label.
-
-## `/takeover`
-
-Available in Lead mode with an interactive UI. On an assigned managed Lead,
-prompts for confirmation before removing that exact session's project
-assignment and any pending project messages. A successful takeover ends Manager
-control and automatic project-result
-forwarding while preserving the Pi session, conversation, branch, worktree,
-running process, and Lead-owned Agents. The session then uses ordinary
-`Orchestrate` execution through `orchestrator-lead`; this changes runtime
-instructions and ordinary active-tool projection, not launch-time model,
-thinking, extensions, skills, or context. Takeover does not imply project
-completion, and it does not restart Pi. On an unassigned Lead it
-reports that the Lead is not managed. In Manager or Chief mode it reports
-`Takeover is available only in Lead mode.` Without an interactive confirmation UI it
-reports `Takeover requires an interactive UI.` Cancellation leaves state
-unchanged. The `orchestrator-lead` profile is resolved before releasing the
-assignment; if it is invalid, takeover does not remove Manager authority.
-
-Successful Herdr worktree removal and explicit `/takeover` are distinct
-assignment-release paths. Settlement, review, or user interaction does not
-release Manager authority.
 
 ## See also
 

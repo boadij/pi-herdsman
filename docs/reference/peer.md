@@ -2,12 +2,12 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Manager peers remain user-global. Ordinary Leads can communicate globally, including across Herdr sockets; if either Lead has an exact current `ProjectAssignment`, both must be in the same verified Herdr worktree group on the same socket. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
+`peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Manager peers remain user-global. Ordinary Leads can communicate globally, including across Herdr sockets; if either Lead is a Managed Lead, it must have a current exact `ProjectAssignment` and both must be in the same verified Herdr worktree group on the same socket. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
 
 Assignment mutations and peer authorization share a short-lived user-global
 process lock. Under it, Herdsman validates every canonical assignment record
-across socket namespaces. Only a complete no-match proves that a Lead is
-ordinary, including when Herdr verified no Git worktree group. Incomplete,
+across socket namespaces. Ordinary identity is immutable and exact-session-bound; assignment absence
+does not turn a Managed Lead into an ordinary peer. Incomplete,
 corrupt, ambiguous, or unavailable assignment evidence fails closed. If either
 Lead is assigned, verified matching group and socket evidence is required.
 
@@ -35,8 +35,8 @@ presence generation rather than reviving the prior claim.
 
 Presence is observation, not permission. The global peer record and its exact
 live process-lock claim bind the publisher's socket and verified project-group
-provenance to that generation; managed status is derived from the global exact
-assignment snapshot. Presentation metadata, branch names,
+provenance to that generation; immutable session kind and the global exact
+assignment snapshot separately establish identity and project eligibility. Presentation metadata, branch names,
 cwd, and checkout names are not authority. Peer publication makes a best-effort final
 reread of the captured sender and target generations immediately before
 writing. Presentation-only enrichment does not invalidate a message, and a
@@ -44,8 +44,9 @@ replacement process-lock claim observed by that reread rejects it. The target's
 held presence lock and the inbox message lock are separate, so a replacement
 can race after the reread. Submission rechecks eligibility after attachment
 preparation and publishes under the assignment authority lock; exact session IDs do not bypass the policy. Queued peer messages
-retain verified sender context across sender shutdown or takeover; delivery
-checks the recipient's current assignment and group. Transient topology failures
+retain verified sender context across sender shutdown; discovery, submission,
+and delivery revalidate managed eligibility and current assignment/group evidence.
+Unavailable or retired Managed Leads never become ordinary global peers. Transient topology failures
 defer delivery, while definitive ineligibility rejects it. Managed agents, Chief sessions, display
 labels, and metadata are never peer targets.
 

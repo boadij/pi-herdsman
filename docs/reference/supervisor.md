@@ -16,7 +16,9 @@ assignment state.
 Direct-supervisor delivery validates the current authority. Ambiguous or
 incomplete authority fails closed instead of silently routing around an
 intermediate Manager. A managed Lead's message validates its current project
-assignment.
+assignment. An unavailable or retired Managed Lead never falls back to Chief
+or ordinary direct supervision; previously queued information retains its own
+validated delivery contract.
 
 ## `message_supervisor`
 

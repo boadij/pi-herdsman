@@ -217,7 +217,6 @@ import {
   readProjectAssignment,
   listProjectAssignments,
   findProjectAssignmentBySession,
-  releaseProjectAssignment,
   retireProjectAssignment,
   type ChiefDescriptor,
   type ChiefMessageKind,
@@ -1269,7 +1268,6 @@ export default function (pi: ExtensionAPI): void {
       leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
     projectMessageBytes,
     writeProjectMessage,
-    releaseProjectAssignment,
     retireProjectAssignment,
     removeProjectMessagesForAssignment,
     recoverStaleProjectMessages,
@@ -1688,15 +1686,6 @@ export default function (pi: ExtensionAPI): void {
             .map((value) => ({ value, label: value })),
         handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
           await leadCommandRuntime.runLeadExecutionCommand(rawArgs, ctx);
-        },
-      });
-      pi.registerCommand("takeover", {
-        description:
-          "Release Manager control while preserving this Lead and its work",
-        handler: async (args, ctx) => {
-          if (args.trim()) throw new Error("/takeover takes no arguments");
-          if (await leadRuntimes.takeover(ctx))
-            leadRuntimes.statusRuntime.requestRefresh();
         },
       });
       if (process.env.HERDR_PANE_ID)

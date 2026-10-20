@@ -59,8 +59,9 @@ Lead uses its session's `Flexible` or `Orchestrate` preference, selecting
 `managed-lead`. These definitions configure execution, not ownership or
 supervision. Only the exact current `ProjectAssignment` establishes Manager
 authority, and Lead-owned Agent trees remain governed by the existing durable
-ownership model. Confirmed `/takeover` releases that assignment and continues
-the session as ordinary `Orchestrate` execution.
+ownership model. Session kind is immutable and exact-session-bound, independent
+of assignment authority. Managed sessions cannot select ordinary execution
+profiles or activate Manager or Chief, even after retirement.
 
 ### Manager
 
@@ -151,12 +152,10 @@ should go through the automatic result; timely questions, clarifications, or
 warnings may use nonblocking `message_supervisor`. This is ordinary
 coordination, not assignment state; there is no deduplication between a
 message and a later result.
-Project assignments end on successful Herdr worktree removal, verified Git
-checkout absence, or user-confirmed `/takeover` by the assigned Lead—not on
-settlement or review. Takeover removes the assignment and pending project messages while
-preserving the session, conversation, branch, worktree,
-running process, and Lead-owned Agents; it does not imply completion or
-acceptance. See
+Project assignments end on successful Herdr worktree removal or verified Git
+checkout absence—not on settlement, review, or direct user interaction.
+Retirement preserves Managed Lead identity, session history and exact Agent
+ownership without asserting completion or acceptance. See
 [Project orchestration](../guides/project-orchestration.md) for the workflow.
 
 `stop_lead` pauses assigned execution while preserving the assignment, Pi
@@ -164,8 +163,7 @@ session, branch, and worktree; `resume_project` resumes the existing
 assignment while its checkout exists. These operations do not change project
 authority. Successful Herdr worktree removal or verified checkout absence
 retires the matching assignment and any still-pending project messages while
-preserving the Git branch. Explicit `/takeover` by the
-assigned Lead is a separate assignment-release path. Manually continuing the
+preserving the Git branch. Manually continuing the
 exact assigned Pi session remains managed; `managed-lead` is launch policy,
 not authority.
 A complete Git worktree inventory that verifies the checkout is absent retires

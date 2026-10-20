@@ -625,6 +625,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -808,7 +809,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     "herdsman",
     "lead",
     "manager",
-    "takeover",
   ]);
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
@@ -1031,6 +1031,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -1092,6 +1093,7 @@ test("list peers and message use global peer presence, not caller inventory", as
     },
   };
   const runtime = peerRuntime();
+  const assignments = supervisionRuntime(process.env.HERDR_SOCKET_PATH);
   const claim = (sessionId: string, paneId: string, tabId: string) => {
     const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
       name: "Lead peer presence",
@@ -1099,6 +1101,7 @@ test("list peers and message use global peer presence, not caller inventory", as
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      sessionKind: "ordinary" as const,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1159,7 +1162,6 @@ test("list peers and message use global peer presence, not caller inventory", as
     const peerMessage = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peerList);
     assert.ok(peerMessage);
-    const assignments = supervisionRuntime(process.env.HERDR_SOCKET_PATH);
     for (const branch of ["peer-ambiguous-a", "peer-ambiguous-b"])
       writeProjectAssignment(assignments, {
         version: 2,
@@ -1221,6 +1223,36 @@ test("list peers and message use global peer presence, not caller inventory", as
       },
     );
     assert.equal(modelJson.includes(WORKSPACE), false);
+    writeProjectAssignment(assignments, {
+      version: 2,
+      id: targetId,
+      repoKey: "peer-test-repo",
+      branch: "feature/peer",
+      text: "ordinary peer contradiction fixture",
+    });
+    const contradictoryList = await peerList.execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      JSON.parse(contradictoryList.content[0].text).peers.some(
+        (peer: { session: string }) => peer.session === targetId,
+      ),
+      false,
+    );
+    await assert.rejects(
+      peerMessage.execute(
+        "message",
+        { session: targetId, message: "contradictory identity" },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    removeProjectAssignment(assignments, "peer-test-repo", "feature/peer");
     assert.equal(
       payload.peers.some(
         (peer: { session: string }) => peer.session === unverifiedTargetId,
@@ -1264,14 +1296,6 @@ test("list peers and message use global peer presence, not caller inventory", as
     );
     removeChiefMessage(runtime, targetId, ordinaryMessage.id);
     writePeerLeadRecord(runtime, target.record);
-    const sourceAssignmentBranch = "peer-managed-source";
-    writeProjectAssignment(assignments, {
-      version: 2,
-      id: senderId,
-      repoKey: "peer-test-repo",
-      branch: sourceAssignmentBranch,
-      text: "managed source fixture",
-    });
     const queued = await peerMessage.execute(
       "message",
       {
@@ -1300,14 +1324,9 @@ test("list peers and message use global peer presence, not caller inventory", as
       role: "lead",
       socket: process.env.HERDR_SOCKET_PATH,
       group: { repoKey: "peer-test-repo", primaryWorkspaceId: WORKSPACE },
-      managed: true,
+      managed: false,
     });
-    removeProjectAssignment(
-      assignments,
-      "peer-test-repo",
-      sourceAssignmentBranch,
-    );
-    assert.equal(readChiefMessage(messagePaths[0]).peerSource?.managed, true);
+    assert.equal(readChiefMessage(messagePaths[0]).peerSource?.managed, false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
@@ -1344,12 +1363,18 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const entries: unknown[] = [];
+  const context = fakeContext(entries) as any;
   context.cwd = "/active/lead-checkout";
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
   };
+  entries.push({
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data: { version: 1, sessionId, kind: "ordinary" },
+  });
   const sessionStart = pi.events.get("session_start")![0];
   const sessionShutdown = pi.events.get("session_shutdown")![0];
   try {
@@ -1365,12 +1390,14 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       "paneId",
       "piSessionId",
       "role",
+      "sessionKind",
       "socket",
       "tabId",
       "updatedAt",
       "version",
       "workspaceId",
     ]);
+    assert.equal(record.sessionKind, "ordinary");
     assert.equal(record.cwd, context.cwd);
     assert.equal(record.repo, undefined);
     assert.equal(record.branch, undefined);
@@ -1440,7 +1467,7 @@ test("peer provenance enrichment never replaces the Lead cwd", async (t) => {
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.cwd = "/active/linked-checkout";
   context.sessionManager = {
     ...context.sessionManager,
@@ -1519,13 +1546,19 @@ test("peer publication rejects sender and target generation replacement during a
     stderr: "",
     code: 0,
   });
-  const claim = (sessionId: string, paneId: string, tabId: string) => {
+  const claim = (
+    sessionId: string,
+    paneId: string,
+    tabId: string,
+    sessionKind: "ordinary" | "managed" = "ordinary",
+  ) => {
     const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
       name: "Lead peer presence",
     });
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      sessionKind,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1558,7 +1591,7 @@ test("peer publication rejects sender and target generation replacement during a
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => senderId,
@@ -1621,7 +1654,7 @@ test("peer publication rejects sender and target generation replacement during a
 
     {
       const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
-      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab", "managed");
       const branch = `managed-target-${randomUUID()}`;
       writePeerLeadRecord(runtime, {
         ...target.record,
@@ -1658,7 +1691,7 @@ test("peer publication rejects sender and target generation replacement during a
 
     {
       const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
-      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab", "managed");
       const branch = `authority-race-${randomUUID()}`;
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
@@ -1666,6 +1699,11 @@ test("peer publication rejects sender and target generation replacement during a
         repoKey: "peer-test-repo",
         branch,
         text: "managed target",
+      });
+      // Managed target identity must agree with the exact assignment under test.
+      writePeerLeadRecord(runtime, {
+        ...target.record,
+        sessionKind: "managed",
       });
       process.env.HERDR_WORKSPACE_ID = WORKSPACE;
       rewriteTargetDuringTopology = true;
@@ -1753,6 +1791,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      sessionKind: "ordinary" as const,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1777,7 +1816,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => senderId,
@@ -1878,7 +1917,7 @@ test("session shutdown prevents pending peer presence publication", async () => 
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
@@ -1930,7 +1969,7 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
@@ -1951,6 +1990,7 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
     const replacement = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      sessionKind: "ordinary" as const,
       piSessionId: sessionId,
       paneId: "replacement-pane",
       tabId: "replacement-tab",
@@ -1994,6 +2034,7 @@ test("active chief describes authoritative remote ask projection", async () => {
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -2213,6 +2254,7 @@ test("idle Chief supervision reconciles at the 10s cadence, not UI redraw ticks"
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -2444,6 +2486,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: chiefId,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -2766,7 +2809,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
   const notices: string[] = [];
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "not json");
-  const pi = fakePi();
+  const pi = fakePi({ allTools: REGISTERED_ROLE_TOOLS });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -2776,6 +2819,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     const command = pi.commandOptions.get("chief");
     assert.ok(command);
 
+    await pi.events.get("session_start")![0](undefined, context);
     await command.handler("", context);
 
     assert.doesNotMatch(
@@ -2813,6 +2857,7 @@ test("a replacement chief never falls back to the previous session supervision",
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -2873,6 +2918,7 @@ test("a replacement chief never falls back to the previous session supervision",
     );
   try {
     await sessionStart(undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
     const first = await beforeStart();
     assert.equal(first?.message, undefined);
     let call = pi.sentMessageCalls.findLast(
@@ -2886,6 +2932,7 @@ test("a replacement chief never falls back to the previous session supervision",
     sessionId = chiefB;
     failRefresh = true;
     await sessionStart(undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
     assert.equal((await beforeStart())?.message, undefined);
     call = pi.sentMessageCalls.findLast(
       ({ message }: any) =>
@@ -2923,6 +2970,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -3005,6 +3053,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     );
   try {
     await sessionStart(undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
     const first = await beforeStart();
     assert.equal(first?.message, undefined);
     let call = pi.sentMessageCalls.findLast(
@@ -3022,6 +3071,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
 
     sessionId = chiefB;
     await sessionStart(undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
     failRefresh = true;
     releaseBlocked();
     await background;
@@ -3062,12 +3112,13 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
     },
   ];
-  const branch: any[] = [];
+  const branch: any[] = [...entries];
   let nextId = 0;
   const pi = fakePi({
     entries,
@@ -3574,7 +3625,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "not-a-role" },
+      data: { sessionId: LEAD_SESSION_ID, role: "not-a-role" },
     },
   ];
   const pi = fakePi({
@@ -3653,6 +3704,7 @@ test("persisted Chief keeps verified authority and mandatory tools when definiti
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -4519,6 +4571,7 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -4566,6 +4619,7 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
       type: "custom",
       customType: "pi-herdsman-role",
       data: {
+        sessionId: LEAD_SESSION_ID,
         role: "chief",
         leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
@@ -4692,7 +4746,9 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
       context,
     );
     await t.waitFor(() => assert.equal(metadataCalls, 3));
-    assert.equal(errorCount(), errorsAfterFirstFailure + 1);
+    await t.waitFor(() =>
+      assert.equal(errorCount(), errorsAfterFirstFailure + 1),
+    );
     assert.equal(unhandled.length, 0);
   } finally {
     process.removeListener("unhandledRejection", onUnhandled);

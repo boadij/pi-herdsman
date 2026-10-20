@@ -179,9 +179,12 @@ balance between direct and delegated work. Ordinary Leads use `flexible-lead`
 or `orchestrator-lead` according to their persisted `Flexible` or
 `Orchestrate` execution mode. Manager-assigned Leads use `managed-lead`; the
 exact current `ProjectAssignment`, not the profile, establishes Manager
-authority. Confirmed `/takeover` releases that authority and continues the
-session in ordinary Orchestrate mode. Lead execution configuration does not
-change Agent ownership semantics.
+authority. Managed identity is permanent for the exact Pi session, including
+when assignment evidence is unavailable or the assignment is retired. Only a
+current exact assignment permits fresh project execution; exactly owned Agent
+recovery remains separate. Use native Pi `/fork` or `/clone` for independent
+ordinary continuation, not a separate Git checkout or fresh process configuration.
+Lead execution configuration does not change Agent ownership semantics.
 
 <!-- pi-herdsman-runtime-lead:end -->
 
@@ -469,10 +472,8 @@ Pi Herdsman uses one durable vocabulary:
   stopped Lead does not retire an assignment while its checkout exists.
   Successful Herdr worktree removal or verified checkout absence retires the
   matching assignment and pending project messages while preserving the Git
-  branch and Pi session. Explicit
-  `/takeover` by the assigned Lead also releases Manager control and removes
-  pending project messages while preserving the session, worktree, branch, and
-  owned Agents. Never infer
+  branch and Pi session. Managed identity and exact Agent ownership survive
+  retirement; retirement does not imply completion or stop a live Pi process. Never infer
   ownership from worktree membership or start an overlapping writer beside
   another Lead;
 - `/manager leave` preserves project work; a later Manager can resume the same
@@ -483,12 +484,11 @@ Pi Herdsman uses one durable vocabulary:
   from supervising a Lead and never gives them control over the Lead's tree. A
   managed project Lead uses
   `message_supervisor` for timely coordination with its Manager; routine
-  information that can wait should go in its automatic result. An unassigned
-  Lead
-  routes to Chief when available, never to Manager merely because both share a
-  project scope. Continuing the exact assigned Pi session manually remains
-  managed; `managed-lead` is launch policy, not authority. Use `/takeover` to
-  release that assignment explicitly;
+  information that can wait should go in its automatic result. An ordinary Lead
+  contacts its verified active project Manager, otherwise Chief when eligible.
+  A Managed Lead never falls back to Chief when assignment authority is missing.
+  Continuing the exact Pi session preserves its kind; `managed-lead` is launch
+  policy, not authority;
 - an **Agent** handles one bounded assignment and may delegate only when its
   definition allows it;
 - the **chief** supervises direct reports through `list_staff`,

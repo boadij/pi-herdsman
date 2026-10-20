@@ -1,9 +1,12 @@
 # Use project assignments for managed-Lead authority
 
+> **Session identity update:** [ADR 0027](0027-use-immutable-managed-lead-session-identity.md) supersedes all
+> takeover and in-place ordinary-continuation decisions in this record.
+> Other decisions remain subject to their noted supersessions.
+
 > **Lifecycle update:** [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md)
 > supersedes the retirement conditions described below: verified checkout
-> absence also retires assignments. Exact-assignment authority and confirmed
-> `/takeover` remain unchanged; the current runtime implements the later policy.
+> absence also retires assignments. Exact-assignment authority remains unchanged.
 >
 > **Supervision update:** [ADR 0021](0021-unify-direct-supervision-authority.md)
 > supersedes this record's restrictions on ordinary-Lead inspection,

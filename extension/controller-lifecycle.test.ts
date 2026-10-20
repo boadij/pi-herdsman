@@ -139,6 +139,50 @@ const ownedSessionContext = (id: string, label: string) =>
       },
     },
   ]);
+function seedSessionKind(
+  context: ReturnType<typeof fakeContext>,
+  kind: "ordinary" | "managed",
+  repoKey?: string,
+  branch?: string,
+): void {
+  const sessionId = context.sessionManager.getSessionId();
+  const data =
+    kind === "managed"
+      ? { version: 1, sessionId, kind, repoKey, branch }
+      : { version: 1, sessionId, kind };
+  (context.sessionManager.getEntries() as any[]).push({
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data,
+  });
+  seedLeadRole(context, kind === "ordinary");
+}
+
+function seedLeadRole(
+  context: ReturnType<typeof fakeContext>,
+  ordinaryExecution = true,
+): void {
+  const entries = context.sessionManager.getEntries() as any[];
+  entries.push({
+    type: "custom",
+    customType: "pi-herdsman-role",
+    data: {
+      sessionId: context.sessionManager.getSessionId(),
+      role: "lead",
+      leadTools: ["read"],
+    },
+  });
+  if (ordinaryExecution)
+    entries.push({
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: {
+        sessionId: context.sessionManager.getSessionId(),
+        mode: "orchestrate",
+        leadTools: ["read"],
+      },
+    });
+}
 
 test("parent delegates two same-definition children with exact ownership", async () => {
   setAgentEnvironment("multiplicity-parent", ["child"]);
@@ -2576,6 +2620,17 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   const entries: unknown[] = [
     {
       type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId: LEAD_SESSION_ID,
+        kind: "managed",
+        repoKey: "repo-key",
+        branch,
+      },
+    },
+    {
+      type: "custom",
       customType: "pi-herdsman-herd-run",
       data: {
         phase: "started",
@@ -2635,11 +2690,14 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     },
   });
   const context = fakeContext(entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.isIdle = () => false;
   registerExtension!(pi.pi as never);
   t.after(async () => {
     for (const handler of pi.events.get("session_shutdown") ?? [])
       await handler(undefined, context);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
   });
   for (const handler of pi.events.get("session_start") ?? [])
     await handler(undefined, context);
@@ -2652,7 +2710,9 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     entries.some(
       (entry: any) =>
         entry.customType === "pi_herdsman_state_error" &&
-        /Cannot verify the current project assignment/.test(entry.data.error),
+        /Cannot verify (?:the original managed project scope|the current project assignment)/.test(
+          entry.data.error,
+        ),
     ),
     "production runtime records the fail-closed assignment diagnostic",
   );
@@ -2865,7 +2925,7 @@ test("unassigned Lead and Manager failure reports replay the exact Chief payload
   assert.deepEqual(roles, ["lead", "lead", "manager", "manager"]);
 });
 
-test("Lead failure report keeps its assigned-project destination across takeover", async (t) => {
+test("Lead failure report keeps its assigned-project destination across retirement", async (t) => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
   const context = fakeContext(pi.entries);
@@ -2914,7 +2974,7 @@ test("Lead failure report keeps its assigned-project destination across takeover
   assert.equal(pending.data.target, "project");
   assert.equal(chiefFailures, 0);
 
-  // Simulate confirmed /takeover: remove the live assignment.
+  // Simulate retirement: remove the live assignment.
   assignment = undefined;
   role = "manager";
   const restored = createRuntime();
@@ -4452,6 +4512,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   };
   const pi = fakePi({ exec });
   const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.hasUI = true;
   let widget: any;
   context.ui.setWidget = (_key, content) => {
@@ -4509,7 +4570,15 @@ test("assigned project herd settlement publishes one nonterminal current-run han
 
   registerExtension!(pi.pi as never);
   try {
+    seedSessionKind(context, "managed", "repo-key", branch);
     await emit("session_start");
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-session-kind" &&
+          entry.data.sessionId === context.sessionManager.getSessionId(),
+      ),
+    );
     assert.ok(
       pi.entries.some(
         (entry: any) =>
@@ -4666,6 +4735,7 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -4836,6 +4906,7 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -4977,6 +5048,7 @@ test("managed project delegation references supported evidence larger than the i
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -5150,6 +5222,7 @@ test("managed project delegation deduplicates required evidence supplied explici
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -5275,6 +5348,7 @@ test("managed project delegation keeps changed original-path content alongside r
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -5402,6 +5476,7 @@ test("managed project delegation rejects authority changes during startup withou
     },
   });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
@@ -5487,6 +5562,7 @@ test("unassigned Lead delegation does not receive project evidence implicitly", 
   );
   const pi = fakePi({ exec: startup.exec });
   const context = fakeContext(pi.entries);
+  seedSessionKind(context, "ordinary");
   registerExtension!(pi.pi as never);
   try {
     for (const handler of pi.events.get("session_start") ?? [])
@@ -5609,6 +5685,7 @@ test("each direct managed Lead turn returns its response", async () => {
   };
   registerExtension!(pi.pi as never);
   try {
+    seedSessionKind(context, "managed", "repo-key", branch);
     await emit("session_start");
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
@@ -5733,6 +5810,7 @@ test("each direct managed Lead turn returns its response", async () => {
 
 test("assigned project handoff remains pending when assignment resolution is locked", async (t) => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
   const socket = join(tmpdir(), `project-handoff-race-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
@@ -5758,6 +5836,19 @@ test("assigned project handoff remains pending when assignment resolution is loc
     true,
   );
   const pi = fakePi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: {
+          version: 1,
+          sessionId: LEAD_SESSION_ID,
+          kind: "managed",
+          repoKey: "repo-key",
+          branch,
+        },
+      },
+    ],
     exec: async (command: string, args: string[]) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
@@ -5779,6 +5870,15 @@ test("assigned project handoff remains pending when assignment resolution is loc
     },
   });
   const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.sessionManager.getEntries = () => pi.entries;
+  seedLeadRole(context, false);
+  const assignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch },
+    timestamp: Date.now(),
+    content: `Project assignment for branch\nImplement the assigned project`,
+  };
   context.hasUI = true;
   let widget: any;
   context.ui.setWidget = (_key, content) => {
@@ -5814,6 +5914,9 @@ test("assigned project handoff remains pending when assignment resolution is loc
   registerExtension!(pi.pi as never);
   try {
     await emit("session_start");
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
     await emit("agent_start");
     const delegated = await registeredAgentTool(pi, "delegate").execute(
       "project-handoff-race",
@@ -5964,6 +6067,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   const pi = fakePi({ exec, persistMessages: true });
   registerExtension!(pi.pi as never);
   const ctx = fakeContext(pi.entries) as any;
+  seedSessionKind(ctx, "ordinary");
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionFile: () => managerSessionFile,
@@ -6231,8 +6335,11 @@ test("recovery cleanup keeps an idle restored herd open when failure reporting i
 
 test("Lead delegation holds the shared lifecycle lock through gated startup", async (t) => {
   const fixture = createStagedAssignmentFixture("agent");
+  seedLeadRole(fixture.context);
   let starting: Promise<any> | undefined;
   try {
+    await fixture.sessionStart;
+    fixture.context.ui.notify = () => {};
     await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
     starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
@@ -7123,7 +7230,8 @@ test("historical session with its inherited label rejects an active managed repr
   });
   registerExtension!(pi.pi as never);
   try {
-    const activationContext = fakeContext();
+    const activationContext = fakeContext(pi.entries);
+    seedLeadRole(activationContext);
     await pi.events.get("session_start")?.[0](undefined, activationContext);
     await pi.commandOptions.get("chief")!.handler("", activationContext);
     const controllerContext = fakeContext();
@@ -7218,7 +7326,8 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   const startup = startupExecutor(`${name}-agent`, () => session.id);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -7290,7 +7399,8 @@ test("concurrent session activation permits one generation", async () => {
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const first = registeredAgentTool(pi, "continue").execute(
       "first",
@@ -7507,7 +7617,11 @@ test("session assignment reports a pane mismatch from the agent state producer",
     },
   });
   registerExtension!(lead.pi as never);
-  await lead.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(lead.entries));
+  await lead.events.get("session_start")![0](
+    undefined,
+    fakeContext(lead.entries),
+  );
   try {
     const result = await registeredAgentTool(lead, "continue").execute(
       "id",
@@ -7558,14 +7672,15 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: name, label, task: "fresh task" },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched.length, 1);
@@ -7635,9 +7750,10 @@ test("startup failure cleans private prompt snapshots", async () => {
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
-    const context = fakeContext();
+    const context = fakeContext(pi.entries);
     await pi.events.get("agent_start")![0](undefined, context);
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7695,7 +7811,8 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7706,7 +7823,7 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched[0].contents.length, 2);
@@ -7760,7 +7877,7 @@ test("automatic prompt failures happen before topology or mailbox mutation", asy
           { definition: name, label, task: "must fail" },
           undefined,
           undefined,
-          fakeContext(),
+          fakeContext(pi.entries),
         );
         assert.equal(result.details.error.category, "invalid_request", kind);
         assert.equal(startup.getCount(), 0, kind);
@@ -7800,8 +7917,9 @@ test("fresh and non-live historical assignments reject disabled definitions", as
   const freshStartup = startupExecutor(freshLabel, () => DEFAULT_PI_SESSION_ID);
   const freshPi = fakePi({ exec: freshStartup.exec });
   registerExtension!(freshPi.pi as never);
-  const freshContext = fakeContext();
+  const freshContext = fakeContext(freshPi.entries);
   await freshPi.events.get("session_start")![0](undefined, freshContext);
+  seedLeadRole(fakeContext(freshPi.entries));
   try {
     const result = await registeredAgentTool(freshPi, "delegate").execute(
       "id",
@@ -7915,7 +8033,8 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
             },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
@@ -7925,7 +8044,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.match(
@@ -7945,6 +8064,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
 
 test("session continuation starts a new agent generation with current prompt contents", async () => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
   const name = `prompt-resume-${randomUUID().slice(0, 8)}`;
   const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -8062,6 +8182,19 @@ test("session continuation starts a new agent generation with current prompt con
   );
   let continuedRequest: RequestRecord | undefined;
   const pi = fakePi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: {
+          version: 1,
+          sessionId: LEAD_SESSION_ID,
+          kind: "managed",
+          repoKey: "repo-key",
+          branch: projectBranch,
+        },
+      },
+    ],
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
@@ -8091,6 +8224,23 @@ test("session continuation starts a new agent generation with current prompt con
   pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
     if (event.phase === "prepare") bootstrapPrepares++;
   });
+  pi.entries.push({
+    type: "custom_message",
+    message: {
+      customType: "pi-herdsman-agent-result",
+      details: {
+        piSessionId: savedState.piSessionId,
+        piSessionFile: savedState.piSessionFile,
+        ownerSessionId: savedState.ownerSessionId,
+        runId: savedState.runId,
+        requestId: savedRequestId,
+        agentLabel: savedState.agentLabel,
+        agentDefinition: name,
+        status: "completed",
+      },
+    },
+  });
+
   registerExtension!(pi.pi as never);
   const projectAssignmentMessage = {
     customType: "pi-herdsman-project_assignment",
@@ -8098,7 +8248,9 @@ test("session continuation starts a new agent generation with current prompt con
     timestamp: Date.now(),
     content: `Project assignment for branch\n${currentAssignment.text}`,
   };
-  const projectAssignmentContext = fakeContext(pi.entries);
+  const projectAssignmentContext = fakeContext(pi.entries) as any;
+  projectAssignmentContext.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  seedLeadRole(projectAssignmentContext, false);
   await pi.events.get("session_start")![0](undefined, projectAssignmentContext);
   await pi.events.get("agent_start")?.[0](undefined, projectAssignmentContext);
   (projectAssignmentContext.sessionManager.getBranch() as any[]).push({
@@ -8172,7 +8324,7 @@ test("session continuation starts a new agent generation with current prompt con
         { session: session.path, task: `reject pending ${pending}` },
         undefined,
         undefined,
-        ownedSessionContext(session.id, name),
+        projectAssignmentContext,
       );
       assert.equal(blocked.details.ok, false, JSON.stringify(blocked.details));
       assert.equal(
@@ -8211,7 +8363,7 @@ test("session continuation starts a new agent generation with current prompt con
         { session: session.path, task: "must reject missing saved evidence" },
         undefined,
         undefined,
-        ownedSessionContext(session.id, name),
+        projectAssignmentContext,
       );
       assert.equal(
         unavailableEvidence.details.error?.category,
@@ -8226,21 +8378,26 @@ test("session continuation starts a new agent generation with current prompt con
       realFs.renameSync(unavailableEvidencePath, inheritedEvidence.path);
     }
     removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
-    const takeover = await registeredAgentTool(pi, "continue").execute(
-      "id",
-      { session: session.path, task: "must not revive retired scope" },
-      undefined,
-      undefined,
-      ownedSessionContext(session.id, name),
+    await assert.rejects(
+      registeredAgentTool(pi, "continue").execute(
+        "id",
+        { session: session.path, task: "must not revive retired scope" },
+        undefined,
+        undefined,
+        projectAssignmentContext,
+      ),
+      /Managed project execution requires a current exact assignment/,
     );
-    assert.equal(takeover.details.ok, false, JSON.stringify(takeover.details));
-    assert.equal(takeover.details.error?.category, "invalid_request");
     writeProjectAssignment(projectRuntime, currentAssignment);
     // An update to the parent assignment must not rewrite this saved Agent snapshot.
     writeProjectAssignment(projectRuntime, {
       ...currentAssignment,
       requiredEvidence: [],
     });
+    await pi.events.get("session_start")![0](
+      undefined,
+      projectAssignmentContext,
+    );
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
       {
@@ -8249,7 +8406,7 @@ test("session continuation starts a new agent generation with current prompt con
       },
       undefined,
       undefined,
-      ownedSessionContext(session.id, name),
+      projectAssignmentContext,
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched[0].contents.length, 2);
@@ -8437,7 +8594,8 @@ test("continuation after a later unscoped assignment does not revive prior requi
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     resetAgentMailbox(savedMailbox);
     const missingAuthority = await registeredAgentTool(pi, "continue").execute(
@@ -8558,7 +8716,8 @@ test("ordinary unscoped accepted session continues after mailbox cleanup", async
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   let malformedEvidence:
     ReturnType<typeof persistRequiredEvidenceSnapshot> | undefined;
   try {
@@ -8686,7 +8845,8 @@ test("session continuation ignores an unrelated missing live session path", asyn
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -8775,7 +8935,8 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -8867,7 +9028,8 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -8969,7 +9131,8 @@ test("session continuation ignores removed secondary session fields", async () =
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
       "id",
@@ -9050,7 +9213,8 @@ test("session continuation fails closed on an unrelated malformed persisted mail
     exec: leadExec(label, "idle", session.id, undefined, session.id, identity),
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     await assert.rejects(
       registeredAgentTool(pi, "continue").execute(
@@ -9108,7 +9272,7 @@ test("rejects known generated-label envelope overflow before startup", async () 
       { definition: "agent", task },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.notEqual(result.details.error.rollbackOccurred, true);
@@ -9173,7 +9337,7 @@ test("revalidates automatic-label collision sizing before startup", async () => 
       { definition: "agent", task },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.notEqual(result.details.error.rollbackOccurred, true);
@@ -9206,7 +9370,7 @@ test("fresh mailbox claim collision retries without touching the occupied mailbo
   const startup = startupExecutor("agent-2", () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const context = fakeContext();
+  const context = fakeContext(pi.entries);
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
@@ -9242,14 +9406,15 @@ test("lost mailbox labels remain reserved until explicit close", async () => {
   writeAgentState(mailbox, state);
   const pi = fakePi({ exec: cascadeExecutor([]).exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "replace" },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.error.category, "agent_label_exists");
     assert.ok(readAgentState(mailbox));
@@ -9334,7 +9499,8 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   const callsAfterActivation = pi.calls.length;
   const cases = [
     {
@@ -9370,7 +9536,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
       params,
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
 
     assert.equal(result.details.error.category, "invalid_request");
@@ -9394,14 +9560,15 @@ test("delegate keeps an explicit human-readable label", async () => {
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "map" },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(result.details.agent, label);
@@ -9457,8 +9624,9 @@ test("rejects an invalid generated collision label after releasing its claim", a
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
-  const context = fakeContext();
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
+  const context = fakeContext(pi.entries);
   context.isProjectTrusted = () => {
     // Simulate the mailbox becoming visible after the assignment snapshot.
     writeAgentState(mailbox, managedState(label));
@@ -9524,14 +9692,18 @@ test("assignment launch handles delayed official Pi session identity", async () 
     );
     const pi = fakePi({ exec: startup.exec });
     registerExtension!(pi.pi as never);
-    await pi.events.get("session_start")![0](undefined, fakeContext());
+    seedLeadRole(fakeContext(pi.entries));
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
         { definition: "agent", label, task },
         undefined,
         undefined,
-        fakeContext(),
+        fakeContext(pi.entries),
       );
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
       assert.equal(startup.getCount(), expectedCount);
@@ -9572,7 +9744,8 @@ test("managed startup accepts matching mailbox state after five seconds", async 
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   let pending:
     ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
@@ -9581,7 +9754,7 @@ test("managed startup accepts matching mailbox state after five seconds", async 
       { definition: "agent", label, task: "wait for delayed mailbox state" },
       abort.signal,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     void pending.catch(() => {});
     await t.waitFor(() => assert.ok(delayedState, "agent start did not run"), {
@@ -9626,7 +9799,8 @@ async function exerciseStartupLock(t: TestContext, failObservation = false) {
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   let pending:
     ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   let observationError: unknown;
@@ -9637,7 +9811,7 @@ async function exerciseStartupLock(t: TestContext, failObservation = false) {
       { definition: "agent", label, task: "wait for child startup lock" },
       abort.signal,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     void pending.catch(() => {});
     try {
@@ -9774,14 +9948,15 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   try {
     const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       { definition: "agent", label, task: "must not be submitted" },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext(pi.entries),
     );
     assert.equal(
       result.details.error.category,
@@ -9887,14 +10062,18 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    await pi.events.get("session_start")![0](undefined, fakeContext());
+    seedLeadRole(fakeContext(pi.entries));
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
         { definition: "agent", label, task: "capture startup diagnostics" },
         operationController.signal,
         undefined,
-        fakeContext(),
+        fakeContext(pi.entries),
       );
       assert.equal(
         result.details.error.category,
@@ -9977,14 +10156,18 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    await pi.events.get("session_start")![0](undefined, fakeContext());
+    seedLeadRole(fakeContext(pi.entries));
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
     try {
       const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
         { definition: "agent", label, task: "optional process diagnostic" },
         undefined,
         undefined,
-        fakeContext(),
+        fakeContext(pi.entries),
       );
       assert.equal(result.details.error.category, "pane_not_ready");
       assert.equal(
@@ -10118,9 +10301,10 @@ test("empty early launch cleans exact resources and same-label retry creates one
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   const tool = registeredAgentTool(pi, "delegate");
-  const context = fakeContext();
+  const context = fakeContext(pi.entries);
   const failed = await tool.execute(
     "id",
     { definition: "agent", label, task: "first attempt" },
@@ -10231,7 +10415,8 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
     {
@@ -10240,7 +10425,7 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     },
     undefined,
     undefined,
-    fakeContext(),
+    fakeContext(pi.entries),
   );
   assert.equal(startup.getCount(), 11);
   assert.equal(result.details.error.category, "invalid_request");
@@ -10314,14 +10499,15 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     },
   });
   registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
   const startedAt = Date.now();
   const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
     { definition: "agent", label, task: "abort identity" },
     controller.signal,
     undefined,
-    fakeContext(),
+    fakeContext(pi.entries),
   );
   assert.ok(Date.now() - startedAt < 2500);
   assert.equal(result.details.error.category, "internal_failure");

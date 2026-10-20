@@ -138,17 +138,18 @@ mutates mailbox/control eligibility.
 ## Lead execution
 
 An ordinary Lead's header may include its verified effective execution mode:
-`· flexible`, `· orchestrate`, or `· managed`. The managed mode is shown when
-the exact Pi session is named by the current project assignment, for example:
+`· flexible` or `· orchestrate`. Dedicated Managed Lead sessions show
+`Managed`, `Managed · Unavailable`, or `Managed · Retired` according to current
+verified authority, retaining their identity when assignment evidence is missing.
+For example:
 
 ```text
 ● lead · managed
 ```
 
 The execution label is presentation only, not authority. Ordinary modes are
-shown only when the current project assignment has been verified absent and
-the selected Lead profile is valid; assignment or profile uncertainty omits the
-label. The label appears separately from Agent ownership ancestry; a Lead with
+shown only for initialized ordinary sessions with a valid selected profile.
+Managed uncertainty is displayed as unavailable, never as an ordinary mode. The label appears separately from Agent ownership ancestry; a Lead with
 descendants retains an ownership breadcrumb such as `lead → implementer` and
 renders execution as contextual metadata, never as an added breadcrumb segment.
 The complete label is omitted when it cannot fit rather than being partially

@@ -41,41 +41,88 @@ export type CoordinatorRole = "lead" | "manager";
 export type PeerRole = CoordinatorRole;
 export type LeadRole = SessionRole;
 
+export type SessionKindEntry =
+  | { version: 1; sessionId: string; kind: "ordinary" }
+  | {
+      version: 1;
+      sessionId: string;
+      kind: "managed";
+      repoKey: string;
+      branch: string;
+    };
+
+// Identity is session-wide, unlike branch-local role and execution preferences.
+export function readSessionKind(
+  entries: readonly unknown[],
+  sessionId: string,
+): SessionKindEntry | undefined {
+  let identity: SessionKindEntry | undefined;
+  for (const candidate of entries as readonly any[]) {
+    if (
+      candidate?.type !== "custom" ||
+      candidate.customType !== "pi-herdsman-session-kind" ||
+      candidate.data?.sessionId !== sessionId
+    )
+      continue;
+    const data = candidate.data;
+    if (
+      !validSession(sessionId) ||
+      Array.isArray(data) ||
+      data.version !== 1 ||
+      (data.kind !== "ordinary" && data.kind !== "managed") ||
+      Object.keys(data).length !== (data.kind === "managed" ? 5 : 3) ||
+      (data.kind === "managed" &&
+        (typeof data.repoKey !== "string" ||
+          !data.repoKey.trim() ||
+          typeof data.branch !== "string" ||
+          !data.branch.trim()))
+    )
+      throw new Error("invalid pi-herdsman-session-kind entry");
+    if (identity && !isDeepStrictEqual(identity, data))
+      throw new Error("conflicting pi-herdsman-session-kind entries");
+    identity = data;
+  }
+  return identity;
+}
+
 export type LeadRoleState = Readonly<{
   role: LeadRole;
   leadTools: readonly string[];
 }>;
 
 export function sessionLeadRoleState(
-  entries: unknown[],
+  entries: readonly unknown[],
+  sessionId: string,
 ): LeadRoleState | undefined {
-  const entry = [...entries]
-    .reverse()
-    .find(
-      (candidate: any) =>
-        candidate?.type === "custom" &&
-        candidate.customType === "pi-herdsman-role",
-    ) as any;
-  if (!entry) return undefined;
-  const data = entry.data;
-  if (
-    !data ||
-    typeof data !== "object" ||
-    Array.isArray(data) ||
-    Object.keys(data).length !== 2 ||
-    !Object.hasOwn(data, "role") ||
-    !Object.hasOwn(data, "leadTools") ||
-    (data.role !== "lead" &&
-      data.role !== "manager" &&
-      data.role !== "chief") ||
-    !Array.isArray(data.leadTools) ||
-    data.leadTools.some(
-      (name: unknown) => typeof name !== "string" || name.length === 0,
-    ) ||
-    new Set(data.leadTools).size !== data.leadTools.length
-  )
-    throw new Error("invalid pi-herdsman-role entry");
-  return { role: data.role, leadTools: [...data.leadTools] };
+  let state: LeadRoleState | undefined;
+  for (const candidate of entries as readonly any[]) {
+    if (
+      candidate?.type !== "custom" ||
+      candidate.customType !== "pi-herdsman-role" ||
+      candidate.data?.sessionId !== sessionId
+    )
+      continue;
+    const data = candidate.data;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      Array.isArray(data) ||
+      Object.keys(data).length !== 3 ||
+      !Object.hasOwn(data, "role") ||
+      !Object.hasOwn(data, "leadTools") ||
+      (data.role !== "lead" &&
+        data.role !== "manager" &&
+        data.role !== "chief") ||
+      !Array.isArray(data.leadTools) ||
+      data.leadTools.some(
+        (name: unknown) => typeof name !== "string" || name.length === 0,
+      ) ||
+      new Set(data.leadTools).size !== data.leadTools.length
+    )
+      throw new Error("invalid pi-herdsman-role entry");
+    state = { role: data.role, leadTools: [...data.leadTools] };
+  }
+  return state;
 }
 
 export type ChiefDescriptor = {
@@ -1104,6 +1151,7 @@ export type PeerRecord = Readonly<{
   version: 2;
   build?: RuntimeBuild;
   role?: PeerRole;
+  sessionKind: "ordinary" | "managed";
   piSessionId: string;
   paneId: string;
   tabId: string;
@@ -1175,6 +1223,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
         "version",
         "build",
         "role",
+        "sessionKind",
         "piSessionId",
         "paneId",
         "tabId",
@@ -1201,6 +1250,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     (record.role === undefined ||
       record.role === "lead" ||
       record.role === "manager") &&
+    (record.sessionKind === "ordinary" || record.sessionKind === "managed") &&
     validSession(record.piSessionId) &&
     validNativeIdentity(record.paneId) &&
     validNativeIdentity(record.tabId) &&
@@ -1242,6 +1292,7 @@ export function samePeerLeadRecord(
   return (
     actual.version === expected.version &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.sessionKind === expected.sessionKind &&
     (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
     actual.paneId === expected.paneId &&
@@ -1279,6 +1330,7 @@ export function samePeerLeadAuthority(
 ): boolean {
   return (
     samePeerLeadGeneration(actual, expected) &&
+    actual.sessionKind === expected.sessionKind &&
     (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.socket === expected.socket &&
     actual.workspaceId === expected.workspaceId &&
@@ -2067,22 +2119,6 @@ export function removeProjectAssignment(
   );
 }
 
-export function releaseProjectAssignment(
-  runtime: SupervisionRuntime,
-  expected: ProjectAssignment,
-): boolean {
-  return withProjectAssignmentLock(() => {
-    const current = readProjectAssignment(
-      runtime,
-      expected.repoKey,
-      expected.branch,
-    );
-    if (!current || current.id !== expected.id) return false;
-    removeProjectAssignmentUnlocked(runtime, expected.repoKey, expected.branch);
-    return true;
-  });
-}
-
 // Caller holds the exact branch lock; the global lock serializes authority writers.
 export function retireProjectAssignment(
   runtime: SupervisionRuntime,
@@ -2333,6 +2369,11 @@ function scanGlobalProjectAssignments(): Map<
         if (/^[a-f0-9]{64}\.messages$/.test(entry.name)) {
           if (!entry.isDirectory() || entry.isSymbolicLink())
             throw new Error(`Invalid project message directory ${entry.name}`);
+          continue;
+        }
+        if (/^[a-f0-9]{64}\.json\.lock$/.test(entry.name)) {
+          if (!entry.isDirectory() || entry.isSymbolicLink())
+            throw new Error(`Invalid project assignment lock ${entry.name}`);
           continue;
         }
         // Atomic writer temporaries are not committed authority records.

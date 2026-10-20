@@ -1,5 +1,9 @@
 # Deliver worktree retirement through pending Manager context
 
+> **Session identity update:** [ADR 0027](0027-use-immutable-managed-lead-session-identity.md) supersedes all
+> takeover and in-place ordinary-continuation decisions in this record.
+> Other decisions remain subject to their noted supersessions.
+
 ## Status
 
 Accepted

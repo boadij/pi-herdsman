@@ -375,8 +375,16 @@ metadata. `Execution` shows the current ordinary mode and opens the Flexible /
 Orchestrate selector; an assigned Lead shows Managed with `managed-lead` help
 and no ordinary mode choices. `/lead` opens the same selector, while
 `/lead flexible` and `/lead orchestrate` select directly through that control.
-Verify assigned Leads cannot switch out of Managed and that takeover starts
-ordinary Orchestrate execution. Settings contains Default Lead execution,
+Verify Managed Leads cannot select ordinary modes or activate Manager/Chief.
+Using disposable project data only, fork and clone an assigned Lead and verify
+new exact ordinary session IDs, no inherited assignment/Agent ownership or
+role/profile policy, and unchanged source identity through tree navigation and
+resume. Verify stop/resume preserves assignment and identity. Retire only the
+disposable checkout through confirmed Herdr removal; verify Managed · Retired
+and exact-owner recovery without fresh delegation. Exercise unavailable evidence
+and verify Managed · Unavailable denies fresh work. Native history copying does
+not create an independent checkout or reset process configuration. Record each
+interactive result explicitly; simulated smoke does not prove these checks. Settings contains Default Lead execution,
 Manager auto-start, Context retirement, and Message limits. Verify changing
 the default affects a future ordinary session without changing the current
 session.
