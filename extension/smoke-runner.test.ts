@@ -1352,36 +1352,87 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorResultState: "missing",
     supervisorErrorCategory: "none",
   });
+  const successfulSupervisor = supervisorMessageDiagnostics(
+    contents
+      .replace('"isError":true', '"isError":false')
+      .replace('"PRIVATE_RESULT_BODY"', '"sent"'),
+    "MANAGER_HANDOFF_READY",
+  );
+  assert.deepEqual(successfulSupervisor, {
+    supervisorCallObserved: true,
+    supervisorResultState: "success",
+    supervisorErrorCategory: "none",
+  });
 
   const earlyPoll = managerAssignmentDiagnostics({
     worktree: "true",
-    result: "not_observed",
-    identity: "not_observed",
+    result: "true",
+    identity: "true",
     lead: "not_yet_evaluated",
+    candidateProcessCount: 101,
+    provenanceMatch: "false",
     supervisorCall: "not_yet_evaluated",
     supervisorSuccess: "not_yet_evaluated",
     readiness: "not_yet_evaluated",
   });
-  const resolvedEvidence = sanitizedFailureEvidence(
+  assert.deepEqual(
+    {
+      supervisorCallObserved: earlyPoll.supervisorCallObserved,
+      supervisorResultState: earlyPoll.supervisorResultState,
+      supervisorErrorCategory: earlyPoll.supervisorErrorCategory,
+      readinessDeliveryObserved: earlyPoll.readinessDeliveryObserved,
+    },
+    {
+      supervisorCallObserved: false,
+      supervisorResultState: "not_observed",
+      supervisorErrorCategory: "none",
+      readinessDeliveryObserved: false,
+    },
+  );
+  const earlyEvidence = sanitizedFailureEvidence(
     { scenario: "manager-handoff", simulated: true },
     {
       error: {
         smoke: {
           stage: "manager-handoff-assignment",
-          lastProgress: { ...correlated, readinessDeliveryObserved: true },
+          lastProgress: earlyPoll,
         },
       },
     },
     "SCENARIO_FAIL",
     "PASS",
   );
-  assert.deepEqual(resolvedEvidence.managerHandoffProgress, {
-    supervisorCallObserved: true,
-    supervisorResultState: "error",
-    supervisorErrorCategory: "agent_busy",
+  assert.equal(
+    earlyEvidence.managerHandoffProgress.supervisorCallObserved,
+    false,
+  );
+  assert.equal(
+    earlyEvidence.managerHandoffProgress.supervisorResultState,
+    "not_observed",
+  );
+  assert.equal(
+    earlyEvidence.managerHandoffProgress.supervisorErrorCategory,
+    "none",
+  );
+  assert.equal(
+    earlyEvidence.managerHandoffProgress.readinessDeliveryObserved,
+    false,
+  );
+  const resolvedProgress = managerAssignmentDiagnostics({
+    worktree: "true",
+    result: "true",
+    identity: "true",
+    lead: "true",
+    supervisorCall: "true",
+    supervisorSuccess: "true",
+    readiness: "true",
+    ...successfulSupervisor,
     readinessDeliveryObserved: true,
-    elapsedMs: null,
-    inactiveMs: null,
+    candidateProcessCount: 1,
+    provenanceMatch: "true",
+    errorCategory: "none",
+    prompt: "PRIVATE_PROGRESS_PROMPT",
+    args: "PRIVATE_ARGS",
   });
   const evidence = sanitizedFailureEvidence(
     {
@@ -1399,7 +1450,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
           elapsedMs: 120_000,
           inactiveMs: 120_000,
           lastProgress: {
-            ...earlyPoll,
+            ...resolvedProgress,
             prompt: "PRIVATE_PROGRESS_PROMPT",
             args: "PRIVATE_ARGS",
             body: "PRIVATE_BODY",
@@ -1416,10 +1467,16 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   try {
     const persisted = await readFile(artifactPath, "utf8");
     assert.deepEqual(JSON.parse(persisted).managerHandoffProgress, {
-      supervisorCallObserved: false,
-      supervisorResultState: "not_observed",
+      expectedBranchWorktree: "true",
+      successfulCorrelatedDelegateProjectResult: "true",
+      assignmentIdentitySessionWorkspaceBranchMatch: "true",
+      matchedLead: "true",
+      candidateProcessCount: 1,
+      candidateProcessProvenanceMatch: "true",
+      supervisorCallObserved: true,
+      supervisorResultState: "success",
       supervisorErrorCategory: "none",
-      readinessDeliveryObserved: false,
+      readinessDeliveryObserved: true,
       elapsedMs: 120_000,
       inactiveMs: 120_000,
     });

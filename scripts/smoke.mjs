@@ -739,6 +739,10 @@ export function managerAssignmentDiagnostics({
   supervisorCall,
   supervisorSuccess,
   readiness,
+  supervisorCallObserved,
+  supervisorResultState,
+  supervisorErrorCategory,
+  readinessDeliveryObserved,
   candidateProcessCount,
   provenanceMatch,
   errorCategory,
@@ -751,10 +755,10 @@ export function managerAssignmentDiagnostics({
     messageSupervisorCall: supervisorCall ?? "not_observed",
     messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
-    supervisorCallObserved: false,
-    supervisorResultState: "not_observed",
-    supervisorErrorCategory: "none",
-    readinessDeliveryObserved: false,
+    supervisorCallObserved: supervisorCallObserved ?? false,
+    supervisorResultState: supervisorResultState ?? "not_observed",
+    supervisorErrorCategory: supervisorErrorCategory ?? "none",
+    readinessDeliveryObserved: readinessDeliveryObserved ?? false,
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
     errorCategory: errorCategory ?? "none",
@@ -7592,6 +7596,47 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
       : null;
   const managerHandoffProgress = managerProgress
     ? {
+        expectedBranchWorktree: ["true", "false", "not_observed"].includes(
+          managerProgress.expectedBranchWorktree,
+        )
+          ? managerProgress.expectedBranchWorktree
+          : "not_observed",
+        successfulCorrelatedDelegateProjectResult: [
+          "true",
+          "false",
+          "not_observed",
+        ].includes(managerProgress.successfulCorrelatedDelegateProjectResult)
+          ? managerProgress.successfulCorrelatedDelegateProjectResult
+          : "not_observed",
+        assignmentIdentitySessionWorkspaceBranchMatch: [
+          "true",
+          "false",
+          "not_observed",
+        ].includes(
+          managerProgress.assignmentIdentitySessionWorkspaceBranchMatch,
+        )
+          ? managerProgress.assignmentIdentitySessionWorkspaceBranchMatch
+          : "not_observed",
+        matchedLead: [
+          "true",
+          "false",
+          "not_observed",
+          "not_yet_evaluated",
+        ].includes(managerProgress.matchedLead)
+          ? managerProgress.matchedLead
+          : "not_yet_evaluated",
+        candidateProcessCount:
+          Number.isSafeInteger(managerProgress.candidateProcessCount) &&
+          managerProgress.candidateProcessCount >= 0
+            ? Math.min(managerProgress.candidateProcessCount, 100)
+            : "not_observed",
+        candidateProcessProvenanceMatch: [
+          "true",
+          "false",
+          "not_evaluated",
+        ].includes(managerProgress.candidateProcessProvenanceMatch)
+          ? managerProgress.candidateProcessProvenanceMatch
+          : "not_evaluated",
         supervisorCallObserved:
           typeof managerProgress.supervisorCallObserved === "boolean"
             ? managerProgress.supervisorCallObserved
