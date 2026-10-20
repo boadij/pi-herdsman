@@ -2247,6 +2247,16 @@ export default function (pi: ExtensionAPI): void {
         controllerScope.kind === "root" ? leadHerdRunRuntime.begin : undefined,
       );
       if (controllerScope.kind === "root") {
+        // Temporary Actions probe; remove after attributing manager-handoff failure.
+        pi.on("session_start", (_event, ctx) => {
+          if (process.env.GITHUB_ACTIONS !== "true") return;
+          try {
+            pi.appendEntry("pi-herdsman-supervisor-boundary", {
+              sessionId: ctx.sessionManager.getSessionId(),
+              status: "ready",
+            });
+          } catch {}
+        });
         pi.registerTool({
           ...supervisorTool,
           name: "message_supervisor",
@@ -2260,10 +2270,45 @@ export default function (pi: ExtensionAPI): void {
             update: unknown,
             ctx: ExtensionContext,
           ) => {
+            let sessionId: string | undefined;
             try {
-              return await supervisorTool.execute(id, p, signal, update, ctx);
+              if (process.env.GITHUB_ACTIONS === "true")
+                sessionId = ctx.sessionManager.getHeader()?.id;
+            } catch {}
+            const observe = (status: string, resultError?: boolean) => {
+              if (process.env.GITHUB_ACTIONS !== "true" || !sessionId) return;
+              try {
+                if (ctx.sessionManager.getHeader()?.id !== sessionId) return;
+                pi.appendEntry("pi-herdsman-supervisor-boundary", {
+                  sessionId,
+                  toolCallId: id,
+                  status,
+                  ...(resultError === undefined ? {} : { resultError }),
+                });
+              } catch {}
+            };
+            observe("entered");
+            try {
+              const result = await supervisorTool.execute(
+                id,
+                p,
+                signal,
+                update,
+                ctx,
+              );
+              try {
+                observe(
+                  "returned",
+                  result?.isError === true || result?.details?.ok === false,
+                );
+              } catch {}
+              return result;
             } catch (error) {
-              if (!(error instanceof OperationError)) throw error;
+              if (!(error instanceof OperationError)) {
+                observe("unclassified_throw");
+                throw error;
+              }
+              observe("operation_error_returned", true);
               return {
                 content: [{ type: "text", text: error.message }],
                 isError: true,
