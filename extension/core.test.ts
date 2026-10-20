@@ -653,12 +653,8 @@ test("resolves result references through shared message file preparation", () =>
     );
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
     assert.ok(prepared.text.includes(resultRef(requestId)));
-    assert.ok(prepared.text.includes(realpathSync(path)));
-    assert.ok(
-      prepared.text.includes(
-        `<file name="${resultRef(requestId)}" path="${realpathSync(path)}"`,
-      ),
-    );
+    assert.equal(prepared.text.includes(realpathSync(path)), false);
+    assert.ok(prepared.text.includes(`<file name="${resultRef(requestId)}"`));
 
     const embedded = prepareMessageInput(
       "Inspect the result again",
@@ -703,13 +699,18 @@ test("preserves semantic result bindings while resolving and deduplicating files
       "assign",
       "Task",
       {
+        inlineLimitBytes: 1,
         serializedBytes: (_text, bindings) => {
           assert.deepEqual(bindings, [binding]);
           return 0;
         },
       },
     );
-    assert.match(prepared.text, /<file name="result:researcher#1"/);
+    assert.match(
+      prepared.text,
+      /<file name="result:researcher#1" bytes="17" \/>/,
+    );
+    assert.doesNotMatch(prepared.text, new RegExp(realpathSync(path)));
     assert.doesNotMatch(prepared.text, new RegExp(resultRef(requestId)));
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
     assert.deepEqual(prepared.resultBindings, [binding]);

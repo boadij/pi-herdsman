@@ -311,12 +311,8 @@ function renderMessageFile(file: RegularFile, content?: string): string {
   const label = file.retainedEvidence
     ? ` label="${escapeMessageFileName(file.retainedEvidence.name)}"`
     : "";
-  const path =
-    !file.retainedEvidence && (file.binding || file.input.startsWith("result:"))
-      ? ` path="${escapeMessageFileName(file.canonicalPath)}"`
-      : "";
   if (content === undefined)
-    return `<file name="${name}"${label}${path} bytes="${file.bytes}" />`;
+    return `<file name="${name}"${label} bytes="${file.bytes}" />`;
   return `<file name="${name}"${label} bytes="${file.bytes}">\n${content}\n</file>`;
 }
 

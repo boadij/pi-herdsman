@@ -118,6 +118,7 @@ import {
   writeResult,
   writeAgentState,
   testTmpRoot,
+  traceTestTmpRoot,
 } from "./support.ts";
 
 test("read_evidence is added only to assigned project Lead tools", async () => {
@@ -1311,7 +1312,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
         {
           definition: "agent",
           task: "child task",
-          files: [retainedFile, resultSemanticRef, retainedFileAfterResult],
+          files: [
+            retainedFile,
+            retainedFile.replace(/([^/]+)$/, "./$1"),
+            resultSemanticRef,
+            retainedFileAfterResult,
+          ],
           retain: true,
         },
         undefined,
@@ -1322,6 +1328,15 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
     assert.ok(published);
     assert.equal(published!.requiredEvidence?.length, 6);
+    assert.equal(
+      published!.requiredEvidence!.filter(
+        (entry) =>
+          "path" in entry &&
+          readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry) ===
+            "agent-local reviewer note",
+      ).length,
+      1,
+    );
     assert.equal(
       readRequiredEvidenceSnapshot(
         parentRequestId,
@@ -2255,11 +2270,13 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   const label = "agent";
   const sessionPath = join(testTmpRoot, "registered-agent.jsonl");
   realFs.rmSync(sessionPath, { force: true });
+  traceTestTmpRoot("fresh-path-write-before");
   realFs.writeFileSync(
     sessionPath,
     JSON.stringify({ type: "session", id: DEFAULT_PI_SESSION_ID }),
     "utf8",
   );
+  traceTestTmpRoot("fresh-path-write-after");
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -7854,7 +7871,9 @@ test("historical session with its inherited label rejects an active managed repr
     chiefDefinitionPath,
     `---\nname: chief\nagents: [${name}]\n---\n`,
   );
+  traceTestTmpRoot("historical-session-write-before");
   writeValidPiSessionFile(session);
+  traceTestTmpRoot("historical-session-write-after");
   realFs.symlinkSync(identity.piSessionFile, aliasPath);
   nativeSessions.set(session.id, session);
   const active = {
@@ -8105,7 +8124,9 @@ test("session assignment reports a pane mismatch from the agent state producer",
     ],
   };
   nativeSessions.set(producerMismatchSession.id, producerMismatchSession);
+  traceTestTmpRoot("producer-mismatch-write-before");
   writeValidPiSessionFile(producerMismatchSession);
+  traceTestTmpRoot("producer-mismatch-write-after");
   realFs.writeFileSync(registeredAgentPath, "{}", "utf8");
   setLeadEnvironment();
   const lead = fakePi({

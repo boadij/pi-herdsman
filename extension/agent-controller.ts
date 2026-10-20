@@ -6476,9 +6476,21 @@ export function createAgentController(
               .map((entry) => entry.result.ref),
           );
           const additions: RequiredEvidence[] = [];
+          const retainedPaths = new Set<string>();
           retainedSelections = supplied.flatMap((file) => {
             if (typeof file === "string") {
-              if (existingPaths.has(resolve(ctx.cwd, file))) return [];
+              let canonicalPath: string | undefined;
+              try {
+                canonicalPath = realpathSync(resolve(ctx.cwd, file));
+              } catch {
+                // Let snapshot validation report invalid paths as before.
+              }
+              if (
+                canonicalPath &&
+                (existingPaths.has(canonicalPath) ||
+                  retainedPaths.has(canonicalPath))
+              )
+                return [];
               const [addition] = persistRequiredTextFiles(
                 nestedEvidence.evidenceAssignmentId,
                 [file],
@@ -6486,6 +6498,7 @@ export function createAgentController(
                 p.action,
               );
               if (!addition) return [];
+              if (canonicalPath) retainedPaths.add(canonicalPath);
               additions.push(addition);
               return [
                 {
