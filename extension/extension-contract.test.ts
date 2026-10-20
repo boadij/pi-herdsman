@@ -89,6 +89,7 @@ import support, {
   writeAgentState,
 } from "./support.ts";
 import { parseHerdrVersion } from "./herdr.ts";
+import { supervisorMessageDiagnostics } from "../scripts/smoke.mjs";
 
 const peerTopology = () => ({
   stdout: JSON.stringify({
@@ -2775,16 +2776,20 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
       (candidate) => candidate.name === "message_supervisor",
     );
     assert.ok(tool);
-    await assert.rejects(
-      tool.execute(
-        "message",
-        { message: "should not be delivered" },
-        undefined,
-        undefined,
-        context,
-      ),
-      /No active supervisor is available/,
+    const result = await tool.execute(
+      "message",
+      { message: "should not be delivered" },
+      undefined,
+      undefined,
+      context,
     );
+    assert.equal(result.isError, true);
+    assert.deepEqual(result.content, [
+      { type: "text", text: "No active supervisor is available" },
+    ]);
+    assert.deepEqual(result.details, {
+      error: { category: "target_not_found" },
+    });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     lease.release();
@@ -4755,6 +4760,93 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("registered message_supervisor projects OperationError categories to tool results", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const tool = pi.tools.find(
+      (candidate) => candidate.name === "message_supervisor",
+    );
+    assert.ok(tool);
+
+    const result = await tool.execute(
+      "call-id",
+      { message: " " },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.isError, true);
+    assert.deepEqual(result.content, [
+      { type: "text", text: "Message must contain non-whitespace text" },
+    ]);
+    assert.deepEqual(result.details, {
+      error: { category: "invalid_request" },
+    });
+    assert.doesNotMatch(
+      JSON.stringify(result.details),
+      /Message must|cause|message_supervisor/,
+    );
+
+    const persistedResult = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "message_supervisor",
+        toolCallId: "call-id",
+        ...result,
+      },
+    };
+    const contents = [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "message_supervisor",
+              id: "call-id",
+              arguments: { message: "MANAGER_HANDOFF_READY" },
+            },
+          ],
+        },
+      },
+      persistedResult,
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    assert.deepEqual(
+      supervisorMessageDiagnostics(contents, "MANAGER_HANDOFF_READY"),
+      {
+        supervisorCallObserved: true,
+        supervisorResultState: "error",
+        supervisorErrorCategory: "invalid_request",
+      },
+    );
+
+    const nonOperationError = new Error("sensitive non-operation error");
+    const hostileParams = new Proxy(
+      {},
+      {
+        get() {
+          throw nonOperationError;
+        },
+      },
+    );
+    await assert.rejects(
+      tool.execute("call-id", hostileParams, undefined, undefined, context),
+      (error: unknown) => error === nonOperationError,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
   }
 });
 

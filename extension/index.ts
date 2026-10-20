@@ -2253,13 +2253,24 @@ export default function (pi: ExtensionAPI): void {
           parameters: supervisorMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          execute: (
+          execute: async (
             id: string,
             p: any,
             signal: AbortSignal | undefined,
             update: unknown,
             ctx: ExtensionContext,
-          ) => supervisorTool.execute(id, p, signal, update, ctx),
+          ) => {
+            try {
+              return await supervisorTool.execute(id, p, signal, update, ctx);
+            } catch (error) {
+              if (!(error instanceof OperationError)) throw error;
+              return {
+                content: [{ type: "text", text: error.message }],
+                isError: true,
+                details: { error: { category: error.detail.category } },
+              };
+            }
+          },
           renderCall: (a: unknown, t: any, c: any) =>
             renderCoordinationCall("supervisor", "message", a, t, c),
           renderResult: (r: any, o: any, t: any, c: any) =>
