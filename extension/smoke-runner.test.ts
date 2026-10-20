@@ -344,10 +344,55 @@ test("failure result projection allowlists only bounded nonsensitive fields", ()
     parentOwnership: null,
     parentCleanup: null,
     cleanupErrorCode: null,
+    cleanupFailureCategories: [],
     cleanup: "PENDING",
   });
   assert.equal(JSON.stringify(result).includes("private"), false);
   assert.equal(JSON.stringify(result).includes("secret"), false);
+});
+
+test("failure artifact propagates only fixed cleanup substep categories", async () => {
+  const ctx = { scenario: "manager-handoff", simulated: true };
+  const cleanupError = await cleanup(
+    { root: "/PRIVATE/root", authLink: "/PRIVATE/auth" },
+    { hostTabId: "PRIVATE_TAB" },
+    ctx,
+    {
+      removeFile: async () => {
+        const error = new Error("PRIVATE auth path");
+        error.code = "ENOENT";
+        throw error;
+      },
+      herdrCommand: async () => {
+        throw new Error("PRIVATE /tmp/path cleanup failure");
+      },
+    },
+  );
+  assert.match(cleanupError ?? "", /PRIVATE/);
+  assert.deepEqual(ctx.cleanupFailureCategories, ["host_tab"]);
+  const evidence = sanitizedFailureEvidence(
+    {
+      ...ctx,
+      cleanupFailureCategories: [
+        ...ctx.cleanupFailureCategories,
+        "PRIVATE /tmp/path and error",
+      ],
+      privateError: "PRIVATE cleanup error text",
+    },
+    {},
+    "SCENARIO_FAIL",
+    "FAIL",
+  );
+  const artifact = await preserveFailureEvidence(evidence);
+  try {
+    const persisted = await readFile(artifact, "utf8");
+    assert.deepEqual(JSON.parse(persisted).cleanupFailureCategories, [
+      "host_tab",
+    ]);
+    assert.doesNotMatch(persisted, /PRIVATE|\/tmp\/path|error text/u);
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
 });
 
 test("terminal failure stall artifact retains only allowlisted report progress", async () => {
@@ -1428,6 +1473,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     readiness: "true",
     ...successfulSupervisor,
     readinessDeliveryObserved: true,
+    worktreeIdentityState: "verified",
     candidateProcessCount: 1,
     provenanceMatch: "true",
     errorCategory: "none",
@@ -1477,6 +1523,8 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       supervisorResultState: "success",
       supervisorErrorCategory: "none",
       readinessDeliveryObserved: true,
+      worktreeIdentityState: "verified",
+      errorCategory: "none",
       elapsedMs: 120_000,
       inactiveMs: 120_000,
     });
@@ -1561,6 +1609,145 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     },
   );
   assert.match(unregistered ?? "", /captured worktree path is unavailable/);
+});
+
+test("Manager handoff retries incomplete exact worktree identity and fails closed", async () => {
+  const branch = "herdsman/smoke-manager-handoff-retry";
+  const ctx = { owned: { managerBranch: branch } };
+  const incomplete = { branch };
+  const complete = {
+    branch,
+    path: "/smoke/manager-handoff-retry",
+    open_workspace_id: "workspace-2",
+  };
+  let observations = 0;
+  const identity = await waitForEvidence(
+    ctx,
+    "manager-handoff-assignment",
+    async () => {
+      const worktree = observations++ === 0 ? incomplete : complete;
+      try {
+        const captured = captureManagerHandoffWorktree(ctx, [worktree], branch);
+        return {
+          done: !!captured,
+          value: captured,
+          progress: managerAssignmentDiagnostics({
+            worktree: "true",
+            worktreeIdentityState: "verified",
+          }),
+        };
+      } catch (error) {
+        if (error.code !== "SMOKE_OBSERVATION") throw error;
+        return {
+          done: false,
+          progress: managerAssignmentDiagnostics({
+            worktreeIdentityState: "incomplete",
+            errorCategory: "worktree_identity_incomplete",
+          }),
+        };
+      }
+    },
+    { timeoutMs: 1000, stallMs: 500, pollMs: 1 },
+  );
+  assert.equal(observations, 2);
+  assert.equal(identity, complete);
+  assert.equal(ctx.owned.managerWorktreePath, complete.path);
+  assert.equal(ctx.owned.managerWorkspaceId, complete.open_workspace_id);
+
+  for (const incompleteIdentity of [
+    { branch, path: null, open_workspace_id: "workspace-2" },
+    { branch, path: "", open_workspace_id: "workspace-2" },
+    { branch, path: complete.path, open_workspace_id: null },
+    { branch, path: complete.path, open_workspace_id: "" },
+  ]) {
+    assert.throws(
+      () =>
+        captureManagerHandoffWorktree(
+          { owned: { managerBranch: branch } },
+          [incompleteIdentity],
+          branch,
+        ),
+      (error) => error.code === "SMOKE_OBSERVATION",
+    );
+  }
+
+  for (const malformed of [
+    { branch, path: 42, open_workspace_id: "workspace-2" },
+    { branch, path: "/smoke/malformed-path", open_workspace_id: {} },
+  ]) {
+    assert.throws(
+      () =>
+        captureManagerHandoffWorktree(
+          { owned: { managerBranch: branch } },
+          [malformed],
+          branch,
+        ),
+      /identity is malformed/u,
+    );
+  }
+
+  const persistent = { ...ctx, owned: { managerBranch: branch } };
+  await assert.rejects(
+    waitForEvidence(
+      persistent,
+      "manager-handoff-assignment",
+      async () => {
+        try {
+          captureManagerHandoffWorktree(persistent, [incomplete], branch);
+        } catch (error) {
+          if (error.code !== "SMOKE_OBSERVATION") throw error;
+          return {
+            done: false,
+            progress: managerAssignmentDiagnostics({
+              worktreeIdentityState: "incomplete",
+              errorCategory: "worktree_identity_incomplete",
+            }),
+          };
+        }
+        return { done: true };
+      },
+      { timeoutMs: 1000, stallMs: 15, pollMs: 1 },
+    ),
+    (error) => {
+      assert.equal(error.code, "SMOKE_STALLED");
+      assert.equal(
+        error.smoke.lastProgress.worktreeIdentityState,
+        "incomplete",
+      );
+      assert.equal(
+        error.smoke.lastProgress.errorCategory,
+        "worktree_identity_incomplete",
+      );
+      const artifact = sanitizedFailureEvidence(
+        { scenario: "manager-handoff", simulated: true },
+        { error },
+        "SCENARIO_FAIL",
+        "FAIL",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.worktreeIdentityState,
+        "incomplete",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.errorCategory,
+        "worktree_identity_incomplete",
+      );
+      assert.doesNotMatch(
+        JSON.stringify(artifact),
+        /smoke\/manager|workspace-2/u,
+      );
+      return true;
+    },
+  );
+  assert.throws(
+    () =>
+      captureManagerHandoffWorktree(
+        persistent,
+        [incomplete, incomplete],
+        branch,
+      ),
+    /one worktree/u,
+  );
 });
 
 test("Agent failure observation resolves the managed Pi session identity", async () => {

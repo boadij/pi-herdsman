@@ -746,6 +746,7 @@ export function managerAssignmentDiagnostics({
   candidateProcessCount,
   provenanceMatch,
   errorCategory,
+  worktreeIdentityState,
 }) {
   return {
     expectedBranchWorktree: worktree ?? "not_observed",
@@ -762,6 +763,7 @@ export function managerAssignmentDiagnostics({
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
     errorCategory: errorCategory ?? "none",
+    worktreeIdentityState: worktreeIdentityState ?? "not_observed",
   };
 }
 
@@ -1085,9 +1087,17 @@ export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
     throw new Error("exact branch must identify one worktree");
   const [worktree] = matches;
   const path = worktree.path ?? worktree.worktree_path;
-  if (typeof path !== "string" || !path || !worktree.open_workspace_id)
-    throw new Error("exact branch worktree identity is incomplete");
-  captureTerminalFailureAssignment(ctx, path, worktree.open_workspace_id);
+  const workspaceId = worktree.open_workspace_id;
+  if (
+    (path !== undefined && path !== null && typeof path !== "string") ||
+    (workspaceId !== undefined &&
+      workspaceId !== null &&
+      typeof workspaceId !== "string")
+  )
+    throw new Error("exact branch worktree identity is malformed");
+  if (!path || !workspaceId)
+    throw observationFailure("exact branch worktree identity is incomplete");
+  captureTerminalFailureAssignment(ctx, path, workspaceId);
   return worktree;
 }
 
@@ -3505,11 +3515,23 @@ async function runManagerHandoffSmoke(ctx) {
       ]);
       if (!Array.isArray(topology.worktrees))
         throw new Error("Manager handoff worktree topology is unavailable");
-      const worktree = captureManagerHandoffWorktree(
-        ctx,
-        topology.worktrees,
-        branch,
-      );
+      let worktree;
+      try {
+        worktree = captureManagerHandoffWorktree(
+          ctx,
+          topology.worktrees,
+          branch,
+        );
+      } catch (error) {
+        if (error?.code !== "SMOKE_OBSERVATION") throw error;
+        return {
+          done: false,
+          progress: managerAssignmentDiagnostics({
+            worktreeIdentityState: "incomplete",
+            errorCategory: "worktree_identity_incomplete",
+          }),
+        };
+      }
       const session = await root();
       if (session) assertNoFailedProjectDelegation(session.contents, branch);
       const rows = session ? staffDelegateResults(session.contents) : [];
@@ -3519,6 +3541,7 @@ async function runManagerHandoffSmoke(ctx) {
       const diagnostics = (values = {}) =>
         managerAssignmentDiagnostics({
           worktree: worktree ? "true" : "false",
+          worktreeIdentityState: worktree ? "verified" : "not_observed",
           result: rows.length ? String(row?.branch === branch) : "not_observed",
           identity: managerAssignmentIdentity(row, worktree, branch),
           lead: "not_yet_evaluated",
@@ -7311,11 +7334,16 @@ export async function cleanup(
   const cleanupHerdr = (args, options = {}) =>
     herdrCommand(args, { ...options, timeout: remainingTimeout() });
   const failures = [];
+  const cleanupFailureCategories = new Set();
+  const recordCleanupFailure = (category, message) => {
+    cleanupFailureCategories.add(category);
+    failures.push(message);
+  };
   try {
     await removeFile(paths.authLink);
   } catch (error) {
     if (error.code !== "ENOENT")
-      failures.push(`auth symlink: ${error.message}`);
+      recordCleanupFailure("auth_symlink", `auth symlink: ${error.message}`);
   }
   if (owned.managerBranch) {
     let managerWorktreeSafe = true;
@@ -7359,7 +7387,8 @@ export async function cleanup(
       }
     } catch (error) {
       managerWorktreeSafe = false;
-      failures.push(
+      recordCleanupFailure(
+        "manager_worktree",
         `manager worktree ${owned.managerWorkspaceId ?? owned.managerBranch}: ${error.message}`,
       );
     }
@@ -7375,7 +7404,8 @@ export async function cleanup(
           ctx.primaryCheckoutPath ?? repoRoot,
         );
       } catch (error) {
-        failures.push(
+        recordCleanupFailure(
+          "manager_branch",
           `manager branch ${owned.managerBranch}: ${error.message}`,
         );
       }
@@ -7414,7 +7444,8 @@ export async function cleanup(
           await sleepFor(Math.min(300, remainingTimeout()));
       }
     } catch (error) {
-      failures.push(
+      recordCleanupFailure(
+        "nested_session",
         `nested session cleanup ${owned.sessionName}: ${error.message}`,
       );
     }
@@ -7422,7 +7453,8 @@ export async function cleanup(
       !deleted &&
       !failures.some((item) => item.startsWith("nested session remains"))
     )
-      failures.push(
+      recordCleanupFailure(
+        "nested_session",
         `nested session remains: ${owned.sessionName}; temp=${paths.root}`,
       );
   }
@@ -7432,7 +7464,10 @@ export async function cleanup(
         env: ctx.parentEnv,
       });
     } catch (error) {
-      failures.push(`host tab ${owned.hostTabId}: ${error.message}`);
+      recordCleanupFailure(
+        "host_tab",
+        `host tab ${owned.hostTabId}: ${error.message}`,
+      );
     }
   }
   if (owned.parent) {
@@ -7447,7 +7482,8 @@ export async function cleanup(
           env: parent.env,
         });
       } catch (error) {
-        failures.push(
+        recordCleanupFailure(
+          "parent_workspace",
           `parent workspace ${parent.workspaceId}: ${error.message}`,
         );
       }
@@ -7540,12 +7576,16 @@ export async function cleanup(
     try {
       await remove(paths.root, { recursive: true, force: true });
     } catch (error) {
-      failures.push(`temporary state: ${error.message}`);
+      recordCleanupFailure(
+        "temporary_state",
+        `temporary state: ${error.message}`,
+      );
     }
   }
   ctx.cleanupErrorCode = failures.length
     ? (ctx.parentCleanupDiagnostics?.cleanupErrorCode ?? "CLEANUP_FAILED")
     : null;
+  ctx.cleanupFailureCategories = [...cleanupFailureCategories].sort();
   return failures.length ? failures.join("\n") : null;
 }
 
@@ -7661,6 +7701,15 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
           typeof managerProgress.readinessDeliveryObserved === "boolean"
             ? managerProgress.readinessDeliveryObserved
             : false,
+        worktreeIdentityState: ["verified", "incomplete"].includes(
+          managerProgress.worktreeIdentityState,
+        )
+          ? managerProgress.worktreeIdentityState
+          : "not_observed",
+        errorCategory:
+          managerProgress.errorCategory === "worktree_identity_incomplete"
+            ? managerProgress.errorCategory
+            : "none",
         elapsedMs:
           typeof failure.error.smoke.elapsedMs === "number" &&
           Number.isFinite(failure.error.smoke.elapsedMs) &&
@@ -7709,6 +7758,21 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         }
       : null,
     cleanupErrorCode: ctx.cleanupErrorCode ?? null,
+    cleanupFailureCategories: [
+      ...new Set(
+        (ctx.cleanupFailureCategories ?? []).filter((category) =>
+          [
+            "auth_symlink",
+            "manager_worktree",
+            "manager_branch",
+            "nested_session",
+            "host_tab",
+            "parent_workspace",
+            "temporary_state",
+          ].includes(category),
+        ),
+      ),
+    ].sort(),
     cleanup,
   };
 }
