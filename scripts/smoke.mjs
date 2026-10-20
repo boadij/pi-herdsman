@@ -744,6 +744,7 @@ export function managerAssignmentDiagnostics({
   supervisorCallObserved,
   supervisorResultState,
   supervisorErrorCategory,
+  supervisorUnstructuredErrorClass,
   readinessDeliveryObserved,
   candidateProcessCount,
   provenanceMatch,
@@ -762,6 +763,14 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
+    ...([
+      "abort_error",
+      "lock_occupied",
+      "dispatch_error",
+      "unstructured_error_unknown",
+    ].includes(supervisorUnstructuredErrorClass)
+      ? { supervisorUnstructuredErrorClass }
+      : {}),
     supervisorHandlerBranchStatus: "not_observed",
     supervisorPersistedErrorCategoryPresent: false,
     supervisorPersistedErrorCategory: "not_observed",

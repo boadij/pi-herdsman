@@ -1470,6 +1470,15 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
   assert.equal(projection.candidateProcessCount, 0);
   assert.equal(projection.candidateProcessProvenanceMatch, "not_evaluated");
   assert.equal(projection.matchedLead, "not_yet_evaluated");
+  assert.equal(
+    Object.hasOwn(
+      managerAssignmentDiagnostics({
+        supervisorUnstructuredErrorClass: "PRIVATE_UNLISTED_CLASS",
+      }),
+      "supervisorUnstructuredErrorClass",
+    ),
+    false,
+  );
   assert.doesNotMatch(
     JSON.stringify(projection),
     /unexpected-branch|expected-branch/,
@@ -1679,6 +1688,8 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorSuccess: "true",
     readiness: "true",
     ...successfulSupervisor,
+    supervisorUnstructuredErrorClass:
+      unknownCategory.supervisorUnstructuredErrorClass,
     readinessDeliveryObserved: true,
     worktreeIdentityState: "verified",
     candidateProcessCount: 1,
@@ -1704,7 +1715,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
           inactiveMs: 120_000,
           lastProgress: {
             ...resolvedProgress,
-            supervisorUnstructuredErrorClass: "unstructured_error_unknown",
             prompt: "PRIVATE_PROGRESS_PROMPT",
             args: "PRIVATE_ARGS",
             body: "PRIVATE_BODY",
