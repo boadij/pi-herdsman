@@ -7290,6 +7290,409 @@ test("owned continuation requires a matching persisted child edge", () => {
   }
 });
 
+test("scoped historical continuation rejects conflicting terminal provenance but accepts identical duplicates", () => {
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `terminal-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `terminal-conflict-${id}.jsonl`);
+  const evidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "agent-pane",
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  terminal.details.requestId = requestId;
+  terminal.details.runId = runId;
+  terminal.details.workspaceId = WORKSPACE;
+  terminal.details.paneId = "agent-pane";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const session = {
+    id,
+    path,
+    cwd: testTmpRoot,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      evidence,
+    ],
+  };
+  nativeSessions.clear();
+  nativeSessions.set(id, session);
+  realFs.writeFileSync(path, "{}", "utf8");
+  const contextFor = (results: unknown[]) => fakeContext(results) as any;
+  try {
+    assert.equal(
+      resolveAssignmentSession(
+        contextFor([terminal, structuredClone(terminal)]),
+        id,
+      ).id,
+      id,
+      "byte-for-byte equivalent terminal duplicates are not conflicting provenance",
+    );
+    const conflicting = structuredClone(terminal);
+    conflicting.details.paneId = "other-pane";
+    assert.throws(
+      () => resolveAssignmentSession(contextFor([terminal, conflicting]), id),
+      /Cannot verify the current accepted assignment/,
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(mailbox, { recursive: true, force: true });
+  }
+});
+
+test("continuation revalidates saved Agent identity before admitting a request", async () => {
+  for (const changed of ["definition", "label"] as const) {
+    setLeadEnvironment();
+    nativeSessions.clear();
+    const id = randomUUID();
+    const requestId = randomUUID();
+    const label = `identity-${id.slice(0, 8)}`;
+    const path = join(testTmpRoot, `identity-${id}.jsonl`);
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const identityEntry = {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: id, definition: "agent", label },
+    };
+    const session = {
+      id,
+      path,
+      cwd: "/tmp",
+      entries: [
+        identityEntry,
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-required-evidence",
+          data: {
+            version: 1,
+            sessionId: id,
+            requestId,
+            runId: AGENT_ID,
+            ownerSessionId: LEAD_SESSION_ID,
+            workspaceId: WORKSPACE,
+            agentLabel: label,
+            paneId: `${label}-pane`,
+            inheritedEvidence: [],
+            localEvidence: [],
+          },
+        },
+      ],
+    };
+    realFs.writeFileSync(path, "{}", "utf8");
+    nativeSessions.set(id, session);
+    const state = {
+      ...managedState(label, undefined, {
+        paneId: `${label}-pane`,
+        tabId: `${label}-tab`,
+        piSessionId: id,
+        piSessionFile: path,
+      }),
+      agentDefinition: "agent",
+      completedRequestId: requestId,
+      lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
+    };
+    writeAgentState(mailbox, state);
+    const startup = startupExecutor(
+      label,
+      () => DEFAULT_PI_SESSION_ID,
+      undefined,
+      undefined,
+      false,
+      () => {
+        identityEntry.data[changed] =
+          changed === "definition" ? "child" : `${label}-changed`;
+      },
+    );
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    const context = fakeContext([
+      ownershipResult(id, LEAD_SESSION_ID, { path, label }),
+    ]);
+    await pi.events.get("session_start")![0](undefined, context);
+    try {
+      const result = await agentTool(pi, "continue").execute(
+        "id",
+        { session: path, task: "must not be admitted" },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(result.details.ok, false, JSON.stringify(result.details));
+      assert.match(
+        result.details.error.message,
+        /saved assignment identity changed/,
+      );
+      assert.equal(
+        realFs
+          .readdirSync(mailbox)
+          .some(
+            (name) => name.startsWith("request-") && name.endsWith(".json"),
+          ),
+        false,
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      startup.stopMailboxConsumer();
+      resetAgentMailbox(mailbox);
+      nativeSessions.clear();
+      realFs.rmSync(path, { force: true });
+    }
+  }
+});
+
+test("scoped historical continuation rejects conflicting accepted evidence markers", () => {
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `evidence-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `evidence-conflict-${id}.jsonl`);
+  const evidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "agent-pane",
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+    workspaceId: WORKSPACE,
+    paneId: "agent-pane",
+  });
+  const session = {
+    id,
+    path,
+    cwd: testTmpRoot,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      evidence,
+      structuredClone(evidence),
+    ],
+  };
+  nativeSessions.clear();
+  nativeSessions.set(id, session);
+  realFs.writeFileSync(path, "{}", "utf8");
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  try {
+    session.entries[2]!.data.evidenceAssignmentId = randomUUID();
+    assert.throws(
+      () => resolveAssignmentSession(fakeContext([terminal]) as any, id),
+      /conflicting accepted evidence metadata/,
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(mailbox, { recursive: true, force: true });
+  }
+});
+
+test("scoped historical continuation rejects residual mailbox after state removal", () => {
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `residual-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `residual-mailbox-${id}.jsonl`);
+  const evidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "agent-pane",
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+    workspaceId: WORKSPACE,
+    paneId: "agent-pane",
+  });
+  const session = {
+    id,
+    path,
+    cwd: testTmpRoot,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      evidence,
+    ],
+  };
+  nativeSessions.clear();
+  nativeSessions.set(id, session);
+  realFs.writeFileSync(path, "{}", "utf8");
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  try {
+    realFs.mkdirSync(mailbox, { recursive: true });
+    realFs.writeFileSync(
+      join(mailbox, `request-${requestId}.json`),
+      "{}",
+      "utf8",
+    );
+    assert.throws(
+      () => resolveAssignmentSession(fakeContext([terminal]) as any, id),
+      /historical mailbox still exists/,
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(mailbox, { recursive: true, force: true });
+  }
+});
+
+test("scoped continuation revalidates terminal provenance immediately before admission", async () => {
+  setLeadEnvironment();
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `race-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `continuation-race-${id}.jsonl`);
+  const socketPath = join(tmpdir(), `continuation-race-${id}.sock`);
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  const projectRuntime = supervisionRuntime(socketPath);
+  writeProjectAssignment(projectRuntime, {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "continuation-race-repo",
+    branch: "continuation-race",
+    text: "Current project",
+  });
+  const acceptedEvidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "historical-pane",
+      projectAssignmentId: LEAD_SESSION_ID,
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, {
+    path,
+    label,
+  });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+    workspaceId: WORKSPACE,
+    paneId: "historical-pane",
+  });
+  const ownerEntries: unknown[] = [terminal];
+  realFs.writeFileSync(path, "{}", "utf8");
+  nativeSessions.set(id, {
+    id,
+    path,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      acceptedEvidence,
+    ],
+  });
+  const startup = startupExecutor(
+    label,
+    () => id,
+    undefined,
+    undefined,
+    false,
+    () => {
+      const conflict = structuredClone(terminal);
+      conflict.details.paneId = "conflicting-pane";
+      ownerEntries.push(conflict);
+    },
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(ownerEntries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    const result = await agentTool(pi, "continue").execute(
+      "id",
+      { session: id, task: "continue after cleanup" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, false, JSON.stringify(result.details));
+    assert.equal(
+      result.details.error.category,
+      "invalid_request",
+      JSON.stringify(result.details),
+    );
+    assert.equal(
+      readAgentState(startup.mailbox)?.activeRequestId,
+      undefined,
+      "no request may be accepted after terminal provenance conflicts",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.delete(id);
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(socketPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
 test("context retirement rejects managed session continuation only when enabled", async () => {
   const sessionId = "018f2f2e-7b13-7abc-8def-0123456789ae";
   const session = {

@@ -209,6 +209,9 @@ history, definition, and logical label together with the current effective
 authorized definition configuration. Its omitted model and thinking fields
 restore the saved session settings, while explicit definition fields override
 them. The caller cannot rename the continued session.
+After normal mailbox cleanup, scoped continuation is allowed only when the
+saved assignment evidence matches its terminal result and the project remains
+currently authorized. Missing or conflicting provenance fails closed.
 Session continuation does not retain the old Herdr tab. A still-live
 generation may be restored from its exact managed identity, while ordinary
 same-workspace tab movement remains presentation-only and does not change

@@ -121,6 +121,11 @@ from current configuration and must currently be enabled and authorized; its
 current effective configuration
 is used for the new generation. Omitted model and thinking fields restore the
 saved session settings, while explicit definition fields override them.
+After normal mailbox cleanup, scoped historical continuation is allowed only
+when the saved assignment's persisted terminal provenance matches its accepted
+evidence and the current project assignment still authorizes the work. Missing
+or conflicting provenance, or unavailable current project authorization, fails
+closed.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
 to itself.
@@ -371,6 +376,9 @@ not silently rewrite it. For an eligible project-scoped managed Agent,
 descendants; inherited evidence remains owned by the project assignment.
 `continue_agent` resumes the
 exact saved managed-agent Pi history and its verified assignment evidence.
+Files supplied explicitly on a `continue_agent` call are a separate handoff for
+that message; they do not become required evidence for the continued
+assignment.
 The Manager's project-assignment **Required evidence** menu is limited to
 project-owned requirements; it does not remove an Agent's local additions.
 Assigned Leads have no project-evidence retention or removal capability. Managed Agents likewise have no separate

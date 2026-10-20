@@ -360,6 +360,7 @@ mock.module("@earendil-works/pi-coding-agent", {
                 },
               },
             ],
+          getBranch: () => session?.entries ?? [],
           buildContextEntries: () =>
             session?.contextEntries ??
             session?.entries ?? [
@@ -2463,6 +2464,16 @@ export function createStagedAssignmentFixture(
         updatedAt: Date.now(),
       });
     },
+    markCompleted(requestId: string) {
+      const state = readAgentState(startup.mailbox);
+      assert.ok(state);
+      writeAgentState(startup.mailbox, {
+        ...state,
+        activeRequestId: undefined,
+        completedRequestId: requestId,
+        updatedAt: Date.now(),
+      });
+    },
     shutdown() {
       pi.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(startup.mailbox);
@@ -2507,6 +2518,7 @@ export function startupExecutor(
   countStartup = false,
   onAccepted?: (request: RequestRecord) => void | Promise<void>,
   sessionFile = "/tmp/registered-agent.jsonl",
+  sessionObservationId?: string,
 ): {
   exec: ExecHandler;
   mailbox: string;
@@ -2515,6 +2527,11 @@ export function startupExecutor(
 } {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   let getCount = 0;
+  const sessionObservation = () =>
+    sessionObservationId ??
+    (countStartup ? sessionForGet(getCount) : null) ??
+    DEFAULT_PI_SESSION_ID;
+  const startupSessionIdentity = sessionObservationId ?? DEFAULT_PI_SESSION_ID;
   let runId = testRunId;
   let ownerSessionId = testRunId ? LEAD_SESSION_ID : "";
   let activePaneId = "startup-pane";
@@ -2527,19 +2544,18 @@ export function startupExecutor(
     value.agents = [];
     return JSON.stringify({ id: AGENT_ID, result: value });
   };
-  const stopMailboxConsumer = consumeMailboxRequest(
-    mailbox,
-    async (request) => {
+  const startMailboxConsumer = () =>
+    consumeMailboxRequest(mailbox, async (request) => {
       if (!readAgentState(mailbox)) return;
       await onRequest?.(request.text, request);
       acceptMailboxRequest(mailbox, request);
       await onAccepted?.(request);
-    },
-  );
+    });
+  let stopMailboxConsumer = startMailboxConsumer();
   return {
     mailbox,
     getCount: () => getCount,
-    stopMailboxConsumer,
+    stopMailboxConsumer: () => stopMailboxConsumer(),
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "status" && args[1] === "--json")
         return herdrStatusResult();
@@ -2562,7 +2578,7 @@ export function startupExecutor(
                     source: "herdr:pi",
                     agent: "pi",
                     kind: "id",
-                    value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    value: sessionObservation(),
                   },
                 },
               },
@@ -2572,7 +2588,7 @@ export function startupExecutor(
           };
         getCount++;
         onGet?.(getCount);
-        const session = sessionForGet(getCount);
+        const session = sessionObservationId ?? sessionForGet(getCount);
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -2635,7 +2651,7 @@ export function startupExecutor(
                     source: "herdr:pi",
                     agent: "pi",
                     kind: "id",
-                    value: sessionForGet(getCount) ?? DEFAULT_PI_SESSION_ID,
+                    value: sessionObservation(),
                   },
                 },
               ]
@@ -2686,6 +2702,13 @@ export function startupExecutor(
         };
       if (args[0] === "tab" && args[1] === "create")
         return (() => {
+          if (closePaneOnClose && (paneClosed || tabClosed)) {
+            stopped = false;
+            paneClosed = false;
+            tabClosed = false;
+            stopMailboxConsumer();
+            stopMailboxConsumer = startMailboxConsumer();
+          }
           for (let i = 0; i < args.length - 1; i++) {
             if (args[i] !== "--env") continue;
             const assignment = args[i + 1]!;
@@ -2809,7 +2832,7 @@ export function startupExecutor(
                   source: "herdr:pi",
                   agent: "pi",
                   kind: "id",
-                  value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                  value: sessionObservation(),
                 },
               },
             },
@@ -2923,7 +2946,7 @@ export function startupExecutor(
           source: "herdr:pi",
           agent: "pi",
           kind: "id",
-          value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          value: startupSessionIdentity,
         },
       };
       writeAgentState(mailbox, {
@@ -2934,7 +2957,7 @@ export function startupExecutor(
         workspaceId: WORKSPACE,
         agentLabel: label,
         paneId: activePaneId,
-        piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        piSessionId: startupSessionIdentity,
         piSessionFile: sessionFile,
         agentDefinition: "agent",
         cwd: testCwd,
@@ -2968,7 +2991,7 @@ export function startupExecutor(
               thinking: null,
               cwd: testCwd,
               resumed: false,
-              session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              session_id: startupSessionIdentity,
               session_name: null,
             },
           },

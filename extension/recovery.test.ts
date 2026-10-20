@@ -985,6 +985,56 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   resetAgentMailbox(mailbox);
 });
 
+test("startup executor identity overrides are explicit and consistent", () => {
+  const label = "session-observation-fixture";
+  const sessionId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const defaultFixture = startupExecutor(label, (count) =>
+    count === 1 ? sessionId : null,
+  );
+  const explicitFixture = startupExecutor(
+    label,
+    () => sessionId,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    undefined,
+    "/tmp/registered-agent.jsonl",
+    sessionId,
+  );
+  try {
+    const agentSession = (fixture: ReturnType<typeof startupExecutor>) =>
+      JSON.parse(
+        fixture.exec("herdr", ["agent", "get", "fixture-alias"]).stdout,
+      ).result.agent.agent_session.value;
+    assert.equal(agentSession(defaultFixture), DEFAULT_PI_SESSION_ID);
+    assert.equal(agentSession(explicitFixture), sessionId);
+    assert.equal(
+      JSON.parse(explicitFixture.exec("herdr", ["pane", "get"]).stdout).result
+        .pane.agent_session.value,
+      sessionId,
+    );
+
+    const started = JSON.parse(
+      explicitFixture.exec("herdr", ["agent", "start", "fixture-alias"]).stdout,
+    ).result;
+    assert.equal(started.agent.agent_session.value, sessionId);
+    assert.equal(started.runtime_identity.session_id, sessionId);
+    assert.equal(readAgentState(mailbox)?.piSessionId, sessionId);
+  } finally {
+    defaultFixture.stopMailboxConsumer();
+    explicitFixture.stopMailboxConsumer();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("rollback requires disappearance proof after a successful close", async () => {
   setLeadEnvironment();
   const label = "persistent-close-agent";
