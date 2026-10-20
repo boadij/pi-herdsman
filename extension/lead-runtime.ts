@@ -619,6 +619,7 @@ type LeadCoordinationHost = LeadCoordinationBaseHost & {
   leadInstanceId(): string;
   workspaceId(): string | undefined;
   currentManager: LeadRoleTransitionRuntime["currentManager"];
+  currentProjectAssignment: LeadRoleTransitionRuntime["currentProjectAssignment"];
   currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
   projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
   resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
@@ -3307,13 +3308,17 @@ export function registerLeadRuntime(
     enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
   const executionTools = (): string[] => {
     const baseline = leadToolState.getLeadTools() ?? [];
+    if (!sessionKind) return [];
+    if (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
+      return options.leadRuntime?.leadContext
+        ? ownedAgentManagementTools(options.leadRuntime.leadContext)
+        : [];
     if (leadExecutionPending)
       return leadToolState
         .normalizeLeadTools([])
         .filter(
           (name) => name !== "delegate_agent" && name !== "continue_agent",
         );
-    if (!sessionKind) return [];
     if (sessionKind.kind === "managed") {
       return managedLifecycle === "assigned"
         ? leadToolState.normalizeLeadTools(baseline)
@@ -3860,7 +3865,10 @@ export function registerLeadRuntime(
     entryName: options.herdRunEntryName,
     activeRole: () => activeLeadRole(options.leadRuntime),
     isVerifiedActiveLead: () => verifiedActiveRootRole("lead") === "lead",
-    isManagedLead: () => !!leadExecution?.managed,
+    isManagedLead: () =>
+      sessionKind?.kind === "managed" &&
+      sessionKind.sessionId ===
+        leadRuntime.leadContext?.sessionManager.getSessionId(),
     hasPendingStarts: () => controller.hasPendingStarts(),
     listAgentStates: () => controller.listAgentStates(),
     currentProjectAssignment: (ctx: ExtensionContext) =>
@@ -3968,12 +3976,7 @@ export function registerLeadRuntime(
     );
     // Keep the runtime unavailable until assignment evidence agrees with identity.
     sessionKind = undefined;
-    let exactAssignments: ReturnType<typeof globalProjectAssignmentSnapshot>;
-    try {
-      exactAssignments = globalProjectAssignmentSnapshot();
-    } catch (error) {
-      throw error;
-    }
+    const exactAssignments = globalProjectAssignmentSnapshot();
     const socket = process.env.HERDR_SOCKET_PATH;
     const matches = exactAssignments.get(sessionId) ?? [];
     if (matches.length > 1)
@@ -4082,28 +4085,45 @@ export function registerLeadRuntime(
     const assignment = scope
       ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
       : undefined;
-    if (!scope || scope.repoKey !== identity.repoKey) {
+    const validScope = scope?.repoKey === identity.repoKey;
+    if (validScope && assignment) {
       if (
-        !replacement &&
-        listPendingRetirements(
-          roleHost.supervisionRuntime(),
-          identity.repoKey,
-        ).some(
-          (retired) =>
-            retired.id === identity.sessionId &&
-            retired.branch === identity.branch,
-        )
-      ) {
-        const workspaceId = process.env.HERDR_WORKSPACE_ID;
-        if (!workspaceId)
-          throw new Error("Cannot verify retired managed project checkout");
+        assignment.repoKey !== identity.repoKey ||
+        assignment.branch !== identity.branch
+      )
+        throw new Error(
+          "Project assignment conflicts with permanent session identity",
+        );
+      managedLifecycle = "assigned";
+      return assignment;
+    }
+    const pendingRetirement =
+      !replacement &&
+      listPendingRetirements(
+        roleHost.supervisionRuntime(),
+        identity.repoKey,
+      ).some(
+        (retired) =>
+          retired.id === identity.sessionId &&
+          retired.branch === identity.branch,
+      );
+    let retirementVerified = false;
+    if (pendingRetirement) {
+      // The retirement commit is durable; verify checkout absence again before presenting it.
+      const workspaceId =
+        (validScope ? scope.primaryWorkspaceId : undefined) ??
+        process.env.HERDR_WORKSPACE_ID;
+      if (workspaceId) {
         const topology = await roleHost.runHerdr(
           pi,
           ctx,
           ["worktree", "list", "--workspace", workspaceId],
           { signal: ctx.signal },
         );
-        if (sessionKind !== identity)
+        if (
+          sessionKind !== identity ||
+          ctx.sessionManager.getSessionId() !== identity.sessionId
+        )
           throw new Error("Session changed while verifying retirement");
         if (
           topology?.source?.repo_key === identity.repoKey &&
@@ -4128,84 +4148,27 @@ export function registerLeadRuntime(
             !inventory.stderr?.trim()
               ? parseGitWorktreeInventory(inventory.stdout)
               : undefined;
-          if (sessionKind !== identity)
+          if (
+            sessionKind !== identity ||
+            ctx.sessionManager.getSessionId() !== identity.sessionId
+          )
             throw new Error("Session changed while verifying retirement");
           if (
             worktrees &&
             !worktrees.some((worktree) => worktree.branch === identity.branch)
           ) {
             managedLifecycle = "retired";
-            return undefined;
+            retirementVerified = true;
           }
         }
       }
-      throw new Error("Cannot verify the original managed project scope");
     }
-    if (assignment) {
-      if (
-        assignment.repoKey !== identity.repoKey ||
-        assignment.branch !== identity.branch
-      )
-        throw new Error(
-          "Project assignment conflicts with permanent session identity",
-        );
-      managedLifecycle = "assigned";
-      return assignment;
-    }
-    if (
-      !replacement &&
-      listPendingRetirements(
-        roleHost.supervisionRuntime(),
-        identity.repoKey,
-      ).some(
-        (retired) =>
-          retired.id === identity.sessionId &&
-          retired.branch === identity.branch,
-      )
-    ) {
-      // The retirement commit is durable; verify checkout absence again before presenting it.
-      const workspaceId =
-        scope?.primaryWorkspaceId ?? process.env.HERDR_WORKSPACE_ID;
-      if (!workspaceId)
-        throw new Error("Cannot verify retired managed project checkout");
-      const topology = await roleHost.runHerdr(
-        pi,
-        ctx,
-        ["worktree", "list", "--workspace", workspaceId],
-        { signal: ctx.signal },
+    if (!validScope && !retirementVerified)
+      throw new Error(
+        pendingRetirement && !process.env.HERDR_WORKSPACE_ID
+          ? "Cannot verify retired managed project checkout"
+          : "Cannot verify the original managed project scope",
       );
-      if (sessionKind !== identity)
-        throw new Error("Session changed while verifying retirement");
-      if (
-        topology?.source?.repo_key === identity.repoKey &&
-        typeof topology.source.source_checkout_path === "string" &&
-        Array.isArray(topology.worktrees) &&
-        !topology.worktrees.some(
-          (worktree: any) => worktree.branch === identity.branch,
-        )
-      ) {
-        const inventory = await pi.exec(
-          "git",
-          ["worktree", "list", "--porcelain", "-z"],
-          {
-            cwd: topology.source.source_checkout_path,
-            signal: ctx.signal,
-            timeout: 10_000,
-          },
-        );
-        const worktrees =
-          inventory.code === 0 && !inventory.killed && !inventory.stderr?.trim()
-            ? parseGitWorktreeInventory(inventory.stdout)
-            : undefined;
-        if (sessionKind !== identity)
-          throw new Error("Session changed while verifying retirement");
-        if (
-          worktrees &&
-          !worktrees.some((worktree) => worktree.branch === identity.branch)
-        )
-          managedLifecycle = "retired";
-      }
-    }
     return undefined;
   };
   const resolveExecutionDefinition = (
@@ -7386,6 +7349,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     supervisedSessionFile,
     sameObservedSessionPath,
     currentManager,
+    currentProjectAssignment,
     sameManagerDescriptor,
     worktreeGroupScope,
     supervisionRuntime,
@@ -9019,6 +8983,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     runHerdr,
     leadInstanceId,
     currentManager,
+    currentProjectAssignment,
     workspaceId,
     currentWorktreeScope,
     projectAssignmentForScope,
@@ -9864,22 +9829,32 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const releaseCoordinationPublication = await enterCoordinationPublication();
     try {
       const sessionId = ctx.sessionManager.getSessionId();
-      let scope: Awaited<ReturnType<typeof currentWorktreeScope>>;
-      try {
-        scope =
-          activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
-      } catch (error) {
-        if (error instanceof OperationError || !(error instanceof Error))
-          throw error;
-        const wrapped = structuredError("internal_failure", error.message);
-        Object.defineProperty(wrapped, "cause", { value: error });
-        throw wrapped;
-      }
+      const identity = readSessionKind(
+        ctx.sessionManager.getEntries(),
+        sessionId,
+      );
+      if (!identity)
+        throw structuredError(
+          "internal_failure",
+          "Session identity is unavailable",
+        );
+      if (identity.kind === "managed" && activeRole() !== "lead")
+        throw structuredError(
+          "internal_failure",
+          "Managed Lead cannot use ordinary supervisor routing",
+        );
       let assignment: ProjectAssignment | undefined;
-      try {
-        assignment = scope && projectAssignmentForScope(scope, sessionId);
-      } catch (error) {
-        throw boundaryError(error);
+      if (identity.kind === "managed" && activeRole() === "lead") {
+        try {
+          assignment = await currentProjectAssignment(ctx);
+        } catch (error) {
+          throw boundaryError(error);
+        }
+        if (!assignment)
+          throw structuredError(
+            "internal_failure",
+            "Managed project assignment is unavailable",
+          );
       }
       if (assignment) {
         const files = resolveMessageFiles(

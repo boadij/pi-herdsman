@@ -1416,6 +1416,105 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
   }
 });
 
+test("registered failed-turn reporting uses exact Managed session identity before execution restoration", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "managed-lead-pane";
+  const sessionId = randomUUID();
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId,
+        kind: "managed",
+        repoKey: "managed-repo",
+        branch: "managed-branch",
+      },
+    },
+  ];
+  const definitionsReached = testGate<void>();
+  const pi = fakePi({ entries });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  support.fileReadHook = (path) => {
+    if (path === join(PI_AGENTS_DIR, "agent.md")) definitionsReached.resolve();
+  };
+  let sessionStartFinished = false;
+  const starting = pi.events
+    .get("session_start")![0](undefined, context)
+    .then(() => {
+      sessionStartFinished = true;
+    });
+  try {
+    // Session identity has been initialized, but prepareLeadExecution has not
+    // run yet, so the mutable execution profile is still absent.
+    await definitionsReached.promise;
+    assert.equal(sessionStartFinished, false);
+    assert.ok(
+      entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-session-kind" &&
+          entry.data?.sessionId === sessionId &&
+          entry.data?.kind === "managed",
+      ),
+    );
+
+    pi.events.get("agent_start")![0]({}, context);
+    pi.events.get("turn_end")![0](
+      {
+        outcome: "error",
+        messageEntryId: randomUUID(),
+        message: { role: "assistant", content: "failed" },
+      },
+      context,
+    );
+    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+
+    const report = entries.find(
+      (entry: any) =>
+        entry?.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.sessionId === sessionId,
+    ) as any;
+    assert.equal(report?.data?.target, "project");
+
+    // The same restored Managed identity must not classify a different active
+    // Pi session as project-owned.
+    const otherSessionId = randomUUID();
+    context.sessionManager.getSessionId = () => otherSessionId;
+    pi.events.get("agent_start")![0]({}, context);
+    pi.events.get("turn_end")![0](
+      {
+        outcome: "error",
+        messageEntryId: randomUUID(),
+        message: { role: "assistant", content: "failed" },
+      },
+      context,
+    );
+    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    const mismatchedReport = entries.find(
+      (entry: any) =>
+        entry?.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.sessionId === otherSessionId,
+    ) as any;
+    assert.equal(mismatchedReport?.data?.target, "chief");
+  } finally {
+    await starting;
+    support.fileReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("peer provenance enrichment never replaces the Lead cwd", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -2759,17 +2858,21 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext(
-    [],
-    [
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: "message_supervisor" }],
-        },
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: { version: 1, sessionId: LEAD_SESSION_ID, kind: "ordinary" },
+    },
+  ];
+  const context = fakeContext(entries, [
+    {
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "message_supervisor" }],
       },
-    ],
-  ) as any;
+    },
+  ]) as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const tool = pi.tools.find(

@@ -52,6 +52,7 @@ import {
   writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
+import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
 import { readRequiredEvidenceSnapshot, resultPath } from "./storage.ts";
 import { claimDelegationLock } from "./agent-controller.ts";
 import {
@@ -1098,6 +1099,11 @@ test("unverifiable exact assignment initialization never persists ordinary ident
   };
   writeProjectAssignment(supervisionRuntime(), assignment);
   let herdrAvailable = false;
+  let releaseSnapshot!: (result: ExecResult) => void;
+  let snapshotRequested!: () => void;
+  const snapshotStarted = new Promise<void>((resolve) => {
+    snapshotRequested = resolve;
+  });
   const pi = fakeChiefPi({
     exec: (_command, args) =>
       herdrAvailable
@@ -1125,7 +1131,12 @@ test("unverifiable exact assignment initialization never persists ordinary ident
               code: 0,
             }
           : { stdout: "{}", stderr: "", code: 0 }
-        : { stdout: "", stderr: "Herdr disconnected", code: 1 },
+        : isApiSnapshot(args)
+          ? new Promise<ExecResult>((resolve) => {
+              releaseSnapshot = resolve;
+              snapshotRequested();
+            })
+          : { stdout: "", stderr: "Herdr disconnected", code: 1 },
   });
   const context = fakeContext(pi.entries) as any;
   registerExtension!(pi.pi as never);
@@ -1138,9 +1149,23 @@ test("unverifiable exact assignment initialization never persists ordinary ident
     );
     setLeadEnvironment();
   });
-  await pi.events.get("session_start")![0](undefined, context);
+  const starting = pi.events.get("session_start")![0](undefined, context);
+  await snapshotStarted;
   assert.equal(readSessionKind(pi.entries, LEAD_SESSION_ID), undefined);
-  assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
+  assert.deepEqual(
+    pi.pi.getActiveTools(),
+    [],
+    "unknown identity exposes no tools while startup evidence is pending",
+  );
+  releaseSnapshot({ stdout: "", stderr: "Herdr disconnected", code: 1 });
+  await starting;
+  assert.equal(
+    pi.pi
+      .getActiveTools()
+      .some((name) => AGENT_COORDINATION_TOOLS.includes(name as never)),
+    false,
+    "unknown identity exposes no coordination tools during pending execution",
+  );
   assert.ok(
     pi.entries.some((entry: any) =>
       String(entry.data?.error).includes("Herdr disconnected"),
@@ -1246,6 +1271,125 @@ test("known managed identity remains unavailable and recovery-only when startup 
       String(entry.data?.error).includes("Herdr disconnected"),
     ),
   );
+});
+
+test("managed pending execution projects only exact-owner recovery tools", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-pending-tools-${randomUUID()}.sock`,
+  );
+  const sessionId = LEAD_SESSION_ID;
+  const identity = {
+    version: 1 as const,
+    sessionId,
+    kind: "managed" as const,
+    repoKey: "peer-test-repo",
+    branch: "pending-project",
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, "pending-owned-agent");
+  writeAgentState(mailbox, managedState("pending-owned-agent"));
+  let releaseSnapshot!: (result: ExecResult) => void;
+  let snapshotRequested!: () => void;
+  const snapshotStarted = new Promise<void>((resolve) => {
+    snapshotRequested = resolve;
+  });
+  const pi = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: identity,
+      },
+    ],
+    exec: (_command, args) =>
+      isApiSnapshot(args)
+        ? new Promise<ExecResult>((resolve) => {
+            releaseSnapshot = resolve;
+            snapshotRequested();
+          })
+        : { stdout: "", stderr: "Herdr disconnected", code: 1 },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager.getSessionId = () => sessionId;
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    rmSync(mailbox, { recursive: true, force: true });
+    setLeadEnvironment();
+  });
+
+  const starting = pi.events.get("session_start")![0](undefined, context);
+  await snapshotStarted;
+  const recoveryTools = AGENT_COORDINATION_TOOLS.filter(
+    (name) => name !== "delegate_agent" && name !== "continue_agent",
+  );
+  assert.deepEqual(pi.pi.getActiveTools(), recoveryTools);
+  releaseSnapshot({ stdout: "", stderr: "Herdr disconnected", code: 1 });
+  await starting;
+  assert.equal(
+    pi.pi
+      .getActiveTools()
+      .some((name) =>
+        [
+          "delegate_agent",
+          "continue_agent",
+          "message_supervisor",
+          "list_peers",
+          "message_peer",
+        ].includes(name),
+      ),
+    false,
+  );
+});
+
+test("managed pending startup without owned Agents exposes no coordination tools", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-pending-no-agents-${randomUUID()}.sock`,
+  );
+  const sessionId = LEAD_SESSION_ID;
+  const pi = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: {
+          version: 1,
+          sessionId,
+          kind: "managed",
+          repoKey: "peer-test-repo",
+          branch: "pending-project",
+        },
+      },
+    ],
+    exec: (_command, args) =>
+      isApiSnapshot(args)
+        ? new Promise<ExecResult>((resolve) => {
+            releaseSnapshot = resolve;
+            snapshotRequested();
+          })
+        : { stdout: "", stderr: "Herdr disconnected", code: 1 },
+  });
+  let releaseSnapshot!: (result: ExecResult) => void;
+  let snapshotRequested!: () => void;
+  const snapshotStarted = new Promise<void>((resolve) => {
+    snapshotRequested = resolve;
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager.getSessionId = () => sessionId;
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  });
+
+  const starting = pi.events.get("session_start")![0](undefined, context);
+  await snapshotStarted;
+  assert.deepEqual(pi.pi.getActiveTools(), []);
+  releaseSnapshot({ stdout: "", stderr: "Herdr disconnected", code: 1 });
+  await starting;
 });
 
 test("incomplete global assignment inventory never initializes an ordinary identity", async (t) => {

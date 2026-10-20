@@ -34,6 +34,7 @@ import {
   listProjectMessages,
   projectAssignmentPath,
   managerDescriptorPath,
+  readSessionKind,
   readManagerDescriptor,
   removeProjectAssignment,
   supervisionRuntime,
@@ -2948,17 +2949,38 @@ test("Lead failure report keeps its assigned-project destination across retireme
   const context = fakeContext(pi.entries);
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.isIdle = () => true;
-  let managed = true;
+  pi.entries.push({
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data: {
+      version: 1,
+      sessionId: LEAD_SESSION_ID,
+      kind: "managed",
+      repoKey: "repo-key",
+      branch: "assigned-branch",
+    },
+  });
   let role: "lead" | "manager" = "lead";
   let assignment: object | undefined = { project: "assigned" };
   let chiefFailures = 0;
   let projectPublications = 0;
+  const isManagedLead = () =>
+    readSessionKind(pi.entries, context.sessionManager.getSessionId())?.kind ===
+    "managed";
+  assert.equal(isManagedLead(), true);
+  context.sessionManager.getSessionId = () => "different-session";
+  assert.equal(
+    isManagedLead(),
+    false,
+    "identity is bound to the exact session",
+  );
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   const createRuntime = () =>
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
       activeRole: () => role,
       isVerifiedActiveLead: () => true,
-      isManagedLead: () => managed,
+      isManagedLead,
       entryName: "pi-herdsman-herd-run",
       hasPendingStarts: () => false,
       listAgentStates: () => [],
@@ -3045,7 +3067,6 @@ test("Lead failure report keeps its assigned-project destination across retireme
     "legacy report without a persisted destination fails closed",
   );
 
-  managed = false;
   role = "lead";
   restored.agentStarted();
   restored.turnEnd({
@@ -3055,12 +3076,14 @@ test("Lead failure report keeps its assigned-project destination across retireme
   });
   restored.beforeSettle({ outcome: "error" });
   await restored.agentSettled(context, false);
-  assert.equal(chiefFailures, 1, "new unassigned failures use the Chief route");
+  assert.equal(chiefFailures, 0, "Managed identity never falls back to Chief");
   const newPending = pi.entries.find(
     (entry: any) =>
-      entry.data?.phase === "report_pending" && entry.data?.target === "chief",
+      entry.data?.phase === "report_pending" &&
+      entry.data?.reportId !== pending.data.reportId &&
+      entry.data?.target === "project",
   ) as any;
-  assert.equal(newPending.data.target, "chief");
+  assert.equal(newPending.data.target, "project");
 });
 
 test("failed idle-report publication keeps one recoverable pending intent", async (t) => {

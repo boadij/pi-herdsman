@@ -502,9 +502,32 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
     const records = (id: string) =>
       listChiefMessagePaths(runtime, id).map((path) => readChiefMessage(path));
 
+    const identityEntry = pi.entries.find(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-session-kind" &&
+        entry.data?.sessionId === leadId,
+    ) as any;
+    const managedIdentity = identityEntry.data;
+    const beforeContradictoryIdentity = listProjectMessages(
+      runtime,
+      "repo-key",
+      "smoke/routing",
+    );
+    identityEntry.data = { version: 1, sessionId: leadId, kind: "ordinary" };
+    const ordinaryResult = await send("ORDINARY_CANNOT_USE_PROJECT_ROUTE");
+    assert.equal(
+      JSON.stringify(ordinaryResult).includes(
+        "Project message saved for Manager",
+      ),
+      false,
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing"),
+      beforeContradictoryIdentity,
+    );
+    identityEntry.data = managedIdentity;
     const saved = await send("SMOKE_READY_1");
     assert.match(JSON.stringify(saved), /Project message saved for Manager/);
-    assert.equal(records(managerId).length, 0);
     assert.deepEqual(
       listProjectMessages(runtime, "repo-key", "smoke/routing").map(
         ({ repoKey, branch, fromSessionId, text }) => ({
@@ -540,6 +563,17 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
       runtime,
     );
     removeProjectAssignment(runtime, "repo-key", "smoke/routing");
+    const unavailableProjectMessages = listProjectMessages(
+      runtime,
+      "repo-key",
+      "smoke/routing",
+    );
+    const unavailableRoute = await send("MUST_NOT_FALL_BACK");
+    assert.equal(unavailableRoute.isError, true);
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing"),
+      unavailableProjectMessages,
+    );
     await t.waitFor(() =>
       assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
     );
@@ -1120,6 +1154,19 @@ test("project Lead observes Manager availability across turnover without exposin
   const branch: any[] = [];
   let messageId = 0;
   const pi = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: {
+          version: 1,
+          sessionId: leadId,
+          kind: "managed",
+          repoKey: "repo-key",
+          branch: assignment.branch,
+        },
+      },
+    ],
     exec,
     sendMessage: (message: any) => {
       const id = `synthetic-${++messageId}`;
@@ -1133,7 +1180,7 @@ test("project Lead observes Manager availability across turnover without exposin
     },
   });
   registerExtension!(pi.pi as never);
-  const ctx = fakeContext([], branch) as any;
+  const ctx = fakeContext(pi.entries, branch) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => leadId,
@@ -1282,9 +1329,9 @@ test("project Lead observes Manager availability across turnover without exposin
     assert.equal(changedAssignment.isError, true);
     assert.match(
       changedAssignment.content[0].text,
-      /Project assignment changed before message publication/,
+      /Managed project assignment is unavailable/,
     );
-    assert.equal(changedAssignment.details.error.category, "invalid_request");
+    assert.equal(changedAssignment.details.error.category, "internal_failure");
     assert.equal(assignmentLookupCalls, 2);
     assert.equal(
       listProjectMessages(runtime, "repo-key", assignment.branch).some(
@@ -1426,6 +1473,13 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
   const branch: any[] = [];
   let messageId = 0;
   const pi = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: { version: 1, sessionId: leadId, kind: "ordinary" },
+      },
+    ],
     exec,
     sendMessage: (message: any) => {
       const id = `synthetic-${++messageId}`;
@@ -1439,7 +1493,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     },
   });
   registerExtension!(pi.pi as never);
-  const ctx = fakeContext([], branch) as any;
+  const ctx = fakeContext(pi.entries, branch) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => leadId,
@@ -1991,6 +2045,71 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
   }
 });
 
+test("Managed supervisor messages never fall through when the active role is not Lead", async () => {
+  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  let ordinaryRoutingCalls = 0;
+  let assignmentLookups = 0;
+  let projectPublications = 0;
+  const host = new Proxy(
+    {
+      pi: {},
+      leadRuntime: { chiefMode: "inactive" },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "manager",
+      currentSupervisor: async () => {
+        ordinaryRoutingCalls++;
+        return undefined;
+      },
+      currentProjectAssignment: async () => {
+        assignmentLookups++;
+        return undefined;
+      },
+      publishProjectMessage: async () => {
+        projectPublications++;
+        return undefined;
+      },
+    },
+    {
+      get(target, key: string) {
+        return key in target
+          ? target[key as keyof typeof target]
+          : () => undefined;
+      },
+    },
+  ) as any;
+  const runtime = createLeadCoordinationRuntime(host);
+  const sessionId = randomUUID();
+  const context = fakeContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId,
+        kind: "managed",
+        repoKey: "repo-key",
+        branch: "managed-branch",
+      },
+    },
+  ]) as any;
+  context.sessionManager.getSessionId = () => sessionId;
+
+  await assert.rejects(
+    runtime.supervisorMessage(
+      "message",
+      { message: "must not route through Chief" },
+      undefined,
+      undefined,
+      context,
+    ),
+    /Managed Lead cannot use ordinary supervisor routing/,
+  );
+  assert.equal(ordinaryRoutingCalls, 0);
+  assert.equal(assignmentLookups, 0);
+  assert.equal(projectPublications, 0);
+});
+
 for (const reachable of [true, false]) {
   test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async (t) => {
     setLeadEnvironment();
@@ -2275,8 +2394,19 @@ for (const reachable of [true, false]) {
         process.env.HERDR_PANE_ID = "lead-pane";
         process.env.HERDR_TAB_ID = "lead-tab";
         const lead = fakeChiefPi({ exec });
+        lead.entries.push({
+          type: "custom",
+          customType: "pi-herdsman-session-kind",
+          data: {
+            version: 1,
+            sessionId: leadId,
+            kind: "managed",
+            repoKey: "repo-key",
+            branch,
+          },
+        });
         registerExtension!(lead.pi as never);
-        const leadCtx = fakeContext() as any;
+        const leadCtx = fakeContext(lead.entries) as any;
         leadCtx.sessionManager = {
           ...leadCtx.sessionManager,
           getSessionId: () => leadId,
@@ -2292,7 +2422,7 @@ for (const reachable of [true, false]) {
               undefined,
               leadCtx,
             );
-          assert.equal(result.details.branch, branch);
+          assert.equal(result.details.branch, branch, JSON.stringify(result));
           assert.ok(typeof result.details.id === "string");
           const saved = listProjectMessages(runtime, "repo-key", branch).find(
             (message) => message.id === result.details.id,
@@ -2470,7 +2600,19 @@ for (const scenario of [
       tab_id: "manager-tab",
     };
     const inventory = [manager, agent];
-    const entries: unknown[] = [];
+    const entries: unknown[] = [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: {
+          version: 1,
+          sessionId,
+          kind: "managed",
+          repoKey: "repo-key",
+          branch: assignment.branch,
+        },
+      },
+    ];
     const pi = fakeChiefPi({
       entries,
       persistMessages: true,
