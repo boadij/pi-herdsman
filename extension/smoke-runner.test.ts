@@ -69,6 +69,7 @@ import {
   staffDelegateResults,
   assertNoFailedProjectDelegation,
   managerAssignmentDiagnostics,
+  supervisorMessageDiagnostics,
   managerAssignmentIdentity,
   managerAssignmentBranchMismatch,
   staffActionResults,
@@ -1300,6 +1301,100 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
     JSON.stringify(projection),
     /unexpected-branch|expected-branch/,
   );
+});
+
+test("manager handoff failure artifact retains only correlated safe readiness evidence", async () => {
+  const contents = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "message_supervisor",
+            id: "PRIVATE_CALL_ID",
+            arguments: {
+              message: "MANAGER_HANDOFF_READY",
+              prompt: "PRIVATE_PROMPT",
+            },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "message_supervisor",
+        toolCallId: "PRIVATE_CALL_ID",
+        isError: true,
+        details: {
+          error: { category: "agent_busy", message: "PRIVATE_ERROR" },
+        },
+        content: "PRIVATE_RESULT_BODY",
+      },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const correlated = supervisorMessageDiagnostics(
+    contents,
+    "MANAGER_HANDOFF_READY",
+  );
+  assert.deepEqual(correlated, {
+    supervisorCallObserved: true,
+    supervisorResultState: "error",
+    supervisorErrorCategory: "agent_busy",
+  });
+  assert.deepEqual(supervisorMessageDiagnostics("", "MANAGER_HANDOFF_READY"), {
+    supervisorCallObserved: false,
+    supervisorResultState: "missing",
+    supervisorErrorCategory: "none",
+  });
+
+  const evidence = sanitizedFailureEvidence(
+    {
+      scenario: "manager-handoff",
+      simulated: true,
+      stage: "manager-handoff-assignment",
+      prompt: "PRIVATE_CONTEXT_PROMPT",
+      environment: { TOKEN: "PRIVATE_SECRET" },
+    },
+    {
+      error: {
+        code: "SMOKE_STALLED",
+        smoke: {
+          stage: "manager-handoff-assignment",
+          lastProgress: {
+            ...correlated,
+            readinessDeliveryObserved: false,
+            prompt: "PRIVATE_PROGRESS_PROMPT",
+            args: "PRIVATE_ARGS",
+            body: "PRIVATE_BODY",
+            error: "PRIVATE_RAW_ERROR",
+            transcript: contents,
+          },
+        },
+      },
+    },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  const artifactPath = await preserveFailureEvidence(evidence);
+  try {
+    const persisted = await readFile(artifactPath, "utf8");
+    assert.deepEqual(JSON.parse(persisted).managerHandoffProgress, {
+      supervisorCallObserved: true,
+      supervisorResultState: "error",
+      supervisorErrorCategory: "agent_busy",
+      readinessDeliveryObserved: false,
+    });
+    assert.doesNotMatch(persisted, /PRIVATE/u);
+    assert.doesNotMatch(persisted, /PRIVATE_CALL_ID|MANAGER_HANDOFF_READY/u);
+  } finally {
+    await rm(dirname(artifactPath), { recursive: true, force: true });
+  }
 });
 
 test("Manager handoff cleanup owns the worktree before Lead readiness", async () => {

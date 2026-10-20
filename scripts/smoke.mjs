@@ -757,6 +757,70 @@ export function managerAssignmentDiagnostics({
   };
 }
 
+const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
+  "not_running_inside_herdr",
+  "agent_label_exists",
+  "pane_not_ready",
+  "target_not_found",
+  "target_ambiguous",
+  "rollback_failure",
+  "agent_busy",
+  "invalid_request",
+  "incompatible_build",
+  "internal_failure",
+]);
+
+export function supervisorMessageDiagnostics(contents, text) {
+  const entries = sessionEntries(contents);
+  const calls = entries.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content.filter(
+          (block) =>
+            block?.type === "toolCall" &&
+            block.name === "message_supervisor" &&
+            block.arguments?.message === text &&
+            typeof block.id === "string",
+        )
+      : [],
+  );
+  const results = calls.flatMap((call) =>
+    entries
+      .filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "message_supervisor" &&
+          entry.message.toolCallId === call.id,
+      )
+      .map((entry) => entry.message),
+  );
+  const success = results.some(
+    (result) => !result.isError && result.details?.ok !== false,
+  );
+  const failed = results.find(
+    (result) => result.isError === true || result.details?.ok === false,
+  );
+  const category = failed?.details?.error?.category;
+  return {
+    supervisorCallObserved: calls.length > 0,
+    supervisorResultState: !calls.length
+      ? "missing"
+      : success
+        ? "success"
+        : failed
+          ? "error"
+          : "pending",
+    supervisorErrorCategory:
+      failed && !success
+        ? STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
+          ? category
+          : "tool_error"
+        : "none",
+  };
+}
+
 export function managerAssignmentIdentity(row, worktree, branch) {
   if (!row) return "not_observed";
   return String(
@@ -3527,10 +3591,11 @@ async function runManagerHandoffSmoke(ctx) {
         provenanceMatch = "false";
         errorCategory = "provenance_observation_failed";
       }
-      const ready = hasSuccessfulSupervisorMessage(
+      const supervisor = supervisorMessageDiagnostics(
         leadSession.contents,
         "MANAGER_HANDOFF_READY",
       );
+      const ready = supervisor.supervisorResultState === "success";
       const readyEntry =
         session &&
         sessionEntries(session.contents).find(
@@ -3542,18 +3607,6 @@ async function runManagerHandoffSmoke(ctx) {
             entry.content ===
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
-      const readyCall = sessionEntries(leadSession.contents).some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "assistant" &&
-          Array.isArray(entry.message.content) &&
-          entry.message.content.some(
-            (block) =>
-              block?.type === "toolCall" &&
-              block.name === "message_supervisor" &&
-              block.arguments?.message === "MANAGER_HANDOFF_READY",
-          ),
-      );
       if (!ready || !readyEntry)
         return {
           done: false,
@@ -3562,9 +3615,11 @@ async function runManagerHandoffSmoke(ctx) {
             candidateProcessCount: processCount,
             provenanceMatch,
             errorCategory,
-            supervisorCall: String(readyCall),
+            ...supervisor,
+            supervisorCall: String(supervisor.supervisorCallObserved),
             supervisorSuccess: String(ready),
             readiness: String(!!readyEntry),
+            readinessDeliveryObserved: !!readyEntry,
           }),
         };
       return {
@@ -3576,7 +3631,9 @@ async function runManagerHandoffSmoke(ctx) {
           errorCategory,
           supervisorCall: "true",
           supervisorSuccess: "true",
+          ...supervisor,
           readiness: "true",
+          readinessDeliveryObserved: true,
         }),
         value: { row, lead, leadSession, owner: session },
       };
@@ -7525,6 +7582,37 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
             : null,
       }
     : null;
+  const managerProgress =
+    failure?.error?.smoke?.stage === "manager-handoff-assignment"
+      ? failure.error.smoke.lastProgress
+      : null;
+  const managerHandoffProgress = managerProgress
+    ? {
+        supervisorCallObserved:
+          typeof managerProgress.supervisorCallObserved === "boolean"
+            ? managerProgress.supervisorCallObserved
+            : null,
+        supervisorResultState: [
+          "missing",
+          "pending",
+          "success",
+          "error",
+        ].includes(managerProgress.supervisorResultState)
+          ? managerProgress.supervisorResultState
+          : null,
+        supervisorErrorCategory: [
+          ...STRUCTURED_TOOL_ERROR_CATEGORIES,
+          "tool_error",
+          "none",
+        ].includes(managerProgress.supervisorErrorCategory)
+          ? managerProgress.supervisorErrorCategory
+          : "none",
+        readinessDeliveryObserved:
+          typeof managerProgress.readinessDeliveryObserved === "boolean"
+            ? managerProgress.readinessDeliveryObserved
+            : null,
+      }
+    : null;
   return {
     scenario: ctx.scenario,
     mode: ctx.simulated ? "simulated" : "live",
@@ -7535,6 +7623,7 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         ? failure.error.code.slice(0, 80)
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
+    ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
