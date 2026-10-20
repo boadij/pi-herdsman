@@ -9715,13 +9715,33 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     _update: unknown,
     ctx: ExtensionContext,
   ) => {
+    const structuredError = (
+      category: "invalid_request" | "target_not_found" | "internal_failure",
+      message: string,
+    ) =>
+      new OperationError({
+        category,
+        message,
+        operation: "message_supervisor",
+        rollbackOccurred: false,
+        retryAttempted: false,
+      });
     if (controllerScope.kind !== "root" || leadRuntime.chiefMode !== "inactive")
-      throw new Error("Chief is available only to ordinary leads");
+      throw structuredError(
+        "invalid_request",
+        "Chief is available only to ordinary leads",
+      );
     const params = raw as { message: string; files?: readonly string[] };
     if (typeof params.message !== "string" || !params.message.trim())
-      throw new Error("Message must contain non-whitespace text");
+      throw structuredError(
+        "invalid_request",
+        "Message must contain non-whitespace text",
+      );
     if (!leadCoordinationHealthy)
-      throw new Error("Lead coordination state is unavailable");
+      throw structuredError(
+        "internal_failure",
+        "Lead coordination state is unavailable",
+      );
     let record: ChiefMessageRecord | undefined;
     const releaseCoordinationPublication = await enterCoordinationPublication();
     try {
@@ -9737,7 +9757,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           resolveMessageFiles(ctx, params.files, "message_supervisor"),
         );
         if (!published)
-          throw new Error(
+          throw structuredError(
+            "invalid_request",
             "Project assignment changed before message publication",
           );
         return {
@@ -9751,7 +9772,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         };
       }
       const chief = await currentSupervisor(ctx);
-      if (!chief) throw new Error("No active supervisor is available");
+      if (!chief)
+        throw structuredError(
+          "target_not_found",
+          "No active supervisor is available",
+        );
       const recordId = randomUUID();
       const createdAt = Date.now();
       const prepared = await prepareCoordinationInput(

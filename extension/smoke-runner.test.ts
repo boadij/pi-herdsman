@@ -1392,6 +1392,24 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorResultState: "error",
     supervisorErrorCategory: "agent_busy",
   });
+  const unknownCategory = supervisorMessageDiagnostics(
+    contents.replace('"agent_busy"', '"PRIVATE_UNLISTED_CATEGORY"'),
+    "MANAGER_HANDOFF_READY",
+  );
+  assert.equal(unknownCategory.supervisorErrorCategory, "tool_error");
+  assert.doesNotMatch(
+    JSON.stringify(unknownCategory),
+    /PRIVATE_ERROR|PRIVATE_UNLISTED/u,
+  );
+  const mappedSupervisorError = supervisorMessageDiagnostics(
+    contents.replace('"agent_busy"', '"invalid_request"'),
+    "MANAGER_HANDOFF_READY",
+  );
+  assert.equal(
+    mappedSupervisorError.supervisorErrorCategory,
+    "invalid_request",
+  );
+  assert.doesNotMatch(JSON.stringify(mappedSupervisorError), /PRIVATE_ERROR/u);
   assert.deepEqual(supervisorMessageDiagnostics("", "MANAGER_HANDOFF_READY"), {
     supervisorCallObserved: false,
     supervisorResultState: "missing",

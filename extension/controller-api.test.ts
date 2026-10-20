@@ -1220,6 +1220,44 @@ test("project Lead observes Manager availability across turnover without exposin
     const replacementState = latestState();
     assert.match(replacementState.content, /availability: available/);
     assert.doesNotMatch(replacementState.content, new RegExp(replacementId));
+
+    let assignmentLookupCalls = 0;
+    let replaceDuringPublication = false;
+    ctx.sessionManager.getSessionId = () => {
+      if (replaceDuringPublication && ++assignmentLookupCalls === 2)
+        writeProjectAssignment(runtime, { ...assignment, id: randomUUID() });
+      return leadId;
+    };
+    replaceDuringPublication = true;
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "message_supervisor")!
+        .execute(
+          "message",
+          { message: "ASSIGNMENT_CHANGED_BEFORE_PUBLICATION" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      (
+        error: Error & { detail?: { category?: string; operation?: string } },
+      ) => {
+        assert.equal(
+          error.message,
+          "Project assignment changed before message publication",
+        );
+        assert.equal(error.detail?.category, "invalid_request");
+        assert.equal(error.detail?.operation, "message_supervisor");
+        return true;
+      },
+    );
+    assert.equal(assignmentLookupCalls, 2);
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", assignment.branch).some(
+        (message) => message.text === "ASSIGNMENT_CHANGED_BEFORE_PUBLICATION",
+      ),
+      false,
+    );
     replacement.release();
     replacement = undefined;
   } finally {
@@ -1325,6 +1363,26 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       );
     const chiefStateResult = await observe();
     assert.equal(chiefStateResult?.message, undefined);
+    const supervisorMessage = pi.tools.find(
+      (tool) => tool.name === "message_supervisor",
+    )!;
+    await assert.rejects(
+      supervisorMessage.execute(
+        "message",
+        { message: "   " },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (
+        error: Error & { detail?: { category?: string; operation?: string } },
+      ) => {
+        assert.equal(error.message, "Message must contain non-whitespace text");
+        assert.equal(error.detail?.category, "invalid_request");
+        assert.equal(error.detail?.operation, "message_supervisor");
+        return true;
+      },
+    );
     const chiefState = branch.at(-1);
     assert.equal(
       (pi.sentMessageCalls.at(-1)!.message as any).customType,
@@ -1346,9 +1404,6 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       workspaceId: WORKSPACE,
       build: OTHER_HERDSMAN_BUILD,
     });
-    const supervisorMessage = pi.tools.find(
-      (tool) => tool.name === "message_supervisor",
-    )!;
     await assert.rejects(
       supervisorMessage.execute(
         "message",
@@ -1443,22 +1498,40 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     assert.match(noSupervisor.content, /supervisor: none/);
     assert.match(noSupervisor.content, /availability: unavailable/);
     await assert.rejects(
-      pi.tools
-        .find((tool) => tool.name === "message_supervisor")!
-        .execute(
-          "message",
-          { message: "NO_SUPERVISOR_MUST_REJECT" },
-          undefined,
-          undefined,
-          ctx,
-        ),
-      /No active supervisor is available/,
+      supervisorMessage.execute(
+        "message",
+        { message: "NO_SUPERVISOR_MUST_REJECT" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (error: Error & { detail?: { category?: string } }) => {
+        assert.equal(error.message, "No active supervisor is available");
+        assert.equal(error.detail?.category, "target_not_found");
+        return true;
+      },
     );
     observationFailure = true;
     assert.equal((await observe())?.message, undefined);
     const unverified = branch.at(-1);
     assert.match(unverified.content, /supervisor: unverified/);
     assert.match(unverified.content, /availability: unknown/);
+    await assert.rejects(
+      supervisorMessage.execute(
+        "message",
+        { message: "UNHEALTHY_COORDINATION_MUST_REJECT" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (error: Error & { detail?: { category?: string } }) => {
+        // This fixture fails Herdr during the supervisor-state read itself,
+        // before the explicit unhealthy-coordination guard is reached.
+        assert.equal(error.message, "simulated Herdr failure");
+        assert.equal(error.detail?.category, "internal_failure");
+        return true;
+      },
+    );
     assert.deepEqual(
       listProjectMessages(runtime, "repo-key", "smoke/routing"),
       [],
@@ -1467,6 +1540,58 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     await pi.events.get("session_shutdown")?.[0]();
     chief.release();
     delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("unhealthy Lead coordination rejects supervisor messages", async () => {
+  setLeadEnvironment();
+  const leadId = randomUUID();
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-state",
+      data: { instanceId: "malformed" },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { sessionId: leadId, role: "lead", leadTools: [] },
+    },
+  ];
+  const pi = fakeChiefPi({ entries });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(entries) as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+
+    const supervisorMessage = pi.tools.find(
+      (tool) => tool.name === "message_supervisor",
+    )!;
+    await assert.rejects(
+      supervisorMessage.execute(
+        "message",
+        { message: "HEALTHY_ROLE_MUST_NOT_PUBLISH" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (
+        error: Error & { detail?: { category?: string; operation?: string } },
+      ) => {
+        assert.equal(error.message, "Lead coordination state is unavailable");
+        assert.equal(error.detail?.category, "internal_failure");
+        assert.equal(error.detail?.operation, "message_supervisor");
+        return true;
+      },
+    );
+    assert.deepEqual(pi.sentMessageCalls, []);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
     setLeadEnvironment();
   }
 });
@@ -1644,6 +1769,28 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     await pi.events.get("session_start")![0](undefined, ctx);
     assert.equal(readPeerLeadRecord(peerRuntime(), senderId), undefined);
     await pi.commandOptions.get("chief").handler("", ctx);
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "message_supervisor")!
+        .execute(
+          "message",
+          { message: "CHIEF_ROLE_MUST_REJECT" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      (
+        error: Error & { detail?: { category?: string; operation?: string } },
+      ) => {
+        assert.equal(
+          error.message,
+          "Chief is available only to ordinary leads",
+        );
+        assert.equal(error.detail?.category, "invalid_request");
+        assert.equal(error.detail?.operation, "message_supervisor");
+        return true;
+      },
+    );
     const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
     writeChiefMessage(
       {
