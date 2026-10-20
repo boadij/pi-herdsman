@@ -6600,6 +6600,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           manager.repoKey,
           assignment.branch,
           close,
+          signal,
         ),
     );
   };
@@ -6987,6 +6988,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 };
               }
             },
+            operationSignal,
           )
           .catch((error) => {
             if (!leadStopped && !reopened) throw error;
@@ -8536,6 +8538,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         host.writeProjectAssignment(runtime, written);
         return written;
       },
+      ctx.signal,
     );
     onPersisted?.(suppliedAdditions);
     return {
@@ -9860,6 +9863,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               reportedRetirementErrors.delete(errorKey);
               return 1;
             },
+            ctx.signal,
           );
         } catch (error) {
           if (!reportedRetirementErrors.has(retired.id)) {
@@ -12018,6 +12022,7 @@ export function createLeadRoleTransitions(
               repoKey,
               observed.branch,
               retireUnderAssignmentLock,
+              ctx.signal,
             );
             return;
           } catch (error) {
@@ -12123,6 +12128,7 @@ export function createLeadRoleTransitions(
             )
               throw new Error("Project assignment changed during takeover");
           },
+          ctx.signal,
         ),
     );
     ctx.ui.notify(
