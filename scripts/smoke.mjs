@@ -761,11 +761,9 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
-    supervisorToolOffered: [
-      "offered",
-      "not_offered",
-      "not_observed",
-    ].includes(supervisorToolOffered)
+    supervisorToolOffered: ["offered", "not_offered", "not_observed"].includes(
+      supervisorToolOffered,
+    )
       ? supervisorToolOffered
       : "not_observed",
     supervisorHandlerBranchStatus: "not_observed",
@@ -807,13 +805,15 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
     entry.type === "message" &&
     entry.message?.role === "assistant" &&
     Array.isArray(entry.message.content)
-      ? entry.message.content.filter(
-          (block) =>
-            block?.type === "toolCall" &&
-            block.name === "message_supervisor" &&
-            block.arguments?.message === text &&
-            typeof block.id === "string",
-        ).map((call) => ({ call, index }))
+      ? entry.message.content
+          .filter(
+            (block) =>
+              block?.type === "toolCall" &&
+              block.name === "message_supervisor" &&
+              block.arguments?.message === text &&
+              typeof block.id === "string",
+          )
+          .map((call) => ({ call, index }))
       : [],
   );
   const match = calls.at(-1);
@@ -7908,13 +7908,13 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         )
           ? managerProgress.supervisorPersistedErrorCategory
           : "not_observed",
-    supervisorToolOffered: [
-      "offered",
-      "not_offered",
-      "not_observed",
-    ].includes(managerProgress.supervisorToolOffered)
-      ? managerProgress.supervisorToolOffered
-      : "not_observed",
+        supervisorToolOffered: [
+          "offered",
+          "not_offered",
+          "not_observed",
+        ].includes(managerProgress.supervisorToolOffered)
+          ? managerProgress.supervisorToolOffered
+          : "not_observed",
         readinessDeliveryObserved:
           typeof managerProgress.readinessDeliveryObserved === "boolean"
             ? managerProgress.readinessDeliveryObserved

@@ -15,6 +15,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -767,6 +768,7 @@ type ResolvedAssignmentSession = {
     evidenceAssignmentId?: string;
     inheritedEvidence: RequiredEvidence[];
     localEvidence: RequiredEvidence[];
+    terminal?: Record<string, unknown>;
   };
 };
 
@@ -780,6 +782,44 @@ function requiredEvidenceEntriesForRequest(
       entry.customType === "pi-herdsman-agent-required-evidence" &&
       entry.data?.requestId === requestId,
   );
+}
+
+function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
+  const records = entries.map((entry) => entry?.data);
+  const itemsById = new Map<string, RequiredEvidence>();
+  for (let index = 1; index < records.length; index++) {
+    const previous = records[index - 1];
+    const current = records[index];
+    if (
+      !previous ||
+      !current ||
+      [
+        "version",
+        "sessionId",
+        "requestId",
+        "runId",
+        "ownerSessionId",
+        "workspaceId",
+        "agentLabel",
+        "paneId",
+        "projectAssignmentId",
+        "evidenceAssignmentId",
+        "inheritedEvidence",
+      ].some((field) => !isDeepStrictEqual(previous[field], current[field])) ||
+      !Array.isArray(previous.localEvidence) ||
+      !Array.isArray(current.localEvidence)
+    )
+      return false;
+  }
+  for (const record of records) {
+    if (!Array.isArray(record?.localEvidence)) return false;
+    for (const item of record.localEvidence as RequiredEvidence[]) {
+      const previous = itemsById.get(item.id);
+      if (previous && !isDeepStrictEqual(previous, item)) return false;
+      itemsById.set(item.id, item);
+    }
+  }
+  return true;
 }
 
 function currentManagedEvidence(ctx: ExtensionContext):
@@ -1246,6 +1286,34 @@ export function agentResultDetails(
   return details && typeof details === "object" && !Array.isArray(details)
     ? (details as Record<string, unknown>)
     : undefined;
+}
+
+function sameTerminalProvenance(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  const fields = [
+    "requestId",
+    "runId",
+    "ownerSessionId",
+    "workspaceId",
+    "agentLabel",
+    "paneId",
+    "piSessionId",
+    "agentDefinition",
+    "status",
+  ];
+  if (!fields.every((field) => left[field] === right[field])) return false;
+  try {
+    return (
+      typeof left.piSessionFile === "string" &&
+      typeof right.piSessionFile === "string" &&
+      canonicalSessionPath(left.piSessionFile) ===
+        canonicalSessionPath(right.piSessionFile)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export const RESULT_REF_ENTRY = "pi-herdsman-result-ref";
@@ -1792,13 +1860,16 @@ export function resolveAssignmentSession(
             "continue",
           );
       }
-      const allEvidenceEntries = manager
-        .getEntries()
-        .filter(
-          (entry: any) =>
-            entry?.type === "custom" &&
-            entry.customType === "pi-herdsman-agent-required-evidence",
-        ) as any[];
+      const allEntries = manager.getEntries();
+      const evidenceBranch =
+        typeof manager.getBranch === "function"
+          ? manager.getBranch()
+          : undefined;
+      const allEvidenceEntries = allEntries.filter(
+        (entry: any) =>
+          entry?.type === "custom" &&
+          entry.customType === "pi-herdsman-agent-required-evidence",
+      ) as any[];
       for (const entry of allEvidenceEntries) {
         const record = entry?.data;
         if (
@@ -1861,12 +1932,81 @@ export function resolveAssignmentSession(
           "continue",
         );
       const currentState = matchingStates[0];
-      if (hasProjectEvidenceHistory && !currentState)
-        fail(
-          "invalid_request",
-          "Cannot verify the current accepted assignment for saved evidence",
-          "continue",
-        );
+      let historicalTerminal: Record<string, unknown> | undefined;
+      if (hasProjectEvidenceHistory && !currentState) {
+        if (!evidenceBranch)
+          fail(
+            "invalid_request",
+            "Cannot verify the applicable accepted evidence branch",
+            "continue",
+          );
+        const latestBranchEvidence = [...evidenceBranch!]
+          .reverse()
+          .find(
+            (entry: any) =>
+              entry?.type === "custom" &&
+              entry.customType === "pi-herdsman-agent-required-evidence",
+          ) as any;
+        const latestRequestId = latestBranchEvidence?.data?.requestId;
+        const proofs = entries
+          .map(agentResultDetails)
+          .filter(
+            (details): details is Record<string, unknown> =>
+              !!details && details.requestId === latestRequestId,
+          );
+        if (
+          !proofs.length ||
+          proofs.some((proof) => !sameTerminalProvenance(proof, proofs[0]!))
+        )
+          fail(
+            "invalid_request",
+            "Cannot verify the current accepted assignment for saved evidence",
+            "continue",
+          );
+        historicalTerminal = proofs[0];
+        if (
+          !historicalTerminal ||
+          !validId(historicalTerminal.requestId as string) ||
+          !validId(historicalTerminal.runId as string) ||
+          historicalTerminal.ownerSessionId !== ownerId ||
+          historicalTerminal.piSessionId !== child.id ||
+          typeof historicalTerminal.piSessionFile !== "string" ||
+          canonicalSessionPath(historicalTerminal.piSessionFile) !==
+            child.path ||
+          historicalTerminal.agentDefinition !== child.definition ||
+          historicalTerminal.agentLabel !== child.label ||
+          typeof historicalTerminal.workspaceId !== "string" ||
+          !historicalTerminal.workspaceId.trim() ||
+          typeof historicalTerminal.paneId !== "string" ||
+          !historicalTerminal.paneId.trim() ||
+          (historicalTerminal.status !== "completed" &&
+            historicalTerminal.status !== "failed")
+        )
+          fail(
+            "invalid_request",
+            "Cannot verify the terminal result for saved evidence",
+            "continue",
+          );
+        try {
+          statSync(
+            agentMailboxPath(
+              historicalTerminal.workspaceId as string,
+              historicalTerminal.agentLabel as string,
+            ),
+          );
+          fail(
+            "invalid_request",
+            "Cannot verify mailbox cleanup because the historical mailbox still exists",
+            "continue",
+          );
+        } catch (error) {
+          if (
+            error instanceof OperationError ||
+            (error as NodeJS.ErrnoException).code !== "ENOENT"
+          )
+            throw error;
+        }
+      }
       const exactIdState =
         selector.kind === "id" &&
         currentState?.piSessionId === child.id &&
@@ -1885,8 +2025,17 @@ export function resolveAssignmentSession(
           "Saved assignment state does not match the exact owned session",
           "continue",
         );
-      const currentRequestId =
-        currentState?.activeRequestId ?? currentState?.completedRequestId;
+      const applicableEvidence =
+        currentState || !hasProjectEvidenceHistory
+          ? allEvidenceEntries
+          : evidenceBranch!.filter(
+              (entry: any) =>
+                entry?.type === "custom" &&
+                entry.customType === "pi-herdsman-agent-required-evidence",
+            );
+      const currentRequestId = currentState
+        ? (currentState.activeRequestId ?? currentState.completedRequestId)
+        : (historicalTerminal?.requestId as string | undefined);
       if (hasProjectEvidenceHistory && !currentRequestId)
         fail(
           "invalid_request",
@@ -1905,10 +2054,19 @@ export function resolveAssignmentSession(
         );
       const evidenceEntries = currentRequestId
         ? requiredEvidenceEntriesForRequest(
-            allEvidenceEntries,
+            applicableEvidence,
             currentRequestId,
           )
         : [];
+      if (
+        evidenceEntries.length > 1 &&
+        !consistentRequiredEvidenceUpdates(evidenceEntries)
+      )
+        fail(
+          "invalid_request",
+          "Saved assignment has conflicting accepted evidence metadata",
+          "continue",
+        );
       if (hasProjectEvidenceHistory && !evidenceEntries.length)
         fail(
           "invalid_request",
@@ -1968,12 +2126,17 @@ export function resolveAssignmentSession(
           identity.definition !== child.definition ||
           identity.label !== record.agentLabel ||
           record.requestId !== currentRequestId ||
-          record.agentLabel !== currentState?.agentLabel ||
-          record.projectAssignmentId !== currentState?.projectAssignmentId ||
-          record.runId !== currentState?.runId ||
-          record.ownerSessionId !== currentState?.ownerSessionId ||
-          record.workspaceId !== currentState?.workspaceId ||
-          record.paneId !== currentState?.paneId
+          record.agentLabel !==
+            (currentState?.agentLabel ?? historicalTerminal?.agentLabel) ||
+          (record.projectAssignmentId !== currentState?.projectAssignmentId &&
+            currentState !== undefined) ||
+          record.runId !== (currentState?.runId ?? historicalTerminal?.runId) ||
+          record.ownerSessionId !==
+            (currentState?.ownerSessionId ??
+              historicalTerminal?.ownerSessionId) ||
+          record.workspaceId !==
+            (currentState?.workspaceId ?? historicalTerminal?.workspaceId) ||
+          record.paneId !== (currentState?.paneId ?? historicalTerminal?.paneId)
         )
           fail(
             "invalid_request",
@@ -2005,6 +2168,7 @@ export function resolveAssignmentSession(
             : {}),
           inheritedEvidence: [...record.inheritedEvidence],
           localEvidence: [...record.localEvidence],
+          ...(historicalTerminal ? { terminal: historicalTerminal } : {}),
         };
       }
       return {
@@ -6054,6 +6218,17 @@ export function createAgentController(
           scope.kind === "managed-agent"
             ? currentManagedEvidence(ctx)
             : undefined;
+        if (
+          scope.kind === "managed-agent" &&
+          continuationEvidence?.projectAssignmentId &&
+          continuationEvidence.projectAssignmentId !==
+            nestedEvidence?.projectAssignmentId
+        )
+          fail(
+            "invalid_request",
+            "Historical Agent belongs to a different project assignment",
+            "continue",
+          );
         const projectAssignmentId =
           nestedEvidence?.projectAssignmentId ??
           continuationEvidence?.projectAssignmentId;
@@ -6805,17 +6980,40 @@ export function createAgentController(
                     );
                 }
                 if (continuationEvidence && resumed) {
-                  const saved = SessionManager.open(resumed.path);
-                  if (saved.getSessionId() !== resumed.id)
-                    throw new Error(
-                      "The exact saved assignment session changed during continuation; retry",
-                    );
-                  const entries = requiredEvidenceEntriesForRequest(
+                  const savedPath = canonicalSessionPath(resumed.path);
+                  const saved = SessionManager.open(savedPath);
+                  const identity = sessionAgentIdentity(
                     saved.getEntries(),
+                    saved.getSessionId(),
+                  );
+                  if (
+                    savedPath !== resumed.path ||
+                    saved.getSessionId() !== resumed.id ||
+                    identity?.definition !== resumed.definition ||
+                    identity.label !== resumed.label
+                  )
+                    throw new Error(
+                      "The exact saved assignment identity changed during continuation; retry",
+                    );
+                  const branch = saved.getBranch();
+                  const entries = requiredEvidenceEntriesForRequest(
+                    branch,
                     continuationEvidence.requestId,
                   );
+                  const latestEvidence = [...branch]
+                    .reverse()
+                    .find(
+                      (entry: any) =>
+                        entry?.type === "custom" &&
+                        entry.customType ===
+                          "pi-herdsman-agent-required-evidence",
+                    ) as any;
                   const record = entries.at(-1)?.data;
                   if (
+                    !consistentRequiredEvidenceUpdates(entries) ||
+                    (continuationEvidence.terminal &&
+                      latestEvidence?.data?.requestId !==
+                        continuationEvidence.requestId) ||
                     !record ||
                     record.requestId !== continuationEvidence.requestId ||
                     record.projectAssignmentId !==
@@ -6829,6 +7027,31 @@ export function createAgentController(
                   )
                     throw new Error(
                       "Saved assignment evidence changed during continuation; retry",
+                    );
+                  if (
+                    continuationEvidence.terminal &&
+                    (() => {
+                      const expected = continuationEvidence.terminal!;
+                      const records = ctx.sessionManager
+                        .getEntries()
+                        .map(agentResultDetails)
+                        .filter(
+                          (details): details is Record<string, unknown> =>
+                            !!details &&
+                            (details.requestId === expected.requestId ||
+                              details.runId === expected.runId),
+                        );
+                      return (
+                        !records.length ||
+                        records.some(
+                          (details) =>
+                            !sameTerminalProvenance(details, expected),
+                        )
+                      );
+                    })()
+                  )
+                    throw new Error(
+                      "Saved assignment terminal proof changed during continuation; retry",
                     );
                 }
                 if (!projectEvidence || !projectAssignment) {

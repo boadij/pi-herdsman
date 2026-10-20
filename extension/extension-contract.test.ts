@@ -4963,6 +4963,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       {
         supervisorSessionHeaderMatches: true,
         supervisorCallObserved: true,
+        supervisorToolOffered: "not_observed",
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
         supervisorHandlerBranchStatus: "operation_error_returned",

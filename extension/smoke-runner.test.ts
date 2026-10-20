@@ -1869,7 +1869,9 @@ test("manager readiness correlates only the latest active-branch call in the ass
 });
 
 test("manager readiness ignores a matching tool result before its call", async () => {
-  const sessionDir = await mkdtemp(join(tmpdir(), "herdsman-smoke-manager-order-"));
+  const sessionDir = await mkdtemp(
+    join(tmpdir(), "herdsman-smoke-manager-order-"),
+  );
   try {
     const session = SessionManager.create(process.cwd(), sessionDir);
     session.appendMessage({
