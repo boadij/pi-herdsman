@@ -72,6 +72,7 @@ import {
   herdsmanTempRoot,
   readRequiredEvidenceSnapshot,
   isRequiredEvidence,
+  resolveResultRef,
   type RequiredEvidence,
 } from "./storage.ts";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
@@ -6438,7 +6439,30 @@ export function createAgentController(
             return true;
           }
         });
-        const assignmentFiles = [...requiredFiles, ...explicitFiles];
+        const inheritedResultPaths = new Set(
+          requiredFiles.flatMap((file) => {
+            if (typeof file === "string") return [];
+            try {
+              const path = resolveResultRef(file.canonicalRef);
+              return path ? [realpathSync(path)] : [];
+            } catch {
+              return [];
+            }
+          }),
+        );
+        const assignmentFiles = [
+          ...explicitFiles.filter((file) => {
+            if (typeof file !== "string") return true;
+            try {
+              return !inheritedResultPaths.has(
+                realpathSync(resolve(ctx.cwd, file)),
+              );
+            } catch {
+              return true;
+            }
+          }),
+          ...requiredFiles,
+        ];
         const prepareAssignmentInput = (assignmentLabel: string) =>
           prepareMessageInput(
             p.task,

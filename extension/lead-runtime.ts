@@ -7377,8 +7377,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operation.files,
         "delegate_project",
       );
-      const requiredEvidence: RequiredEvidence[] = [
-        persistRequiredEvidenceSnapshot(id, "project-brief.md", operation.task),
+      const projectBrief = persistRequiredEvidenceSnapshot(
+        id,
+        "project-brief.md",
+        operation.task,
+      );
+      const attachedEvidence: RequiredEvidence[] = [
         ...persistRequiredTextFiles(
           id,
           suppliedFiles.filter(
@@ -7393,9 +7397,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             : [{ id: randomUUID(), name: file.ref, result: file }],
         ),
       ];
+      const requiredEvidence = [projectBrief, ...attachedEvidence];
       const prepared = prepareMessageInput(
         operation.task,
-        requiredEvidence.flatMap((evidence) =>
+        attachedEvidence.flatMap((evidence) =>
           "path" in evidence ? [evidence.path] : [evidence.result],
         ),
         ctx.cwd,

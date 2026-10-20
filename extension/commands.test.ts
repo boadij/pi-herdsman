@@ -5637,6 +5637,15 @@ async function managerDelegateAssignmentTest(
     assert.equal(outcome.details.ok, true);
     const assignment = listProjectAssignments(supervisionRuntime(), repoKey)[0];
     assert.ok(assignment);
+    assert.equal(assignment.text.match(/Implement focused change/g)?.length, 1);
+    const brief = assignment.requiredEvidence?.find(
+      (entry) => entry.name === "project-brief.md",
+    );
+    assert.ok(brief && "path" in brief);
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignment.id, brief),
+      "Implement focused change",
+    );
     const reviewFile = join(tmpdir(), `manager-review-${randomUUID()}.md`);
     t.after(() => rmSync(reviewFile, { force: true }));
     realFs.writeFileSync(reviewFile, "external review finding");

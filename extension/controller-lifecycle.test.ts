@@ -28,6 +28,8 @@ import { claimProcessLock } from "./lock.ts";
 import {
   persistRequiredEvidenceSnapshot,
   readRequiredEvidenceSnapshot,
+  resultPath,
+  resultRef,
 } from "./storage.ts";
 import {
   listProjectAssignments,
@@ -5121,7 +5123,7 @@ test("managed project delegation references supported evidence larger than the i
   }
 });
 
-test("managed project delegation deduplicates required evidence supplied explicitly", async () => {
+test("managed project delegation keeps small changed content and deduplicates matching evidence", async () => {
   setLeadEnvironment();
   const socket = join(
     tmpdir(),
@@ -5137,7 +5139,10 @@ test("managed project delegation deduplicates required evidence supplied explici
   );
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
   const originalPath = join("/tmp", originalRelativePath);
-  realFs.writeFileSync(originalPath, "duplicate plan body");
+  const matchingRelativePath = `matching-plan-${LEAD_SESSION_ID}.md`;
+  const matchingPath = join("/tmp", matchingRelativePath);
+  realFs.writeFileSync(originalPath, "newer plan body");
+  realFs.writeFileSync(matchingPath, "duplicate plan body");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -5224,7 +5229,7 @@ test("managed project delegation deduplicates required evidence supplied explici
         definition: "agent",
         label,
         task: "implement plan",
-        files: [originalRelativePath],
+        files: [originalRelativePath, matchingRelativePath],
       },
       undefined,
       undefined,
@@ -5233,6 +5238,7 @@ test("managed project delegation deduplicates required evidence supplied explici
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
+    assert.match(accepted!.text, /newer plan body/);
     assert.equal(accepted!.text.match(/duplicate plan body/g)?.length, 1);
     assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
   } finally {
@@ -5242,6 +5248,7 @@ test("managed project delegation deduplicates required evidence supplied explici
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(originalPath, { force: true });
+    realFs.rmSync(matchingPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -5255,14 +5262,16 @@ test("managed project delegation keeps changed original-path content alongside r
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
   const branch = `evidence-changed-${randomUUID()}`;
+  const inheritedContent = `Inherited evidence body ${"i".repeat(75000)}`;
+  const currentContent = `Current review evidence ${"c".repeat(75000)}`;
   const snapshot = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
     "plan.md",
-    "retained plan body",
+    inheritedContent,
   );
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
   const originalPath = join("/tmp", originalRelativePath);
-  realFs.writeFileSync(originalPath, "newer plan body");
+  realFs.writeFileSync(originalPath, currentContent);
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -5352,12 +5361,22 @@ test("managed project delegation keeps changed original-path content alongside r
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
-    assert.match(accepted!.text, /newer plan body/);
-    assert.match(accepted!.text, /retained plan body/);
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(originalPath)}" bytes="${Buffer.byteLength(currentContent)}">\n${currentContent}\n</file>`,
+      ),
+      "current explicit evidence must be embedded in full",
+    );
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(snapshot.path)}" bytes="${Buffer.byteLength(inheritedContent)}" />`,
+      ),
+      "inherited required evidence remains available by verified reference",
+    );
     assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
     assert.equal(
       readRequiredEvidenceSnapshot(assignment.id, snapshot),
-      "retained plan body",
+      inheritedContent,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -5366,6 +5385,127 @@ test("managed project delegation keeps changed original-path content alongside r
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(originalPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed project delegation preserves inherited semantic result identity over an explicit path", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-result-alias-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `result-alias-${randomUUID()}`;
+  const canonicalRef = resultRef(randomUUID());
+  const artifactPath = resultPath(canonicalRef.slice("result:".length));
+  const semanticRef = "result:reviewer#1";
+  const inherited = {
+    id: randomUUID(),
+    name: semanticRef,
+    result: { ref: semanticRef, canonicalRef },
+  } as const;
+  realFs.mkdirSync(resolve(artifactPath, ".."), { recursive: true });
+  realFs.writeFileSync(artifactPath, "persisted review evidence");
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [inherited],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted: RequestRecord | undefined;
+  const label = `er-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    (request) => {
+      accepted = request;
+    },
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  registerExtension!(pi.pi as never);
+  try {
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    await assertManagedLeadRole(pi, context);
+
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "required-result-alias",
+      {
+        definition: "agent",
+        label,
+        task: "Review this result",
+        files: [artifactPath],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(accepted!.text, /<file name="result:reviewer#1"/);
+    assert.match(accepted!.text, /persisted review evidence/);
+    assert.deepEqual(accepted!.requiredEvidence, [inherited]);
+    assert.deepEqual(accepted!.resultBindings, [
+      { ref: semanticRef, canonicalRef },
+    ]);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(artifactPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
