@@ -1765,7 +1765,7 @@ export function delegatedLifecycleExecutor(
           agentLabel: label,
           paneId,
           piSessionId: childSessionIds[createdChildren++],
-          piSessionFile: `/tmp/${label}.jsonl`,
+          piSessionFile: resolve(tmpdir(), `${label}.jsonl`),
           cwd: testCwd,
           updatedAt: Date.now(),
         };

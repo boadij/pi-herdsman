@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
 import type { TestContext } from "node:test";
@@ -8565,7 +8565,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
   const childLabel = `resume-child-${randomUUID().slice(0, 8)}`;
   const parentMailbox = agentMailboxPath(WORKSPACE, parentLabel);
   const parentSessionPath = join(PI_AGENT_ROOT, `${parentLabel}.jsonl`);
-  let childSessionPath = join("/tmp", `${childLabel}.jsonl`);
+  const childSessionPath = resolve(tmpdir(), `${childLabel}.jsonl`);
   const parentSessionId = PARENT_SESSION_ID;
   const parentRequestId = randomUUID();
   const projectAssignmentId = LEAD_SESSION_ID;
