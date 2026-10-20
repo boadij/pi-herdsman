@@ -1303,7 +1303,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
   );
 });
 
-test("manager handoff failure artifact retains only correlated safe readiness evidence", async () => {
+test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
   const contents = [
     {
       type: "message",
@@ -1353,6 +1353,36 @@ test("manager handoff failure artifact retains only correlated safe readiness ev
     supervisorErrorCategory: "none",
   });
 
+  const earlyPoll = managerAssignmentDiagnostics({
+    worktree: "true",
+    result: "not_observed",
+    identity: "not_observed",
+    lead: "not_yet_evaluated",
+    supervisorCall: "not_yet_evaluated",
+    supervisorSuccess: "not_yet_evaluated",
+    readiness: "not_yet_evaluated",
+  });
+  const resolvedEvidence = sanitizedFailureEvidence(
+    { scenario: "manager-handoff", simulated: true },
+    {
+      error: {
+        smoke: {
+          stage: "manager-handoff-assignment",
+          lastProgress: { ...correlated, readinessDeliveryObserved: true },
+        },
+      },
+    },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(resolvedEvidence.managerHandoffProgress, {
+    supervisorCallObserved: true,
+    supervisorResultState: "error",
+    supervisorErrorCategory: "agent_busy",
+    readinessDeliveryObserved: true,
+    elapsedMs: null,
+    inactiveMs: null,
+  });
   const evidence = sanitizedFailureEvidence(
     {
       scenario: "manager-handoff",
@@ -1366,9 +1396,10 @@ test("manager handoff failure artifact retains only correlated safe readiness ev
         code: "SMOKE_STALLED",
         smoke: {
           stage: "manager-handoff-assignment",
+          elapsedMs: 120_000,
+          inactiveMs: 120_000,
           lastProgress: {
-            ...correlated,
-            readinessDeliveryObserved: false,
+            ...earlyPoll,
             prompt: "PRIVATE_PROGRESS_PROMPT",
             args: "PRIVATE_ARGS",
             body: "PRIVATE_BODY",
@@ -1385,10 +1416,12 @@ test("manager handoff failure artifact retains only correlated safe readiness ev
   try {
     const persisted = await readFile(artifactPath, "utf8");
     assert.deepEqual(JSON.parse(persisted).managerHandoffProgress, {
-      supervisorCallObserved: true,
-      supervisorResultState: "error",
-      supervisorErrorCategory: "agent_busy",
+      supervisorCallObserved: false,
+      supervisorResultState: "not_observed",
+      supervisorErrorCategory: "none",
       readinessDeliveryObserved: false,
+      elapsedMs: 120_000,
+      inactiveMs: 120_000,
     });
     assert.doesNotMatch(persisted, /PRIVATE/u);
     assert.doesNotMatch(persisted, /PRIVATE_CALL_ID|MANAGER_HANDOFF_READY/u);

@@ -751,6 +751,10 @@ export function managerAssignmentDiagnostics({
     messageSupervisorCall: supervisorCall ?? "not_observed",
     messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
+    supervisorCallObserved: false,
+    supervisorResultState: "not_observed",
+    supervisorErrorCategory: "none",
+    readinessDeliveryObserved: false,
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
     errorCategory: errorCategory ?? "none",
@@ -7591,15 +7595,16 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         supervisorCallObserved:
           typeof managerProgress.supervisorCallObserved === "boolean"
             ? managerProgress.supervisorCallObserved
-            : null,
+            : false,
         supervisorResultState: [
+          "not_observed",
           "missing",
           "pending",
           "success",
           "error",
         ].includes(managerProgress.supervisorResultState)
           ? managerProgress.supervisorResultState
-          : null,
+          : "not_observed",
         supervisorErrorCategory: [
           ...STRUCTURED_TOOL_ERROR_CATEGORIES,
           "tool_error",
@@ -7610,6 +7615,18 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         readinessDeliveryObserved:
           typeof managerProgress.readinessDeliveryObserved === "boolean"
             ? managerProgress.readinessDeliveryObserved
+            : false,
+        elapsedMs:
+          typeof failure.error.smoke.elapsedMs === "number" &&
+          Number.isFinite(failure.error.smoke.elapsedMs) &&
+          failure.error.smoke.elapsedMs >= 0
+            ? failure.error.smoke.elapsedMs
+            : null,
+        inactiveMs:
+          typeof failure.error.smoke.inactiveMs === "number" &&
+          Number.isFinite(failure.error.smoke.inactiveMs) &&
+          failure.error.smoke.inactiveMs >= 0
+            ? failure.error.smoke.inactiveMs
             : null,
       }
     : null;
