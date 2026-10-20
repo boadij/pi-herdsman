@@ -320,6 +320,78 @@ test("missing or corrupt Chief overflow bodies are retained without Pi submissio
   }
 });
 
+test("inbox receipt and rejection cleanup do not require overflow bodies", async () => {
+  for (const delivered of [true, false]) {
+    const runtime = supervisionRuntime(socket());
+    const record = message({ text: "complete body ".repeat(2_000) });
+    const path = writeChiefMessage(record, runtime);
+    writeFileSync(`${path}.body`, "corrupt", "utf8");
+    let sent = 0;
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: record.toSessionId,
+      isAuthorized: () => delivered,
+      isDelivered: () => delivered,
+      sendMessage: () => sent++,
+    });
+    assert.equal(sent, 0);
+    assert.equal(existsSync(path), false);
+  }
+});
+
+test("unreadable overflow messages do not consume the bounded delivery window", async () => {
+  const runtime = supervisionRuntime(socket());
+  for (let i = 0; i < COORDINATION_INBOX_SCAN_LIMIT; i++) {
+    const record = message({
+      id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+      createdAt: i,
+      text: "overflow body ".repeat(2_000),
+    });
+    const path = writeChiefMessage(record, runtime);
+    unlinkSync(`${path}.body`);
+  }
+  const valid = message({
+    id: "00000000-0000-4000-8000-000000000033",
+    createdAt: COORDINATION_INBOX_SCAN_LIMIT,
+  });
+  writeChiefMessage(valid, runtime);
+  const sent: string[] = [];
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: valid.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: (id) => sent.includes(id),
+    sendMessage: (_message, _options, record) => sent.push(record.id),
+  });
+  assert.deepEqual(sent, [valid.id]);
+  assert.equal(
+    existsSync(chiefMessagePath(runtime, valid.toSessionId, valid.id)),
+    false,
+  );
+});
+
+test("overflow body reads reject FIFOs without blocking", async (t) => {
+  if (process.platform === "win32") return t.skip("FIFOs are POSIX-only");
+  const runtime = supervisionRuntime(socket());
+  const record = message({ text: "overflow body ".repeat(2_000) });
+  const path = writeChiefMessage(record, runtime);
+  unlinkSync(`${path}.body`);
+  const fifo = spawnSync("mkfifo", [`${path}.body`]);
+  if (fifo.status !== 0) return t.skip("mkfifo is unavailable");
+  assert.throws(() => writeChiefMessage(record, runtime));
+  const reported: unknown[] = [];
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => false,
+    sendMessage: () => assert.fail("FIFO body must not be delivered"),
+    cleanupError: (error) => reported.push(error),
+  });
+  assert.equal(reported.length, 1);
+  assert.equal(existsSync(path), true);
+});
+
 test("coordination records bind branch only for project and assigned Manager messages", () => {
   const runtime = supervisionRuntime(socket());
   const kinds = [

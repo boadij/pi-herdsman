@@ -445,7 +445,10 @@ function writeOverflowBody(
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.size > COORDINATION_BODY_MAX_BYTES)
       throw new Error("Unsafe existing coordination message body");
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
+    );
     let existing: Buffer;
     try {
       const current = fstatSync(fd);
@@ -501,7 +504,10 @@ function readOverflowBody(
     throw new Error("Invalid coordination message body reference");
   let fd: number | undefined;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
+    );
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size !== ref.bytes)
       throw new Error("Coordination message body size mismatch");
@@ -901,6 +907,9 @@ function removeChiefMessageUnlocked(
   const matchesExpected = (): boolean => {
     if (!expected) return true;
     try {
+      const stored = readStoredChiefMessage(path);
+      if ((expected as StoredChiefMessage).bodyRef)
+        return isDeepStrictEqual(stored, expected);
       return isDeepStrictEqual(readChiefMessage(path), expected);
     } catch {
       return false;
@@ -1024,10 +1033,9 @@ export async function drainCoordinationInbox(
   options: ChiefInboxDrainOptions,
 ): Promise<number> {
   let delivered = 0;
-  for (const path of listChiefMessagePaths(
-    options.runtime,
-    options.sessionId,
-  )) {
+  let examined = 0;
+  for (const path of allChiefMessagePaths(options.runtime, options.sessionId)) {
+    if (examined >= COORDINATION_INBOX_SCAN_LIMIT) break;
     if (options.signal?.aborted) break;
     const id = basename(path, ".json");
     if (
@@ -1035,16 +1043,12 @@ export async function drainCoordinationInbox(
       chiefMessageQuarantined(options.runtime, options.sessionId, id)
     )
       continue;
+    let stored: StoredChiefMessage;
     let record: ChiefMessageRecord;
     try {
-      record = readChiefMessage(path);
+      stored = readStoredChiefMessage(path);
+      record = stored as ChiefMessageRecord;
     } catch {
-      try {
-        if (readStoredChiefMessage(path).bodyRef)
-          await options.cleanupError?.(
-            new Error(`Unable to read overflow body for Chief message ${id}`),
-          );
-      } catch {}
       if (UUID.test(id) && conclusivelyMalformedChiefMessage(path)) {
         for (const cleanupError of removeMalformedChiefMessage(
           options.runtime,
@@ -1057,6 +1061,7 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    examined++;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -1137,6 +1142,21 @@ export async function drainCoordinationInbox(
         );
         // Authorization may have yielded while Pi persisted an earlier send.
         if (!options.isDelivered(record.id)) {
+          if (stored.bodyRef) {
+            try {
+              const body = readOverflowBody(`${path}.body`, stored.bodyRef);
+              record = { ...record, ...body } as ChiefMessageRecord;
+            } catch {
+              examined--;
+              await options.cleanupError?.(
+                new Error(
+                  `Unable to read overflow body for Chief message ${id}`,
+                ),
+              );
+              await clearTransaction();
+              continue;
+            }
+          }
           await options.sendMessage(
             {
               customType: `pi-herdsman-${record.kind}`,
