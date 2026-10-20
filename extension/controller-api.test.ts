@@ -57,6 +57,7 @@ import support, {
   realFs,
   recoveryIdentity,
   registerExtension,
+  registerExtensionForTest,
   removeAsk,
   removeRequest,
   removeResult,
@@ -1015,6 +1016,140 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
+});
+
+test("message_supervisor tool cancellation prevents project publication while waiting for its lock", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `cancel-message-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const runtime = supervisionRuntime();
+  const leadId = randomUUID();
+  const managerId = randomUUID();
+  const branch = "smoke/cancel-message";
+  const assignment = {
+    version: 2 as const,
+    id: leadId,
+    repoKey: "repo-key",
+    branch,
+    text: "project assignment",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const manager = claimManagerLease({
+    piSessionId: managerId,
+    paneId: "manager-pane",
+    tabId: "manager-tab",
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  writeLeadCoordinationState(runtime, {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerId,
+    updatedAt: Date.now(),
+  });
+  const agents = [
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: leadId,
+      },
+      pane_id: "lead-pane",
+      tab_id: "lead-tab",
+      workspace_id: "linked-workspace",
+    },
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: managerId,
+      },
+      pane_id: "manager-pane",
+      tab_id: "manager-tab",
+      workspace_id: WORKSPACE,
+    },
+  ];
+  const pi = fakeChiefPi({
+    exec: (_command, args) => {
+      let result: unknown = {};
+      if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+      else if (isAgentList(args)) result = { agents };
+      else if (args[0] === "agent" && args[1] === "get")
+        result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+      else if (args[0] === "workspace" && args[1] === "get")
+        result = {
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: true },
+          },
+        };
+      else if (args[0] === "worktree" && args[1] === "list")
+        result = {
+          source: {
+            repo_key: "repo-key",
+            repo_name: "project",
+            source_workspace_id: WORKSPACE,
+          },
+          worktrees: [{ branch, open_workspace_id: "linked-workspace" }],
+        };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  let lockContentionObserved!: () => void;
+  const contended = new Promise<void>((resolve) => {
+    lockContentionObserved = resolve;
+  });
+  registerExtensionForTest!(pi.pi as never, {
+    afterOccupied: async () => lockContentionObserved(),
+  });
+  const ctx = fakeContext(pi.entries, []) as any;
+  const contextAbort = new AbortController();
+  ctx.signal = contextAbort.signal;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+    getSessionFile: () => `/tmp/${leadId}.jsonl`,
+  };
+  const toolAbort = new AbortController();
+  const lock = acquireProcessLock(
+    `${projectAssignmentPath(runtime, "repo-key", branch)}.lock`,
+    { name: "test assignment lock" },
+  );
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const tool = pi.tools.find(
+      (candidate) => candidate.name === "message_supervisor",
+    )!;
+    const publication = tool.execute(
+      "message",
+      { message: "must not publish" },
+      toolAbort.signal,
+      undefined,
+      ctx,
+    );
+    await contended;
+    assert.equal(contextAbort.signal.aborted, false);
+    toolAbort.abort();
+    await assert.rejects(publication, { name: "AbortError" });
+  } finally {
+    lock.release();
+    await pi.events.get("session_shutdown")?.[0]();
+    manager.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+  assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
 });
 
 test("project Lead observes Manager availability across turnover without exposing identity", async () => {
