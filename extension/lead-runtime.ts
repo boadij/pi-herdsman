@@ -3323,13 +3323,8 @@ export function registerLeadRuntime(
         .filter(
           (name) => name !== "delegate_agent" && name !== "continue_agent",
         );
-    if (sessionKind.kind === "managed") {
-      return managedLifecycle === "assigned"
-        ? leadToolState.normalizeLeadTools(baseline)
-        : options.leadRuntime?.leadContext
-          ? ownedAgentManagementTools(options.leadRuntime.leadContext)
-          : [];
-    }
+    if (sessionKind.kind === "managed")
+      return leadToolState.normalizeLeadTools(baseline);
     if (!leadExecution) return leadToolState.normalizeLeadTools(baseline);
     if (!leadExecution.valid) return leadToolState.normalizeLeadTools([]);
     return leadToolState.projectLeadTools(baseline, leadExecution.definition);
