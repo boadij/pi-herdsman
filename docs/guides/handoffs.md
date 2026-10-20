@@ -61,6 +61,14 @@ already-running child's accepted evidence set; continuation resumes the saved
 assignment evidence and still requires valid ownership authority. Retired
 project assignments cannot be resumed.
 
+For managed-Agent assignments, explicitly supplied per-handoff evidence is
+considered for inline embedding before automatically inherited required
+evidence. All accepted requirements remain part of the assignment even when
+represented by verified references; presentation order does not change
+requirement authority. Initial project briefs are delivered as task text and
+separately retained for future descendants without duplicating their content
+in the initial message.
+
 Required file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
 fails explicitly. A supported snapshot that exceeds the inline delivery limit

@@ -6438,7 +6438,7 @@ export function createAgentController(
             return true;
           }
         });
-        const assignmentFiles = [...requiredFiles, ...explicitFiles];
+        const assignmentFiles = [...explicitFiles, ...requiredFiles];
         const prepareAssignmentInput = (assignmentLabel: string) =>
           prepareMessageInput(
             p.task,

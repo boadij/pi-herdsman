@@ -5255,14 +5255,16 @@ test("managed project delegation keeps changed original-path content alongside r
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
   const branch = `evidence-changed-${randomUUID()}`;
+  const inheritedContent = `Inherited evidence body ${"i".repeat(75000)}`;
+  const currentContent = `Current review evidence ${"c".repeat(75000)}`;
   const snapshot = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
     "plan.md",
-    "retained plan body",
+    inheritedContent,
   );
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
   const originalPath = join("/tmp", originalRelativePath);
-  realFs.writeFileSync(originalPath, "newer plan body");
+  realFs.writeFileSync(originalPath, currentContent);
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -5352,12 +5354,22 @@ test("managed project delegation keeps changed original-path content alongside r
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
-    assert.match(accepted!.text, /newer plan body/);
-    assert.match(accepted!.text, /retained plan body/);
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(originalPath)}" bytes="${Buffer.byteLength(currentContent)}">\n${currentContent}\n</file>`,
+      ),
+      "current explicit evidence must be embedded in full",
+    );
+    assert.ok(
+      accepted!.text.includes(
+        `<file name="${realpathSync(snapshot.path)}" bytes="${Buffer.byteLength(inheritedContent)}" />`,
+      ),
+      "inherited required evidence remains available by verified reference",
+    );
     assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
     assert.equal(
       readRequiredEvidenceSnapshot(assignment.id, snapshot),
-      "retained plan body",
+      inheritedContent,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
