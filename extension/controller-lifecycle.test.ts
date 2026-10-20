@@ -2806,7 +2806,7 @@ test("failed active Lead reports before child completion and does not hand off s
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async (_ctx, _assignment, message) => {
       reports.push(message);
-      return true;
+      return false;
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -2822,6 +2822,23 @@ test("failed active Lead reports before child completion and does not hand off s
   });
   herd.beforeSettle({ outcome: "error" });
   await herd.agentSettled(context, false);
+  const failurePhases = pi.entries
+    .filter((entry: any) => entry.data?.terminalFailureDiagnostic === true)
+    .map((entry: any) => `${entry.data.phase}:${entry.data.outcome ?? ""}`);
+  assert.deepEqual(failurePhases, [
+    "settlement:error",
+    "publication_attempt:",
+    "publication_result:returned",
+  ]);
+  assert.ok(
+    pi.entries.findIndex(
+      (entry: any) => entry.data?.phase === "report_pending",
+    ) <
+      pi.entries.findIndex(
+        (entry: any) => entry.data?.phase === "publication_attempt",
+      ),
+    "the durable pending report precedes publication entry",
+  );
   assert.equal(reports.length, 1);
   assert.match(reports[0], /failed before completion/);
   assert.match(reports[0], /partial output/);
@@ -2839,8 +2856,8 @@ test("failed active Lead reports before child completion and does not hand off s
   await herd.maybeFinish(context);
   assert.equal(
     reports.length,
-    1,
-    "late child completion must not create success handoff",
+    2,
+    "a false publication return is recorded as returned and remains retryable",
   );
 });
 

@@ -407,9 +407,20 @@ test("terminal failure stall artifact retains only allowlisted report progress",
     logicalReports: 0,
     actionable: false,
     managerResponded: false,
+    settlementCallback: "observed",
+    settlementOutcome: "error",
+    reportPending: "observed",
+    publicationAttempt: "attempted",
+    publicationOutcome: "returned",
+    managerReceipt: "not_observed",
+    managerFollowup: "not_observed",
     prompt: "private prompt",
     transcript: "private transcript",
     mailbox: "private mailbox",
+    sessionId: "private-session-id",
+    message: "private report body",
+    error: "private raw error",
+    secret: "private-secret",
   };
   const evidence = sanitizedFailureEvidence(
     {
@@ -439,10 +450,81 @@ test("terminal failure stall artifact retains only allowlisted report progress",
     logicalReports: 0,
     actionable: false,
     managerResponded: false,
+    settlementCallback: "observed",
+    settlementOutcome: "error",
+    reportPending: "observed",
+    publicationAttempt: "attempted",
+    publicationOutcome: "returned",
+    managerReceipt: "not_observed",
+    managerFollowup: "not_observed",
   });
   assert.doesNotMatch(
     persisted,
-    /private prompt|private transcript|private mailbox/,
+    /private prompt|private transcript|private mailbox|private-session-id|private report body|private raw error|private-secret/,
+  );
+  const incomplete = sanitizedFailureEvidence(
+    { scenario: "terminal-failure", simulated: true },
+    {
+      error: {
+        smoke: { stage: "terminal-failure-report", lastProgress: {} },
+      },
+    },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(incomplete.terminalFailureProgress).filter(([key]) =>
+        [
+          "settlementCallback",
+          "settlementOutcome",
+          "reportPending",
+          "publicationAttempt",
+          "publicationOutcome",
+          "managerReceipt",
+          "managerFollowup",
+        ].includes(key),
+      ),
+    ),
+    {
+      settlementCallback: "not_observed",
+      settlementOutcome: "not_observed",
+      reportPending: "not_observed",
+      publicationAttempt: "not_observed",
+      publicationOutcome: "not_observed",
+      managerReceipt: "not_observed",
+      managerFollowup: "not_observed",
+    },
+  );
+  const pendingWithoutAttempt = sanitizedFailureEvidence(
+    { scenario: "terminal-failure", simulated: true },
+    {
+      error: {
+        smoke: {
+          stage: "terminal-failure-report",
+          lastProgress: {
+            reportPending: "observed",
+            prompt: "PRIVATE prompt",
+            sessionId: "PRIVATE session id",
+            report: "PRIVATE report body",
+          },
+        },
+      },
+    },
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.equal(
+    pendingWithoutAttempt.terminalFailureProgress.reportPending,
+    "observed",
+  );
+  assert.equal(
+    pendingWithoutAttempt.terminalFailureProgress.publicationAttempt,
+    "not_observed",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(pendingWithoutAttempt),
+    /PRIVATE|session id|report body/u,
   );
   const unrelated = sanitizedFailureEvidence(
     { scenario: "core", simulated: true },
