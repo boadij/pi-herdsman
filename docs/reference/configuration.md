@@ -75,14 +75,15 @@ Lead session that has no persisted execution choice. Its values select
 and an existing session choice takes precedence. Manager-created assigned Leads
 use `managed-lead` instead.
 
-`inlineAttachmentLimitBytes` applies per file. Eligible complete strict UTF-8
-files are embedded only when the complete durable payload fits; other files
-remain canonical references. `mailboxPayloadLimitBytes` limits new managed-Agent
-request and ask payloads and new Manager project assignments. Ordinary
-coordination records remain subject to this configured limit and their fixed
-8 KiB ceiling. Project assignments are persisted separately from their compact
-inbox notification, so that coordination ceiling does not reduce the evidence
-capacity of a Manager-to-Lead assignment.
+`inlineAttachmentLimitBytes` applies per file. In ordinary coordination
+messages, supported complete strict UTF-8 text is delivered only when both
+this per-file limit and the complete logical-message budget fit; unsupported
+or non-fitting attachments reject the handoff instead of remaining as
+references. `mailboxPayloadLimitBytes` also limits new managed-Agent request
+and ask payloads and new Manager project assignments. Chief, staff, supervisor,
+peer, and project coordination messages use this configured logical-message
+limit. Their compact physical inbox records remain bounded at 8 KiB; larger
+accepted message bodies are stored separately and verified before Pi delivery.
 
 When the effective `contextRetirement` preference is enabled, automatic
 context pressure retires a managed-agent session. Herdsman suppresses

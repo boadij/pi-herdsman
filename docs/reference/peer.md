@@ -101,7 +101,8 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 as evidence. A semantic ref resolves on the sender's current branch and keeps
 its model-facing name during attachment preparation. Its hidden canonical
 binding travels with the durable peer message so the recipient can forward the
-same semantic ref. Files and refs share the same submission-time UTF-8
-embedding, reference fallback, and configured byte limits. The durable peer
-record carries the prepared text and any hidden bindings and is bounded by the
-8 KiB coordination transport limit.
+same semantic ref. Peer attachments must be complete supported UTF-8 text
+within both configured byte limits or the handoff is rejected; a reference-only
+attachment is not reported as delivered. The compact physical peer record
+remains bounded by the internal 8 KiB limit, with larger accepted bodies
+stored separately and verified before Pi delivery.

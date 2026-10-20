@@ -1,13 +1,16 @@
+import { constants } from "node:fs";
 import {
   chmodSync,
   closeSync,
   fsyncSync,
   lstatSync,
+  fstatSync,
   readdirSync,
   rmSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   statSync,
   renameSync,
   unlinkSync,
@@ -146,6 +149,16 @@ export type ChiefMessageRecord = {
   createdAt: number;
 };
 
+type OverflowBodyRef = { bytes: number; sha256: string };
+type StoredChiefMessage = Omit<
+  ChiefMessageRecord,
+  "text" | "resultBindings"
+> & {
+  text: string;
+  resultBindings?: ResultBinding[];
+  bodyRef?: OverflowBodyRef;
+};
+
 export type PeerGroup = Readonly<{
   repoKey: string;
   primaryWorkspaceId: string;
@@ -208,10 +221,24 @@ export type CoordinationInboxDrainOptions = ChiefInboxDrainOptions;
 export const COORDINATION_MESSAGE_MAX_BYTES = 8 * 1024;
 export const COORDINATION_INBOX_SCAN_LIMIT = 32;
 const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
+const COORDINATION_BODY_MAX_BYTES = 1024 * 1024;
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MESSAGE_KINDS = new Set<ChiefMessageKind>(COORDINATION_MESSAGE_KINDS);
+
+function validOverflowBodyRef(value: unknown): value is OverflowBodyRef {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 2 &&
+    Number.isInteger((value as any).bytes) &&
+    (value as any).bytes > 0 &&
+    (value as any).bytes <= COORDINATION_BODY_MAX_BYTES &&
+    /^[a-f0-9]{64}$/.test((value as any).sha256)
+  );
+}
 
 function validSession(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -244,7 +271,13 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["branch", "resultBindings", "build", "peerSource"];
+  const optional = [
+    "branch",
+    "resultBindings",
+    "build",
+    "peerSource",
+    "bodyRef",
+  ];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -301,7 +334,11 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     validSession(record.toSessionId) &&
     validSession(record.leadSessionId) &&
     typeof record.text === "string" &&
-    record.text.length > 0 &&
+    (record.bodyRef === undefined
+      ? record.text.length > 0
+      : record.text === "" &&
+        record.resultBindings === undefined &&
+        validOverflowBodyRef(record.bodyRef)) &&
     (record.resultBindings === undefined ||
       (Array.isArray(record.resultBindings) &&
         record.resultBindings.every(isResultBinding))) &&
@@ -318,6 +355,26 @@ function assertMessage(value: unknown): asserts value is ChiefMessageRecord {
   if (!validMessage(value)) throw new Error("Invalid Chief message record");
   if (chiefMessageBytes(value) > COORDINATION_MESSAGE_MAX_BYTES)
     throw new Error("Chief message record is too large");
+}
+
+function compactChiefMessage(
+  record: ChiefMessageRecord,
+  path: string,
+): StoredChiefMessage {
+  if (chiefMessageBytes(record) <= COORDINATION_MESSAGE_MAX_BYTES)
+    return record;
+  const bodyRef = writeOverflowBody(`${path}.body`, {
+    text: record.text,
+    ...(record.resultBindings ? { resultBindings: record.resultBindings } : {}),
+  });
+  const stored: StoredChiefMessage = { ...record, text: "", bodyRef };
+  delete stored.resultBindings;
+  if (
+    chiefMessageBytes(stored as ChiefMessageRecord) >
+    COORDINATION_MESSAGE_MAX_BYTES
+  )
+    throw new Error("Chief message routing metadata is too large");
+  return stored;
 }
 
 function inboxFor(runtime: SupervisionRuntime, toSessionId: string): string {
@@ -369,6 +426,124 @@ function publishRecord(path: string, content: string): string {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+  }
+}
+
+function writeOverflowBody(
+  path: string,
+  body: {
+    text: string;
+    resultBindings?: ResultBinding[];
+  },
+): OverflowBodyRef {
+  const content = `${JSON.stringify(body)}\n`;
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > COORDINATION_BODY_MAX_BYTES)
+    throw new Error("Coordination message body is too large");
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > COORDINATION_BODY_MAX_BYTES)
+      throw new Error("Unsafe existing coordination message body");
+    const fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
+    );
+    let existing: Buffer;
+    try {
+      const current = fstatSync(fd);
+      if (!current.isFile() || current.size > COORDINATION_BODY_MAX_BYTES)
+        throw new Error("Unsafe existing coordination message body");
+      existing = Buffer.alloc(current.size);
+      let offset = 0;
+      while (offset < existing.length) {
+        const count = readSync(
+          fd,
+          existing,
+          offset,
+          existing.length - offset,
+          offset,
+        );
+        if (!count)
+          throw new Error("Existing coordination message body is truncated");
+        offset += count;
+      }
+      if (fstatSync(fd).size !== current.size)
+        throw new Error(
+          "Existing coordination message body changed while reading",
+        );
+    } finally {
+      closeSync(fd);
+    }
+    if (
+      existing.length !== bytes ||
+      createHash("sha256").update(existing).digest("hex") !== sha256
+    )
+      throw new Error("Coordination message ID already has a different body");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    publishRecord(path, content);
+  }
+  return { bytes, sha256 };
+}
+
+function readOverflowBody(
+  path: string,
+  ref: OverflowBodyRef,
+): {
+  text: string;
+  resultBindings?: ResultBinding[];
+} {
+  if (
+    !ref ||
+    !Number.isInteger(ref.bytes) ||
+    ref.bytes < 1 ||
+    ref.bytes > COORDINATION_BODY_MAX_BYTES ||
+    !/^[a-f0-9]{64}$/.test(ref.sha256)
+  )
+    throw new Error("Invalid coordination message body reference");
+  let fd: number | undefined;
+  try {
+    fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
+    );
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size !== ref.bytes)
+      throw new Error("Coordination message body size mismatch");
+    const bytes = Buffer.alloc(ref.bytes);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!count) throw new Error("Coordination message body is truncated");
+      offset += count;
+    }
+    if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256)
+      throw new Error("Coordination message body integrity check failed");
+    const parsed: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).some(
+        (key) => !["text", "resultBindings"].includes(key),
+      ) ||
+      typeof (parsed as any).text !== "string" ||
+      !(parsed as any).text.length ||
+      ((parsed as any).resultBindings !== undefined &&
+        (!Array.isArray((parsed as any).resultBindings) ||
+          !(parsed as any).resultBindings.every(isResultBinding)))
+    )
+      throw new Error("Invalid coordination message body");
+    return parsed as { text: string; resultBindings?: ResultBinding[] };
+  } catch (error) {
+    throw new Error("Unable to read coordination message body", {
+      cause: error,
+    });
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -514,7 +689,8 @@ export function writeChiefMessage(
 ): string {
   if (!record.build)
     throw new Error("Coordination message build identity is required");
-  assertMessage(record);
+  if (!validMessage(record) || record.bodyRef !== undefined)
+    throw new Error("Invalid Chief message record");
   return withChiefMessageLock(
     chiefMessagePath(runtime, record.toSessionId, record.id),
     () => writeChiefMessageUnlocked(record, runtime, clearQuarantine),
@@ -546,8 +722,9 @@ function writeChiefMessageUnlocked(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+  const stored = compactChiefMessage(record, path);
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
-  const content = `${JSON.stringify(record)}\n`;
+  const content = `${JSON.stringify(stored)}\n`;
   let fd: number | undefined;
   try {
     fd = openSync(temporary, "wx", 0o600);
@@ -625,7 +802,7 @@ function assertChiefMessageNotQuarantined(
     throw new Error("Chief message is quarantined");
 }
 
-export function readChiefMessage(path: string): ChiefMessageRecord {
+function readStoredChiefMessage(path: string): StoredChiefMessage {
   let size: number;
   try {
     size = statSync(path).size;
@@ -637,12 +814,24 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     assertMessage(parsed);
-    return parsed;
+    return parsed as StoredChiefMessage;
   } catch (error) {
     if (error instanceof Error && /Chief message record/.test(error.message))
       throw error;
     throw new Error("Invalid Chief message record", { cause: error });
   }
+}
+
+export function readChiefMessage(path: string): ChiefMessageRecord {
+  const parsed = readStoredChiefMessage(path);
+  if (parsed.bodyRef) {
+    const body = readOverflowBody(`${path}.body`, parsed.bodyRef);
+    const logical = { ...parsed, ...body } as ChiefMessageRecord;
+    delete (logical as any).bodyRef;
+    if (!validMessage(logical)) throw new Error("Invalid Chief message body");
+    return logical;
+  }
+  return parsed as ChiefMessageRecord;
 }
 
 function allChiefMessagePaths(
@@ -666,7 +855,7 @@ function allChiefMessagePaths(
   return paths
     .flatMap((path) => {
       try {
-        const record = readChiefMessage(path);
+        const record = readStoredChiefMessage(path);
         return [{ path, record }];
       } catch {
         return [{ path, record: undefined }];
@@ -718,9 +907,10 @@ function removeChiefMessageUnlocked(
   const matchesExpected = (): boolean => {
     if (!expected) return true;
     try {
-      return (
-        JSON.stringify(readChiefMessage(path)) === JSON.stringify(expected)
-      );
+      const stored = readStoredChiefMessage(path);
+      if ((expected as StoredChiefMessage).bodyRef)
+        return isDeepStrictEqual(stored, expected);
+      return isDeepStrictEqual(readChiefMessage(path), expected);
     } catch {
       return false;
     }
@@ -755,6 +945,10 @@ function removeChiefMessageUnlocked(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT")
       throw new Error("Unable to remove Chief message", { cause: error });
   }
+  try {
+    unlinkSync(`${path}.body`);
+    fsyncDirectory(directory);
+  } catch {}
   try {
     removeChiefMessageQuarantineUnlocked(runtime, toSessionId, id);
   } catch (error) {
@@ -831,9 +1025,7 @@ function deliveredMessageContent(record: CoordinationMessageRecord): string {
     record.kind === "project_assignment"
       ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
       : `${prefix}${record.text}`;
-  return Buffer.from(content, "utf8")
-    .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
-    .toString("utf8");
+  return content;
 }
 
 /** Drain only this session's inbox. Files remain when Pi rejects delivery. */
@@ -841,10 +1033,9 @@ export async function drainCoordinationInbox(
   options: ChiefInboxDrainOptions,
 ): Promise<number> {
   let delivered = 0;
-  for (const path of listChiefMessagePaths(
-    options.runtime,
-    options.sessionId,
-  )) {
+  let examined = 0;
+  for (const path of allChiefMessagePaths(options.runtime, options.sessionId)) {
+    if (examined >= COORDINATION_INBOX_SCAN_LIMIT) break;
     if (options.signal?.aborted) break;
     const id = basename(path, ".json");
     if (
@@ -852,9 +1043,11 @@ export async function drainCoordinationInbox(
       chiefMessageQuarantined(options.runtime, options.sessionId, id)
     )
       continue;
+    let stored: StoredChiefMessage;
     let record: ChiefMessageRecord;
     try {
-      record = readChiefMessage(path);
+      stored = readStoredChiefMessage(path);
+      record = stored as ChiefMessageRecord;
     } catch {
       if (UUID.test(id) && conclusivelyMalformedChiefMessage(path)) {
         for (const cleanupError of removeMalformedChiefMessage(
@@ -868,6 +1061,7 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    examined++;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -948,6 +1142,21 @@ export async function drainCoordinationInbox(
         );
         // Authorization may have yielded while Pi persisted an earlier send.
         if (!options.isDelivered(record.id)) {
+          if (stored.bodyRef) {
+            try {
+              const body = readOverflowBody(`${path}.body`, stored.bodyRef);
+              record = { ...record, ...body } as ChiefMessageRecord;
+            } catch {
+              examined--;
+              await options.cleanupError?.(
+                new Error(
+                  `Unable to read overflow body for Chief message ${id}`,
+                ),
+              );
+              await clearTransaction();
+              continue;
+            }
+          }
           await options.sendMessage(
             {
               customType: `pi-herdsman-${record.kind}`,
@@ -2400,6 +2609,16 @@ export type ProjectMessage = Readonly<{
   createdAt: number;
 }>;
 
+export type ProjectMessageHeader = Omit<
+  ProjectMessage,
+  "text" | "resultBindings"
+> & {
+  text: string;
+  resultBindings?: ResultBinding[];
+  bodyRef?: OverflowBodyRef;
+};
+type StoredProjectMessage = ProjectMessageHeader;
+
 function projectMessageDirectory(
   runtime: SupervisionRuntime,
   repoKey: string,
@@ -2424,6 +2643,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
         "kind",
         "createdAt",
         "resultBindings",
+        "bodyRef",
       ].includes(key),
     ) &&
     Object.keys(r).length >= 7 &&
@@ -2442,15 +2662,17 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
     validNativeIdentity(r.branch) &&
     validSession(r.fromSessionId) &&
     typeof r.text === "string" &&
-    r.text.length > 0 &&
+    (r.bodyRef === undefined
+      ? r.text.length > 0
+      : r.text === "" &&
+        r.resultBindings === undefined &&
+        validOverflowBodyRef(r.bodyRef)) &&
     (r.kind === undefined || r.kind === "execution_failure") &&
     (r.resultBindings === undefined ||
       (Array.isArray(r.resultBindings) &&
         r.resultBindings.every(isResultBinding))) &&
     Number.isInteger(r.createdAt) &&
-    (r.createdAt as number) >= 0 &&
-    Buffer.byteLength(`${JSON.stringify(r)}\n`, "utf8") <=
-      COORDINATION_MESSAGE_MAX_BYTES
+    (r.createdAt as number) >= 0
   );
 }
 
@@ -2462,7 +2684,23 @@ export function writeProjectMessage(
   record: ProjectMessage,
   runtime: SupervisionRuntime,
 ): void {
-  if (!validProjectMessage(record)) throw new Error("Invalid project message");
+  if (!validProjectMessage(record) || (record as any).bodyRef !== undefined)
+    throw new Error("Invalid project message");
+  const path = join(
+    projectMessageDirectory(runtime, record.repoKey, record.branch),
+    `${record.id}.json`,
+  );
+  withChiefMessageLock(path, () =>
+    writeProjectMessageUnlocked(record, runtime),
+  );
+}
+
+function writeProjectMessageUnlocked(
+  record: ProjectMessage,
+  runtime: SupervisionRuntime,
+): void {
+  if (!validProjectMessage(record) || (record as any).bodyRef !== undefined)
+    throw new Error("Invalid project message");
   const directory = projectMessageDirectory(
     runtime,
     record.repoKey,
@@ -2474,30 +2712,44 @@ export function writeProjectMessage(
   chmodSync(dirname(directory), 0o700);
   chmodSync(directory, 0o700);
   const path = join(directory, `${record.id}.json`);
+  let stored: StoredProjectMessage = record;
+  if (projectMessageBytes(record) > COORDINATION_MESSAGE_MAX_BYTES) {
+    const bodyRef = writeOverflowBody(`${path}.body`, {
+      text: record.text,
+      ...(record.resultBindings
+        ? { resultBindings: record.resultBindings }
+        : {}),
+    });
+    stored = { ...record, text: "", bodyRef };
+    delete (stored as any).resultBindings;
+    if (
+      projectMessageBytes(stored as ProjectMessage) >
+      COORDINATION_MESSAGE_MAX_BYTES
+    )
+      throw new Error("Project message routing metadata is too large");
+  }
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
     fd = openSync(temporary, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
+    writeFileSync(fd, `${JSON.stringify(stored)}\n`, "utf8");
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
-    let existing: unknown;
+    let existing: ProjectMessage | undefined;
     try {
-      if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
-        throw new Error("large");
-      existing = JSON.parse(readFileSync(path, "utf8"));
+      existing = readProjectMessageFile(path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+      if (
+        (error as any).cause?.code !== "ENOENT" &&
+        (error as NodeJS.ErrnoException).code !== "ENOENT"
+      )
         throw new Error(`Unable to verify existing project message ${path}`, {
           cause: error,
         });
     }
     if (existing !== undefined) {
-      if (
-        !validProjectMessage(existing) ||
-        JSON.stringify(existing) !== JSON.stringify(record)
-      )
+      if (JSON.stringify(existing) !== JSON.stringify(record))
         throw new Error(
           "Project message identity conflicts with durable payload",
         );
@@ -2551,6 +2803,58 @@ export function listProjectMessages(
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+/** Lists compact pending records without opening or validating overflow bodies. */
+export function listProjectMessageHeaders(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+): ProjectMessageHeader[] {
+  const directory = projectMessageDirectory(runtime, repoKey, branch);
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
+    .flatMap((entry) => {
+      try {
+        const value = readStoredProjectMessageFile(join(directory, entry));
+        if (value.repoKey !== repoKey || value.branch !== branch)
+          throw new Error(
+            `Project message identity does not match ${directory}`,
+          );
+        return [value];
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
+        )
+          return [];
+        throw error;
+      }
+    })
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/** Resolves one previously listed project message after its delivery is authorized. */
+export function readProjectMessage(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  id: string,
+): ProjectMessage {
+  if (!UUID.test(id)) throw new Error("Invalid project message ID");
+  const record = readProjectMessageFile(
+    join(projectMessageDirectory(runtime, repoKey, branch), `${id}.json`),
+  );
+  if (record.repoKey !== repoKey || record.branch !== branch)
+    throw new Error("Project message identity does not match its directory");
+  return record;
+}
+
 export function removeProjectMessage(
   runtime: SupervisionRuntime,
   repoKey: string,
@@ -2560,21 +2864,62 @@ export function removeProjectMessage(
   if (!UUID.test(id)) throw new Error("Invalid project message ID");
   const directory = projectMessageDirectory(runtime, repoKey, branch);
   try {
+    if (!statSync(directory).isDirectory())
+      throw new Error("Invalid project message directory");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const path = join(directory, `${id}.json`);
+  withChiefMessageLock(path, () => removeProjectMessageUnlocked(directory, id));
+}
+
+function removeProjectMessageUnlocked(directory: string, id: string): void {
+  try {
     unlinkSync(join(directory, `${id}.json`));
     fsyncDirectory(directory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  try {
+    unlinkSync(join(directory, `${id}.json.body`));
+    fsyncDirectory(directory);
+  } catch {}
 }
 
 function readProjectMessageFile(path: string): ProjectMessage {
   try {
+    const stored = readStoredProjectMessageFile(path);
+    if ((stored as StoredProjectMessage).bodyRef) {
+      const compact = stored as StoredProjectMessage;
+      const body = readOverflowBody(`${path}.body`, compact.bodyRef!);
+      const value = { ...compact, ...body } as ProjectMessage;
+      delete (value as any).bodyRef;
+      if (!validProjectMessage(value)) throw new Error("invalid body");
+      return value;
+    }
+    return stored as ProjectMessage;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to read project message ")
+    )
+      throw error;
+    throw new Error(`Unable to read project message ${path}`, { cause: error });
+  }
+}
+
+function readStoredProjectMessageFile(path: string): StoredProjectMessage {
+  try {
     if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
       throw new Error("large");
-    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (!validProjectMessage(value) || basename(path) !== `${value.id}.json`)
+    const stored: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      !validProjectMessage(stored) ||
+      basename(path) !== `${(stored as ProjectMessage).id}.json`
+    )
       throw new Error("invalid");
-    return value;
+    return stored as StoredProjectMessage;
   } catch (error) {
     throw new Error(`Unable to read project message ${path}`, { cause: error });
   }
@@ -2584,7 +2929,7 @@ export function removeProjectMessagesForAssignment(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
 ): void {
-  for (const message of listProjectMessages(
+  for (const message of listProjectMessageHeaders(
     runtime,
     assignment.repoKey,
     assignment.branch,
@@ -2633,9 +2978,9 @@ export function recoverStaleProjectMessages(
         (file) => UUID.test(file.slice(0, -5)) && file.endsWith(".json"),
       )) {
         const path = join(messages, file);
-        let message: ProjectMessage;
+        let message: ProjectMessageHeader;
         try {
-          message = readProjectMessageFile(path);
+          message = readStoredProjectMessageFile(path);
         } catch (error) {
           if (
             error instanceof Error &&

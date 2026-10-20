@@ -44,11 +44,12 @@ An ordinary Lead without a verified active project Manager or Chief should
 continue independently until a supervisor is available. Manually continuing the exact assigned Pi session
 does not release management; `managed-lead` is launch policy, not authority.
 
-Messages are bounded. `files` accepts ordinary
-paths, reusable direct Agent refs, and canonical result refs already supplied
-as evidence; attachments are prepared at submission and the durable message
-carries prepared text plus any hidden semantic-result bindings needed for the
-recipient to forward them.
+Messages are bounded by configured per-file and complete-message budgets.
+`files` accepts ordinary paths, reusable direct Agent refs, and canonical
+result refs already supplied as evidence. Supported UTF-8 text is delivered in
+full or the handoff fails; the physical 8 KiB coordination-record limit does
+not truncate the recipient's message. Hidden semantic-result bindings remain
+available for the recipient to forward.
 
 ## Delivery
 

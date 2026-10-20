@@ -1675,6 +1675,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     assert.equal(readPeerLeadRecord(peerRuntime(), senderId), undefined);
     await pi.commandOptions.get("chief").handler("", ctx);
     const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
+    const completeEvidence = "review-evidence-478\n".repeat(1_500);
     writeChiefMessage(
       {
         version: 2,
@@ -1684,7 +1685,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
         fromSessionId: senderId,
         toSessionId: sessionId,
         leadSessionId: senderId,
-        text: "queued until the turn starts",
+        text: completeEvidence,
         createdAt: Date.now(),
       },
       supervisionRuntime(),
@@ -1700,7 +1701,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 650));
     assert.equal(
       pi.sent.some((message: any) =>
-        String(message?.content ?? "").includes("queued until the turn starts"),
+        String(message?.content ?? "").includes("review-evidence-478"),
       ),
       false,
     );
@@ -1709,7 +1710,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 650));
     assert.equal(
       pi.sent.some((message: any) =>
-        String(message?.content ?? "").includes("queued until the turn starts"),
+        String(message?.content ?? "").includes("review-evidence-478"),
       ),
       false,
     );
@@ -1718,17 +1719,16 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     await t.waitFor(() =>
       assert.ok(
         pi.sent.some((message: any) =>
-          String(message?.content ?? "").includes(
-            "queued until the turn starts",
-          ),
+          String(message?.content ?? "").includes("review-evidence-478"),
         ),
       ),
     );
     const delivered = pi.sent.find(
       (message: any) =>
         message.customType === "pi-herdsman-lead_message" &&
-        String(message.content).includes("queued until the turn starts"),
+        String(message.content).includes("review-evidence-478"),
     );
+    assert.ok(delivered.content.includes(completeEvidence));
     assert.deepEqual(
       {
         fromSessionId: delivered.details.fromSessionId,
@@ -1903,7 +1903,7 @@ for (const reachable of [true, false]) {
           repoKey: "repo-key",
           branch,
           fromSessionId: leadId,
-          text: "live project review handoff",
+          text: "project-review-evidence-478\n".repeat(1_500),
           createdAt: managerA.createdAt + 1,
         };
         writeProjectAssignment(runtime, {
@@ -1922,6 +1922,11 @@ for (const reachable of [true, false]) {
           );
         await t.waitFor(() =>
           assert.equal(projectDeliveries(liveRecord.id).length, 1),
+        );
+        assert.ok(
+          String(projectDeliveries(liveRecord.id)[0]?.content).includes(
+            liveRecord.text,
+          ),
         );
         const liveSend = pi.sentMessageCalls.find(
           ({ message }: any) => (message as any)?.details?.id === liveRecord.id,
@@ -2094,15 +2099,19 @@ for (const reachable of [true, false]) {
         };
         try {
           await lead.events.get("session_start")![0](undefined, leadCtx);
+          const plan = "project-message-plan-478\n".repeat(1_000);
+          const planPath = join(tmpdir(), `project-plan-${randomUUID()}.md`);
+          realFs.writeFileSync(planPath, plan);
           const result = await lead.tools
             .find((tool) => tool.name === "message_supervisor")!
             .execute(
               "message",
-              { message: "reachable before chat" },
+              { message: "Review the attached plan.", files: [planPath] },
               undefined,
               undefined,
               leadCtx,
             );
+          realFs.unlinkSync(planPath);
           assert.equal(result.details.branch, branch);
           assert.ok(typeof result.details.id === "string");
           const saved = listProjectMessages(runtime, "repo-key", branch).find(
@@ -2111,7 +2120,12 @@ for (const reachable of [true, false]) {
           assert.ok(saved);
           assert.equal(saved.id, result.details.id);
           assert.equal(saved.fromSessionId, leadId);
-          assert.equal(saved.text, "reachable before chat");
+          assert.ok(saved.text.includes(plan));
+          await t.waitFor(() =>
+            assert.ok(
+              projectDeliveries(result.details.id)[0]?.content.includes(plan),
+            ),
+          );
         } finally {
           await lead.events.get("session_shutdown")?.[0]();
           process.env.HERDR_PANE_ID = "root-pane";
@@ -5355,6 +5369,123 @@ async function runManagerStartupScenario(
         "the generated assignment note is handoff text, not an attachment",
       );
       assert.match(delivered.text, new RegExp(generatedNote));
+      const requiredEvidenceBeforeHandoff = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch)?.requiredEvidence;
+      const completePlan = "# Complete coordination evidence\n".padEnd(
+        29_764,
+        "x",
+      );
+      assert.equal(Buffer.byteLength(completePlan), 29_764);
+      realFs.writeFileSync(attachmentPath, completePlan);
+      const nonRetained = await staffMessage.execute(
+        "complete-text-evidence",
+        {
+          session: childSession,
+          message: "Review this plan.",
+          files: [attachmentPath],
+          retain: false,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(nonRetained.details.ok, true);
+      realFs.unlinkSync(attachmentPath);
+      const recipientPi = fakePi({ persistMessages: true });
+      await drainCoordinationInbox({
+        runtime: supervisionRuntime(),
+        sessionId: childSession,
+        isAuthorized: () => true,
+        isDelivered: (id) =>
+          recipientPi.entries.some(
+            (message: any) => message?.details?.id === id,
+          ),
+        deliveryMode: () => "followUp",
+        sendMessage: async (message) => {
+          recipientPi.pi.sendMessage(message, { deliverAs: "followUp" });
+        },
+      });
+      const immediateMessage = recipientPi.sentMessageCalls
+        .map(({ message }) => message as any)
+        .find((message) => message.details?.id === nonRetained.details.id);
+      assert.ok(
+        immediateMessage,
+        `recipient Pi sendMessage was called: ${JSON.stringify(nonRetained)}; ` +
+          `${JSON.stringify(listChiefMessagePaths(supervisionRuntime(), childSession).map((path) => readChiefMessage(path)))}`,
+      );
+      assert.ok(
+        recipientPi.entries.includes(immediateMessage),
+        "complete handoff is present in recipient Pi conversation context",
+      );
+      assert.equal(immediateMessage.customType, "pi-herdsman-manager_message");
+      assert.ok(immediateMessage.content.includes(completePlan));
+      assert.doesNotMatch(immediateMessage.content, /<file\b[^>]*\/>/);
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), repoKey).find(
+          (item) => item.branch === assignment.branch,
+        )?.requiredEvidence,
+        requiredEvidenceBeforeHandoff,
+        "retain:false must not add continuing required evidence",
+      );
+
+      const retainedPlan = completePlan.replaceAll("x", "y");
+      realFs.writeFileSync(attachmentPath, retainedPlan);
+      const retained = await staffMessage.execute(
+        "complete-retained-text-evidence",
+        {
+          session: childSession,
+          message: "Review this retained plan.",
+          files: [attachmentPath],
+          retain: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(retained.details.ok, true);
+      realFs.unlinkSync(attachmentPath);
+      await drainCoordinationInbox({
+        runtime: supervisionRuntime(),
+        sessionId: childSession,
+        isAuthorized: () => true,
+        isDelivered: (id) =>
+          recipientPi.entries.some(
+            (message: any) => message?.details?.id === id,
+          ),
+        deliveryMode: () => "followUp",
+        sendMessage: async (message) => {
+          recipientPi.pi.sendMessage(message, { deliverAs: "followUp" });
+        },
+      });
+      const retainedMessage = recipientPi.sentMessageCalls
+        .map(({ message }) => message as any)
+        .find((message) => message.details?.id === retained.details.id);
+      assert.ok(
+        retainedMessage,
+        "retained handoff reached recipient Pi sendMessage",
+      );
+      assert.ok(
+        recipientPi.entries.includes(retainedMessage),
+        "retained handoff is present in recipient Pi conversation context",
+      );
+      assert.equal(retainedMessage.customType, "pi-herdsman-manager_message");
+      assert.ok(retainedMessage.content.includes(retainedPlan));
+      const retainedAssignment = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch)!;
+      const retainedEvidence = retainedAssignment.requiredEvidence?.find(
+        (entry) =>
+          readRequiredEvidenceSnapshot(retainedAssignment.id, entry) ===
+          retainedPlan,
+      );
+      assert.ok(retainedEvidence, "retain:true persists immutable evidence");
+      assert.equal(
+        readRequiredEvidenceSnapshot(retainedAssignment.id, retainedEvidence),
+        retainedPlan,
+      );
       return;
     }
     if (mode === "success") {
@@ -5473,7 +5604,7 @@ test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
 test("Manager preserves project assignment and skips notification for incompatible Lead", () =>
   runManagerStartupScenario("incompatible-build"));
-test("Manager message staff does not publish to incompatible Lead", () =>
+test("Manager message_staff rejects incompatible Leads and delivers complete attachments", () =>
   runManagerStartupScenario("staff-message-mismatch"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
