@@ -420,6 +420,36 @@ function writePlacementSetting(placement: "tab" | "subtree" | "split") {
   );
 }
 
+function writeValidPiSessionFile(session: {
+  id: string;
+  path: string;
+  cwd: string;
+  entries?: readonly Record<string, unknown>[];
+}): void {
+  let parentId: string | null = null;
+  const entries = (session.entries ?? []).map((entry) => {
+    const persisted = {
+      ...entry,
+      id: randomUUID(),
+      parentId,
+      timestamp: new Date().toISOString(),
+    };
+    parentId = persisted.id;
+    return persisted;
+  });
+  realFs.writeFileSync(
+    session.path,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: session.id,
+      timestamp: new Date().toISOString(),
+      cwd: session.cwd,
+    })}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}${entries.length ? "\n" : ""}`,
+    "utf8",
+  );
+}
+
 function registerNativeAgentSession(state: ManagedAgentState): void {
   nativeSessions.set(state.piSessionId, {
     id: state.piSessionId,
@@ -7106,7 +7136,7 @@ test("historical session with its inherited label rejects an active managed repr
     chiefDefinitionPath,
     `---\nname: chief\nagents: [${name}]\n---\n`,
   );
-  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.symlinkSync(identity.piSessionFile, aliasPath);
   nativeSessions.set(session.id, session);
   const active = {
@@ -7211,7 +7241,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
     definitionPath,
     `---\nname: ${name}\n---\nexact stale ID test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   nativeSessions.set(session.id, session);
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
@@ -7279,7 +7309,7 @@ test("concurrent session activation permits one generation", async () => {
     definitionPath,
     `---\nname: ${name}\n---\nconcurrent activation test\n`,
   );
-  realFs.writeFileSync(session.path, "{}", "utf8");
+  writeValidPiSessionFile(session);
   nativeSessions.set(session.id, session);
   const startup = startupExecutor(name, () => session.id);
   let release!: () => void;
@@ -7340,12 +7370,24 @@ test("session assignment reports a pane mismatch from the agent state producer",
   registerExtension!(agent.pi as never);
   const agentStart = agent.events.get("session_start")![0];
   const paneEnvironment: Record<string, string> = {};
-  nativeSessions.set("dddddddd-dddd-4ddd-8ddd-dddddddddddd", {
+  const producerMismatchSession = {
     id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
     path: producerMismatchPath,
     cwd: "/tmp",
-  });
-  realFs.writeFileSync(producerMismatchPath, "{}", "utf8");
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          definition: "agent",
+          label,
+        },
+      },
+    ],
+  };
+  nativeSessions.set(producerMismatchSession.id, producerMismatchSession);
+  writeValidPiSessionFile(producerMismatchSession);
   realFs.writeFileSync(registeredAgentPath, "{}", "utf8");
   setLeadEnvironment();
   const lead = fakePi({
@@ -8029,7 +8071,7 @@ test("session continuation starts a new agent generation with current prompt con
     ],
   };
   realFs.writeFileSync(promptPath, "current saved-session prompt");
-  realFs.writeFileSync(session.path, "{}", "utf8");
+  writeValidPiSessionFile(session);
   writePromptDefinition(definitionPath, name, promptPath);
   nativeSessions.set(session.id, session);
   const savedMailbox = agentMailboxPath(WORKSPACE, name);
@@ -8399,7 +8441,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
         ],
       };
       nativeSessions.set(DEFAULT_PI_SESSION_ID, session);
-      realFs.writeFileSync(sessionPath, "{}", "utf8");
+      writeValidPiSessionFile(session);
     },
     sessionPath,
   );
@@ -8707,7 +8749,17 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
                 },
               },
             ];
-            realFs.writeFileSync(childSessionPath, "{}", "utf8");
+            realFs.writeFileSync(
+              childSessionPath,
+              `${JSON.stringify({
+                type: "session",
+                version: 3,
+                id: childSessionId,
+                timestamp: new Date().toISOString(),
+                cwd: "/tmp",
+              })}\n${childEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+              "utf8",
+            );
             nativeSessions.set(childSessionId, {
               id: childSessionId,
               path: childSessionPath,
@@ -8830,6 +8882,38 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     );
     assert.ok(acceptedEvidence, "child runtime persists accepted evidence");
     assert.equal(acceptedEvidence.data.requestId, firstRequest.requestId);
+    const { createManagedAgentEvidenceUpdater } =
+      await import("./managed-agent-runtime.ts");
+    const updateEvidence = createManagedAgentEvidenceUpdater(
+      childPi.pi as never,
+    );
+    const firstLocal = await updateEvidence(
+      "remove-local-evidence",
+      { text: "retain this local note" },
+      undefined,
+      undefined,
+      activeChildContext,
+    );
+    const removedLocal = await updateEvidence(
+      "add-local-evidence",
+      { text: "remove this local note" },
+      undefined,
+      undefined,
+      activeChildContext,
+    );
+    const removedItem = removedLocal.details.evidence.find(
+      (item) =>
+        !firstLocal.details.evidence.some(
+          (previous) => previous.id === item.id,
+        ),
+    )!;
+    await updateEvidence(
+      "remove-local-evidence",
+      { remove: [removedItem.id] },
+      undefined,
+      undefined,
+      activeChildContext,
+    );
     for (const handler of childPi.events.get("agent_start") ?? [])
       await handler(undefined, activeChildContext);
     const control = childPi.events.get("input")![0](
@@ -8896,6 +8980,29 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.equal(terminal.details.piSessionId, childSessionId);
     assert.equal(terminal.details.piSessionFile, childSessionPath);
 
+    let parentEntryId: string | null = null;
+    const persistedChildEntries = childEntries.map((entry) => {
+      const persisted = {
+        ...entry,
+        id: randomUUID(),
+        parentId: parentEntryId,
+        timestamp: new Date().toISOString(),
+      };
+      parentEntryId = persisted.id;
+      return persisted;
+    });
+    realFs.writeFileSync(
+      childSessionPath,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: childSessionId,
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      })}\n${persistedChildEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
     process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
     process.env.PI_HERDSMAN_RUN_ID = parent.runId;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
@@ -8927,10 +9034,27 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       accepted!.projectAssignmentId,
       firstRequest.projectAssignmentId,
     );
-    assert.deepEqual(accepted!.requiredEvidence, firstRequest.requiredEvidence);
-    assert.deepEqual(
-      accepted!.localEvidence ?? [],
-      firstRequest.localEvidence ?? [],
+    const retainedNote = firstLocal.details.evidence.find(
+      (item) => item.id !== inherited.id && item.id !== local.id,
+    )!;
+    assert.deepEqual(accepted!.requiredEvidence, [
+      inherited,
+      local,
+      retainedNote,
+    ]);
+    assert.deepEqual(accepted!.inheritedEvidence, [inherited, local]);
+    assert.deepEqual(accepted!.localEvidence, [retainedNote]);
+    assert.ok(
+      accepted!.localEvidence?.some((item) => item.id === retainedNote.id),
+      "continued request retains the remaining local note",
+    );
+    assert.ok(
+      !accepted!.localEvidence?.some((item) => item.id === removedItem.id),
+      "continued request excludes the removed local note",
+    );
+    assert.ok(
+      !accepted!.requiredEvidence.some((item) => item.id === removedItem.id),
+      "removed local evidence is not revived in inherited evidence",
     );
     assert.equal(
       accepted!.evidenceAssignmentId,
@@ -8943,6 +9067,13 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.equal(
       readRequiredEvidenceSnapshot(projectAssignmentId, local),
       "accepted local review contents",
+    );
+    assert.equal(
+      readRequiredEvidenceSnapshot(
+        firstRequest.evidenceAssignmentId,
+        retainedNote,
+      ),
+      "retain this local note",
     );
   } finally {
     if (childRequestPump) clearInterval(childRequestPump);
@@ -9062,7 +9193,7 @@ test("continuation after a later unscoped assignment does not revive prior requi
       },
     ],
   };
-  realFs.writeFileSync(path, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.writeFileSync(promptPath, "saved prompt", "utf8");
   writePromptDefinition(definitionPath, name, promptPath);
   nativeSessions.set(sessionId, session);
@@ -9184,7 +9315,7 @@ test("ordinary unscoped accepted session continues after mailbox cleanup", async
       },
     ],
   };
-  realFs.writeFileSync(path, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.writeFileSync(promptPath, "saved prompt", "utf8");
   writePromptDefinition(definitionPath, name, promptPath);
   nativeSessions.set(sessionId, session);
@@ -9219,6 +9350,7 @@ test("ordinary unscoped accepted session continues after mailbox cleanup", async
       "must not be ignored",
     );
     markerData.inheritedEvidence = [malformedEvidence];
+    writeValidPiSessionFile(session);
     const malformed = await registeredAgentTool(pi, "continue").execute(
       "reject-malformed-unscoped",
       { session: path, task: "must fail closed" },
@@ -9244,6 +9376,7 @@ test("ordinary unscoped accepted session continues after mailbox cleanup", async
       false,
     );
     markerData.inheritedEvidence = [];
+    writeValidPiSessionFile(session);
     const result = await registeredAgentTool(pi, "continue").execute(
       "continue-retired-unscoped",
       { session: path, task: "continue ordinary work" },
@@ -9313,7 +9446,7 @@ test("session continuation ignores an unrelated missing live session path", asyn
     definitionPath,
     `---\nname: ${name}\n---\nmissing live session test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.writeFileSync(staleExpectedPath, "{}", "utf8");
   resetAgentMailbox(staleMailbox);
   writeAgentState(staleMailbox, staleState);
@@ -9406,7 +9539,7 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
     definitionPath,
     `---\nname: ${name}\n---\nexact live ID with stale path test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   resetAgentMailbox(staleMailbox);
   writeAgentState(staleMailbox, staleState);
   nativeSessions.set(session.id, session);
@@ -9497,7 +9630,7 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
     definitionPath,
     `---\nname: ${name}\n---\nexact live ID with contradictory observations test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.writeFileSync(unrelatedObservedPath, "{}", "utf8");
   resetAgentMailbox(staleMailbox);
   writeAgentState(staleMailbox, staleState);
@@ -9595,7 +9728,7 @@ test("session continuation ignores removed secondary session fields", async () =
     definitionPath,
     `---\nname: ${name}\n---\nlive session path error test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   realFs.writeFileSync(notDirectoryPath, "not a directory", "utf8");
   realFs.writeFileSync(staleExpectedPath, "{}", "utf8");
   resetAgentMailbox(staleMailbox);
@@ -9681,7 +9814,7 @@ test("session continuation fails closed on an unrelated malformed persisted mail
     definitionPath,
     `---\nname: ${name}\n---\npersisted path error test\n`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  writeValidPiSessionFile(session);
   nativeSessions.set(session.id, session);
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);

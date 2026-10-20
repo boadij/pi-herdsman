@@ -7320,6 +7320,10 @@ test("scoped historical continuation rejects conflicting terminal provenance but
   terminal.details.workspaceId = WORKSPACE;
   terminal.details.paneId = "agent-pane";
   const mailbox = agentMailboxPath(WORKSPACE, label);
+  const unrelatedMailbox = agentMailboxPath(
+    WORKSPACE,
+    `malformed-${id.slice(0, 8)}`,
+  );
   const session = {
     id,
     path,
@@ -7336,6 +7340,8 @@ test("scoped historical continuation rejects conflicting terminal provenance but
   nativeSessions.clear();
   nativeSessions.set(id, session);
   realFs.writeFileSync(path, "{}", "utf8");
+  realFs.mkdirSync(unrelatedMailbox, { recursive: true });
+  realFs.writeFileSync(join(unrelatedMailbox, "state.json"), "{", "utf8");
   const contextFor = (results: unknown[]) => fakeContext(results) as any;
   try {
     assert.equal(
@@ -7356,6 +7362,7 @@ test("scoped historical continuation rejects conflicting terminal provenance but
     nativeSessions.clear();
     realFs.rmSync(path, { force: true });
     realFs.rmSync(mailbox, { recursive: true, force: true });
+    realFs.rmSync(unrelatedMailbox, { recursive: true, force: true });
   }
 });
 
@@ -7681,6 +7688,277 @@ test("scoped continuation revalidates terminal provenance immediately before adm
       readAgentState(startup.mailbox)?.activeRequestId,
       undefined,
       "no request may be accepted after terminal provenance conflicts",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.delete(id);
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(socketPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("valid scoped historical continuation ignores an unrelated corrupt mailbox", async () => {
+  setLeadEnvironment();
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `isolated-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `continuation-isolated-${id}.jsonl`);
+  const socketPath = join(tmpdir(), `continuation-isolated-${id}.sock`);
+  const unrelatedMailbox = agentMailboxPath(
+    WORKSPACE,
+    `malformed-${id.slice(0, 8)}`,
+  );
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  const projectRuntime = supervisionRuntime(socketPath);
+  writeProjectAssignment(projectRuntime, {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch: "continuation-isolation",
+    text: "Current project",
+  });
+  const acceptedEvidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "historical-pane",
+      projectAssignmentId: LEAD_SESSION_ID,
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+    workspaceId: WORKSPACE,
+    paneId: "historical-pane",
+  });
+  realFs.writeFileSync(path, "{}", "utf8");
+  nativeSessions.set(id, {
+    id,
+    path,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      acceptedEvidence,
+    ],
+  });
+  const startup = startupExecutor(
+    label,
+    () => id,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    undefined,
+    "/tmp/registered-agent.jsonl",
+    id,
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([terminal]) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    assert.equal(
+      realFs.existsSync(startup.mailbox),
+      false,
+      "the exact historical Agent mailbox must be absent after cleanup",
+    );
+    realFs.mkdirSync(unrelatedMailbox, { recursive: true });
+    realFs.writeFileSync(join(unrelatedMailbox, "state.json"), "{", "utf8");
+
+    const result = await agentTool(pi, "continue").execute(
+      "id",
+      { session: id, task: "continue despite unrelated corrupt mailbox" },
+      undefined,
+      undefined,
+      context,
+    );
+
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    const state = readAgentState(startup.mailbox);
+    assert.ok(state?.activeRequestId);
+    assert.notEqual(state.activeRequestId, requestId);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(unrelatedMailbox, { recursive: true, force: true });
+    nativeSessions.delete(id);
+    realFs.rmSync(path, { force: true });
+    realFs.rmSync(socketPath, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("scoped historical continuation rejects a corrupt exact-target mailbox", async () => {
+  setLeadEnvironment();
+  const id = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const label = `corrupt-target-${id.slice(0, 8)}`;
+  const path = join(testTmpRoot, `continuation-corrupt-target-${id}.jsonl`);
+  const socketPath = join(tmpdir(), `continuation-corrupt-target-${id}.sock`);
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  writeProjectAssignment(supervisionRuntime(socketPath), {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch: "continuation-corrupt-target",
+    text: "Current project",
+  });
+  const acceptedEvidence = {
+    type: "custom",
+    customType: "pi-herdsman-agent-required-evidence",
+    data: {
+      version: 1,
+      sessionId: id,
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: "historical-pane",
+      projectAssignmentId: LEAD_SESSION_ID,
+      evidenceAssignmentId: randomUUID(),
+      inheritedEvidence: [],
+      localEvidence: [],
+    },
+  };
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+    workspaceId: WORKSPACE,
+    paneId: "historical-pane",
+  });
+  realFs.writeFileSync(path, "{}", "utf8");
+  nativeSessions.set(id, {
+    id,
+    path,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "agent", label },
+      },
+      acceptedEvidence,
+    ],
+  });
+  const startup = startupExecutor(
+    label,
+    () => id,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    undefined,
+    "/tmp/registered-agent.jsonl",
+    id,
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([terminal]) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    assert.equal(realFs.existsSync(startup.mailbox), false);
+    realFs.mkdirSync(startup.mailbox, { recursive: true });
+    realFs.writeFileSync(
+      join(startup.mailbox, "state.json"),
+      "{malformed",
+      "utf8",
+    );
+
+    const result = await agentTool(pi, "continue").execute(
+      "id",
+      { session: id, task: "must not bypass corrupt target mailbox" },
+      undefined,
+      undefined,
+      context,
+    );
+
+    assert.equal(result.details.ok, false, JSON.stringify(result.details));
+    assert.equal(
+      result.details.error.category,
+      "invalid_request",
+      JSON.stringify(result.details),
+    );
+    assert.throws(
+      () => readAgentState(startup.mailbox),
+      "corrupt target state must not be replaced by a new generation",
+    );
+    assert.deepEqual(
+      realFs.readdirSync(startup.mailbox),
+      ["state.json"],
+      "no new request or generation state may be written",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();

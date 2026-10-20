@@ -15,6 +15,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -781,6 +782,7 @@ function requiredEvidenceEntriesForRequest(
 
 function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
   const records = entries.map((entry) => entry?.data);
+  const itemsById = new Map<string, RequiredEvidence>();
   for (let index = 1; index < records.length; index++) {
     const previous = records[index - 1];
     const current = records[index];
@@ -799,20 +801,19 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
         "projectAssignmentId",
         "evidenceAssignmentId",
         "inheritedEvidence",
-      ].some(
-        (field) =>
-          JSON.stringify(previous[field]) !== JSON.stringify(current[field]),
-      ) ||
+      ].some((field) => !isDeepStrictEqual(previous[field], current[field])) ||
       !Array.isArray(previous.localEvidence) ||
-      !Array.isArray(current.localEvidence) ||
-      previous.localEvidence.length > current.localEvidence.length ||
-      previous.localEvidence.some(
-        (item: RequiredEvidence, itemIndex: number) =>
-          JSON.stringify(item) !==
-          JSON.stringify(current.localEvidence[itemIndex]),
-      )
+      !Array.isArray(current.localEvidence)
     )
       return false;
+  }
+  for (const record of records) {
+    if (!Array.isArray(record?.localEvidence)) return false;
+    for (const item of record.localEvidence as RequiredEvidence[]) {
+      const previous = itemsById.get(item.id);
+      if (previous && !isDeepStrictEqual(previous, item)) return false;
+      itemsById.set(item.id, item);
+    }
   }
   return true;
 }
@@ -1927,12 +1928,6 @@ export function resolveAssignmentSession(
           "continue",
         );
       const currentState = matchingStates[0];
-      if (!currentState && listAgentStateIssues().length)
-        fail(
-          "invalid_request",
-          "Cannot verify mailbox cleanup because managed state is unavailable",
-          "continue",
-        );
       let historicalTerminal: Record<string, unknown> | undefined;
       if (hasProjectEvidenceHistory && !currentState) {
         if (!evidenceBranch)
