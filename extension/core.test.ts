@@ -769,6 +769,8 @@ test("rejects a same-size in-place mutation while reading an attachment", () => 
     if (!changed) {
       changed = true;
       realFs.writeFileSync(path, "BBBB");
+      const oldTimestamp = new Date("2000-01-01T00:00:00Z");
+      realFs.utimesSync(path, oldTimestamp, oldTimestamp);
     }
   };
   try {
