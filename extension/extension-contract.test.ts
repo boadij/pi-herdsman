@@ -2788,7 +2788,10 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
       { type: "text", text: "No active supervisor is available" },
     ]);
     assert.deepEqual(result.details, {
-      error: { category: "target_not_found" },
+      error: {
+        branchStatus: "operation_error_returned",
+        category: "target_not_found",
+      },
     });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -4787,7 +4790,10 @@ test("registered message_supervisor projects OperationError categories to tool r
       { type: "text", text: "Message must contain non-whitespace text" },
     ]);
     assert.deepEqual(result.details, {
-      error: { category: "invalid_request" },
+      error: {
+        branchStatus: "operation_error_returned",
+        category: "invalid_request",
+      },
     });
     assert.doesNotMatch(
       JSON.stringify(result.details),
@@ -4828,6 +4834,9 @@ test("registered message_supervisor projects OperationError categories to tool r
         supervisorCallObserved: true,
         supervisorResultState: "error",
         supervisorErrorCategory: "invalid_request",
+        supervisorHandlerBranchStatus: "operation_error_returned",
+        supervisorPersistedErrorCategoryPresent: true,
+        supervisorPersistedErrorCategory: "invalid_request",
       },
     );
 
@@ -4843,6 +4852,53 @@ test("registered message_supervisor projects OperationError categories to tool r
     await assert.rejects(
       tool.execute("call-id", hostileParams, undefined, undefined, context),
       (error: unknown) => error === nonOperationError,
+    );
+    const persistedThrownError = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "message_supervisor",
+            id: "call-id",
+            arguments: { message: "MANAGER_HANDOFF_READY" },
+          },
+        ],
+      },
+    };
+    const persistedPiThrownResult = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "message_supervisor",
+        toolCallId: "call-id",
+        isError: true,
+        content: [{ type: "text", text: nonOperationError.message }],
+      },
+    };
+    const thrownDiagnostics = supervisorMessageDiagnostics(
+      [persistedThrownError, persistedPiThrownResult]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "MANAGER_HANDOFF_READY",
+    );
+    assert.equal(thrownDiagnostics.supervisorResultState, "error");
+    assert.equal(
+      thrownDiagnostics.supervisorHandlerBranchStatus,
+      "not_observed",
+    );
+    assert.equal(
+      thrownDiagnostics.supervisorPersistedErrorCategoryPresent,
+      false,
+    );
+    assert.equal(
+      thrownDiagnostics.supervisorPersistedErrorCategory,
+      "not_observed",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(thrownDiagnostics),
+      /sensitive|PRIVATE/u,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

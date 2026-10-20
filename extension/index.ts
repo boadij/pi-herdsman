@@ -2267,7 +2267,12 @@ export default function (pi: ExtensionAPI): void {
               return {
                 content: [{ type: "text", text: error.message }],
                 isError: true,
-                details: { error: { category: error.detail.category } },
+                details: {
+                  error: {
+                    branchStatus: "operation_error_returned",
+                    category: error.detail.category,
+                  },
+                },
               };
             }
           },

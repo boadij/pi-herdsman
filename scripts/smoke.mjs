@@ -759,6 +759,9 @@ export function managerAssignmentDiagnostics({
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
+    supervisorHandlerBranchStatus: "not_observed",
+    supervisorPersistedErrorCategoryPresent: false,
+    supervisorPersistedErrorCategory: "not_observed",
     readinessDeliveryObserved: readinessDeliveryObserved ?? false,
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
@@ -813,6 +816,12 @@ export function supervisorMessageDiagnostics(contents, text) {
     (result) => result.isError === true || result.details?.ok === false,
   );
   const category = failed?.details?.error?.category;
+  const errorDetails = failed?.details?.error;
+  const handlerBranchStatus = errorDetails?.branchStatus;
+  const categoryPresent =
+    errorDetails !== null &&
+    typeof errorDetails === "object" &&
+    Object.hasOwn(errorDetails, "category");
   return {
     supervisorCallObserved: calls.length > 0,
     supervisorResultState: !calls.length
@@ -828,6 +837,15 @@ export function supervisorMessageDiagnostics(contents, text) {
           ? category
           : "tool_error"
         : "none",
+    supervisorHandlerBranchStatus:
+      handlerBranchStatus === "operation_error_returned"
+        ? handlerBranchStatus
+        : "not_observed",
+    supervisorPersistedErrorCategoryPresent: categoryPresent,
+    supervisorPersistedErrorCategory:
+      categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
+        ? category
+        : "not_observed",
   };
 }
 
@@ -7785,6 +7803,21 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         ].includes(managerProgress.supervisorErrorCategory)
           ? managerProgress.supervisorErrorCategory
           : "none",
+        supervisorHandlerBranchStatus:
+          managerProgress.supervisorHandlerBranchStatus ===
+          "operation_error_returned"
+            ? managerProgress.supervisorHandlerBranchStatus
+            : "not_observed",
+        supervisorPersistedErrorCategoryPresent:
+          typeof managerProgress.supervisorPersistedErrorCategoryPresent ===
+          "boolean"
+            ? managerProgress.supervisorPersistedErrorCategoryPresent
+            : false,
+        supervisorPersistedErrorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+          managerProgress.supervisorPersistedErrorCategory,
+        )
+          ? managerProgress.supervisorPersistedErrorCategory
+          : "not_observed",
         readinessDeliveryObserved:
           typeof managerProgress.readinessDeliveryObserved === "boolean"
             ? managerProgress.readinessDeliveryObserved

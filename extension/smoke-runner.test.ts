@@ -1459,6 +1459,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
         details: {
           error: {
             category: "internal_failure",
+            branchStatus: "operation_error_returned",
             message: "PRIVATE_ERROR",
             cause: "PRIVATE_CAUSE",
           },
@@ -1477,6 +1478,9 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorCallObserved: true,
     supervisorResultState: "error",
     supervisorErrorCategory: "internal_failure",
+    supervisorHandlerBranchStatus: "operation_error_returned",
+    supervisorPersistedErrorCategoryPresent: true,
+    supervisorPersistedErrorCategory: "internal_failure",
   });
   assert.doesNotMatch(
     JSON.stringify(correlated),
@@ -1487,9 +1491,37 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     "MANAGER_HANDOFF_READY",
   );
   assert.equal(unknownCategory.supervisorErrorCategory, "tool_error");
+  assert.equal(unknownCategory.supervisorPersistedErrorCategoryPresent, true);
+  assert.equal(
+    unknownCategory.supervisorPersistedErrorCategory,
+    "not_observed",
+  );
   assert.doesNotMatch(
     JSON.stringify(unknownCategory),
     /PRIVATE_ERROR|PRIVATE_UNLISTED/u,
+  );
+  const unsupportedBranchStatus = supervisorMessageDiagnostics(
+    contents.replace(
+      '"branchStatus":"operation_error_returned"',
+      '"branchStatus":"non_operation_error_throw"',
+    ),
+    "MANAGER_HANDOFF_READY",
+  );
+  assert.equal(
+    unsupportedBranchStatus.supervisorHandlerBranchStatus,
+    "not_observed",
+  );
+  assert.equal(
+    unsupportedBranchStatus.supervisorPersistedErrorCategoryPresent,
+    true,
+  );
+  assert.equal(
+    unsupportedBranchStatus.supervisorPersistedErrorCategory,
+    "internal_failure",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(unsupportedBranchStatus),
+    /PRIVATE_CALL_ID|PRIVATE_PROMPT|PRIVATE_ERROR|PRIVATE_CAUSE|PRIVATE_RESULT_BODY/u,
   );
   const mappedSupervisorError = supervisorMessageDiagnostics(
     contents.replace('"internal_failure"', '"invalid_request"'),
@@ -1504,6 +1536,9 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorCallObserved: false,
     supervisorResultState: "missing",
     supervisorErrorCategory: "none",
+    supervisorHandlerBranchStatus: "not_observed",
+    supervisorPersistedErrorCategoryPresent: false,
+    supervisorPersistedErrorCategory: "not_observed",
   });
   const successfulSupervisor = supervisorMessageDiagnostics(
     contents
@@ -1515,6 +1550,9 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorCallObserved: true,
     supervisorResultState: "success",
     supervisorErrorCategory: "none",
+    supervisorHandlerBranchStatus: "not_observed",
+    supervisorPersistedErrorCategoryPresent: false,
+    supervisorPersistedErrorCategory: "not_observed",
   });
 
   const earlyPoll = managerAssignmentDiagnostics({
@@ -1630,6 +1668,9 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       supervisorCallObserved: true,
       supervisorResultState: "success",
       supervisorErrorCategory: "none",
+      supervisorHandlerBranchStatus: "not_observed",
+      supervisorPersistedErrorCategoryPresent: false,
+      supervisorPersistedErrorCategory: "not_observed",
       readinessDeliveryObserved: true,
       worktreeIdentityState: "verified",
       errorCategory: "none",
