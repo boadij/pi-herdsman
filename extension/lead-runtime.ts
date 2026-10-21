@@ -7253,12 +7253,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     host.pi,
                     ctx,
                     ["worktree", "remove", "--workspace", workspaceId],
-                    { signal: operationSignal },
+                    { signal: operationSignal, timeout: 180_000 },
                   ),
                 };
               } catch (error) {
                 return {
                   error: error instanceof Error ? error.message : String(error),
+                  commandInterrupted:
+                    error instanceof OperationError &&
+                    error.detail.details?.killed === true,
                   reopened,
                 };
               }
@@ -7298,6 +7301,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           retirementError =
             error instanceof Error ? error.message : String(error);
         }
+        const mayFinishLater =
+          "error" in removed && removed.commandInterrupted
+            ? " Herdr may still complete removal after the CLI stopped."
+            : "";
         return {
           content: [
             {
@@ -7307,8 +7314,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.`
                   : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}`
                 : checkoutState === "present"
-                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal was not confirmed for ${branch}; checkout remains and assignment ${assignmentRetired ? "was retired" : "was not retired"}${"error" in removed ? `: ${removed.error}` : "."}`
-                  : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}`,
+                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal is unconfirmed for ${branch}; checkout was present at the last check; assignment ${assignmentRetired ? "was retired" : "remains recorded"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`
+                  : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`,
             },
           ],
           details: {
