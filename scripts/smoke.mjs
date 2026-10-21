@@ -2438,6 +2438,8 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     firstUnverifiedBoundary = "implementer_session";
   else if (scout.edge?.delegation !== "accepted")
     firstUnverifiedBoundary = "implementer_to_scout";
+  else if (implementerReceipt === "observed")
+    firstUnverifiedBoundary = "implementer_result_delivery";
   else if (scout.edge.terminalResult === "published")
     firstUnverifiedBoundary = "scout_result_delivery";
   else if (scout.edge.session !== "observed")
@@ -8804,6 +8806,79 @@ function sanitizedCoreDelegation(value) {
   };
 }
 
+function sanitizedFailureDiagnostics(value) {
+  if (!value || typeof value !== "object") return null;
+  const count = (input) =>
+    Number.isSafeInteger(input) && input >= 0 ? Math.min(input, 256) : null;
+  const root = value.rootDelegation;
+  const supervisor = value.supervisorAgent;
+  return {
+    ...(typeof value.stage === "string" &&
+    /^[a-z0-9-]{1,80}$/u.test(value.stage)
+      ? { stage: value.stage }
+      : {}),
+    agentsObserved: count(value.agentsObserved),
+    panesObserved: count(value.panesObserved),
+    rootSessionObserved:
+      typeof value.rootSessionObserved === "boolean"
+        ? value.rootSessionObserved
+        : false,
+    ...(root && typeof root === "object"
+      ? {
+          rootDelegation: {
+            delegationCallObserved:
+              typeof root.delegationCallObserved === "boolean"
+                ? root.delegationCallObserved
+                : false,
+            matchingResult: [
+              "absent",
+              "pending",
+              "error",
+              "success",
+              "unknown",
+            ].includes(root.matchingResult)
+              ? root.matchingResult
+              : "unknown",
+            assistantObserved:
+              typeof root.assistantObserved === "boolean"
+                ? root.assistantObserved
+                : false,
+            assistantStopReason: [
+              "stop",
+              "length",
+              "toolUse",
+              "error",
+              "aborted",
+              "unknown",
+            ].includes(root.assistantStopReason)
+              ? root.assistantStopReason
+              : "unknown",
+            assistantErrorObserved:
+              typeof root.assistantErrorObserved === "boolean"
+                ? root.assistantErrorObserved
+                : false,
+          },
+        }
+      : {}),
+    ...(supervisor && typeof supervisor === "object"
+      ? {
+          supervisorAgent: {
+            assignmentsObserved: count(supervisor.assignmentsObserved),
+            childSessionObserved:
+              typeof supervisor.childSessionObserved === "boolean"
+                ? supervisor.childSessionObserved
+                : false,
+            matchingMailboxes: count(supervisor.matchingMailboxes),
+          },
+        }
+      : {}),
+    candidateProcessesObserved: count(value.candidateProcessesObserved),
+    ...(value.coreDelegation
+      ? { coreDelegation: sanitizedCoreDelegation(value.coreDelegation) }
+      : {}),
+  };
+}
+
 export function sanitizedFailureEvidence(
   ctx,
   failure,
@@ -9029,6 +9104,9 @@ export function sanitizedFailureEvidence(
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
+    ...(diagnostics
+      ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) }
+      : {}),
     ...(ctx.scenario === "core" && diagnostics?.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
       : {}),

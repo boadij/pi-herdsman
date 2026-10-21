@@ -308,9 +308,32 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     assistantStopReason: "error",
     assistantErrorObserved: true,
   });
-  const artifact = await preserveFailureEvidence({ diagnostics: projection });
+  const evidence = sanitizedFailureEvidence(
+    {
+      scenario: "continuation",
+      simulated: true,
+      stage: "continuation-first-generation",
+    },
+    { error: new Error("PRIVATE_ERROR") },
+    "STALLED",
+    "PASS",
+    {
+      ...projection,
+      path: "PRIVATE_PATH",
+      rootSession: { summary: "PRIVATE_TRANSCRIPT" },
+      rootDelegation: {
+        ...projection.rootDelegation,
+        task: "PRIVATE_TASK",
+        message: "PRIVATE_MESSAGE",
+      },
+    },
+  );
+  assert.equal(evidence.diagnostics.rootDelegation.matchingResult, "absent");
+  const artifact = await preserveFailureEvidence(evidence);
   try {
-    assert.doesNotMatch(await readFile(artifact, "utf8"), /PRIVATE/u);
+    const saved = JSON.parse(await readFile(artifact, "utf8"));
+    assert.equal(saved.diagnostics.rootDelegation.matchingResult, "absent");
+    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }
@@ -453,7 +476,10 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         failureEvidence.coreDelegation,
         projection.coreDelegation,
       );
-      assert.equal("diagnostics" in failureEvidence, false);
+      assert.deepEqual(
+        failureEvidence.diagnostics.coreDelegation,
+        projection.coreDelegation,
+      );
       const artifact = await preserveFailureEvidence(failureEvidence);
       try {
         const saved = await readFile(artifact, "utf8");
@@ -529,10 +555,6 @@ test("core failure diagnostics distinguish nested result publication from delive
     const scoutEntries = [{ type: "session", id: "private-scout" }];
     await Promise.all([
       writeFile(
-        join(piSessions, "implementer.jsonl"),
-        implementerEntries.map((entry) => JSON.stringify(entry)).join("\n"),
-      ),
-      writeFile(
         join(piSessions, "scout.jsonl"),
         scoutEntries.map((entry) => JSON.stringify(entry)).join("\n"),
       ),
@@ -563,39 +585,106 @@ test("core failure diagnostics distinguish nested result publication from delive
         status: "completed",
       }),
     );
-    const projection = await collectDiagnostics(
-      {
-        scenario: "core",
-        stage: "core-delegation",
-        paths: { piSessions, piAgent: join(root, "agent") },
-        sessionName: "isolated",
-        rootPaneId: "root",
-      },
-      { hostPaneId: "host" },
-      null,
-      {
-        execute: async () => ({ stdout: "" }),
-        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
-        snapshot: async () => ({
-          path: "private-root-path",
-          status: "saved",
-          contents: rootEntries
-            .map((entry) => JSON.stringify(entry))
-            .join("\n"),
-        }),
-      },
-    );
-    assert.deepEqual(projection.coreDelegation.implementerToScout, {
-      delegation: "accepted",
-      session: "observed",
-      terminalResult: "published",
-      resultDelivered: "not_observed",
-    });
-    assert.equal(
-      projection.coreDelegation.firstUnverifiedBoundary,
-      "scout_result_delivery",
-    );
-    assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+    for (const [receipt, expectedReceipt] of [
+      [null, "not_observed"],
+      [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            requestId,
+            piSessionId: "private-scout",
+            ownerSessionId: "private-implementer",
+            runId: "private-run-id",
+            workspaceId: "private-workspace-id",
+            agentLabel: "smoke-core-scout",
+            paneId: "private-pane-id",
+            agentDefinition: "scout",
+          },
+          content: "PRIVATE_RESULT",
+        },
+        "observed",
+      ],
+      [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            requestId: "00000000-0000-4000-8000-000000000004",
+            piSessionId: "private-scout",
+            ownerSessionId: "private-implementer",
+            runId: "private-run-id",
+            workspaceId: "private-workspace-id",
+            agentLabel: "smoke-core-scout",
+            paneId: "private-pane-id",
+            agentDefinition: "scout",
+          },
+          content: "PRIVATE_RESULT",
+        },
+        "not_observed",
+      ],
+      [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            requestId,
+            piSessionId: "foreign-session",
+            ownerSessionId: "private-implementer",
+            runId: "private-run-id",
+            workspaceId: "private-workspace-id",
+            agentLabel: "smoke-core-scout",
+            paneId: "private-pane-id",
+            agentDefinition: "scout",
+          },
+          content: "PRIVATE_RESULT",
+        },
+        "not_observed",
+      ],
+    ]) {
+      await writeFile(
+        join(piSessions, "implementer.jsonl"),
+        [...implementerEntries, ...(receipt ? [receipt] : [])]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
+      );
+      const projection = await collectDiagnostics(
+        {
+          scenario: "core",
+          stage: "core-delegation",
+          paths: { piSessions, piAgent: join(root, "agent") },
+          sessionName: "isolated",
+          rootPaneId: "root",
+        },
+        { hostPaneId: "host" },
+        null,
+        {
+          execute: async () => ({ stdout: "" }),
+          observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+          snapshot: async () => ({
+            path: "private-root-path",
+            status: "saved",
+            contents: rootEntries
+              .map((entry) => JSON.stringify(entry))
+              .join("\n"),
+          }),
+        },
+      );
+      assert.deepEqual(projection.coreDelegation.implementerToScout, {
+        delegation: "accepted",
+        session: "observed",
+        terminalResult:
+          expectedReceipt === "observed" ? "delivered" : "published",
+        resultDelivered: expectedReceipt,
+      });
+      assert.equal(
+        projection.coreDelegation.firstUnverifiedBoundary,
+        expectedReceipt === "observed"
+          ? "implementer_result_delivery"
+          : "scout_result_delivery",
+      );
+      assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
