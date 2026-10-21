@@ -2955,6 +2955,8 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   t.after(async () => {
     for (const handler of pi.events.get("session_shutdown") ?? [])
       await handler(undefined, context);
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     delete process.env.HERDR_SOCKET_PATH;
   });
@@ -2981,6 +2983,41 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     context,
   );
   await scopeStarted;
+  const delegationParams = {
+    definition: "agent",
+    label: "agent",
+    task: "verify managed delegation authority",
+  };
+  const pendingDenial = await registeredAgentTool(pi, "delegate").execute(
+    "pending-verification",
+    delegationParams,
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(pendingDenial.details.ok, false);
+  assert.equal(
+    pendingDenial.details.error.message,
+    "Agent definition agent is not allowed",
+  );
+  assert.equal(pendingDenial.details.error.rollbackOccurred, false);
+  assert.deepEqual(
+    {
+      sessionKind:
+        pendingDenial.details.error.details.authorizationDiagnostic.sessionKind,
+      managedAssignmentLifecycle:
+        pendingDenial.details.error.details.authorizationDiagnostic
+          .managedAssignmentLifecycle,
+      assignmentVerificationInProgress:
+        pendingDenial.details.error.details.authorizationDiagnostic
+          .assignmentVerificationInProgress,
+    },
+    {
+      sessionKind: "managed",
+      managedAssignmentLifecycle: "unavailable",
+      assignmentVerificationInProgress: true,
+    },
+  );
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
     "reader before refresh",
@@ -3035,6 +3072,65 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
         entry.data?.reportId === reportId,
     ),
     "the pending handoff remains durable",
+  );
+  const revokedDenial = await registeredAgentTool(pi, "delegate").execute(
+    "after-revocation",
+    delegationParams,
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(revokedDenial.details.ok, false);
+  assert.equal(
+    revokedDenial.details.error.details.authorizationDiagnostic
+      .managedAssignmentLifecycle,
+    "unavailable",
+  );
+  scopeUnavailable = false;
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  const successfulRetry = await registeredAgentTool(pi, "delegate").execute(
+    "after-verification",
+    delegationParams,
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(
+    successfulRetry.details.ok,
+    true,
+    JSON.stringify(successfulRetry.details),
+  );
+  removeProjectAssignment(runtime, "repo-key", branch);
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: randomUUID(),
+    repoKey: "repo-key",
+    branch,
+    text: "Disposable replacement assignment",
+  });
+  await assert.rejects(
+    registeredAgentTool(pi, "delegate").execute(
+      "observe-replacement",
+      { ...delegationParams, label: "replacement-probe" },
+      undefined,
+      undefined,
+      context,
+    ),
+    /Managed project execution requires a current exact assignment/,
+  );
+  const replacedDenial = await registeredAgentTool(pi, "delegate").execute(
+    "after-replacement",
+    { ...delegationParams, label: "replacement-probe" },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(replacedDenial.details.ok, false);
+  assert.equal(
+    replacedDenial.details.error.details.authorizationDiagnostic
+      .managedAssignmentLifecycle,
+    "retired",
   );
 });
 
