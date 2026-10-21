@@ -429,14 +429,32 @@ test("core failure diagnostics correlate accepted delegation without exposing id
             : "implementer_session",
       });
       assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
-      const artifact = await preserveFailureEvidence({
-        diagnostics: projection,
-      });
+      const failureEvidence = sanitizedFailureEvidence(
+        { scenario: "core", simulated: true },
+        { error: new Error("PRIVATE_ERROR") },
+        "STALLED",
+        "PASS",
+        {
+          ...projection,
+          private: "PRIVATE_PATH",
+          coreDelegation: {
+            ...projection.coreDelegation,
+            private: "PRIVATE_TASK",
+          },
+        },
+      );
+      assert.deepEqual(
+        failureEvidence.coreDelegation,
+        projection.coreDelegation,
+      );
+      const artifact = await preserveFailureEvidence(failureEvidence);
       try {
-        assert.doesNotMatch(
-          await readFile(artifact, "utf8"),
-          /private|PRIVATE/u,
+        const saved = await readFile(artifact, "utf8");
+        assert.deepEqual(
+          JSON.parse(saved).coreDelegation,
+          projection.coreDelegation,
         );
+        assert.doesNotMatch(saved, /private|PRIVATE/u);
       } finally {
         await rm(dirname(artifact), { recursive: true, force: true });
       }

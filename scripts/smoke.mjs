@@ -8404,6 +8404,11 @@ export async function collectDiagnostics(
         ? diagnostics.processes.filter((record) => record.processMatch).length
         : null,
       rootSessionObserved: !diagnostics.rootSession?.error,
+      ...(diagnostics.coreDelegation
+        ? {
+            coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation),
+          }
+        : {}),
     });
     console.error(`diagnostics: ${serialized}`);
   } catch {
@@ -8429,7 +8434,9 @@ export async function collectDiagnostics(
         }
       : {}),
     ...(diagnostics.coreDelegation
-      ? { coreDelegation: diagnostics.coreDelegation }
+      ? {
+          coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation),
+        }
       : {}),
     candidateProcessesObserved: Array.isArray(diagnostics.processes)
       ? diagnostics.processes.filter((record) => record.processMatch).length
@@ -8738,7 +8745,72 @@ export async function cleanup(
   return failures.length ? failures.join("\n") : null;
 }
 
-export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
+const CORE_DIAGNOSTIC_ENUMS = {
+  delegation: ["accepted", "rejected", "unknown", "not_observed", "ambiguous"],
+  session: [
+    "observed",
+    "not_observed",
+    "unknown",
+    "ambiguous",
+    "observation_failed",
+  ],
+  terminalResult: [
+    "published",
+    "delivered",
+    "not_observed",
+    "unknown",
+    "ambiguous",
+    "observation_failed",
+  ],
+  resultDelivered: ["observed", "not_observed", "unknown", "ambiguous"],
+  firstUnverifiedBoundary: [
+    "none_observed",
+    "root_to_implementer",
+    "implementer_session",
+    "implementer_result_delivery",
+    "implementer_to_scout",
+    "scout_session",
+    "scout_result_delivery",
+    "root_completion",
+    "root_session_unavailable",
+    "observation_failed",
+  ],
+};
+
+function sanitizedCoreDelegation(value) {
+  const state = (object, field) =>
+    CORE_DIAGNOSTIC_ENUMS[field].includes(object?.[field])
+      ? object[field]
+      : "unknown";
+  const edge = (object) => ({
+    delegation: state(object, "delegation"),
+    session: state(object, "session"),
+    terminalResult: state(object, "terminalResult"),
+    resultDelivered: state(object, "resultDelivered"),
+  });
+  return {
+    rootToImplementer: edge(value?.rootToImplementer),
+    implementerToScout: edge(value?.implementerToScout),
+    rootCompletionMarker:
+      typeof value?.rootCompletionMarker === "boolean"
+        ? value.rootCompletionMarker
+        : null,
+    firstUnverifiedBoundary:
+      CORE_DIAGNOSTIC_ENUMS.firstUnverifiedBoundary.includes(
+        value?.firstUnverifiedBoundary,
+      )
+        ? value.firstUnverifiedBoundary
+        : "observation_failed",
+  };
+}
+
+export function sanitizedFailureEvidence(
+  ctx,
+  failure,
+  outcome,
+  cleanup,
+  diagnostics,
+) {
   const parent = ctx.owned?.parent;
   const progress =
     failure?.error?.smoke?.stage === "terminal-failure-report"
@@ -8957,6 +9029,9 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
+    ...(ctx.scenario === "core" && diagnostics?.coreDelegation
+      ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
+      : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
@@ -9332,6 +9407,7 @@ async function main() {
         failure,
         classifySmokeFailure(phase, error),
         "PENDING",
+        diagnosticProjection,
       );
       const markerPath = join(
         paths.piAgent,
