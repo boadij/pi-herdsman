@@ -7604,6 +7604,15 @@ test("owned continuation requires a matching persisted child edge", () => {
     );
     const latestAcceptance = structuredClone(accepted);
     latestAcceptance.message.details.request_id = randomUUID();
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([earlierTerminal, accepted, latestAcceptance]),
+          id,
+        ),
+      /latest accepted assignment outcome/,
+      "a completed older generation cannot authorize an accepted generation without an outcome",
+    );
     const latestClose = structuredClone(close);
     latestClose.message.details.closed_assignment.request_id =
       latestAcceptance.message.details.request_id;
