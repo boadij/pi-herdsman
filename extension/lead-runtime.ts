@@ -140,6 +140,7 @@ import {
   probePeerEndpoint,
   removeRemotePeerOutbound,
   runPeerEndpoint,
+  tryPollPeerReplies,
   type SavedPeerMachine,
 } from "./peer-transport.ts";
 import {
@@ -10616,7 +10617,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                   recipientSession: correspondence.recipientSession,
                   recipientGeneration: correspondence.recipientGeneration,
                 });
-                let response: {
+                const polled = await tryPollPeerReplies(() =>
+                  runPeerEndpoint(machine, "poll", request),
+                );
+                if (polled === undefined) continue;
+                const response = JSON.parse(polled) as {
                   dataRoot?: unknown;
                   hasReplies?: unknown;
                   replies?: Array<{
@@ -10627,18 +10632,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     acknowledged?: unknown;
                   }>;
                 };
-                try {
-                  response = JSON.parse(
-                    await runPeerEndpoint(machine, "poll", request),
-                  ) as typeof response;
-                } catch {
-                  const finalized = JSON.parse(
-                    await runPeerEndpoint(machine, "finalize", request),
-                  ) as { finalized?: unknown };
-                  if (finalized.finalized === true)
-                    removePeerCorrespondence(correspondence.id);
-                  continue;
-                }
                 if (!Array.isArray(response.replies))
                   throw new Error("invalid remote peer reply batch");
                 if (typeof response.dataRoot !== "string")

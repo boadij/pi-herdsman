@@ -6,9 +6,18 @@ import {
   peerRecoveryRequest,
   persistRemotePeerOutbound,
   removeRemotePeerOutbound,
+  tryPollPeerReplies,
 } from "./peer-transport.ts";
-import { assertPeerDataRoot } from "./peer-correspondence.ts";
 import { randomUUID } from "node:crypto";
+import {
+  acknowledgePeerReply,
+  assertPeerDataRoot,
+  createPeerCorrespondence,
+  listPeerCorrespondences,
+  pollPeerReplies,
+  queuePeerReply,
+  removePeerCorrespondence,
+} from "./peer-correspondence.ts";
 
 test("saved SSH targets preserve URI ports and SSH config aliases", () => {
   assert.deepEqual(parsePeerSshTarget("ssh://buildbox:2222"), {
@@ -91,4 +100,70 @@ test("peer recovery carries the verified endpoint root and rejects mismatches", 
     () => assertPeerDataRoot("/different/root", request.expectedDataRoot),
     /data root/,
   );
+});
+
+test("failed reply polls retain correspondence for a later exactly-once reply", async () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const actions: string[] = [];
+  assert.equal(
+    await tryPollPeerReplies(async () => {
+      actions.push("poll");
+      throw new Error("transient endpoint failure");
+    }),
+    undefined,
+  );
+  assert.deepEqual(actions, ["poll"]);
+  assert.equal(
+    listPeerCorrespondences().find((item) => item.id === c.id)?.finalized,
+    undefined,
+  );
+
+  const replyId = randomUUID();
+  assert.equal(queuePeerReply(c, replyId, "reply after the outage"), "queued");
+  const laterPoll = await tryPollPeerReplies(async () => {
+    actions.push("poll");
+    return JSON.stringify(
+      pollPeerReplies(
+        c.id,
+        c.capability,
+        c.originSession,
+        c.originGeneration,
+        c.recipientSession,
+        c.recipientGeneration,
+      ),
+    );
+  });
+  const replies = JSON.parse(laterPoll!) as Array<{ id: string; text: string }>;
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0]?.id, replyId);
+  assert.equal(replies[0]?.text, "reply after the outage");
+  actions.push("ack");
+  acknowledgePeerReply(
+    c.id,
+    c.capability,
+    replyId,
+    c.originSession,
+    c.originGeneration,
+    c.recipientSession,
+    c.recipientGeneration,
+  );
+  assert.deepEqual(
+    pollPeerReplies(
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    ),
+    [],
+  );
+  assert.deepEqual(actions, ["poll", "poll", "ack"]);
+  removePeerCorrespondence(c.id);
 });

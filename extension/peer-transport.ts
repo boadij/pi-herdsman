@@ -263,6 +263,16 @@ export async function runPeerEndpoint(
   );
 }
 
+export async function tryPollPeerReplies(
+  poll: () => Promise<string>,
+): Promise<string | undefined> {
+  try {
+    return await poll();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function probePeerEndpoint(
   machine: SavedPeerMachine,
 ): Promise<RemotePeerSnapshot> {
