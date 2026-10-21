@@ -132,6 +132,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
+import {
+  listSavedPeerMachines,
+  listRemotePeerOutbounds,
+  persistRemotePeerOutbound,
+  probePeerEndpoint,
+  removeRemotePeerOutbound,
+  runPeerEndpoint,
+  type SavedPeerMachine,
+} from "./peer-transport.ts";
 
 type LeadIdentityHost = {
   expectedSession(id: string, path?: string): ExpectedSession;
@@ -10213,6 +10222,32 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   type PeerOperation =
     | { action: "list" }
     | { action: "message"; session: string; message: string; files?: string[] };
+  const remotePeerRoutes = new Map<
+    string,
+    {
+      machine: SavedPeerMachine;
+      dataRoot: string;
+      claimId: string;
+      build?: unknown;
+    }
+  >();
+  const ambiguousRemoteSessions = new Set<string>();
+  const deliverRemoteOutbound = async (
+    machine: SavedPeerMachine,
+    id: string,
+    envelope: string,
+  ): Promise<boolean> => {
+    try {
+      const receipt = JSON.parse(
+        await runPeerEndpoint(machine, "accept", envelope),
+      ) as { accepted?: unknown; id?: unknown };
+      if (receipt.accepted !== true || receipt.id !== id) return false;
+      removeRemotePeerOutbound(id);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const executeSupervisorMessage = async (
     _id: string,
     raw: unknown,
@@ -10489,18 +10524,137 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           workspace_label: record.workspaceLabel ?? "",
         });
       }
+      const unavailableMachines: string[] = [];
+      const localPeerSessions = new Set(peers.map((peer) => peer.session));
+      remotePeerRoutes.clear();
+      ambiguousRemoteSessions.clear();
+      if (activeRole() === "manager") {
+        let machines: SavedPeerMachine[];
+        try {
+          machines = await listSavedPeerMachines();
+        } catch {
+          machines = [];
+          unavailableMachines.push("saved machines");
+        }
+        const seen = new Set<string>();
+        for (const machine of machines) {
+          if (!machine.reachable) {
+            unavailableMachines.push(machine.label);
+            continue;
+          }
+          try {
+            const snapshot = await probePeerEndpoint(machine);
+            if (activeRole() === "manager") {
+              for (const outbound of listRemotePeerOutbounds()) {
+                if (
+                  outbound.machine.id !== machine.id ||
+                  outbound.session !== self
+                )
+                  continue;
+                await deliverRemoteOutbound(
+                  machine,
+                  outbound.id,
+                  outbound.envelope,
+                );
+              }
+            }
+            for (const remote of snapshot.peers) {
+              if (
+                remote.role !== "manager" ||
+                remote.piSessionId === self ||
+                localPeerSessions.has(remote.piSessionId) ||
+                !remote.claim?.id ||
+                seen.has(
+                  `${snapshot.dataRoot}\0${remote.piSessionId}\0${remote.claim.id}`,
+                )
+              )
+                continue;
+              if (remote.build) {
+                try {
+                  requireCompatibleBuild(
+                    HERDSMAN_BUILD,
+                    remote.build as RuntimeBuild,
+                    "peer_message",
+                    `remote Manager ${remote.piSessionId}`,
+                  );
+                } catch {
+                  continue;
+                }
+              }
+              seen.add(
+                `${snapshot.dataRoot}\0${remote.piSessionId}\0${remote.claim.id}`,
+              );
+              const route = remotePeerRoutes.get(remote.piSessionId);
+              if (route) {
+                ambiguousRemoteSessions.add(remote.piSessionId);
+                remotePeerRoutes.delete(remote.piSessionId);
+                continue;
+              }
+              remotePeerRoutes.set(remote.piSessionId, {
+                machine,
+                dataRoot: snapshot.dataRoot,
+                claimId: remote.claim.id,
+                build: remote.build,
+              });
+              peers.push({
+                session: remote.piSessionId,
+                name:
+                  remote.name ?? `manager-${remote.piSessionId.slice(0, 8)}`,
+                machine: machine.label,
+                cwd: remote.cwd ?? "",
+                repo: remote.repo ?? "",
+                branch: remote.branch ?? "",
+                workspace_label: remote.workspaceLabel ?? "",
+              });
+            }
+          } catch {
+            unavailableMachines.push(machine.label);
+          }
+        }
+        for (const session of ambiguousRemoteSessions) {
+          remotePeerRoutes.delete(session);
+          const index = peers.findIndex(
+            (peer) => peer.session === session && "machine" in peer,
+          );
+          if (index >= 0) peers.splice(index, 1);
+        }
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify({ self, peers }) }],
-        details: { ok: true, action: "list", self, peers },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              self,
+              peers,
+              ...(unavailableMachines.length
+                ? { unavailable_machines: [...new Set(unavailableMachines)] }
+                : {}),
+            }),
+          },
+        ],
+        details: {
+          ok: true,
+          action: "list",
+          self,
+          peers,
+          ...(unavailableMachines.length
+            ? { unavailable_machines: [...new Set(unavailableMachines)] }
+            : {}),
+        },
       };
     }
     const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
-    const target = await livePeerLead(ctx, params.session);
+    const remoteRoute = remotePeerRoutes.get(params.session);
+    const target = remoteRoute
+      ? undefined
+      : await livePeerLead(ctx, params.session);
     if (
       !sender ||
-      !target ||
       (sender.role ?? "lead") !== activeRole() ||
-      (target.role ?? "lead") !== activeRole()
+      (remoteRoute
+        ? activeRole() !== "manager" ||
+          ambiguousRemoteSessions.has(params.session)
+        : !target || (target.role ?? "lead") !== activeRole())
     )
       throw new Error(
         "Peer target was not found or is no longer a live same-role peer",
@@ -10525,7 +10679,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         leaseId: sender.claim.id,
         kind: "peer_message",
         fromSessionId: sender.piSessionId,
-        toSessionId: target.piSessionId,
+        toSessionId: target?.piSessionId ?? params.session,
         leadSessionId: sender.piSessionId,
         peerSource: submissionSource,
         text: candidate,
@@ -10535,6 +10689,82 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         createdAt,
       }),
     );
+    if (remoteRoute) {
+      const current = await probePeerEndpoint(remoteRoute.machine);
+      const currentTarget = current.peers.find(
+        (peer) =>
+          peer.role === "manager" &&
+          peer.piSessionId === params.session &&
+          peer.claim.id === remoteRoute.claimId,
+      );
+      if (!currentTarget || current.dataRoot !== remoteRoute.dataRoot)
+        throw new Error("Remote Manager changed; run `list_peers` again.");
+      const record: ChiefMessageRecord = {
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id: recordId,
+        leaseId: sender.claim.id,
+        kind: "peer_message",
+        fromSessionId: sender.piSessionId,
+        toSessionId: params.session,
+        leadSessionId: sender.piSessionId,
+        peerSource: { role: "manager" },
+        text: prepared.text,
+        ...(prepared.resultBindings.length
+          ? { resultBindings: [...prepared.resultBindings] }
+          : {}),
+        createdAt,
+      };
+      const attachments = prepared.attachments.map((attachment) => {
+        if (attachment.text === undefined)
+          throw new Error(
+            `Peer attachment was not captured completely: ${attachment.name}`,
+          );
+        return {
+          name: attachment.name,
+          ...(attachment.ref ? { ref: attachment.ref } : {}),
+          text: attachment.text,
+          sha256: createHash("sha256")
+            .update(attachment.text, "utf8")
+            .digest("hex"),
+        };
+      });
+      const envelope = JSON.stringify({
+        record,
+        recipientClaimId: remoteRoute.claimId,
+        attachments,
+      });
+      persistRemotePeerOutbound({
+        id: recordId,
+        machine: remoteRoute.machine,
+        dataRoot: remoteRoute.dataRoot,
+        session: sender.piSessionId,
+        claimId: sender.claim.id,
+        envelope,
+      });
+      const accepted = await deliverRemoteOutbound(
+        remoteRoute.machine,
+        recordId,
+        envelope,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: accepted
+              ? `Message accepted by remote Manager ${params.session} (${recordId}).`
+              : `Message queued locally for remote Manager ${params.session} (${recordId}); remote acceptance is still pending.`,
+          },
+        ],
+        details: {
+          id: recordId,
+          remoteSessionId: params.session,
+          machine: remoteRoute.machine.label,
+          accepted,
+          queued: true,
+        },
+      };
+    }
     const record = await queuePeerRecord(
       prepared.text,
       target.piSessionId,

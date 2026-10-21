@@ -1,6 +1,5 @@
 import type { Dirent } from "node:fs";
-import { tmpdir } from "node:os";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { homedir, tmpdir } from "node:os";
 import {
   chmodSync,
   closeSync,
@@ -17,7 +16,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const RESULT_PREFIX = "result:";
 const RESULT_ID =
@@ -386,7 +386,34 @@ export function isResultBinding(value: unknown): value is ResultBinding {
 }
 
 export function herdsmanDataRoot(): string {
-  return join(getAgentDir(), "pi-herdsman");
+  return join(nodeOnlyAgentDir(), "pi-herdsman");
+}
+
+/** Match Pi 1.3.0 getAgentDir() normalization without importing the Pi SDK. */
+export function nodeOnlyAgentDir(): string {
+  let directory = process.env.PI_CODING_AGENT_DIR;
+  if (!directory) return join(homedir(), ".pi", "agent");
+
+  if (
+    process.platform === "win32" &&
+    directory.startsWith("/") &&
+    !directory.startsWith("//") &&
+    !directory.includes("\\")
+  ) {
+    const match = directory.match(
+      /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i,
+    );
+    if (match)
+      directory = `${match[1].toUpperCase()}:\\${(match[2] ?? "").replaceAll("/", "\\")}`;
+  }
+  if (directory === "~") return homedir();
+  if (
+    directory.startsWith("~/") ||
+    (process.platform === "win32" && directory.startsWith("~\\"))
+  )
+    return join(homedir(), directory.slice(2));
+  if (/^file:\/\//.test(directory)) return fileURLToPath(directory);
+  return directory;
 }
 
 export function herdsmanConfigPath(): string {
@@ -404,6 +431,60 @@ function validateResultId(requestId: string): void {
 export function resultPath(requestId: string): string {
   validateResultId(requestId);
   return join(herdsmanDataRoot(), "results", requestId);
+}
+
+/** Persist a received text attachment as immutable recipient-local content. */
+export function persistPeerAttachment(name: string, text: string): string {
+  if (
+    typeof name !== "string" ||
+    !name ||
+    name.length > 255 ||
+    /[\\/\0]/u.test(name) ||
+    typeof text !== "string"
+  )
+    throw new Error("invalid peer attachment");
+  const bytes = Buffer.from(text, "utf8");
+  if (new TextDecoder("utf-8", { fatal: true }).decode(bytes) !== text)
+    throw new Error("invalid peer attachment text");
+  const directory = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "peers-v2",
+    "received-evidence",
+  );
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const path = join(directory, `${digest}-${name}`);
+  try {
+    writeFileSync(path, bytes, { flag: "wx", mode: 0o600, flush: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (!readFileSync(path).equals(bytes))
+      throw new Error("peer attachment content identity collision");
+  }
+  return path;
+}
+
+/** Import a forwarded result artifact without allowing canonical-ID rebinding. */
+export function persistPeerResultArtifact(
+  canonicalRef: string,
+  text: string,
+): string {
+  if (!isCanonicalResultRef(canonicalRef) || typeof text !== "string")
+    throw new Error("invalid peer result artifact");
+  const path = resultPath(canonicalRef.slice(RESULT_PREFIX.length));
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
+  const bytes = Buffer.from(text, "utf8");
+  try {
+    writeFileSync(path, bytes, { flag: "wx", mode: 0o600, flush: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (!readFileSync(path).equals(bytes))
+      throw new Error("peer result identity collision");
+  }
+  return path;
 }
 
 export function resultRef(requestId: string): string {

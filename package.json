@@ -101,6 +101,9 @@
     "dist",
     "skills"
   ],
+  "bin": {
+    "pi-herdsman-peer": "dist/peer-bridge.js"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },

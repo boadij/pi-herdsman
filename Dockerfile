@@ -135,6 +135,8 @@ RUN set -eu; \
     rm -f /tmp/runtime.json
 
 COPY --from=package /package /opt/pi-herdsman
+RUN ln -s /opt/pi-herdsman/dist/peer-bridge.js /usr/local/bin/pi-herdsman-peer \
+ && chmod 0755 /opt/pi-herdsman/dist/peer-bridge.js
 COPY --chmod=0444 docker/AGENTS.md /AGENTS.md
 COPY docker/entrypoint.sh /usr/local/bin/container-entrypoint
 COPY docker/sshd_config /etc/ssh/sshd_config

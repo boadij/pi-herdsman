@@ -3,12 +3,15 @@ import { randomUUID } from "node:crypto";
 import {
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
@@ -30,7 +33,49 @@ import {
   persistRequiredEvidenceSnapshot,
   readRequiredEvidenceSnapshot,
   requiredEvidenceDirectory,
+  nodeOnlyAgentDir,
+  persistPeerAttachment,
+  persistPeerResultArtifact,
 } from "./storage.ts";
+
+test("Node-only agent directory resolution matches Pi 1.3.0", () => {
+  const original = process.env.PI_CODING_AGENT_DIR;
+  try {
+    delete process.env.PI_CODING_AGENT_DIR;
+    assert.equal(nodeOnlyAgentDir(), getAgentDir());
+    for (const override of [
+      join(tmpdir(), `pi-agent-${randomUUID()}`),
+      "~/pi-agent",
+      pathToFileURL(join(tmpdir(), `pi-agent-${randomUUID()}`)).href,
+      "relative-agent-dir",
+      process.platform === "win32" ? "/c/temp/pi-agent" : "C:\\temp\\pi-agent",
+    ]) {
+      process.env.PI_CODING_AGENT_DIR = override;
+      assert.equal(nodeOnlyAgentDir(), getAgentDir(), override);
+    }
+  } finally {
+    if (original === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = original;
+  }
+});
+
+test("peer evidence is immutable and result identities cannot be rebound", () => {
+  const attachment = persistPeerAttachment("spec.md", "specification\n");
+  assert.equal(readFileSync(attachment, "utf8"), "specification\n");
+  assert.equal(persistPeerAttachment("spec.md", "specification\n"), attachment);
+  assert.throws(
+    () => persistPeerAttachment("../escape", "unsafe"),
+    /invalid peer attachment/,
+  );
+
+  const canonicalRef = resultRef(randomUUID());
+  const result = persistPeerResultArtifact(canonicalRef, "result\n");
+  assert.equal(readFileSync(result, "utf8"), "result\n");
+  assert.throws(
+    () => persistPeerResultArtifact(canonicalRef, "different result\n"),
+    /identity collision/,
+  );
+});
 
 test("recoverable Herdsman state lives under Pi agent data", () => {
   const root = join(getAgentDir(), "pi-herdsman");

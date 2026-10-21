@@ -2404,7 +2404,7 @@ function registerExtensionImpl(
           name: "list_peers",
           label: "list peers",
           description:
-            "List other live ordinary Lead sessions. Do not use for progress polling.",
+            "List live same-role peer sessions; Managers also discover eligible remote Managers on reachable saved Herdr machines. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (

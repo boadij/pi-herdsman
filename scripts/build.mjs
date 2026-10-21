@@ -13,6 +13,7 @@ await build({
     index: "extension/index.ts",
     "integrations/pi-codex-context-sharing":
       "extension/integrations/pi-codex-context-sharing.ts",
+    "peer-bridge": "bin/peer-bridge.ts",
   },
   outdir: "dist",
   bundle: true,

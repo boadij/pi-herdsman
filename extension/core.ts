@@ -277,6 +277,7 @@ export type PreparedAttachment = {
   name: string;
   inline: boolean;
   ref?: string;
+  text?: string;
 };
 
 export type PreparedMessageInput = {
@@ -357,6 +358,7 @@ export function prepareMessageInput(
     file.binding ? [file.binding] : [],
   );
   const sections = regular.map((file) => renderMessageFile(file));
+  const attachmentTexts: (string | undefined)[] = regular.map(() => undefined);
   const rendered = () =>
     (options.fileOrder === "textFirst"
       ? [`${heading}:\n${text}`, ...sections]
@@ -557,6 +559,7 @@ export function prepareMessageInput(
       continue;
     }
     sections[index] = renderMessageFile(file, content);
+    attachmentTexts[index] = content;
     if (!fits(rendered(), resultBindings)) {
       sections[index] = prior;
       if (options.requireInline)
@@ -579,6 +582,9 @@ export function prepareMessageInput(
           : escapeMessageFileName(basename(file.canonicalPath)),
       inline: sections[index] !== renderMessageFile(file),
       ...(file.retainedEvidence || file.binding ? { ref: file.input } : {}),
+      ...(attachmentTexts[index] !== undefined
+        ? { text: attachmentTexts[index] }
+        : {}),
     })),
   };
 }
