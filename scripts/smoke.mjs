@@ -750,6 +750,7 @@ export function managerAssignmentDiagnostics({
   provenanceMatch,
   errorCategory,
   worktreeIdentityState,
+  fauxSupervisorToolAvailability,
 }) {
   return {
     expectedBranchWorktree: worktree ?? "not_observed",
@@ -760,6 +761,10 @@ export function managerAssignmentDiagnostics({
     messageSupervisorSuccess: supervisorSuccess ?? "not_observed",
     messageSupervisorResult: supervisorResult ?? "not_called",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
+    fauxSupervisorToolAvailability:
+      fauxSupervisorToolAvailability === "not_offered"
+        ? "not_offered"
+        : "not_observed",
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
@@ -780,6 +785,23 @@ export function managerAssignmentDiagnostics({
     errorCategory: errorCategory ?? "none",
     worktreeIdentityState: worktreeIdentityState ?? "not_observed",
   };
+}
+
+export function managerHandoffSupervisorToolAvailability(contents) {
+  if (typeof contents !== "string") return "not_observed";
+  for (const line of contents.split(/\r?\n/)) {
+    try {
+      const attempt = JSON.parse(line);
+      if (
+        attempt?.model === "manager-handoff-lead" &&
+        attempt.supervisorToolAvailability === "not_offered"
+      )
+        return "not_offered";
+    } catch {
+      // Ignore malformed and unrelated attempt records.
+    }
+  }
+  return "not_observed";
 }
 
 const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
@@ -3719,6 +3741,15 @@ async function runManagerHandoffSmoke(ctx) {
       if (rows.length > 1)
         throw new Error("Manager handoff created multiple project assignments");
       const row = rows.length === 1 ? rows[0] : null;
+      const fauxAttempts = await readFile(
+        join(
+          ctx.paths.piAgent,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-attempts.jsonl",
+        ),
+        "utf8",
+      ).catch(() => "");
       const diagnostics = (values = {}) =>
         managerAssignmentDiagnostics({
           worktree: worktree ? "true" : "false",
@@ -3729,6 +3760,8 @@ async function runManagerHandoffSmoke(ctx) {
           supervisorCall: "not_yet_evaluated",
           supervisorSuccess: "not_yet_evaluated",
           readiness: "not_yet_evaluated",
+          fauxSupervisorToolAvailability:
+            managerHandoffSupervisorToolAvailability(fauxAttempts),
           candidateProcessCount: "not_observed",
           provenanceMatch: "not_evaluated",
           ...values,
@@ -7874,6 +7907,12 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup) {
       : null;
   const managerHandoffProgress = managerProgress
     ? {
+        fauxSupervisorToolAvailability: [
+          "not_offered",
+          "not_observed",
+        ].includes(managerProgress.fauxSupervisorToolAvailability)
+          ? managerProgress.fauxSupervisorToolAvailability
+          : "not_observed",
         expectedBranchWorktree: ["true", "false", "not_observed"].includes(
           managerProgress.expectedBranchWorktree,
         )

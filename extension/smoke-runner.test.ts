@@ -74,6 +74,7 @@ import {
   staffDelegateResults,
   assertNoFailedProjectDelegation,
   managerAssignmentDiagnostics,
+  managerHandoffSupervisorToolAvailability,
   supervisorMessageDiagnostics,
   supervisorMessageCallStatus,
   managerAssignmentIdentity,
@@ -1426,6 +1427,44 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   assert.equal(managerHandoffSupervisorToolAvailable(removedMessages), false);
 });
 
+test("manager-handoff faux tool availability exposes only the sentinel enum", () => {
+  assert.equal(
+    managerHandoffSupervisorToolAvailability(
+      JSON.stringify({
+        model: "manager-handoff-lead",
+        supervisorToolAvailability: "not_offered",
+        private: "PRIVATE_VALUE",
+      }),
+    ),
+    "not_offered",
+  );
+  assert.equal(managerHandoffSupervisorToolAvailability(""), "not_observed");
+  assert.equal(
+    managerHandoffSupervisorToolAvailability(
+      JSON.stringify({
+        model: "manager-handoff-lead",
+        supervisorToolAvailability: "PRIVATE_VALUE",
+      }),
+    ),
+    "not_observed",
+  );
+  assert.equal(
+    managerHandoffSupervisorToolAvailability(
+      JSON.stringify({
+        model: "other-model",
+        supervisorToolAvailability: "not_offered",
+      }),
+    ),
+    "not_observed",
+  );
+  assert.equal(
+    managerAssignmentDiagnostics({
+      fauxSupervisorToolAvailability: "PRIVATE_VALUE",
+    }).fauxSupervisorToolAvailability,
+    "not_observed",
+  );
+});
+
 test("Manager assignment diagnostics are bounded and reject a mismatched branch identity", () => {
   const call = {
     type: "toolCall",
@@ -1740,6 +1779,10 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     earlyEvidence.managerHandoffProgress.readinessDeliveryObserved,
     false,
   );
+  assert.equal(
+    earlyEvidence.managerHandoffProgress.fauxSupervisorToolAvailability,
+    "not_observed",
+  );
   const resolvedProgress = managerAssignmentDiagnostics({
     worktree: "true",
     result: "true",
@@ -1748,6 +1791,13 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorCall: "true",
     supervisorSuccess: "true",
     readiness: "true",
+    fauxSupervisorToolAvailability: managerHandoffSupervisorToolAvailability(
+      JSON.stringify({
+        model: "manager-handoff-lead",
+        supervisorToolAvailability: "not_offered",
+        private: "PRIVATE_ATTEMPT",
+      }),
+    ),
     ...successfulSupervisor,
     supervisorUnstructuredErrorClass:
       unknownCategory.supervisorUnstructuredErrorClass,
@@ -1793,6 +1843,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   try {
     const persisted = await readFile(artifactPath, "utf8");
     assert.deepEqual(JSON.parse(persisted).managerHandoffProgress, {
+      fauxSupervisorToolAvailability: "not_offered",
       expectedBranchWorktree: "true",
       successfulCorrelatedDelegateProjectResult: "true",
       assignmentIdentitySessionWorkspaceBranchMatch: "true",
