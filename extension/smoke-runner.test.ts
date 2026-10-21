@@ -437,12 +437,14 @@ test("core failure diagnostics correlate accepted delegation without exposing id
           session: "not_observed",
           terminalResult:
             expectedDelivery === "observed" ? "delivered" : "not_observed",
+          terminalStatus: "unknown",
           resultDelivered: expectedDelivery,
         },
         implementerToScout: {
           delegation: "unknown",
           session: "unknown",
           terminalResult: "unknown",
+          terminalStatus: "unknown",
           resultDelivered: "unknown",
         },
         rootCompletionMarker: false,
@@ -675,6 +677,7 @@ test("core failure diagnostics distinguish nested result publication from delive
         session: "observed",
         terminalResult:
           expectedReceipt === "observed" ? "delivered" : "published",
+        terminalStatus: "completed",
         resultDelivered: expectedReceipt,
       });
       assert.equal(
@@ -684,6 +687,75 @@ test("core failure diagnostics distinguish nested result publication from delive
           : "scout_result_delivery",
       );
       assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+    }
+
+    await rm(join(mailbox, `result-${requestId}.json`));
+    const failedReceipt = {
+      type: "custom_message",
+      customType: "pi-herdsman-agent-result",
+      details: {
+        requestId,
+        piSessionId: "private-scout",
+        ownerSessionId: "private-implementer",
+        runId: "private-run-id",
+        workspaceId: "private-workspace-id",
+        agentLabel: "smoke-core-scout",
+        paneId: "private-pane-id",
+        agentDefinition: "scout",
+        status: "failed",
+        error: "PRIVATE_ERROR",
+      },
+      content: "PRIVATE_RESULT",
+    };
+    await writeFile(
+      join(piSessions, "implementer.jsonl"),
+      [...implementerEntries, failedReceipt]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+    const projection = await collectDiagnostics(
+      {
+        scenario: "core",
+        stage: "core-delegation",
+        paths: { piSessions, piAgent: join(root, "agent") },
+        sessionName: "isolated",
+        rootPaneId: "root",
+      },
+      { hostPaneId: "host" },
+      null,
+      {
+        execute: async () => ({ stdout: "" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => ({
+          path: "PRIVATE_PATH",
+          status: "saved",
+          contents: rootEntries
+            .map((entry) => JSON.stringify(entry))
+            .join("\n"),
+        }),
+      },
+    );
+    const evidence = sanitizedFailureEvidence(
+      { scenario: "core", simulated: true, stage: "core-delegation" },
+      { error: new Error("PRIVATE_ERROR") },
+      "STALLED",
+      "PASS",
+      { ...projection, task: "PRIVATE_TASK" },
+    );
+    const artifact = await preserveFailureEvidence(evidence);
+    try {
+      const saved = JSON.parse(await readFile(artifact, "utf8"));
+      assert.equal(
+        saved.diagnostics.coreDelegation.implementerToScout.terminalStatus,
+        "failed",
+      );
+      assert.equal(
+        saved.diagnostics.coreDelegation.implementerToScout.resultDelivered,
+        "observed",
+      );
+      assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
+    } finally {
+      await rm(dirname(artifact), { recursive: true, force: true });
     }
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -2222,6 +2222,7 @@ function coreDelegationEdge(contents, label, ownerSessionId) {
       delegation: calls.length ? "ambiguous" : "not_observed",
       session: "unknown",
       terminalResult: "unknown",
+      terminalStatus: "unknown",
       resultDelivered: "unknown",
       identity: null,
     };
@@ -2269,6 +2270,7 @@ function coreDelegationEdge(contents, label, ownerSessionId) {
     delegation: "accepted",
     session: "identified",
     terminalResult: "unknown",
+    terminalStatus: "unknown",
     resultDelivered: "unknown",
     identity: { piSessionId, requestId },
   };
@@ -2292,6 +2294,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     }
     edge.session = child ? "observed" : "not_observed";
     edge.terminalResult = "unknown";
+    edge.terminalStatus = "unknown";
     try {
       const root = join(
         ctx.paths.piAgent,
@@ -2352,8 +2355,11 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
           if (error.code !== "ENOENT") throw error;
         }
       }
-      if (matches.length === 1 && matches[0]) edge.terminalResult = "published";
-      else if (matches.length > 1 || matches.includes(null))
+      if (matches.length === 1 && matches[0]) {
+        edge.terminalResult = "published";
+        if (["completed", "failed"].includes(matches[0].status))
+          edge.terminalStatus = matches[0].status;
+      } else if (matches.length > 1 || matches.includes(null))
         edge.terminalResult = "ambiguous";
       else edge.terminalResult = "not_observed";
       if (mailboxIdentities.length === 1) {
@@ -2368,6 +2374,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         };
       } else if (mailboxIdentities.length > 1) {
         edge.terminalResult = "ambiguous";
+        edge.terminalStatus = "unknown";
       }
     } catch {
       edge.terminalResult = "observation_failed";
@@ -2387,7 +2394,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       )
     : { edge: null, child: null };
   const deliver = (parentContents, edge) => {
-    if (!edge?.identity) return "unknown";
+    if (!edge?.identity) return { state: "unknown", terminalStatus: "unknown" };
     const entries = sessionEntries(parentContents);
     const ownerSessionId = entries.find(
       (entry) => entry.type === "session",
@@ -2410,16 +2417,26 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         (!edge.identity.agentDefinition ||
           entry.details?.agentDefinition === edge.identity.agentDefinition),
     );
-    return receipts.length === 1
-      ? "observed"
-      : receipts.length
-        ? "ambiguous"
-        : "not_observed";
+    return {
+      state:
+        receipts.length === 1
+          ? "observed"
+          : receipts.length
+            ? "ambiguous"
+            : "not_observed",
+      terminalStatus:
+        edge.terminalStatus !== "unknown"
+          ? edge.terminalStatus
+          : receipts.length === 1 &&
+              ["completed", "failed"].includes(receipts[0].details?.status)
+            ? receipts[0].details.status
+            : "unknown",
+    };
   };
   const rootReceipt = deliver(rootContents, implementer.edge);
   const implementerReceipt = implementer.child
     ? deliver(implementer.child.contents, scout.edge)
-    : "unknown";
+    : { state: "unknown", terminalStatus: "unknown" };
   const completionMarker = Boolean(
     assistantResultForSession(
       { contents: rootContents },
@@ -2430,7 +2447,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
   let firstUnverifiedBoundary = "none_observed";
   if (implementer.edge.delegation !== "accepted")
     firstUnverifiedBoundary = "root_to_implementer";
-  else if (rootReceipt === "observed") {
+  else if (rootReceipt.state === "observed") {
     if (!completionMarker) firstUnverifiedBoundary = "root_completion";
   } else if (implementer.edge.terminalResult === "published")
     firstUnverifiedBoundary = "implementer_result_delivery";
@@ -2438,13 +2455,13 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     firstUnverifiedBoundary = "implementer_session";
   else if (scout.edge?.delegation !== "accepted")
     firstUnverifiedBoundary = "implementer_to_scout";
-  else if (implementerReceipt === "observed")
+  else if (implementerReceipt.state === "observed")
     firstUnverifiedBoundary = "implementer_result_delivery";
   else if (scout.edge.terminalResult === "published")
     firstUnverifiedBoundary = "scout_result_delivery";
   else if (scout.edge.session !== "observed")
     firstUnverifiedBoundary = "scout_session";
-  else if (implementerReceipt !== "observed")
+  else if (implementerReceipt.state !== "observed")
     firstUnverifiedBoundary = "scout_result_delivery";
   else firstUnverifiedBoundary = "implementer_result_delivery";
   return {
@@ -2452,10 +2469,12 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       delegation: implementer.edge.delegation,
       session: implementer.edge.session,
       terminalResult:
-        rootReceipt === "observed"
+        rootReceipt.state === "observed"
           ? "delivered"
           : implementer.edge.terminalResult,
-      resultDelivered: rootReceipt,
+      terminalStatus:
+        rootReceipt.terminalStatus ?? implementer.edge.terminalStatus,
+      resultDelivered: rootReceipt.state,
     },
     rootCompletionMarker: completionMarker,
     implementerToScout: scout.edge
@@ -2463,15 +2482,18 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
           delegation: scout.edge.delegation,
           session: scout.edge.session,
           terminalResult:
-            implementerReceipt === "observed"
+            implementerReceipt.state === "observed"
               ? "delivered"
               : scout.edge.terminalResult,
-          resultDelivered: implementerReceipt,
+          terminalStatus:
+            implementerReceipt.terminalStatus ?? scout.edge.terminalStatus,
+          resultDelivered: implementerReceipt.state,
         }
       : {
           delegation: "unknown",
           session: "unknown",
           terminalResult: "unknown",
+          terminalStatus: "unknown",
           resultDelivered: "unknown",
         },
     firstUnverifiedBoundary,
@@ -8764,6 +8786,7 @@ const CORE_DIAGNOSTIC_ENUMS = {
     "ambiguous",
     "observation_failed",
   ],
+  terminalStatus: ["completed", "failed", "unknown"],
   resultDelivered: ["observed", "not_observed", "unknown", "ambiguous"],
   firstUnverifiedBoundary: [
     "none_observed",
@@ -8788,6 +8811,7 @@ function sanitizedCoreDelegation(value) {
     delegation: state(object, "delegation"),
     session: state(object, "session"),
     terminalResult: state(object, "terminalResult"),
+    terminalStatus: state(object, "terminalStatus"),
     resultDelivered: state(object, "resultDelivered"),
   });
   return {
