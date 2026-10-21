@@ -7168,8 +7168,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
     operationSignal?.throwIfAborted();
     if (answer !== "remove")
-      if (options.expected) pendingRemovals.delete(branch);
-    if (answer !== "remove")
       return {
         content: [
           {

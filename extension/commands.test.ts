@@ -5402,6 +5402,37 @@ test("Manager pending selection cannot approve or dismiss its replacement", asyn
   assert.ok(existsSync(fixture.checkoutPath));
 });
 
+test("cancelling an approved request preserves a newer pending request", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  await request();
+  const selected = fixture.runtime.listPendingRemovals()[0];
+
+  fixture.ctx.ui.input = async () => {
+    fixture.replaceAssignment();
+    await request();
+    return undefined;
+  };
+
+  const result = await fixture.runtime.approvePendingRemoval(
+    selected,
+    fixture.ctx,
+  );
+  assert.equal(result.details.cancelled, true);
+  assert.equal(
+    fixture.runtime.listPendingRemovals()[0].assignmentId,
+    "replacement-assignment",
+  );
+  assert.deepEqual(fixture.removals, []);
+});
+
 test("human-approved dirty Manager removal refuses before Herdr remove", async (t) => {
   const fixture = await managerRemovalFixture(t);
   const requested = await fixture.runtime.executeStaff(
