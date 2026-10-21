@@ -5072,6 +5072,7 @@ async function managerRemovalFixture(
     primaryWorkspaceInitially?: boolean;
     primaryWorkspaceAfterConfirmation?: boolean;
     replaceManagerAfterConfirmation?: boolean;
+    interruptedRemove?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -5114,6 +5115,7 @@ async function managerRemovalFixture(
   let managerReplaced = false;
   let confirmationCount = 0;
   const removals: string[] = [];
+  const removalOptions: any[] = [];
   const calls: string[][] = [];
   const inventoryOutput = () => {
     const worktrees = [
@@ -5184,7 +5186,7 @@ async function managerRemovalFixture(
       piSessionId: assignment?.id,
     }),
     requireCompatibleBuild: () => {},
-    runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
+    runHerdr: async (_pi: any, _ctx: any, args: string[], runOptions: any) => {
       calls.push(args);
       if (args[1] === "list")
         return {
@@ -5216,6 +5218,16 @@ async function managerRemovalFixture(
         };
       }
       if (args[1] === "remove") {
+        removalOptions.push(runOptions);
+        if (options.interruptedRemove)
+          throw new OperationError({
+            category: "internal_failure",
+            operation: "herdr worktree remove",
+            message: "Herdr command was killed",
+            rollbackOccurred: false,
+            retryAttempted: false,
+            details: { killed: true },
+          });
         if (options.removeError) throw new Error("Herdr remove failed");
         removals.push(args[args.indexOf("--workspace") + 1]!);
         checkoutPresent = false;
@@ -5279,6 +5291,7 @@ async function managerRemovalFixture(
     checkoutPath,
     calls,
     removals,
+    removalOptions,
     confirmationCount: () => confirmationCount,
     stoppedLeadCount: () => stoppedLeadCount,
     lockCount: () => lockCount,
@@ -5420,6 +5433,34 @@ test("Manager removal reports native failure and uncertain assignment reconcilia
   );
   assert.deepEqual(stopped.removals, []);
   assert.ok(stopped.assignment());
+});
+
+test("Manager removal reports interrupted CLI as unconfirmed and preserves assignment", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    interruptedRemove: true,
+  });
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+  const text = result.content[0].text;
+
+  assert.equal(fixture.removalOptions.length, 1);
+  assert.equal(fixture.removalOptions[0].timeout, 180_000);
+  assert.equal(fixture.removalOptions[0].signal, fixture.ctx.signal);
+  assert.equal(result.details.ok, false);
+  assert.equal(result.details.checkout_removed, false);
+  assert.equal(result.details.checkout_state, "present");
+  assert.equal(result.details.assignment_retired, false);
+  assert.match(text, /checkout was present at the last check/);
+  assert.match(text, /assignment remains recorded/);
+  assert.match(text, /Herdr may still complete removal after the CLI stopped/);
+  assert.match(result.details.removal_error, /Herdr command was killed/);
+  assert.equal(fixture.assignment()?.id, "assigned-lead");
+  assert.ok(existsSync(fixture.checkoutPath));
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.stoppedLeadCount(), 1);
 });
 
 test("closed Manager removal refuses absent or mismatched reopened workspace identity", async (t) => {
