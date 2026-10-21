@@ -974,38 +974,16 @@ function closedAssignmentReceipt(
   ownerSessionId: string,
   child: OwnedAssignmentSession,
 ): Record<string, unknown> | undefined {
-  const accepted = entries.flatMap((entry, index) => {
-    if (!entry || typeof entry !== "object" || !("message" in entry)) return [];
-    const message = entry.message as any;
-    const details = message?.details;
+  const accepted = acceptedAssignmentReceipts(entries, ownerSessionId, child);
+  const closed = entries.flatMap((entry, index) => {
     if (
-      message?.role !== "toolResult" ||
-      ![
-        "delegate_agent",
-        "continue_agent",
-        "agent_delegate",
-        "agent_continue",
-      ].includes(message.toolName) ||
-      message.isError === true ||
-      details?.ok !== true ||
-      details.owner_session_id !== ownerSessionId ||
-      details.session_id !== child.id ||
-      details.agent !== child.label ||
-      details.definition !== child.definition ||
-      typeof details.session_path !== "string" ||
-      !validId(details.request_id)
+      !entry ||
+      typeof entry !== "object" ||
+      !("type" in entry) ||
+      entry.type !== "message" ||
+      !("message" in entry)
     )
       return [];
-    try {
-      return canonicalSessionPath(details.session_path) === child.path
-        ? [{ index, requestId: details.request_id }]
-        : [];
-    } catch {
-      return [];
-    }
-  });
-  const closed = entries.flatMap((entry, index) => {
-    if (!entry || typeof entry !== "object" || !("message" in entry)) return [];
     const message = entry.message as any;
     const details = message?.details;
     const proof = details?.closed_assignment;
@@ -1050,6 +1028,50 @@ function closedAssignmentReceipt(
   if (!matches.length || matches.length !== 1) return undefined;
   const { proof } = matches[0]!;
   return proof;
+}
+
+function acceptedAssignmentReceipts(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  child: OwnedAssignmentSession,
+): { index: number; requestId: string }[] {
+  return entries.flatMap((entry, index) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("type" in entry) ||
+      entry.type !== "message" ||
+      !("message" in entry)
+    )
+      return [];
+    const message = entry.message as any;
+    const details = message?.details;
+    if (
+      message?.role !== "toolResult" ||
+      ![
+        "delegate_agent",
+        "continue_agent",
+        "agent_delegate",
+        "agent_continue",
+      ].includes(message.toolName) ||
+      message.isError === true ||
+      details?.ok !== true ||
+      details.owner_session_id !== ownerSessionId ||
+      details.session_id !== child.id ||
+      details.agent !== child.label ||
+      details.definition !== child.definition ||
+      typeof details.session_path !== "string" ||
+      !validId(details.request_id)
+    )
+      return [];
+    try {
+      return canonicalSessionPath(details.session_path) === child.path
+        ? [{ index, requestId: details.request_id }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function closedAssignmentChildren(
@@ -2137,7 +2159,35 @@ export function resolveAssignmentSession(
         );
       const currentState = matchingStates[0];
       let historicalTerminal: Record<string, unknown> | undefined;
+      const latestAccepted = acceptedAssignmentReceipts(
+        entries,
+        ownerId,
+        child,
+      ).at(-1);
       const historicalClose = closedAssignmentReceipt(entries, ownerId, child);
+      if (latestAccepted && !currentState && !historicalClose) {
+        const hasLatestTerminal = entries.some((entry, index) => {
+          if (index <= latestAccepted.index) return false;
+          const result = ownedAssignmentResult(entry, ownerId);
+          const details = agentResultDetails(entry);
+          if (
+            result?.id !== child.id ||
+            details?.requestId !== latestAccepted.requestId
+          )
+            return false;
+          try {
+            return canonicalSessionPath(result.path) === child.path;
+          } catch {
+            return false;
+          }
+        });
+        if (!hasLatestTerminal)
+          fail(
+            "invalid_request",
+            "Cannot verify the latest accepted assignment outcome",
+            "continue",
+          );
+      }
       if (historicalClose) {
         if (
           entries

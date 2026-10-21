@@ -7573,6 +7573,48 @@ test("owned continuation requires a matching persisted child edge", () => {
       resolveAssignmentSession(fakeContext([accepted, close]), id).id,
       id,
     );
+    const earlierTerminal = ownershipResult(id, LEAD_SESSION_ID, { path });
+    earlierTerminal.details.requestId = requestId;
+    assert.throws(
+      () =>
+        resolveAssignmentSession(fakeContext([earlierTerminal, accepted]), id),
+      /latest accepted assignment outcome/,
+    );
+    const acceptedAsNonMessage = {
+      ...accepted,
+      type: "custom",
+    };
+    assert.equal(
+      resolveAssignmentSession(
+        fakeContext([earlierTerminal, acceptedAsNonMessage]),
+        id,
+      ).id,
+      id,
+      "non-message entries are not treated as newer accepted receipts",
+    );
+    const closeAsNonMessage = { ...close, type: "custom" };
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([accepted, closeAsNonMessage]),
+          id,
+        ),
+      /ownership tree/,
+      "non-message entries are not treated as closure receipts",
+    );
+    const latestAcceptance = structuredClone(accepted);
+    latestAcceptance.message.details.request_id = randomUUID();
+    const latestClose = structuredClone(close);
+    latestClose.message.details.closed_assignment.request_id =
+      latestAcceptance.message.details.request_id;
+    assert.equal(
+      resolveAssignmentSession(
+        fakeContext([earlierTerminal, accepted, latestAcceptance, latestClose]),
+        id,
+      ).id,
+      id,
+      "the latest accepted generation is eligible after its matching clean close",
+    );
     const contradictoryTerminal = ownershipResult(id, LEAD_SESSION_ID, {
       path,
     });
