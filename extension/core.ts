@@ -273,11 +273,17 @@ export function persistRequiredTextFiles(
   );
 }
 
+export type PreparedAttachment = {
+  name: string;
+  inline: boolean;
+  ref?: string;
+};
+
 export type PreparedMessageInput = {
   text: string;
   canonicalPaths: string[];
   resultBindings: ResultBinding[];
-  attachments: Array<{ name: string; inline: boolean }>;
+  attachments: PreparedAttachment[];
 };
 
 export type MessagePreparationOptions = {
@@ -572,6 +578,7 @@ export function prepareMessageInput(
           ? file.input
           : escapeMessageFileName(basename(file.canonicalPath)),
       inline: sections[index] !== renderMessageFile(file),
+      ...(file.retainedEvidence || file.binding ? { ref: file.input } : {}),
     })),
   };
 }

@@ -7592,8 +7592,8 @@ export function createAgentController(
           options.onChanged();
           const inlineNames = new Set(
             (assignmentInput?.attachments ?? [])
-              .filter((attachment) => attachment.inline)
-              .map((attachment) => attachment.name),
+              .filter((attachment) => attachment.inline && attachment.ref)
+              .map((attachment) => attachment.ref!),
           );
           const currentRefs = currentEvidence.map(semanticEvidenceRef);
           const historicalRefs = historicalEvidence.map(semanticEvidenceRef);
@@ -7602,7 +7602,8 @@ export function createAgentController(
             explicitInline: (assignmentInput?.attachments ?? [])
               .filter(
                 (attachment) =>
-                  attachment.inline && !currentRefs.includes(attachment.name),
+                  attachment.inline &&
+                  !currentRefs.includes(attachment.ref ?? ""),
               )
               .map((attachment) => attachment.name),
             referenced: [

@@ -5460,7 +5460,7 @@ test("managed project delegation references supported evidence larger than the i
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
   const branch = `evidence-reference-${randomUUID()}`;
-  const content = "large supported evidence\n".repeat(256);
+  const content = "large supported evidence\n".repeat(1024);
   const largeExplicitPath = join(tmpdir(), `large-explicit-${randomUUID()}.md`);
   const smallExplicitPath = join(tmpdir(), `small-explicit-${randomUUID()}.md`);
   realFs.writeFileSync(smallExplicitPath, "explicit supporting patch");
@@ -5475,6 +5475,8 @@ test("managed project delegation references supported evidence larger than the i
     "plan.md",
     content,
   );
+  const collisionPath = join(tmpdir(), snapshot.ref);
+  realFs.writeFileSync(collisionPath, "unrelated inline file");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -5618,7 +5620,7 @@ test("managed project delegation references supported evidence larger than the i
         definition: "agent",
         label,
         task: "use the current retained plan",
-        files: [smallExplicitPath],
+        files: [smallExplicitPath, collisionPath],
       },
       undefined,
       undefined,
@@ -5629,11 +5631,15 @@ test("managed project delegation references supported evidence larger than the i
     assert.ok(accepted);
     assert.equal(accepted!.paneId, finalPaneId);
     assert.match(accepted!.text, /Current evidence — reference-only batch/);
-    assert.ok(accepted!.text.includes(snapshot.ref));
+    assert.ok(accepted!.text.includes(`- ${snapshot.ref} — plan.md`));
+    assert.ok(
+      accepted!.text.includes(`<file name="${realpathSync(collisionPath)}"`),
+    );
+    assert.ok(accepted!.text.includes("unrelated inline file"));
     assert.match(accepted!.text, /explicit supporting patch/);
     assert.deepEqual(automatic.details.evidence, {
       currentInline: [],
-      explicitInline: [basename(smallExplicitPath)],
+      explicitInline: [basename(smallExplicitPath), snapshot.ref],
       referenced: [snapshot.ref],
     });
   } finally {
@@ -5642,6 +5648,7 @@ test("managed project delegation references supported evidence larger than the i
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(collisionPath, { force: true });
     realFs.rmSync(largeExplicitPath, { force: true });
     realFs.rmSync(smallExplicitPath, { force: true });
     realFs.rmSync(nonRegularPath, { recursive: true, force: true });
