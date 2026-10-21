@@ -1135,6 +1135,7 @@ test("message preparation keeps no-file messages unchanged", () => {
     text: "hello",
     canonicalPaths: [],
     resultBindings: [],
+    attachments: [],
   });
 });
 

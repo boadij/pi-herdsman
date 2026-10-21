@@ -104,6 +104,14 @@ and reference delivery.
 
 ## Consequences
 
+Current presentation refinement: the project assignment identifies the latest
+Manager-retained batch without replacing older required evidence. Descendants
+receive that batch inline when the complete batch fits; otherwise the batch is
+referenced as a unit. Explicit handoff files remain strict. The accepted Agent
+session freezes its batch selection, and successful delegation/continuation
+reports a receipt derived from the accepted payload. These rules affect
+presentation only and do not alter evidence authority or ownership.
+
 - Required evidence is explicit assignment state and is delivered through the
   existing `files` preparation path.
 - Existing internal logic can identify and remove evidence by exact ID under

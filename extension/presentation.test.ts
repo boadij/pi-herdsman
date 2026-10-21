@@ -4960,6 +4960,22 @@ test("steer result reports queued non-preemptive delivery", () => {
 });
 
 test("successful control results contain factual assignment evidence", (t) => {
+  const receipt = formatToolModelResult("delegate", {
+    ok: true,
+    agent: "reviewer",
+    request_id: "request-1",
+    session_id: "session-1",
+    evidence: {
+      currentInline: ["evidence:review#1"],
+      explicitInline: ["patch.md"],
+      referenced: ["evidence:older-plan#1"],
+    },
+  });
+  assert.match(receipt, /Assignment accepted/);
+  assert.match(receipt, /Current evidence — inline:\n- evidence:review#1/);
+  assert.match(receipt, /Explicit attachments — inline:\n- patch\.md/);
+  assert.match(receipt, /Evidence — references:\n- evidence:older-plan#1/);
+  assert.doesNotMatch(receipt, /read, understood, or applied/);
   {
     for (const action of ["delegate", "steer", "interrupt", "reply"]) {
       const rendered = formatToolModelResult(action, {

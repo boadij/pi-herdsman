@@ -7419,21 +7419,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "project-brief.md",
         operation.task,
       );
-      const attachedEvidence: RequiredEvidence[] = [
-        ...persistRequiredTextFiles(
-          id,
-          suppliedFiles.filter(
-            (file): file is string => typeof file === "string",
-          ),
-          ctx.cwd,
-          "delegate_project",
-        ),
-        ...suppliedFiles.flatMap((file) =>
-          typeof file === "string"
-            ? []
-            : [{ id: randomUUID(), name: file.ref, result: file }],
-        ),
-      ];
+      const attachedEvidence: RequiredEvidence[] = [];
+      for (const file of suppliedFiles)
+        attachedEvidence.push(
+          ...(typeof file === "string"
+            ? persistRequiredTextFiles(id, [file], ctx.cwd, "delegate_project")
+            : [{ id: randomUUID(), name: file.ref, result: file }]),
+        );
       const requiredEvidence = [projectBrief, ...attachedEvidence];
       const prepared = prepareMessageInput(
         operation.task,
@@ -7472,6 +7464,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         branch,
         text: prepared.text,
         ...(requiredEvidence.length ? { requiredEvidence } : {}),
+        currentEvidenceIds: requiredEvidence.map((evidence) => evidence.id),
         ...(prepared.resultBindings.length
           ? { resultBindings: prepared.resultBindings }
           : {}),
@@ -8422,19 +8415,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const resolved =
       params.resolvedAdd ??
       host.resolveMessageFiles(ctx, params.add, operation);
-    additions.push(
-      ...persistRequiredTextFiles(
-        assignment.id,
-        resolved.filter((file): file is string => typeof file === "string"),
-        ctx.cwd,
-        operation,
-      ),
-      ...resolved.flatMap((file) =>
-        typeof file === "string"
-          ? []
-          : [{ id: randomUUID(), name: file.ref, result: file }],
-      ),
-    );
+    for (const file of resolved)
+      additions.push(
+        ...(typeof file === "string"
+          ? persistRequiredTextFiles(assignment.id, [file], ctx.cwd, operation)
+          : [{ id: randomUUID(), name: file.ref, result: file }]),
+      );
     const suppliedAdditions = [...additions];
     if (params.text !== undefined) {
       if (!params.text.trim())
@@ -8543,12 +8529,47 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           );
           if (!duplicate) next.push(addition);
         }
+        const selectedCurrent: string[] = [];
+        if (params.text !== undefined) {
+          const note = additions.at(-1)!;
+          const accepted = next.find(
+            (entry) =>
+              "path" in entry &&
+              "path" in note &&
+              entry.name === note.name &&
+              entry.sha256 === note.sha256 &&
+              entry.sourceAssignmentId === note.sourceAssignmentId,
+          );
+          if (accepted) selectedCurrent.push(accepted.id);
+        }
+        for (const addition of suppliedAdditions) {
+          const accepted = next.find((entry) =>
+            "result" in entry && "result" in addition
+              ? entry.result.ref === addition.result.ref
+              : "path" in entry &&
+                "path" in addition &&
+                entry.name === addition.name &&
+                entry.sha256 === addition.sha256 &&
+                entry.sourceAssignmentId === addition.sourceAssignmentId,
+          );
+          if (accepted && !selectedCurrent.includes(accepted.id))
+            selectedCurrent.push(accepted.id);
+        }
+        const currentEvidenceIds =
+          params.text !== undefined || suppliedAdditions.length
+            ? selectedCurrent
+            : (current.currentEvidenceIds ?? []).filter((id) =>
+                next.some((entry) => entry.id === id),
+              );
         const written = {
           ...current,
           ...(next.length
             ? { requiredEvidence: next }
             : { requiredEvidence: undefined }),
           ...(resultBindings.length ? { resultBindings } : {}),
+          ...(currentEvidenceIds.length
+            ? { currentEvidenceIds }
+            : { currentEvidenceIds: undefined }),
         };
         host.writeProjectAssignment(runtime, written);
         return written;

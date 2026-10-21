@@ -2059,6 +2059,7 @@ export type ProjectAssignment = Readonly<{
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
   requiredEvidence?: RequiredEvidence[];
+  currentEvidenceIds?: string[];
 }>;
 
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
@@ -2087,7 +2088,12 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
-  const optional = ["piSessionFile", "resultBindings", "requiredEvidence"];
+  const optional = [
+    "piSessionFile",
+    "resultBindings",
+    "requiredEvidence",
+    "currentEvidenceIds",
+  ];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
     Object.keys(r).every(
@@ -2113,7 +2119,17 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
             "result" in evidence || evidence.sourceAssignmentId === r.id,
         ) &&
         new Set(r.requiredEvidence.map((evidence) => evidence.id)).size ===
-          r.requiredEvidence.length))
+          r.requiredEvidence.length)) &&
+    (r.currentEvidenceIds === undefined ||
+      (Array.isArray(r.currentEvidenceIds) &&
+        new Set(r.currentEvidenceIds).size === r.currentEvidenceIds.length &&
+        r.currentEvidenceIds.every(
+          (id) =>
+            typeof id === "string" &&
+            (r.requiredEvidence as RequiredEvidence[] | undefined)?.some(
+              (evidence) => evidence.id === id,
+            ),
+        )))
   );
 }
 

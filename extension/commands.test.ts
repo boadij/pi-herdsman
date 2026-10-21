@@ -6071,6 +6071,13 @@ async function managerDelegateAssignmentTest(
     )!;
     assert.equal(retained.requiredEvidence?.[2].name, "assignment-note.md");
     assert.deepEqual(
+      retained.currentEvidenceIds?.map(
+        (id) =>
+          retained.requiredEvidence?.find((entry) => entry.id === id)?.name,
+      ),
+      ["assignment-note.md", basename(reviewFile)],
+    );
+    assert.deepEqual(
       retained.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(retained.id, entry),
       ),
@@ -6209,6 +6216,7 @@ async function managerDelegateAssignmentTest(
     );
     assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
       "branch",
+      "currentEvidenceIds",
       "id",
       "piSessionFile",
       "repoKey",

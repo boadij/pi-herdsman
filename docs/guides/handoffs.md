@@ -50,7 +50,10 @@ See the [staff-tool reference](../reference/staff.md#message_staff) and
 
 Each new descendant assignment receives the effective required-evidence set
 when that assignment is accepted, merged with explicit `files` for that
-handoff and deduplicated by verified version and result binding. Project
+handoff and deduplicated by verified version and result binding. The Manager's
+latest retained update identifies one current batch for future eligible
+descendants; other required entries remain historical and reference-first.
+Project
 descendants inherit project requirements; nested descendants also inherit
 relevant additions owned by their Agent parent. Siblings do not inherit one
 another's local additions. An inherited snapshot keeps its original
@@ -62,16 +65,21 @@ assignment evidence and still requires valid ownership authority. Retired
 project assignments cannot be resumed.
 
 For each managed-Agent assignment, the task and current files are presented
-before historical requirements. Explicitly supplied files and evidence newly
-retained by that handoff are current evidence and use the existing complete
-content preparation. Previously accepted requirements are listed as short
-semantic references, regardless of their size; they are not automatically
-embedded. Selecting an accepted reference through `files` presents that exact
-version as current evidence without retaining it again. All accepted
+before historical requirements. A complete Manager-selected current batch is
+embedded when it fits the configured limits; if the automatic batch exceeds
+capacity, it is presented as semantic references as a whole. Explicit
+attachments remain strict: an explicit file that cannot be embedded rejects
+the handoff. Previously accepted requirements outside that batch are listed
+as semantic references. Selecting an accepted reference through `files`
+presents that exact version as a current explicit attachment. All accepted
 requirements remain part of the assignment; presentation does not change their
 authority or ownership. The initial project brief is delivered as task text
 and separately retained for descendants without duplicating it in the initial
-message.
+message. A saved Agent continuation keeps the current-batch selection accepted
+with that session, even if the Manager later changes the project batch.
+Successful Agent delegation and continuation return a receipt of the inline
+and referenced evidence in the accepted task. It confirms mailbox acceptance,
+not that the Agent read, understood, or applied the evidence.
 
 Required file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files

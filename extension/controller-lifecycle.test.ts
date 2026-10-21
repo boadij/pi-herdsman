@@ -5459,6 +5459,8 @@ test("managed project delegation references supported evidence larger than the i
   const branch = `evidence-reference-${randomUUID()}`;
   const content = "large supported evidence\n".repeat(256);
   const largeExplicitPath = join(tmpdir(), `large-explicit-${randomUUID()}.md`);
+  const smallExplicitPath = join(tmpdir(), `small-explicit-${randomUUID()}.md`);
+  realFs.writeFileSync(smallExplicitPath, "explicit supporting patch");
   const largeExplicit = "large explicit attachment\n".repeat(65536);
   const nonRegularPath = join(tmpdir(), `non-regular-${randomUUID()}`);
   realFs.writeFileSync(largeExplicitPath, largeExplicit);
@@ -5477,6 +5479,7 @@ test("managed project delegation references supported evidence larger than the i
     branch,
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
+    currentEvidenceIds: [snapshot.id],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -5602,6 +5605,29 @@ test("managed project delegation references supported evidence larger than the i
       undefined,
       "failed current delivery must not be advertised as accepted",
     );
+    const automatic = await registeredAgentTool(pi, "delegate").execute(
+      "automatic-reference-fallback",
+      {
+        definition: "agent",
+        label,
+        task: "use the current retained plan",
+        files: [smallExplicitPath],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.match(accepted!.text, /Current evidence — reference-only batch/);
+    assert.ok(accepted!.text.includes(snapshot.ref));
+    assert.match(accepted!.text, /explicit supporting patch/);
+    assert.deepEqual(automatic.details.evidence, {
+      currentInline: [],
+      explicitInline: [basename(smallExplicitPath)],
+      referenced: [snapshot.ref],
+    });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
@@ -5609,6 +5635,7 @@ test("managed project delegation references supported evidence larger than the i
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
     realFs.rmSync(largeExplicitPath, { force: true });
+    realFs.rmSync(smallExplicitPath, { force: true });
     realFs.rmSync(nonRegularPath, { recursive: true, force: true });
     if (process.platform !== "win32") realFs.rmSync(fifoPath, { force: true });
     if (previousConfig === undefined)
@@ -9668,7 +9695,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.equal(accepted!.ownerSessionId, parentSessionId);
     assert.equal(accepted!.projectAssignmentId, projectAssignmentId);
     assert.deepEqual(accepted!.requiredEvidence, [inherited, local]);
-    assert.equal(accepted!.localEvidence, undefined);
+    assert.deepEqual(accepted!.localEvidence, [local]);
     const firstRequest = structuredClone(accepted!);
     const childState = readAgentState(childMailbox)!;
     assert.ok(childPi && childContext);
@@ -9848,8 +9875,8 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       local,
       retainedNote,
     ]);
-    assert.deepEqual(accepted!.inheritedEvidence, [inherited, local]);
-    assert.deepEqual(accepted!.localEvidence, [retainedNote]);
+    assert.deepEqual(accepted!.inheritedEvidence, [inherited]);
+    assert.deepEqual(accepted!.localEvidence, [local, retainedNote]);
     assert.ok(
       accepted!.localEvidence?.some((item) => item.id === retainedNote.id),
       "continued request retains the remaining local note",

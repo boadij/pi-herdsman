@@ -3605,6 +3605,7 @@ async function runManagerStartupScenario(
       );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
+        ...(starting.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         ...(["active-missing", "active-missing-legacy"].includes(mode)
           ? ["piSessionFile"]
@@ -5052,6 +5053,7 @@ async function runManagerStartupScenario(
       assert.equal(assignment.id, childSession);
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
         ...(assignment.requiredEvidence ? ["requiredEvidence"] : []),
@@ -5126,6 +5128,7 @@ async function runManagerStartupScenario(
       )[0]!;
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
         ...(assignment.requiredEvidence ? ["requiredEvidence"] : []),
@@ -5238,6 +5241,7 @@ async function runManagerStartupScenario(
     )[0]!;
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
+      ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
       "id",
       ...(["success", "unmaterialized-path"].includes(mode)
         ? ["piSessionFile"]
