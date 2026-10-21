@@ -143,8 +143,10 @@ unacknowledged handoff use generic attention. A retained request is not proof
 of non-delivery and must not be duplicated. Physical `unknown` remains
 fail-closed and receives at most one attention event for an episode. `settling`
 alone is not a timeout or generic attention condition. A parent projected as
-blocked while waiting for direct children is progress-capable and is not the
-same as Herdr reporting that the managed child runtime is blocked.
+blocked while waiting for direct children records a durable dependency, not
+proof that its own execution is live; steering remains unavailable unless its
+managed execution is currently reported as working. This differs from Herdr
+reporting that the managed parent runtime is blocked.
 
 When attention arrives, the owner handles a required action before ending the
 turn. For stale attention:

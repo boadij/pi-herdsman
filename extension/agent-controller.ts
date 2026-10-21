@@ -3191,7 +3191,7 @@ export async function managedAgentSnapshots(
     const steerable =
       presence.kind === "live" &&
       !state.pendingAskId &&
-      (projectedState === "working" || waitingForChildren);
+      projectedState === "working";
     const now = Date.now();
     const listed = {
       label: state.agentLabel,
@@ -6555,6 +6555,11 @@ export function createAgentController(
               ({ state }) => `${state.workspaceId}\0${state.paneId}`,
             ),
           );
+          const closedReceipt = closedAssignmentReceipt(
+            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getSessionId(),
+            resumed,
+          );
           for (const agent of snapshot.liveAgents)
             if (
               herdrSessionsMatch(
@@ -6568,10 +6573,28 @@ export function createAgentController(
               !statePanes.has(
                 `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
               )
-            )
+            ) {
+              if (
+                closedReceipt?.workspace_id === agent.workspace_id &&
+                closedReceipt.pane_id === agent.pane_id &&
+                typeof agent.pane_id === "string"
+              ) {
+                try {
+                  await paneProcess(pi, ctx, agent.pane_id, signal);
+                } catch (error) {
+                  if (
+                    error instanceof OperationError &&
+                    error.detail.operation === "herdr pane process-info" &&
+                    error.detail.details?.herdrCode === "pane_not_found"
+                  )
+                    continue;
+                  throw error;
+                }
+              }
               representations.add(
                 `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
               );
+            }
           if (representations.size > 1)
             fail(
               "target_ambiguous",

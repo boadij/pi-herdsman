@@ -57,7 +57,7 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for seven bounded
+The harness also supports an opt-in Pi-native faux provider for eight bounded
 scenarios:
 
 ```sh
@@ -68,6 +68,7 @@ npm run smoke -- supervisor-agent --simulated
 npm run smoke -- terminal-failure --simulated
 npm run smoke -- agent-terminal-failure --simulated
 npm run smoke -- manager-handoff --simulated
+npm run smoke -- agent-crash-recovery --simulated
 ```
 
 Simulation supplies model decisions only. Pi still runs its real agent loop and
@@ -75,12 +76,17 @@ tools, while Herdsman and Herdr perform and record the actual delegation,
 continuation, role transitions, process/session lifecycle, and cleanup. The
 provider accepts only expected transcript states and requires actual correlated
 tool results before producing completion responses. It cannot produce
-successful tool results or directly mutate Herdsman or Herdr state. The two
-additional scenarios are simulated-only and use real Pi, Herdsman, and Herdr;
-they do not replace live-model acceptance. Simulated runs do not require model
-credentials or inference, but retain runtime compatibility checks, build,
-isolation, Herdr setup, and cleanup. They are integration checks, not
-replacements for real-model acceptance.
+successful tool results or directly mutate Herdsman or Herdr state. The
+simulated-only scenarios use real Pi, Herdsman, and Herdr; they do not replace
+live-model acceptance. `agent-crash-recovery` fully stops and restarts its
+generated named Herdr server, reopens the exact owner Pi session, verifies that
+the restored pending-child parent has no steer authority, persists a successful
+close tool result, and continues the exact saved target session as a new
+generation. Model decisions are scripted; the process/server lifecycle and
+controller tools are real. The scenario never uses the default Herdr server.
+Simulated runs do not require model credentials or inference, but retain runtime
+compatibility checks, build, isolation, Herdr setup, and cleanup. They are
+integration checks, not replacements for real-model acceptance.
 
 Nested Agent completions arrive asynchronously through Herdsman's normal
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` path. Pi
@@ -126,8 +132,10 @@ with a pending project message, verified missing-worktree retirement without
 recreating the assignment, and refusal to resume retired work),
 `agent-terminal-failure` (managed-Agent terminal failure settlement and exact
 owner delivery), `manager-handoff` (project-message retention during Manager
-absence and delivery after role reentry), and `terminal-failure` (assigned-Lead
-terminal failure and project reporting).
+absence and delivery after role reentry), `agent-crash-recovery` (full isolated
+Herdr server restart, exact owner-session reopen, safe pending-child projection,
+verified close receipt, and same-session new-generation continuation), and
+`terminal-failure` (assigned-Lead terminal failure and project reporting).
 `terminal-failure` creates an isolated Manager project and exactly assigned
 Lead, selects the isolated native faux `terminal-error` model only for that
 Lead, and exhausts Pi's bounded native retry after partial assistant output

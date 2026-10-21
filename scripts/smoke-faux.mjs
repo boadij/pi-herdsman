@@ -18,6 +18,11 @@ const modelIds = [
   "terminal-agent-error",
   "manager-handoff",
   "manager-handoff-lead",
+  "agent-crash-root",
+  "agent-crash-recovery",
+  "agent-crash-target",
+  "agent-crash-parent",
+  "agent-crash-child",
 ];
 
 function text(message) {
@@ -33,7 +38,7 @@ function lastUser(messages) {
   return [...messages].reverse().find((message) => message.role === "user");
 }
 
-function correlatedCall(messages, name) {
+function correlatedCall(messages, name, identity) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== "assistant") continue;
@@ -41,6 +46,12 @@ function correlatedCall(messages, name) {
       (part) => part.type === "toolCall" && part.name === name,
     );
     if (!call) continue;
+    if (
+      identity &&
+      call.arguments?.label !== identity &&
+      call.arguments?.agent !== identity
+    )
+      continue;
     const result = messages.find(
       (candidate, resultIndex) =>
         resultIndex > index &&
@@ -363,6 +374,108 @@ function textFromSessionId(result) {
   return id;
 }
 
+function agentCrashRecoveryDecision(model, context) {
+  const messages = context.messages;
+  const prompt = text(lastUser(messages));
+  const latest = messages.at(-1);
+  if (model === "agent-crash-root") {
+    const initial = messages.some(
+      (message) =>
+        message.role === "user" &&
+        text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_INITIAL"),
+    );
+    const postRestart = messages.find(
+      (message) =>
+        message.role === "user" &&
+        text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART"),
+    );
+    if (initial && !postRestart) {
+      if (!correlatedCall(messages, "delegate_agent", "smoke-crash-target"))
+        return call("delegate_agent", {
+          definition: "smoke-crash-target",
+          label: "smoke-crash-target",
+          task: "SMOKE_CRASH_TARGET: remain active until the isolated restart interrupts this generation.",
+        });
+      if (!correlatedCall(messages, "delegate_agent", "smoke-crash-parent"))
+        return call("delegate_agent", {
+          definition: "implementer",
+          label: "smoke-crash-parent",
+          task: "SMOKE_CRASH_PARENT: delegate one child that asks its owner a question, then wait for that child.",
+        });
+      return fauxAssistantMessage(
+        "PI_HERDSMAN_CRASH_RECOVERY_ASSIGNMENTS_ACCEPTED",
+      );
+    }
+    if (postRestart) {
+      const list = correlatedCall(messages, "list_agents");
+      if (!list) return call("list_agents", {});
+      const closed = correlatedCall(
+        messages,
+        "close_agent",
+        "smoke-crash-target",
+      );
+      if (!closed) return call("close_agent", { agent: "smoke-crash-target" });
+      const continuePrompt = messages.find(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUE"),
+      );
+      if (!continuePrompt)
+        return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
+      const session = closed.result?.details?.closed_assignment?.session_path;
+      if (!session)
+        throw new Error("Restart prompt omitted exact target session path");
+      const continued = correlatedCall(messages, "continue_agent");
+      if (!continued)
+        return call("continue_agent", {
+          session,
+          task: "SMOKE_CRASH_CONTINUE: return exactly PI_HERDSMAN_CRASH_RECOVERY_CONTINUED without replaying prior work.",
+        });
+      const sessionId = textFromSessionId(continued.result);
+      const handoff = deliveredResult(
+        messages,
+        "continue_agent",
+        (content) =>
+          content.startsWith("Agent result · agent=") &&
+          content.includes(`session=${sessionId} · status=completed`),
+      );
+      return handoff
+        ? fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CONTINUED")
+        : waitForResult("Waiting for the continued exact session result.");
+    }
+    throw new Error("Unexpected agent-crash root transcript");
+  }
+  if (model === "agent-crash-target") {
+    if (prompt.includes("SMOKE_CRASH_CONTINUE:"))
+      return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CONTINUED");
+    return waitForResult(
+      "The original target execution is intentionally left in flight until server stop.",
+    );
+  }
+  if (model === "agent-crash-parent") {
+    const delegated = correlatedCall(
+      messages,
+      "delegate_agent",
+      "smoke-crash-child",
+    );
+    if (!delegated)
+      return call("delegate_agent", {
+        definition: "scout",
+        label: "smoke-crash-child",
+        task: "SMOKE_CRASH_CHILD: ask your owner exactly CRASH_CHILD_WAITING and remain blocked.",
+      });
+    return waitForResult("Parent remains pending on its direct child.");
+  }
+  if (model === "agent-crash-child") {
+    const asked = correlatedCall(messages, "ask_owner");
+    if (!asked) return call("ask_owner", { question: "CRASH_CHILD_WAITING" });
+    return waitForResult("Child remains blocked on its owner.");
+  }
+  if (latest?.role === "toolResult")
+    throw new Error(`Unexpected recovery result for ${model}`);
+  throw new Error(`Unexpected recovery model: ${model}`);
+}
+
 export function decide(model, context) {
   const messages = context.messages;
   const prompt = text(lastUser(messages));
@@ -509,6 +622,11 @@ export function decide(model, context) {
   }
   if (model === "core") return coreDecision(context);
   if (model === "continuation") return continuationDecision(messages);
+  if (model.startsWith("agent-crash-"))
+    return agentCrashRecoveryDecision(
+      model === "agent-crash-recovery" ? "agent-crash-root" : model,
+      context,
+    );
 
   if (model === "terminal-failure") {
     const latest = messages.at(-1);
@@ -659,6 +777,34 @@ export default function install(pi) {
         _options?.signal,
       ).then(() => answer);
     }
+    if (
+      model.id === "agent-crash-target" &&
+      !text(lastUser(context.messages)).includes("SMOKE_CRASH_CONTINUE:")
+    )
+      return waitForSmokeObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "crash-target-release",
+        _options?.signal,
+      ).then(() => answer);
+    if (
+      model.id === "agent-crash-target" &&
+      text(lastUser(context.messages)).includes("SMOKE_CRASH_CONTINUE:")
+    )
+      return waitForSmokeObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "crash-continuation-release",
+        _options?.signal,
+      ).then(() => answer);
+    if (
+      model.id === "agent-crash-parent" &&
+      answer.stopReason === "stop" &&
+      correlatedCall(context.messages, "delegate_agent", "smoke-crash-child")
+    )
+      return waitForSmokeObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "crash-parent-release",
+        _options?.signal,
+      ).then(() => answer);
     if (model.id === "terminal-agent-error" && terminalErrorRequests === 1)
       return waitForSmokeObservation(
         join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),

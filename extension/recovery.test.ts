@@ -4946,6 +4946,13 @@ test("stale working parents remain visible while waiting parents project blocked
       "an idle parent waiting on an unresolved child projects blocked",
     );
     assert.equal(
+      waiting.details.agents
+        .find((agent: any) => agent.agent === parent.agentLabel)
+        ?.available_tools.includes("steer_agent"),
+      false,
+      "an idle restored parent waiting on a child has no live steer authority",
+    );
+    assert.equal(
       pi.sent.filter(
         (message: any) => message.customType === "pi-herdsman-agent-stale",
       ).length,

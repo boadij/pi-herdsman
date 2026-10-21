@@ -9985,7 +9985,7 @@ test("successful controls persist their definition before runtime teardown", asy
   }
 });
 
-test("lead steers a blocked parent waiting for direct-child work", async () => {
+test("lead steers a parent waiting for direct-child work only while working", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -10102,7 +10102,11 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       "blocked",
       JSON.stringify(listed.details),
     );
-    assert.ok(listed.details.agents[0].available_tools.includes("steer_agent"));
+    assert.equal(
+      listed.details.agents[0].available_tools.includes("steer_agent"),
+      false,
+      "child-waiting projection does not prove the parent execution is live",
+    );
     const listedChild = (listed.details.agents as any[]).find(
       (agent) => agent.agent === child.agentLabel,
     );
@@ -10231,6 +10235,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     removeRequest(parentMailbox, handoffRequestId);
 
+    const idleSteer = await agentTool(pi, "steer").execute(
+      "steer",
+      { agent: parent.agentLabel, message: "continue" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(idleSteer.details.ok, false);
+    assert.equal(idleSteer.details.error.category, "agent_busy");
+    assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    parentStatus = "working";
     const steered = await agentTool(pi, "steer").execute(
       "steer",
       { agent: parent.agentLabel, message: "continue" },
@@ -10242,6 +10257,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
     assert.deepEqual(readAgentState(childMailbox), childBefore);
 
+    parentStatus = "idle";
     writeAgentState(childMailbox, {
       ...child,
       activeRequestId: undefined,
@@ -10268,8 +10284,10 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.equal(completedChild.details.agents[0].state, "blocked");
-    assert.ok(
+    assert.equal(
       completedChild.details.agents[0].available_tools.includes("steer_agent"),
+      false,
+      "an idle parent remains non-steerable while a child result is pending",
     );
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -10455,7 +10473,9 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
 
     writeAgentState(parentMailbox, parent);
     writeAgentState(childMailbox, child);
-    const recoveredPositive = fakePi({ exec: base });
+    const recoveredPositive = fakePi({
+      exec: agentControllerExecutor(parent, [child]),
+    });
     registerExtension!(recoveredPositive.pi as never);
     const recoveredPositiveList = await agentTool(
       recoveredPositive,
