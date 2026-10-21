@@ -50,20 +50,22 @@ schema is:
   "contextRetirement": true,
   "autoActivateManager": false,
   "inlineAttachmentLimitBytes": 131072,
-  "mailboxPayloadLimitBytes": 131072
+  "mailboxPayloadLimitBytes": 131072,
+  "worktreeRemovalPreapprovedRepos": ["/verified/repository"]
 }
 ```
 
 An absent file means these defaults:
 
-| Field                        |            Default | Allowed values                                    |
-| ---------------------------- | -----------------: | ------------------------------------------------- |
-| `defaultLeadExecution`       |         `flexible` | `flexible`, `orchestrate`                         |
-| `spawnPlacement`             |          `subtree` | `tab`, `subtree`, `split`                         |
-| `contextRetirement`          |               true | boolean                                           |
-| `autoActivateManager`        |              false | boolean                                           |
-| `inlineAttachmentLimitBytes` | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
-| `mailboxPayloadLimitBytes`   | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
+| Field                             |            Default | Allowed values                                                                |
+| --------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
+| `defaultLeadExecution`            |         `flexible` | `flexible`, `orchestrate`                                                     |
+| `spawnPlacement`                  |          `subtree` | `tab`, `subtree`, `split`                                                     |
+| `contextRetirement`               |               true | boolean                                                                       |
+| `autoActivateManager`             |              false | boolean                                                                       |
+| `inlineAttachmentLimitBytes`      | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
+| `mailboxPayloadLimitBytes`        | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
+| `worktreeRemovalPreapprovedRepos` |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
 
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human

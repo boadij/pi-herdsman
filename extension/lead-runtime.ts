@@ -53,6 +53,10 @@ import {
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
+import {
+  isWorktreeRemovalPreapproved,
+  setWorktreeRemovalPreapproved,
+} from "./config.ts";
 import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
   isLeadExecutionMode,
@@ -7102,37 +7106,69 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Unrelated or ambiguously identified Pi execution occupies the worktree; worktree preserved",
       );
   };
+  type PendingRemoval = {
+    branch: string;
+    repoKey: string;
+    assignmentId: string;
+    checkoutPath: string;
+    manager: Awaited<ReturnType<typeof host.currentManager>>;
+    sessionId: string;
+  };
+  const pendingRemovals = new Map<string, PendingRemoval>();
   const removeWorktree = async (
     branch: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    options: { expected?: PendingRemoval; preauthorized?: boolean } = {},
   ) => {
     if (activeRole() !== "manager")
       throw new Error("Only Managers can remove project worktrees");
-    if (!ctx.hasUI)
-      throw new Error("Worktree removal requires interactive confirmation");
     const operationSignal = signal ?? ctx.signal;
     operationSignal?.throwIfAborted();
     const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
+    if (
+      options.expected &&
+      (options.expected.repoKey !== candidate.manager.repoKey ||
+        options.expected.assignmentId !== candidate.assignment.id ||
+        options.expected.checkoutPath !== candidate.checkoutPath ||
+        !host.sameManagerDescriptor(
+          options.expected.manager,
+          candidate.manager,
+        ) ||
+        options.expected.sessionId !== ctx.sessionManager.getSessionId())
+    )
+      throw new Error("Pending removal target changed; worktree preserved");
     await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
-    const answer = await ctx.ui.input(
-      [
-        "Remove worktree",
-        "",
-        `Branch: ${branch}`,
-        `Checkout: ${candidate.checkoutPath}`,
-        "",
-        "Removes this checkout and Herdr workspace.",
-        "Running managed execution may be stopped.",
-        "Preserves the Git branch and Pi conversation.",
-        "Retires the assignment after verified removal.",
-        "",
-        "Type remove to confirm.",
-      ].join("\n"),
-      undefined,
-      { signal: operationSignal },
+    const preauthorized = isWorktreeRemovalPreapproved(
+      candidate.manager.repoKey,
     );
+    if (options.preauthorized && !preauthorized)
+      throw new Error("Project removal preauthorization was revoked");
+    const bypass = preauthorized;
+    if (!bypass && !ctx.hasUI)
+      throw new Error("Worktree removal requires interactive confirmation");
+    const answer = bypass
+      ? "remove"
+      : await ctx.ui.input(
+          [
+            "Remove worktree",
+            "",
+            `Branch: ${branch}`,
+            `Checkout: ${candidate.checkoutPath}`,
+            "",
+            "Removes this checkout and Herdr workspace.",
+            "Running managed execution may be stopped.",
+            "Preserves the Git branch and Pi conversation.",
+            "Retires the assignment after verified removal.",
+            "",
+            "Type remove to confirm.",
+          ].join("\n"),
+          undefined,
+          { signal: operationSignal },
+        );
     operationSignal?.throwIfAborted();
+    if (answer !== "remove")
+      if (options.expected) pendingRemovals.delete(branch);
     if (answer !== "remove")
       return {
         content: [
@@ -7167,9 +7203,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 throw new Error(
                   "Removal target changed during confirmation; worktree preserved",
                 );
+              if (
+                bypass &&
+                !isWorktreeRemovalPreapproved(current.manager.repoKey)
+              )
+                throw new Error("Project removal preauthorization was revoked");
               await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
               if (current.liveLead) {
                 try {
+                  if (
+                    bypass &&
+                    !isWorktreeRemovalPreapproved(current.manager.repoKey)
+                  )
+                    throw new Error(
+                      "Project removal preauthorization was revoked",
+                    );
                   await stopExecution(
                     current.assignment.id,
                     current.liveLead,
@@ -7248,6 +7296,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 );
               try {
                 operationSignal?.throwIfAborted();
+                if (
+                  bypass &&
+                  !isWorktreeRemovalPreapproved(final.manager.repoKey)
+                )
+                  throw new Error(
+                    "Project removal preauthorization was revoked",
+                  );
                 return {
                   result: await host.runHerdr(
                     host.pi,
@@ -7339,6 +7394,69 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         };
       },
     );
+  };
+  const listPendingRemovals = (ctx?: ExtensionContext) => {
+    if (ctx)
+      for (const [branch, pending] of pendingRemovals)
+        if (
+          pending.sessionId !== ctx.sessionManager.getSessionId() ||
+          activeRole() !== "manager"
+        )
+          pendingRemovals.delete(branch);
+    return [...pendingRemovals.values()].map((item) => ({
+      branch: item.branch,
+      checkoutPath: item.checkoutPath,
+    }));
+  };
+  const approvePendingRemoval = async (
+    branch: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const pending = pendingRemovals.get(branch);
+    if (!pending) throw new Error("Pending removal is no longer available");
+    pendingRemovals.delete(branch);
+    if (activeRole() !== "manager")
+      throw new Error("Manager authority is no longer active");
+    return removeWorktree(branch, ctx, signal ?? ctx.signal, {
+      expected: pending,
+    });
+  };
+  const cancelPendingRemoval = (branch: string) =>
+    pendingRemovals.delete(branch);
+  const setRemovalPreauthorization = async (
+    enabled: boolean,
+    ctx: ExtensionContext,
+  ) => {
+    const manager = await host.currentManager(ctx);
+    if (host.activeRole() !== "manager" || !manager || !ctx.hasUI)
+      throw new Error(
+        "Only an interactive active Manager can change this setting",
+      );
+    const group = await host.worktreeGroupScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      ctx.signal,
+    );
+    if (
+      group.repoKey !== manager.repoKey ||
+      group.primaryWorkspaceId !== manager.workspaceId
+    )
+      throw new Error("Manager worktree group is not authoritative");
+    if (enabled) {
+      const answer = await ctx.ui.input(
+        `Skip worktree removal confirmation for this verified repository?\n\n${manager.repoKey}\n\nSubsequent explicitly requested removals here can proceed without a per-removal prompt. All safety checks remain active. Type enable to confirm.`,
+        undefined,
+        { signal: ctx.signal },
+      );
+      if (answer !== "enable") return false;
+    }
+    const current = await host.currentManager(ctx);
+    if (!current || !host.sameManagerDescriptor(current, manager))
+      throw new Error("Manager authority changed before saving the setting");
+    setWorktreeRemovalPreapproved(manager.repoKey, enabled);
+    return isWorktreeRemovalPreapproved(manager.repoKey) === enabled;
   };
   const {
     pi,
@@ -8229,8 +8347,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action === "remove") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can remove project worktrees");
-      if (!ctx.hasUI)
-        throw new Error("Worktree removal requires interactive confirmation");
       const operationSignal = signal ?? ctx.signal;
       operationSignal?.throwIfAborted();
       const target = await inspectRemovalTarget(
@@ -8239,11 +8355,43 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationSignal,
       );
       await assertNoUnrelatedPiExecution(target, ctx, operationSignal);
+      if (isWorktreeRemovalPreapproved(target.manager.repoKey))
+        return removeWorktree(params.branch, ctx, operationSignal, {
+          preauthorized: true,
+        });
+      if (!ctx.hasUI)
+        throw new Error("Worktree removal approval requires an interactive UI");
+      const pending: PendingRemoval = {
+        branch: params.branch,
+        repoKey: target.manager.repoKey,
+        assignmentId: target.assignment.id,
+        checkoutPath: target.checkoutPath,
+        manager: target.manager,
+        sessionId: ctx.sessionManager.getSessionId(),
+      };
+      const verifiedAgain = await inspectRemovalTarget(
+        params.branch,
+        ctx,
+        operationSignal,
+      );
+      if (
+        host.activeRole() !== "manager" ||
+        pending.sessionId !== ctx.sessionManager.getSessionId() ||
+        !host.sameManagerDescriptor(
+          await host.currentManager(ctx),
+          target.manager,
+        ) ||
+        verifiedAgain.assignment.id !== pending.assignmentId ||
+        verifiedAgain.checkoutPath !== pending.checkoutPath ||
+        verifiedAgain.manager.repoKey !== pending.repoKey
+      )
+        throw new Error("Manager authority changed while preparing approval");
+      pendingRemovals.set(params.branch, pending);
       return {
         content: [
           {
             type: "text" as const,
-            text: `No worktree was removed. To confirm removal of ${params.branch}, use /manager remove ${params.branch} or /manager → Project → Remove worktree….`,
+            text: `Removal of ${params.branch} awaits human approval. Review it with /manager remove.`,
           },
         ],
         details: {
@@ -8251,6 +8399,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           action: "remove",
           branch: params.branch,
           confirmation_required: true,
+          pending: true,
         },
       };
     }
@@ -8915,6 +9064,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     stop,
     activateProjectLead,
     removeWorktree,
+    listPendingRemovals,
+    approvePendingRemoval,
+    cancelPendingRemoval,
+    setRemovalPreauthorization,
     executeStaff,
     updateAssignmentEvidence,
     inspectRequiredEvidence,

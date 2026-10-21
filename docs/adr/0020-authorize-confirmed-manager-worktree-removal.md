@@ -3,6 +3,9 @@
 > **Session identity update:** [ADR 0029](0029-use-immutable-managed-lead-session-identity.md) supersedes all
 > takeover and in-place ordinary-continuation decisions in this record.
 > Other decisions remain subject to their noted supersessions.
+>
+> **Approval update:** [ADR 0030](0030-project-scoped-manager-removal-approval.md)
+> supersedes the requirement for a separate per-removal human confirmation.
 
 [Documentation index](../README.md)
 
@@ -26,9 +29,8 @@ current Manager assignment and checkout authority; Herdr remains the physical
 worktree lifecycle authority and performs checkout removal without force.
 
 Model-facing worktree-removal requests must not wait for human confirmation.
-They return a confirmation-required outcome without initiating removal. Actual
-removal is performed only through an explicitly confirmed human action, after
-fresh validation of the exact current target.
+They register ephemeral pending intent unless a human has preauthorized the
+exact repository; removal always revalidates the exact current target.
 
 After authoritative checkout removal, project assignments and pending project
 messages continue to retire under [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md).

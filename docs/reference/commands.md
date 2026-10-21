@@ -274,6 +274,15 @@ An active Manager can remove an assigned project checkout with:
 /manager remove <branch>
 ```
 
+Use `/manager remove` without a branch to review a pending model-requested
+removal. Approval still uses the exact typed word `remove` unless the current
+repository has been explicitly preauthorized by a human.
+
+An active Manager can enable or disable the repository-scoped opt-in with
+`/manager remove-preapproval on` or `/manager remove-preapproval off`. Enabling
+requires typing `enable` in a confirmation naming the verified repository;
+disabling takes effect immediately. The opt-in waives only the extra prompt.
+
 This command does not activate Manager mode. It accepts a manually typed branch;
 completion suggests `leave` or `remove`, then branches assigned to the active
 Manager's repository after `remove`. Suggestions are advisory and are not
@@ -291,9 +300,10 @@ word `remove`. Escape, empty input, or any other response cancels. No operation
 lock is held while waiting; authority, target identity, and safety are checked
 again under the existing locks after confirmation.
 
-The model-facing `remove_worktree` tool only validates and returns instructions
-for these independent human actions; it never opens this prompt or queues a
-removal. See [Staff tools](staff.md#remove_worktree) for the result contract.
+The model-facing `remove_worktree` tool returns immediately with a pending
+approval request unless the repository has human preauthorization, in which
+case it invokes the same guarded operation without another confirmation.
+See [Staff tools](staff.md#remove_worktree) for the result contract.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` refreshes its validated profile after the current turn

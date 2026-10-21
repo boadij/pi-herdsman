@@ -2627,6 +2627,7 @@ const writePeerLeadRecord = (runtime: any, record: any) =>
   });
 const {
   readConfig,
+  setWorktreeRemovalPreapproved,
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
@@ -5327,6 +5328,60 @@ test("Manager removal requests leave running and closed worktrees untouched", as
   }
 });
 
+test("Manager removal requests are actionable, nonblocking, and consumed once", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  fixture.ctx.ui.input = async () => {
+    throw new Error("request must not prompt");
+  };
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  const first = await request();
+  const duplicate = await request();
+  assert.equal(first.details.pending, true);
+  assert.equal(duplicate.details.pending, true);
+  assert.equal(fixture.runtime.listPendingRemovals().length, 1);
+  assert.equal(fixture.confirmationCount(), 0);
+  fixture.ctx.ui.input = async () => "remove";
+  const approved = await fixture.runtime.approvePendingRemoval(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+  assert.equal(approved.details.checkout_removed, true);
+  assert.equal(fixture.runtime.listPendingRemovals().length, 0);
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval("feat/remove-test", fixture.ctx),
+    /no longer available/,
+  );
+  assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("Manager preauthorization lets explicit model requests use the guarded remover", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const repoKey = fixture.assignment().repoKey;
+  setWorktreeRemovalPreapproved(repoKey, true);
+  t.after(() => setWorktreeRemovalPreapproved(repoKey, false));
+  fixture.ctx.ui.input = async () => {
+    throw new Error("preauthorized removal must not prompt");
+  };
+  const result = await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.forced, false);
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
 test("Manager removal rejects a replaced Manager after confirmation", async (t) => {
   const fixture = await managerRemovalFixture(t, {
     replaceManagerAfterConfirmation: true,
@@ -6530,6 +6585,7 @@ async function managerDelegateAssignmentTest(
       action: "remove",
       branch: assignment.branch,
       confirmation_required: true,
+      pending: true,
     });
     assert.equal(confirmationPrompts, 0);
     assert.equal(
