@@ -1593,6 +1593,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
     managerExternalRemoval: false,
+    managerRemovalAcceptance: false,
   });
   for (const scenario of [
     "core",
@@ -1611,6 +1612,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
       managerExternalRemoval: false,
+      managerRemovalAcceptance: false,
     },
   );
   assert.deepEqual(
@@ -1622,6 +1624,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
       managerExternalRemoval: false,
+      managerRemovalAcceptance: false,
     },
   );
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
@@ -1634,6 +1637,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
     managerExternalRemoval: false,
+    managerRemovalAcceptance: false,
   });
   assert.throws(
     () => parseSmokeArgs(["core", "--simulated", "--model", "p/m"]),
@@ -2760,6 +2764,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
       managerReadyTimeoutMs: 45_000,
       managerRecoveryDiagnostics: true,
       managerExternalRemoval: false,
+      managerRemovalAcceptance: false,
     },
   );
   for (const timeout of ["0", "-1", "1.5", "600001", "many"])
@@ -2777,6 +2782,15 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
   );
   assert.throws(
     () => parseSmokeArgs(["core", "--manager-recovery-diagnostics"]),
+    /only valid for manager-recovery/,
+  );
+  assert.equal(
+    parseSmokeArgs(["manager-recovery", "--manager-removal-acceptance"])
+      .managerRemovalAcceptance,
+    true,
+  );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-removal-acceptance"]),
     /only valid for manager-recovery/,
   );
 });
