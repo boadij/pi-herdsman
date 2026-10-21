@@ -11973,3 +11973,149 @@ test("root assignments reject a generation owned by a different session", async 
     false,
   );
 });
+
+test("root delegation rejection preserves safe authorization state across deterministic lifecycle phases", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const context = fakeContext() as any;
+  const agentDefinition = {
+    name: "implementer",
+    path: "/tmp/implementer.md",
+    frontmatter: {},
+    body: "",
+  };
+  let lifecycle: "unavailable" | "assigned" | "retired" = "unavailable";
+  let verificationInProgress = true;
+  let role: "lead" | "manager" | "chief" = "lead";
+  let profileValid = true;
+  const rootPolicy = () =>
+    role === "lead" && lifecycle === "assigned"
+      ? ("all" as const)
+      : new Set(role === "manager" || role === "chief" ? [] : ["other"]);
+  const denied = async () => {
+    const pi = fakePi();
+    const controller = createAgentController(
+      pi.pi as never,
+      {
+        scope: { kind: "root" },
+        rootDelegationPolicy: rootPolicy,
+        rootDelegationGeneration: () => ({
+          sessionId: context.sessionManager.getSessionId(),
+          roleGeneration: 7,
+          role,
+          authority: undefined,
+          profile: undefined,
+        }),
+        rootDelegationDiagnostic: () => ({
+          effectiveRole: role,
+          verifiedRole: profileValid ? role : null,
+          sessionKind: "managed",
+          managedAssignmentLifecycle: lifecycle,
+          assignmentVerificationInProgress: verificationInProgress,
+          supervisoryProfileValid:
+            role === "manager" || role === "chief" ? profileValid : null,
+          supervisoryLeaseValid:
+            role === "manager" || role === "chief" ? profileValid : null,
+        }),
+        build: HERDSMAN_BUILD,
+        extensionPath: "test",
+        isContextRetired: () => false,
+        snapshotDependencies: {
+          runtimeForLabel: () => undefined,
+          readLeadSessionIds: () => [],
+          staleAfterMs: 60_000,
+        },
+        persistedTranscriptReady: () => false,
+        agentDefinitions: async () => [agentDefinition],
+        readTranscript: () => ({ transcript: "", truncated: false }),
+        workspaceId: () => WORKSPACE,
+        sendResultMessage: () => undefined,
+        sendAskMessage: () => undefined,
+        sessionRetired: () => false,
+        appendError: () => undefined,
+        onChanged: () => undefined,
+        onWorkChanged: () => undefined,
+        reportWatcherError: () => undefined,
+      } as any,
+    );
+    await assert.rejects(
+      controller.action(context, {
+        action: "delegate",
+        definition: "implementer",
+        task: "disposable authorization probe",
+      } as any),
+      (error: unknown) => {
+        assert.ok(error instanceof OperationError);
+        assert.equal(error.detail.category, "invalid_request");
+        assert.equal(
+          error.detail.message,
+          "Agent definition implementer is not allowed",
+        );
+        const diagnostic = error.detail.details?.authorizationDiagnostic as
+          Record<string, unknown> | undefined;
+        assert.ok(diagnostic);
+        assert.equal(
+          Number.isNaN(Date.parse(String(diagnostic.timestamp))),
+          false,
+        );
+        assert.equal(
+          diagnostic.controllerSessionId,
+          context.sessionManager.getSessionId(),
+        );
+        assert.equal(diagnostic.requestedDefinition, "implementer");
+        assert.equal(diagnostic.policyType, "allowlist");
+        assert.equal(diagnostic.requestedDefinitionPermitted, false);
+        assert.equal(diagnostic.role, role);
+        assert.equal(diagnostic.sessionKind, "managed");
+        assert.equal(diagnostic.managedAssignmentLifecycle, lifecycle);
+        assert.equal(
+          diagnostic.assignmentVerificationInProgress,
+          verificationInProgress,
+        );
+        if (role !== "lead") {
+          assert.equal(diagnostic.supervisoryProfileValid, profileValid);
+          assert.equal(diagnostic.supervisoryLeaseValid, profileValid);
+        }
+        assert.equal(error.detail.rollbackOccurred, false);
+        return true;
+      },
+    );
+    return controller;
+  };
+
+  // Model currentProjectAssignment's synchronous revoke before its first await.
+  let finishVerification!: () => void;
+  const verification = new Promise<void>((resolve) => {
+    finishVerification = resolve;
+  }).then(() => {
+    lifecycle = "assigned";
+    verificationInProgress = false;
+  });
+  const pendingController = await denied();
+  const listing = await pendingController.action(context, {
+    action: "list",
+  } as any);
+  assert.equal(listing.ok, true);
+  assert.equal(
+    lifecycle,
+    "unavailable",
+    "list does not itself verify assignment",
+  );
+  finishVerification();
+  await verification;
+  assert.equal(rootPolicy(), "all", "verified Lead policy permits delegation");
+  lifecycle = "retired";
+  await denied();
+  lifecycle = "unavailable";
+  verificationInProgress = false;
+  await denied();
+
+  for (const supervisoryRole of ["manager", "chief"] as const) {
+    role = supervisoryRole;
+    lifecycle = "assigned";
+    verificationInProgress = false;
+    profileValid = false;
+    await denied();
+    profileValid = true;
+    await denied(); // valid profile, but its allow-list excludes this definition
+  }
+});

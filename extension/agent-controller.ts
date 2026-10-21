@@ -3401,6 +3401,8 @@ export type AgentControllerOptions = {
   rootDelegationPolicy?(): RootDelegationPolicy;
   /** Stable authority/profile generation captured across assignment preflight. */
   rootDelegationGeneration?(): RootDelegationGeneration;
+  /** Safe rejection-only state for diagnosing a denied root delegation. */
+  rootDelegationDiagnostic?(): Record<string, unknown>;
   projectEvidence?(ctx: ExtensionContext): Promise<
     | {
         assignment: import("./supervision.ts").ProjectAssignment;
@@ -6524,12 +6526,34 @@ export function createAgentController(
               "Root delegation authority is unavailable",
               p.action,
             );
-          if (!permitsRootDelegation(policy, agentDefinition))
+          if (!permitsRootDelegation(policy, agentDefinition)) {
+            let authorizationDiagnostic: Record<string, unknown> = {};
+            try {
+              authorizationDiagnostic =
+                options.rootDelegationDiagnostic?.() ?? {};
+            } catch {
+              // Diagnostics must not alter the public authorization failure.
+            }
             fail(
               "invalid_request",
               `Agent definition ${agentDefinition} is not allowed`,
               p.action,
+              {
+                details: {
+                  authorizationDiagnostic: {
+                    timestamp: new Date().toISOString(),
+                    controllerSessionId: initiatingSessionId,
+                    requestedDefinition: agentDefinition,
+                    policyType: policy === "all" ? "all" : "allowlist",
+                    requestedDefinitionPermitted: false,
+                    role: initiatingRootGeneration?.role,
+                    roleGeneration: initiatingRootGeneration?.roleGeneration,
+                    ...authorizationDiagnostic,
+                  },
+                },
+              },
             );
+          }
         }
       };
       assertRootDelegationAllowed();

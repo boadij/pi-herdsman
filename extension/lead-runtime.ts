@@ -2597,6 +2597,7 @@ export function registerLeadRuntime(
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
   let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
+  let assignmentVerificationCount = 0;
   let leadExecutionPending = false;
   let startupTools: string[] = [];
   let startupWasManaged = false;
@@ -3575,6 +3576,29 @@ export function registerLeadRuntime(
     },
     rootDelegationPolicy,
     rootDelegationGeneration,
+    rootDelegationDiagnostic: () => {
+      const role = activeLeadRole(leadRuntime);
+      const verifiedRole = verifiedActiveRootRole();
+      const supervisory =
+        leadRuntime.leadContext && (role === "manager" || role === "chief")
+          ? currentSupervisoryProfile(leadRuntime.leadContext, role)
+          : undefined;
+      return {
+        effectiveRole: role,
+        verifiedRole: verifiedRole ?? null,
+        sessionKind: sessionKind?.kind ?? "unavailable",
+        managedAssignmentLifecycle:
+          sessionKind?.kind === "managed" ? managedLifecycle : null,
+        assignmentVerificationInProgress: assignmentVerificationCount > 0,
+        supervisoryProfileValid: supervisory?.valid ?? null,
+        supervisoryLeaseValid:
+          role === "manager"
+            ? verifiedRole === "manager"
+            : role === "chief"
+              ? verifiedRole === "chief"
+              : null,
+      };
+    },
     build: options.build,
     onChanged: () => {
       statusRuntime.requestRefresh();
@@ -4102,7 +4126,13 @@ export function registerLeadRuntime(
       managedLifecycle = "retired";
       return undefined;
     }
-    const scope = await roleTransitions.currentWorktreeScope(ctx);
+    assignmentVerificationCount++;
+    let scope: WorktreeScope | undefined;
+    try {
+      scope = await roleTransitions.currentWorktreeScope(ctx);
+    } finally {
+      assignmentVerificationCount--;
+    }
     if (
       sessionKind !== identity ||
       ctx.sessionManager.getSessionId() !== identity.sessionId
