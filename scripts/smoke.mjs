@@ -2203,6 +2203,279 @@ export function rootDelegationDiagnostics(contents) {
   };
 }
 
+function coreDelegationEdge(contents, label, ownerSessionId) {
+  const entries = sessionEntries(contents);
+  const calls = entries.flatMap((entry, index) =>
+    entry.type === "message" && entry.message?.role === "assistant"
+      ? (entry.message.content ?? [])
+          .filter(
+            (part) =>
+              part.type === "toolCall" &&
+              part.name === "delegate_agent" &&
+              part.arguments?.label === label,
+          )
+          .map((call) => ({ call, index }))
+      : [],
+  );
+  if (calls.length !== 1)
+    return {
+      delegation: calls.length ? "ambiguous" : "not_observed",
+      session: "unknown",
+      terminalResult: "unknown",
+      resultDelivered: "unknown",
+      identity: null,
+    };
+  const { call, index } = calls[0];
+  const matches = entries.filter(
+    (entry, i) =>
+      i > index &&
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "delegate_agent" &&
+      entry.message.toolCallId === call.id,
+  );
+  if (matches.length !== 1)
+    return {
+      delegation: matches.length ? "ambiguous" : "unknown",
+      session: "unknown",
+      terminalResult: "unknown",
+      resultDelivered: "unknown",
+      identity: null,
+    };
+  const result = matches[0].message;
+  if (result.isError !== false || result.details?.ok === false)
+    return {
+      delegation:
+        result.isError === true || result.details?.ok === false
+          ? "rejected"
+          : "unknown",
+      session: "unknown",
+      terminalResult: "unknown",
+      resultDelivered: "unknown",
+      identity: null,
+    };
+  const text = messageText(result.content);
+  const piSessionId = text.match(/^Session: ([^\r\n]+)$/m)?.[1];
+  const requestId = text.match(/^Request: ([^\r\n]+)$/m)?.[1];
+  if (!piSessionId || !requestId)
+    return {
+      delegation: "accepted",
+      session: "unknown",
+      terminalResult: "unknown",
+      resultDelivered: "unknown",
+      identity: null,
+    };
+  return {
+    delegation: "accepted",
+    session: "identified",
+    terminalResult: "unknown",
+    resultDelivered: "unknown",
+    identity: { piSessionId, requestId },
+  };
+}
+
+async function coreNestedDelegationDiagnostics(ctx, rootContents) {
+  const ownerId = sessionEntries(rootContents).find(
+    (entry) => entry.type === "session",
+  )?.id;
+  const inspect = async (contents, label, ownerSessionId) => {
+    const edge = coreDelegationEdge(contents, label, ownerSessionId);
+    if (!edge.identity) return { edge, child: null };
+    let child;
+    try {
+      child = await exactIsolatedSession(ctx, edge.identity.piSessionId);
+    } catch {
+      return {
+        edge: { ...edge, session: "observation_failed" },
+        child: null,
+      };
+    }
+    edge.session = child ? "observed" : "not_observed";
+    edge.terminalResult = "unknown";
+    try {
+      const root = join(
+        ctx.paths.piAgent,
+        "pi-herdsman",
+        "runtime",
+        "mailboxes-v5",
+      );
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          edge.identity.requestId,
+        )
+      ) {
+        edge.terminalResult = "observation_failed";
+        return { edge, child };
+      }
+      const dirs = await readdir(root, { withFileTypes: true });
+      if (dirs.length > 256) throw new Error("mailbox scan exceeded its bound");
+      const matches = [];
+      const mailboxIdentities = [];
+      for (const dir of dirs.slice(0, 256)) {
+        if (!dir.isDirectory() || !/^[0-9a-f]{32}$/.test(dir.name)) continue;
+        const mailbox = join(root, dir.name);
+        let state;
+        try {
+          const path = join(mailbox, "state.json");
+          const stat = await lstat(path);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
+            continue;
+          state = JSON.parse(await readFile(path, "utf8"));
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          continue;
+        }
+        if (
+          state.piSessionId !== edge.identity.piSessionId ||
+          state.ownerSessionId !== ownerSessionId ||
+          state.agentLabel !== label
+        )
+          continue;
+        mailboxIdentities.push(state);
+        const path = join(mailbox, `result-${edge.identity.requestId}.json`);
+        try {
+          const stat = await lstat(path);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
+            throw new Error("invalid mailbox result");
+          const result = JSON.parse(await readFile(path, "utf8"));
+          if (
+            result.requestId === edge.identity.requestId &&
+            result.runId === state.runId &&
+            result.workspaceId === state.workspaceId &&
+            result.ownerSessionId === ownerSessionId &&
+            result.agentLabel === label &&
+            result.paneId === state.paneId
+          )
+            matches.push(result);
+          else matches.push(null);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      }
+      if (matches.length === 1 && matches[0]) edge.terminalResult = "published";
+      else if (matches.length > 1 || matches.includes(null))
+        edge.terminalResult = "ambiguous";
+      else edge.terminalResult = "not_observed";
+      if (mailboxIdentities.length === 1) {
+        const [state] = mailboxIdentities;
+        edge.identity = {
+          ...edge.identity,
+          runId: state.runId,
+          workspaceId: state.workspaceId,
+          agentLabel: state.agentLabel,
+          paneId: state.paneId,
+          agentDefinition: state.agentDefinition,
+        };
+      } else if (mailboxIdentities.length > 1) {
+        edge.terminalResult = "ambiguous";
+      }
+    } catch {
+      edge.terminalResult = "observation_failed";
+    }
+    return { edge, child };
+  };
+  const implementer = await inspect(
+    rootContents,
+    "smoke-core-implementer",
+    ownerId,
+  );
+  const scout = implementer.child
+    ? await inspect(
+        implementer.child.contents,
+        "smoke-core-scout",
+        implementer.child.id,
+      )
+    : { edge: null, child: null };
+  const deliver = (parentContents, edge) => {
+    if (!edge?.identity) return "unknown";
+    const entries = sessionEntries(parentContents);
+    const ownerSessionId = entries.find(
+      (entry) => entry.type === "session",
+    )?.id;
+    const receipts = entries.filter(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-agent-result" &&
+        entry.details?.requestId === edge.identity.requestId &&
+        entry.details?.piSessionId === edge.identity.piSessionId &&
+        entry.details?.ownerSessionId === ownerSessionId &&
+        (!edge.identity.runId ||
+          entry.details?.runId === edge.identity.runId) &&
+        (!edge.identity.workspaceId ||
+          entry.details?.workspaceId === edge.identity.workspaceId) &&
+        (!edge.identity.agentLabel ||
+          entry.details?.agentLabel === edge.identity.agentLabel) &&
+        (!edge.identity.paneId ||
+          entry.details?.paneId === edge.identity.paneId) &&
+        (!edge.identity.agentDefinition ||
+          entry.details?.agentDefinition === edge.identity.agentDefinition),
+    );
+    return receipts.length === 1
+      ? "observed"
+      : receipts.length
+        ? "ambiguous"
+        : "not_observed";
+  };
+  const rootReceipt = deliver(rootContents, implementer.edge);
+  const implementerReceipt = implementer.child
+    ? deliver(implementer.child.contents, scout.edge)
+    : "unknown";
+  const completionMarker = Boolean(
+    assistantResultForSession(
+      { contents: rootContents },
+      ctx.initialPrompt,
+      `PI_HERDSMAN_SMOKE_OK ${ctx.expectedPackage}`,
+    ),
+  );
+  let firstUnverifiedBoundary = "none_observed";
+  if (implementer.edge.delegation !== "accepted")
+    firstUnverifiedBoundary = "root_to_implementer";
+  else if (rootReceipt === "observed") {
+    if (!completionMarker) firstUnverifiedBoundary = "root_completion";
+  } else if (implementer.edge.terminalResult === "published")
+    firstUnverifiedBoundary = "implementer_result_delivery";
+  else if (implementer.edge.session !== "observed")
+    firstUnverifiedBoundary = "implementer_session";
+  else if (scout.edge?.delegation !== "accepted")
+    firstUnverifiedBoundary = "implementer_to_scout";
+  else if (scout.edge.terminalResult === "published")
+    firstUnverifiedBoundary = "scout_result_delivery";
+  else if (scout.edge.session !== "observed")
+    firstUnverifiedBoundary = "scout_session";
+  else if (implementerReceipt !== "observed")
+    firstUnverifiedBoundary = "scout_result_delivery";
+  else firstUnverifiedBoundary = "implementer_result_delivery";
+  return {
+    rootToImplementer: {
+      delegation: implementer.edge.delegation,
+      session: implementer.edge.session,
+      terminalResult:
+        rootReceipt === "observed"
+          ? "delivered"
+          : implementer.edge.terminalResult,
+      resultDelivered: rootReceipt,
+    },
+    rootCompletionMarker: completionMarker,
+    implementerToScout: scout.edge
+      ? {
+          delegation: scout.edge.delegation,
+          session: scout.edge.session,
+          terminalResult:
+            implementerReceipt === "observed"
+              ? "delivered"
+              : scout.edge.terminalResult,
+          resultDelivered: implementerReceipt,
+        }
+      : {
+          delegation: "unknown",
+          session: "unknown",
+          terminalResult: "unknown",
+          resultDelivered: "unknown",
+        },
+    firstUnverifiedBoundary,
+  };
+}
+
 function summarizeSession(contents) {
   const entries = sessionEntries(contents);
   const header = entries.find((entry) => entry.type === "session");
@@ -7821,6 +8094,21 @@ export async function collectDiagnostics(
   } catch (error) {
     diagnostics.rootSession = { error: error.message };
   }
+  if (ctx.scenario === "core") {
+    try {
+      diagnostics.coreDelegation =
+        rootSession.status === "fulfilled" && rootSession.value
+          ? await coreNestedDelegationDiagnostics(
+              ctx,
+              rootSession.value.contents,
+            )
+          : { firstUnverifiedBoundary: "root_session_unavailable" };
+    } catch {
+      diagnostics.coreDelegation = {
+        firstUnverifiedBoundary: "observation_failed",
+      };
+    }
+  }
   if (ctx.scenario === "supervisor-agent") {
     const session =
       rootSession.status === "fulfilled" ? rootSession.value : null;
@@ -8139,6 +8427,9 @@ export async function collectDiagnostics(
               ? rootDelegationDiagnostics(rootSession.value.contents)
               : null,
         }
+      : {}),
+    ...(diagnostics.coreDelegation
+      ? { coreDelegation: diagnostics.coreDelegation }
       : {}),
     candidateProcessesObserved: Array.isArray(diagnostics.processes)
       ? diagnostics.processes.filter((record) => record.processMatch).length

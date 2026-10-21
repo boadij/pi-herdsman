@@ -316,6 +316,136 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
   }
 });
 
+test("core failure diagnostics correlate accepted delegation without exposing identities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "smoke-core-diagnostics-"));
+  const piSessions = join(root, "sessions");
+  const piAgent = join(root, "agent");
+  await Promise.all([mkdir(piSessions), mkdir(piAgent)]);
+  await mkdir(join(piAgent, "pi-herdsman", "runtime", "mailboxes-v5"), {
+    recursive: true,
+  });
+  const entries = [
+    { type: "session", id: "private-owner-session" },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "delegate_agent",
+            id: "private-call-id",
+            arguments: {
+              label: "smoke-core-implementer",
+              task: "PRIVATE_TASK",
+            },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        toolCallId: "private-call-id",
+        isError: false,
+        content:
+          "Session: private-child-session\nRequest: 00000000-0000-4000-8000-000000000001",
+      },
+    },
+  ];
+  try {
+    for (const [receipt, expectedDelivery] of [
+      [null, "not_observed"],
+      [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            requestId: "00000000-0000-4000-8000-000000000001",
+            piSessionId: "private-child-session",
+            ownerSessionId: "private-owner-session",
+          },
+          content: "PRIVATE_RESULT",
+        },
+        "observed",
+      ],
+      [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            requestId: "foreign-request-id",
+            piSessionId: "private-child-session",
+            ownerSessionId: "private-owner-session",
+          },
+          content: "PRIVATE_RESULT",
+        },
+        "not_observed",
+      ],
+    ]) {
+      const projection = await collectDiagnostics(
+        {
+          scenario: "core",
+          stage: "core-delegation",
+          paths: { piSessions, piAgent },
+          sessionName: "isolated",
+          rootPaneId: "root",
+        },
+        { hostPaneId: "host" },
+        null,
+        {
+          execute: async () => ({ stdout: "" }),
+          observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+          snapshot: async () => ({
+            path: "private-path",
+            status: "saved",
+            contents: [
+              ...entries.map((entry) => JSON.stringify(entry)),
+              ...(receipt ? [JSON.stringify(receipt)] : []),
+            ].join("\n"),
+          }),
+        },
+      );
+      assert.deepEqual(projection.coreDelegation, {
+        rootToImplementer: {
+          delegation: "accepted",
+          session: "not_observed",
+          terminalResult:
+            expectedDelivery === "observed" ? "delivered" : "not_observed",
+          resultDelivered: expectedDelivery,
+        },
+        implementerToScout: {
+          delegation: "unknown",
+          session: "unknown",
+          terminalResult: "unknown",
+          resultDelivered: "unknown",
+        },
+        rootCompletionMarker: false,
+        firstUnverifiedBoundary:
+          expectedDelivery === "observed"
+            ? "root_completion"
+            : "implementer_session",
+      });
+      assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+      const artifact = await preserveFailureEvidence({
+        diagnostics: projection,
+      });
+      try {
+        assert.doesNotMatch(
+          await readFile(artifact, "utf8"),
+          /private|PRIVATE/u,
+        );
+      } finally {
+        await rm(dirname(artifact), { recursive: true, force: true });
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failure result projection allowlists only bounded nonsensitive fields", () => {
   const result = sanitizedFailureEvidence(
     {
