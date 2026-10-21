@@ -4,8 +4,12 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentTools,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
+
+const MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED =
+  "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED";
 
 const modelIds = [
   "core",
@@ -150,6 +154,12 @@ function call(name, arguments_) {
   return fauxAssistantMessage(fauxToolCall(name, arguments_), {
     stopReason: "toolUse",
   });
+}
+
+export function managerHandoffSupervisorToolAvailable(messages) {
+  return getCurrentTools(messages).some(
+    (tool) => tool.name === "message_supervisor",
+  );
 }
 
 function waitForResult(message) {
@@ -384,6 +394,8 @@ export function decide(model, context) {
           ?.message === "MANAGER_HANDOFF_READY"
       )
         return fauxAssistantMessage("MANAGER_HANDOFF_READY");
+      if (!managerHandoffSupervisorToolAvailable(messages))
+        throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
       return call("message_supervisor", { message: "MANAGER_HANDOFF_READY" });
     }
     const marker = prompt.match(/MANAGER_HANDOFF_PENDING_[0-9a-f-]+/)?.[0];
@@ -393,6 +405,8 @@ export function decide(model, context) {
         ?.message === marker
     )
       return fauxAssistantMessage("MANAGER_HANDOFF_SENT");
+    if (!managerHandoffSupervisorToolAvailable(messages))
+      throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
     return call("message_supervisor", { message: marker });
   }
   if (model === "manager-handoff") {
@@ -647,7 +661,26 @@ export default function install(pi) {
           "Assigned Lead's initial request omitted session-matched agent definitions",
         );
     }
-    const answer = decide(model.id, context);
+    let answer;
+    try {
+      answer = decide(model.id, context);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED
+      ) {
+        appendFileSync(
+          join(
+            process.env.PI_CODING_AGENT_DIR,
+            "pi-herdsman",
+            "runtime",
+            "smoke-faux-attempts.jsonl",
+          ),
+          `${JSON.stringify({ model: model.id, supervisorToolAvailability: "not_offered" })}\n`,
+        );
+      }
+      throw error;
+    }
     if (
       model.id === "continuation" &&
       answer.stopReason === "stop" &&

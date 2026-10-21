@@ -3,6 +3,10 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
+  decide as decideSmokeFaux,
+  managerHandoffSupervisorToolAvailable,
+} from "../scripts/smoke-faux.mjs";
+import {
   mkdir,
   mkdtemp,
   readFile,
@@ -1363,6 +1367,53 @@ test("failed Agent retirement requires absent process, pane, registration, and m
     agentRetirementConverged({ ...converged, mailboxPending: true }),
     false,
   );
+});
+
+test("manager-handoff faux Lead only calls offered message_supervisor tool", () => {
+  const tool = {
+    name: "message_supervisor",
+    description: "Send a message to the verified supervisor.",
+    parameters: {
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+    },
+  };
+  const system = (toolsAdded?: typeof tool[], toolsRemoved?: { name: string }[]) => ({
+    role: "system" as const,
+    content: "",
+    ...(toolsAdded ? { toolsAdded } : {}),
+    ...(toolsRemoved ? { toolsRemoved } : {}),
+    timestamp: 1,
+  });
+  const prompt = {
+    role: "user" as const,
+    content:
+      'Call message_supervisor exactly once with this exact text: MANAGER_HANDOFF_READY. Then end the turn.',
+    timestamp: 2,
+  };
+  const availableMessages = [system([tool]), prompt];
+  assert.equal(managerHandoffSupervisorToolAvailable(availableMessages), true);
+  const available = decideSmokeFaux("manager-handoff-lead", {
+    messages: availableMessages,
+  });
+  assert.equal(available.content[0]?.type, "toolCall");
+  assert.equal(
+    available.content[0]?.type === "toolCall" && available.content[0].name,
+    "message_supervisor",
+  );
+
+  const unavailableMessages = [system(), prompt];
+  assert.equal(managerHandoffSupervisorToolAvailable(unavailableMessages), false);
+  assert.throws(
+    () =>
+      decideSmokeFaux("manager-handoff-lead", {
+        messages: unavailableMessages,
+      }),
+    { message: "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED" },
+  );
+  const removedMessages = [system([tool]), system(undefined, [{ name: tool.name }]), prompt];
+  assert.equal(managerHandoffSupervisorToolAvailable(removedMessages), false);
 });
 
 test("Manager assignment diagnostics are bounded and reject a mismatched branch identity", () => {
