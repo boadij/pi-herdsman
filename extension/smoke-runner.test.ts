@@ -446,6 +446,136 @@ test("core failure diagnostics correlate accepted delegation without exposing id
   }
 });
 
+test("core failure diagnostics distinguish nested result publication from delivery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "smoke-core-nested-diagnostics-"));
+  const piSessions = join(root, "sessions");
+  const mailboxRoot = join(
+    root,
+    "agent",
+    "pi-herdsman",
+    "runtime",
+    "mailboxes-v5",
+  );
+  await Promise.all([
+    mkdir(piSessions),
+    mkdir(mailboxRoot, { recursive: true }),
+  ]);
+  const requestId = "00000000-0000-4000-8000-000000000002";
+  const entries = (owner, label, child, request) => [
+    { type: "session", id: owner },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "delegate_agent",
+            id: `call-${label}`,
+            arguments: { label, task: "PRIVATE_TASK" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        toolCallId: `call-${label}`,
+        isError: false,
+        content: `Session: ${child}\nRequest: ${request}`,
+      },
+    },
+  ];
+  try {
+    const rootEntries = entries(
+      "private-root",
+      "smoke-core-implementer",
+      "private-implementer",
+      "00000000-0000-4000-8000-000000000003",
+    );
+    const implementerEntries = entries(
+      "private-implementer",
+      "smoke-core-scout",
+      "private-scout",
+      requestId,
+    );
+    const scoutEntries = [{ type: "session", id: "private-scout" }];
+    await Promise.all([
+      writeFile(
+        join(piSessions, "implementer.jsonl"),
+        implementerEntries.map((entry) => JSON.stringify(entry)).join("\n"),
+      ),
+      writeFile(
+        join(piSessions, "scout.jsonl"),
+        scoutEntries.map((entry) => JSON.stringify(entry)).join("\n"),
+      ),
+    ]);
+    const mailbox = join(mailboxRoot, "a".repeat(32));
+    await mkdir(mailbox);
+    await writeFile(
+      join(mailbox, "state.json"),
+      JSON.stringify({
+        piSessionId: "private-scout",
+        ownerSessionId: "private-implementer",
+        agentLabel: "smoke-core-scout",
+        runId: "private-run-id",
+        workspaceId: "private-workspace-id",
+        paneId: "private-pane-id",
+        agentDefinition: "scout",
+      }),
+    );
+    await writeFile(
+      join(mailbox, `result-${requestId}.json`),
+      JSON.stringify({
+        requestId,
+        runId: "private-run-id",
+        ownerSessionId: "private-implementer",
+        workspaceId: "private-workspace-id",
+        agentLabel: "smoke-core-scout",
+        paneId: "private-pane-id",
+        status: "completed",
+      }),
+    );
+    const projection = await collectDiagnostics(
+      {
+        scenario: "core",
+        stage: "core-delegation",
+        paths: { piSessions, piAgent: join(root, "agent") },
+        sessionName: "isolated",
+        rootPaneId: "root",
+      },
+      { hostPaneId: "host" },
+      null,
+      {
+        execute: async () => ({ stdout: "" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => ({
+          path: "private-root-path",
+          status: "saved",
+          contents: rootEntries
+            .map((entry) => JSON.stringify(entry))
+            .join("\n"),
+        }),
+      },
+    );
+    assert.deepEqual(projection.coreDelegation.implementerToScout, {
+      delegation: "accepted",
+      session: "observed",
+      terminalResult: "published",
+      resultDelivered: "not_observed",
+    });
+    assert.equal(
+      projection.coreDelegation.firstUnverifiedBoundary,
+      "scout_result_delivery",
+    );
+    assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failure result projection allowlists only bounded nonsensitive fields", () => {
   const result = sanitizedFailureEvidence(
     {
