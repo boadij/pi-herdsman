@@ -2108,6 +2108,20 @@ export function resolveAssignmentSession(
       let historicalTerminal: Record<string, unknown> | undefined;
       const historicalClose = closedAssignmentReceipt(entries, ownerId, child);
       if (historicalClose) {
+        if (
+          entries
+            .map(agentResultDetails)
+            .some(
+              (proof) =>
+                proof?.requestId === historicalClose.request_id &&
+                proof.piSessionId === child.id,
+            )
+        )
+          fail(
+            "invalid_request",
+            "Conflicting terminal and closure provenance",
+            "continue",
+          );
         try {
           statSync(
             agentMailboxPath(
@@ -2347,16 +2361,27 @@ export function resolveAssignmentSession(
           identity.label !== record.agentLabel ||
           record.requestId !== currentRequestId ||
           record.agentLabel !==
-            (currentState?.agentLabel ?? historicalTerminal?.agentLabel) ||
+            (currentState?.agentLabel ??
+              historicalTerminal?.agentLabel ??
+              historicalClose?.agent) ||
           (record.projectAssignmentId !== currentState?.projectAssignmentId &&
             currentState !== undefined) ||
-          record.runId !== (currentState?.runId ?? historicalTerminal?.runId) ||
+          record.runId !==
+            (currentState?.runId ??
+              historicalTerminal?.runId ??
+              historicalClose?.run_id) ||
           record.ownerSessionId !==
             (currentState?.ownerSessionId ??
-              historicalTerminal?.ownerSessionId) ||
+              historicalTerminal?.ownerSessionId ??
+              historicalClose?.owner_session_id) ||
           record.workspaceId !==
-            (currentState?.workspaceId ?? historicalTerminal?.workspaceId) ||
-          record.paneId !== (currentState?.paneId ?? historicalTerminal?.paneId)
+            (currentState?.workspaceId ??
+              historicalTerminal?.workspaceId ??
+              historicalClose?.workspace_id) ||
+          record.paneId !==
+            (currentState?.paneId ??
+              historicalTerminal?.paneId ??
+              historicalClose?.pane_id)
         )
           fail(
             "invalid_request",
@@ -4679,13 +4704,15 @@ export function createAgentController(
       throw failure;
     }
     const ownerSessionId = context.sessionManager.getSessionId();
+    const closedRequestId =
+      state.activeRequestId ?? state.resultError?.requestId;
     const closedAssignment =
       !warnings.size &&
       state.ownerSessionId === ownerSessionId &&
       !!state.piSessionId &&
       !!state.piSessionFile &&
-      !!state.activeRequestId &&
-      validId(state.activeRequestId) &&
+      !!closedRequestId &&
+      validId(closedRequestId) &&
       validId(state.runId) &&
       context.sessionManager.getEntries().some((entry: any) => {
         const message = entry?.message;
@@ -4704,7 +4731,7 @@ export function createAgentController(
           details.owner_session_id === ownerSessionId &&
           details.session_id === state.piSessionId &&
           details.session_path === state.piSessionFile &&
-          details.request_id === state.activeRequestId &&
+          details.request_id === closedRequestId &&
           details.agent === state.agentLabel &&
           details.definition === candidate.agentDefinition
         );
@@ -4714,7 +4741,7 @@ export function createAgentController(
             session_id: state.piSessionId,
             session_path: state.piSessionFile,
             run_id: state.runId,
-            request_id: state.activeRequestId,
+            request_id: closedRequestId,
             agent: state.agentLabel,
             definition: candidate.agentDefinition,
             pane_id: state.paneId,

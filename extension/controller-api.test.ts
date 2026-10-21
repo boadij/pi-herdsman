@@ -7569,6 +7569,19 @@ test("owned continuation requires a matching persisted child edge", () => {
       resolveAssignmentSession(fakeContext([accepted, close]), id).id,
       id,
     );
+    const contradictoryTerminal = ownershipResult(id, LEAD_SESSION_ID, {
+      path,
+    });
+    contradictoryTerminal.details.requestId = requestId;
+    contradictoryTerminal.details.piSessionId = id;
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([accepted, close, contradictoryTerminal]),
+          id,
+        ),
+      /Conflicting terminal and closure provenance/,
+    );
     assert.throws(
       () =>
         resolveAssignmentSession(
