@@ -4141,7 +4141,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
                 ? respond({ snapshot: { agents: [], panes: [] } })
                 : respond({}),
   });
-  const ctx = fakeContext() as any;
+  const ctx = fakeContext(pi.entries) as any;
   const notices: string[] = [];
   ctx.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
@@ -4153,6 +4153,39 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       WORKSPACE,
     )?.leaseId;
     assert.ok(leaseId);
+    const pendingRequest = {
+      version: 1,
+      action: "request",
+      id: randomUUID(),
+      sessionId: LEAD_SESSION_ID,
+      branch: "fix/pending-removal",
+      repoKey: "repo-key",
+      assignmentId: "assignment-id",
+      checkoutPath: "/tmp/fix-pending-removal",
+    };
+    pi.pi.appendEntry("pi-herdsman-pending-removal", pendingRequest);
+    const originalAppendForRemoval = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      if (type === "pi-herdsman-pending-removal")
+        throw new Error("injected pending removal invalidation failure");
+      originalAppendForRemoval(type, data);
+    };
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    pi.pi.appendEntry = originalAppendForRemoval;
+    assert.ok(
+      notices.some((message) =>
+        message.includes("injected pending removal invalidation failure"),
+      ),
+    );
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      leaseId,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     const originalAppend = pi.pi.appendEntry;
     for (const failedType of ["pi-herdsman-role", "pi-herdsman-lead-state"]) {
       let failed = false;

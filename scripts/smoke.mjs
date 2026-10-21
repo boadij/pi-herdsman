@@ -6896,7 +6896,8 @@ async function runManagerRecoverySmoke(ctx) {
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
-        entry.message.toolName === "remove_worktree",
+        entry.message.toolName === "remove_worktree" &&
+        entry.message.details?.branch === branch,
     ).length;
     markStage(ctx, "manager-removal-clean-pending-request");
     await promptRoot(authorizedPrompt);
@@ -6918,7 +6919,7 @@ async function runManagerRecoverySmoke(ctx) {
           done:
             results.length === cleanRemovalCount + 1 &&
             results.at(-1)?.message?.details?.pending === true,
-          value: results[0],
+          value: results.at(-1),
           progress: {
             correlatedPendingResult:
               results.at(-1)?.message?.details?.pending === true,
@@ -6957,23 +6958,71 @@ async function runManagerRecoverySmoke(ctx) {
       async () => {
         const session = await rootSnapshot();
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        const executorCompleted =
-          text.includes(`removed checkout for ${branch}`) ||
-          text.includes(`checkout removed for ${branch}`);
-        const checkoutRemoved = (await matchingWorktrees()).length === 0;
+        const results = session
+          ? sessionEntries(session.contents).filter(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message?.role === "toolResult" &&
+                entry.message.toolName === "remove_worktree" &&
+                entry.message.details?.branch === branch,
+            )
+          : [];
+        const result =
+          results.length > cleanRemovalCount ? results.at(-1) : null;
+        const details = result?.message?.details;
+        const resultText = (result?.message?.content ?? [])
+          .map((item) => item.text ?? "")
+          .join(" ");
+        const worktreeCount = (await matchingWorktrees()).length;
+        const executorCompleted = details?.checkout_removed === true;
+        const checkoutRemoved = worktreeCount === 0;
+        const explicitRefusal =
+          details?.checkout_removed === false &&
+          details?.checkout_state === "present" &&
+          /(?:refus|preserv|dirty|occupied|changed before)/iu.test(resultText);
+        const uncertain =
+          details?.checkout_state === "unknown" ||
+          (details?.checkout_removed === false && !explicitRefusal) ||
+          /may still complete removal|removal is unconfirmed/iu.test(
+            resultText,
+          );
         return {
-          done: executorCompleted && checkoutRemoved,
-          value: { executorCompleted, checkoutRemoved },
-          progress: { executorCompleted, checkoutRemoved },
+          done:
+            (executorCompleted && checkoutRemoved) ||
+            explicitRefusal ||
+            uncertain,
+          value: {
+            outcome:
+              executorCompleted && checkoutRemoved
+                ? "verified-success"
+                : explicitRefusal
+                  ? "guarded-refusal"
+                  : "interrupted-or-uncertain",
+            executorCompleted,
+            checkoutRemoved,
+          },
+          progress: {
+            resultObserved: Boolean(result),
+            executorCompleted,
+            checkoutRemoved,
+            explicitRefusal,
+            uncertain,
+          },
           evidence: {
             visible: text.slice(-1200),
+            result: result?.message ?? null,
+            matchingWorktrees: worktreeCount,
             session: session ? summarizeSession(session.contents) : null,
           },
         };
       },
-      { timeoutMs: 30_000, stallMs: MODEL_STALL_MS },
+      // Herdr's guarded remove is bounded at 180s; allow 30s for the final
+      // result and independent worktree inventory to become observable.
+      { timeoutMs: 210_000, stallMs: 210_000 },
     );
-    assert.equal(removal.branch, branch);
+    assert.equal(removal.outcome, "verified-success");
+    assert.equal(removal.executorCompleted, true);
+    assert.equal(removal.checkoutRemoved, true);
     ctx.owned.managerWorktreeRetirementRequested = true;
     await waitForEvidence(
       ctx,

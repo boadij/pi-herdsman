@@ -13330,6 +13330,7 @@ export function createLeadRoleTransitions(
   ): Promise<string> => {
     if (state.controllerRole !== "manager" || !state.managerLease)
       throw new Error("Manager mode is not active");
+    host.invalidateManagerRemovalRequests?.(ctx);
     state.controllerRole = "lead";
     try {
       host.persistRole("lead");
@@ -13354,7 +13355,6 @@ export function createLeadRoleTransitions(
       }
       throw error;
     }
-    host.invalidateManagerRemovalRequests?.(ctx);
     host.advancePeerPresenceGeneration();
     host.removePeerPresence();
     try {
