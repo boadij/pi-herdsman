@@ -6044,17 +6044,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     | undefined;
   let lastSettledRun:
     { aborted: boolean; outcome?: string; summary?: string } | undefined;
-  const recordTerminalFailureDiagnostic = (phase: string, outcome?: string) => {
-    try {
-      host.pi.appendEntry(host.entryName, {
-        terminalFailureDiagnostic: true,
-        phase,
-        ...(outcome ? { outcome } : {}),
-      });
-    } catch {
-      // Diagnostics must never alter report handling.
-    }
-  };
   const publishProjectHandoff = async (
     ctx: ExtensionContext,
     message: string,
@@ -6062,9 +6051,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     kind?: ProjectMessage["kind"],
     createdAt = Date.now(),
     target?: "project" | "chief",
-    onPublicationInvocation?: () => void,
   ): Promise<boolean> => {
-    onPublicationInvocation?.();
     const role = host.activeRole();
     if (kind === "execution_failure" && !reportId) return false;
     if (target === "project") {
@@ -6405,18 +6392,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         !aborted &&
         current?.outcome === "completed" &&
         current.responseEntryId !== undefined;
-      recordTerminalFailureDiagnostic(
-        "settlement",
-        aborted
-          ? "aborted"
-          : current?.outcome === "error"
-            ? "error"
-            : current?.outcome === "completed"
-              ? "completed"
-              : current?.outcome
-                ? "other"
-                : "not_observed",
-      );
       const summary = successful ? current.responseText : undefined;
       if (herdOwnsHandoff)
         lastSettledRun = { aborted, outcome: current?.outcome, summary };
@@ -6428,8 +6403,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           ? `\n\nPartial response (not completed):\n${partial}`
           : "";
         const message = `${current?.outcome === "error" ? "Lead model execution failed before completion." : "Lead execution settled without verified completion."}${detail}`;
-        let publicationAttempted = false;
-        let publicationResultObserved = false;
         try {
           const target =
             host.activeRole() === "lead" && host.isManagedLead()
@@ -6453,14 +6426,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             "execution_failure",
             reportCreatedAt,
             target,
-            () => {
-              publicationAttempted = true;
-              recordTerminalFailureDiagnostic("publication_attempt");
-            },
           );
-          publicationResultObserved = true;
-          if (publicationAttempted)
-            recordTerminalFailureDiagnostic("publication_result", "returned");
           if (published)
             host.pi.appendEntry(host.entryName, {
               phase: "report_sent",
@@ -6470,8 +6436,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
             });
         } catch (error) {
-          if (publicationAttempted && !publicationResultObserved)
-            recordTerminalFailureDiagnostic("publication_result", "failed");
           host.appendDurableError(
             host.pi,
             ctx,

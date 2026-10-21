@@ -2867,41 +2867,6 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
   };
 }
 
-function terminalFailureRuntimeDiagnostics(contents, sessionId) {
-  const entries = sessionEntries(contents);
-  const records = entries.filter(
-    (entry) =>
-      entry.type === "custom" &&
-      entry.customType === "pi-herdsman-herd-run" &&
-      entry.data?.terminalFailureDiagnostic === true,
-  );
-  const last = (phase) =>
-    records.filter((entry) => entry.data.phase === phase).at(-1);
-  const settlement = last("settlement");
-  const pending = entries.some(
-    (entry) =>
-      entry.type === "custom" &&
-      entry.customType === "pi-herdsman-herd-run" &&
-      entry.data?.phase === "report_pending" &&
-      entry.data.sessionId === sessionId,
-  );
-  const attempted = last("publication_attempt");
-  const result = last("publication_result");
-  return {
-    settlementCallback: settlement ? "observed" : "not_observed",
-    settlementOutcome: ["aborted", "error", "completed", "other"].includes(
-      settlement?.data.outcome,
-    )
-      ? settlement.data.outcome
-      : "not_observed",
-    reportPending: pending ? "observed" : "not_observed",
-    publicationAttempt: attempted ? "attempted" : "not_observed",
-    publicationOutcome: ["returned", "failed"].includes(result?.data.outcome)
-      ? result.data.outcome
-      : "not_observed",
-  };
-}
-
 export function matchPiProvenance(
   records,
   sessionId,
@@ -3140,15 +3105,16 @@ async function runTerminalFailureSmoke(ctx) {
           String(failureMessage.content),
         )
       );
-      const runtimeDiagnostics = leadSession
-        ? terminalFailureRuntimeDiagnostics(leadSession.contents, sessionId)
-        : {
-            settlementCallback: "not_observed",
-            settlementOutcome: "not_observed",
-            reportPending: "not_observed",
-            publicationAttempt: "not_observed",
-            publicationOutcome: "not_observed",
-          };
+      const reportPending = !!(
+        leadSession &&
+        sessionEntries(leadSession.contents).some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-herdsman-herd-run" &&
+            entry.data?.phase === "report_pending" &&
+            entry.data.sessionId === sessionId,
+        )
+      );
       const settledRows = settled
         .split(/\r?\n/)
         .filter(Boolean)
@@ -3202,7 +3168,7 @@ async function runTerminalFailureSmoke(ctx) {
           logicalReports: reports?.logicalReports ?? 0,
           actionable: !!reports?.actionable,
           managerResponded,
-          ...runtimeDiagnostics,
+          reportPending: reportPending ? "observed" : "not_observed",
           managerReceipt: failureMessage ? "observed" : "not_observed",
           managerFollowup: managerResponded ? "observed" : "not_observed",
           settledCount: settledRows.length,

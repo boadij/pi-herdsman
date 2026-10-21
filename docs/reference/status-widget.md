@@ -138,13 +138,13 @@ mutates mailbox/control eligibility.
 ## Lead execution
 
 An ordinary Lead's header may include its verified effective execution mode:
-`· flexible` or `· orchestrate`. Dedicated Managed Lead sessions show
+`· Flexible` or `· Orchestrate`. Dedicated Managed Lead sessions show
 `Managed`, `Managed · Unavailable`, or `Managed · Retired` according to current
 verified authority, retaining their identity when assignment evidence is missing.
 For example:
 
 ```text
-● lead · managed
+● lead · Managed
 ```
 
 The execution label is presentation only, not authority. Ordinary modes are
