@@ -26,6 +26,26 @@ is uncertain, or adding delegation overhead can increase the burden instead.
 For each model-facing change, ask: **Which decision does this leave to the
 model, and does that decision require its judgment?**
 
+## Compose model-facing context for salience
+
+Information placement can affect how reliably models use long context:
+relevant material may be easier to use at the beginning or end than in the
+middle ([Lost in the Middle](https://aclanthology.org/2024.tacl-1.9/)).
+This is a tendency, not an instruction hierarchy. Position alone does not
+change instruction authority or make newer evidence binding.
+
+When composing new model-facing context, clearly delimit supporting material
+and, where semantics permit, place the current task or decision request and
+its essential constraints near the end. Preserve meaningful source order,
+provenance, and established instruction precedence. Avoid burying critical
+information in lengthy middle sections or duplicating it solely for recency.
+
+Optimize at composition time, not by rewriting previously delivered context.
+Preserve reusable prompt prefixes and append-only Pi history per
+[ADR 0009](../adr/0009-preserve-prompt-cache-continuity.md).
+Prefer clear, deterministic composition over attention scoring or
+provider-specific ordering heuristics.
+
 ## One invariant, one meaning
 
 Every behavioral invariant should have one authoritative meaning. Runtime
@@ -151,6 +171,25 @@ Prefer:
 Remove distinctions once they no longer carry meaningful semantics.
 
 Do not expose implementation details merely because they exist internally.
+
+## Minimize model-facing reference burden
+
+Treat file paths, identifiers, and artifact references exposed to models as
+interface design decisions, not incidental storage details. Prefer omitting
+or deriving an identity from verified runtime state; otherwise reuse a short,
+stable, unambiguous semantic reference instead of exposing long absolute
+paths, UUID-containing paths, generated filenames, or internal directory
+layouts. Do not require models to construct, remember, or transcribe
+information the system already knows.
+
+Shorter strings are not inherently better. Do not add aliases, registries, or
+lookup rules merely to hide complexity, or sacrifice identity, authority,
+security, recoverability, or interoperability. Retain exact physical paths
+and opaque IDs when required by the underlying tool or boundary, and resolve
+simplified references deterministically against authoritative state.
+
+For each model-facing reference, ask: **Does the model need to supply this,
+and what is the simplest reliable way to identify it?**
 
 ## Do not accumulate defensive guidance
 

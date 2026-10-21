@@ -606,7 +606,8 @@ const {
 } = await import("./agent-controller.ts");
 const { sessionContextRetired, registerManagedAgentContextHandlers } =
   await import("./managed-agent-runtime.ts");
-const { default: registerExtension } = await import("./index.ts");
+const { default: registerExtension, registerExtensionForTest } =
+  await import("./index.ts");
 const { readEffectiveConfig } = await import("./config.ts");
 export function resolveAssignmentSession(
   ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
@@ -623,6 +624,7 @@ export function resolveAssignmentSession(
 }
 export { sessionAgentIdentity };
 export { registerExtension };
+export { registerExtensionForTest };
 export { sessionContextRetired };
 export { registerManagedAgentContextHandlers };
 export const HERDSMAN_BUILD = runtimeBuild(

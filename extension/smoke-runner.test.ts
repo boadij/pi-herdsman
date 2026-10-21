@@ -69,6 +69,7 @@ import {
   staffDelegateResults,
   assertNoFailedProjectDelegation,
   managerAssignmentDiagnostics,
+  supervisorMessageCallStatus,
   managerAssignmentIdentity,
   managerAssignmentBranchMismatch,
   staffActionResults,
@@ -1236,6 +1237,50 @@ test("failed Agent retirement requires absent process, pane, registration, and m
 });
 
 test("Manager assignment diagnostics are bounded and reject a mismatched branch identity", () => {
+  const call = {
+    type: "toolCall",
+    id: "private-id",
+    name: "message_supervisor",
+    arguments: { message: "MANAGER_HANDOFF_READY" },
+  };
+  const assistant = {
+    type: "message",
+    message: { role: "assistant", content: [call] },
+  };
+  const session = (...entries: unknown[]) =>
+    entries.map((entry) => JSON.stringify(entry)).join("\n");
+  const result = (isError: boolean) => ({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "message_supervisor",
+      toolCallId: "private-id",
+      isError,
+      content: "SECRET",
+    },
+  });
+  assert.equal(
+    supervisorMessageCallStatus("", "MANAGER_HANDOFF_READY"),
+    "not_called",
+  );
+  assert.equal(
+    supervisorMessageCallStatus(session(assistant), "MANAGER_HANDOFF_READY"),
+    "pending",
+  );
+  assert.equal(
+    supervisorMessageCallStatus(
+      session(assistant, result(true)),
+      "MANAGER_HANDOFF_READY",
+    ),
+    "error",
+  );
+  assert.equal(
+    supervisorMessageCallStatus(
+      session(assistant, result(false)),
+      "MANAGER_HANDOFF_READY",
+    ),
+    "success",
+  );
   assert.equal(managerAssignmentBranchMismatch(null, "expected-branch"), false);
   assert.equal(
     managerAssignmentBranchMismatch(
