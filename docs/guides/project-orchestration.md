@@ -211,9 +211,9 @@ review, and user interaction do not release an assignment.
 ### Dedicated sessions and independent continuation
 
 A Managed Lead keeps its immutable identity for its exact Pi session. Its
-execution state is `Managed` with a current exact assignment,
-`Managed · Unavailable` when evidence is insufficient or contradictory, and
-`Managed · Retired` when authoritative evidence confirms retirement or
+execution state is `managed` with a current exact assignment,
+`managed · unavailable` when evidence is insufficient or contradictory, and
+`managed · retired` when authoritative evidence confirms retirement or
 replacement. Missing assignment evidence alone is not proof of retirement.
 Neither inactive state allows fresh delegation, continued Agent work, ordinary
 execution profiles, Manager/Chief activation, or ordinary global peer access.

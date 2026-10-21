@@ -908,6 +908,17 @@ test("status projection renders the complete stable tree with aligned columns", 
       renderStatusRows(agents, { now: 0, frame: 1 })[3]!.text,
       rows[3]!.text,
     );
+    for (const [state, marker] of [
+      ["blocked", "◐"],
+      ["unknown", "?"],
+      ["lost", "×"],
+    ] as const) {
+      const agent = [{ label: "probe", definition: "agent", state }];
+      const first = renderStatusRows(agent, { now: 0, frame: 0 });
+      const second = renderStatusRows(agent, { now: 0, frame: 1 });
+      assert.ok(first[0]!.text.startsWith(`└─ ${marker} agent`));
+      assert.equal(first[0]!.text, second[0]!.text);
+    }
     assert.match(rows[4]!.text, /◌ starting/);
     assert.notEqual(
       renderStatusRows(agents, { now: 0, frame: 1 })[0]!.text,
@@ -2749,12 +2760,12 @@ test("Status widget renders complete execution metadata without changing ownersh
     breadcrumb: [{ text: "lead" }],
   };
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
-  assert.equal(widget.render(160)[0], "● lead · Managed");
+  assert.equal(widget.render(160)[0], "● lead · managed");
   assert.ok(calls.includes("success:● lead"));
-  assert.ok(calls.includes("muted: · Managed"));
+  assert.ok(calls.includes("muted: · managed"));
   for (const [mode, label] of [
-    ["flexible", "Flexible"],
-    ["orchestrate", "Orchestrate"],
+    ["flexible", "flexible"],
+    ["orchestrate", "orchestrate"],
   ] as const) {
     widget.setSnapshot({ ...snapshot, execution: { kind: "ordinary", mode } });
     assert.equal(widget.render(160)[0], `● lead · ${label}`);
@@ -2776,15 +2787,15 @@ test("Status widget renders complete execution metadata without changing ownersh
   });
   assert.equal(
     widget.render(160)[0],
-    "● lead → implementer → scout · Managed  [read, bash]",
+    "● lead → implementer → scout · managed  [read, bash]",
   );
   assert.deepEqual(breadcrumb, [
     { text: "lead" },
     { text: "implementer" },
     { text: "scout" },
   ]);
-  assert.equal(widget.render(41)[0], "● lead → implementer → scout · Managed");
-  assert.doesNotMatch(widget.render(8)[0]!, /· Managed/);
+  assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
+  assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
     assert.ok(
       widget.render(width).every((line) => visibleWidth(line) <= width),
@@ -2793,6 +2804,19 @@ test("Status widget renders complete execution metadata without changing ownersh
 
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
   assert.equal(widget.render(11)[0], "● lead");
+  for (const [lifecycle, label] of [
+    ["unavailable", "managed · unavailable"],
+    ["retired", "managed · retired"],
+  ] as const) {
+    widget.setSnapshot({
+      ...snapshot,
+      execution: { kind: "managed", lifecycle },
+    });
+    assert.equal(widget.render(160)[0], `● lead · ${label}`);
+    const width = visibleWidth(widget.render(160)[0]!);
+    assert.equal(widget.render(width)[0], `● lead · ${label}`);
+    assert.doesNotMatch(widget.render(width - 1)[0]!, new RegExp(`${label}$`));
+  }
 
   widget.setSnapshot({
     ...snapshot,
@@ -2801,7 +2825,7 @@ test("Status widget renders complete execution metadata without changing ownersh
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
-  assert.match(widget.render(160)[0]!, /^● lead · Managed  1 blocked$/);
+  assert.match(widget.render(160)[0]!, /^● lead · managed  1 blocked$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
@@ -2820,7 +2844,7 @@ test("Status widget keeps execution metadata ahead of elapsed time when narrow",
 
   widget.setSnapshot({ ...snapshot, herdRunStartedAt: Date.now() - 30_000 });
   const header = widget.render(width)[0]!;
-  assert.match(header, /· Managed/);
+  assert.match(header, /· managed/);
   assert.doesNotMatch(header, /\d+s/);
   assert.ok(visibleWidth(header) <= width);
 });
@@ -3302,6 +3326,20 @@ test("managed marker has an independent visible-only hit region", (t) => {
   });
   widget.render(80);
   assert.equal(click(start), undefined);
+
+  for (const lifecycle of ["unavailable", "retired"] as const) {
+    widget.setSnapshot({
+      agents: [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: [{ text: "lead" }],
+      execution: { kind: "managed", lifecycle },
+      identityOnly: true,
+    });
+    widget.render(80);
+    assert.equal(click(start), undefined, lifecycle);
+  }
+  assert.deepEqual(selected, []);
 });
 
 test("widget uses logical labels in the shared row formatter", (t) => {

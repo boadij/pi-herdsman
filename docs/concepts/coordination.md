@@ -54,7 +54,7 @@ direct Agent trees when explicitly enabled; those trees do not become part of
 a supervised Lead's herd.
 
 Lead execution configuration is separate from role and authority. An ordinary
-Lead uses its session's `Flexible` or `Orchestrate` preference, selecting
+Lead uses its session's `flexible` or `orchestrate` preference, selecting
 `flexible-lead` or `orchestrator-lead`; a Manager-assigned Lead uses
 `managed-lead`. These definitions configure execution, not ownership or
 supervision. Only the exact current `ProjectAssignment` establishes Manager

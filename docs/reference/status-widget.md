@@ -138,13 +138,13 @@ mutates mailbox/control eligibility.
 ## Lead execution
 
 An ordinary Lead's header may include its verified effective execution mode:
-`· Flexible` or `· Orchestrate`. Dedicated Managed Lead sessions show
-`Managed`, `Managed · Unavailable`, or `Managed · Retired` according to current
+`· flexible` or `· orchestrate`. Dedicated Managed Lead sessions show
+`managed`, `managed · unavailable`, or `managed · retired` according to current
 verified authority, retaining their identity when assignment evidence is missing.
 For example:
 
 ```text
-● lead · Managed
+● lead · managed
 ```
 
 The execution label is presentation only, not authority. Ordinary modes are
@@ -222,7 +222,9 @@ then elapsed time, then context percentage; the same column choice is used for
 every row. The task is the rightmost elastic field and is kept only when it has
 useful room before it is truncated.
 
-Working rows use `● working`, blocked rows use `◐ blocked`, settling rows use
+The fixed-width activity column animates working, settling, and starting rows;
+blocked, unknown, and lost rows show their static lifecycle marker in that
+column. Working rows use `● working`, blocked rows use `◐ blocked`, settling rows use
 `◌ settling`, starting rows use `◌ starting`, unknown rows use `? unknown`, and
 lost rows use `× lost` with the theme's attention/error styling. Working,
 settling, and starting animate; blocked, unknown, and lost rows are static.

@@ -178,8 +178,8 @@ conflict resolution, and final technical decisions within your assigned
 objective. Decompose only as far as useful. Reuse adequate existing evidence
 instead of duplicating work. The active Lead execution profile determines the
 balance between direct and delegated work. Ordinary Leads use `flexible-lead`
-or `orchestrator-lead` according to their persisted `Flexible` or
-`Orchestrate` execution mode. Manager-assigned Leads use `managed-lead`; the
+or `orchestrator-lead` according to their persisted `flexible` or
+`orchestrate` execution mode. Manager-assigned Leads use `managed-lead`; the
 exact current `ProjectAssignment`, not the profile, establishes Manager
 authority. Managed identity is permanent for the exact Pi session, including
 when assignment evidence is unavailable or the assignment is retired. Only a
