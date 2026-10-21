@@ -6552,6 +6552,7 @@ async function runManagerRecoverySmoke(ctx) {
   ];
   const allowedAssignmentKeys = [
     ...requiredAssignmentKeys,
+    "currentEvidenceIds",
     "requiredEvidence",
     "resultBindings",
   ];
