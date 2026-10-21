@@ -5297,6 +5297,9 @@ async function managerRemovalFixture(
     setCheckoutDirty: (dirty: boolean) => {
       checkoutDirty = dirty;
     },
+    replaceAssignment: () => {
+      assignment = { ...assignment, id: "replacement-assignment" };
+    },
     assignment: () => assignment,
     checkoutPath,
     calls,
@@ -5356,18 +5359,47 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
   assert.equal(duplicate.details.pending, true);
   assert.equal(fixture.runtime.listPendingRemovals().length, 1);
   assert.equal(fixture.confirmationCount(), 0);
+  const selected = fixture.runtime.listPendingRemovals()[0];
   fixture.ctx.ui.input = async () => "remove";
   const approved = await fixture.runtime.approvePendingRemoval(
-    "feat/remove-test",
+    selected,
     fixture.ctx,
   );
   assert.equal(approved.details.checkout_removed, true);
   assert.equal(fixture.runtime.listPendingRemovals().length, 0);
   await assert.rejects(
-    fixture.runtime.approvePendingRemoval("feat/remove-test", fixture.ctx),
-    /no longer available/,
+    fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
+    /Pending removal (?:is no longer available|changed)/,
   );
   assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("Manager pending selection cannot approve or dismiss its replacement", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  await request();
+  const selected = fixture.runtime.listPendingRemovals()[0];
+  fixture.replaceAssignment();
+  await request();
+  const replacement = fixture.runtime.listPendingRemovals()[0];
+  assert.notEqual(replacement, selected);
+
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
+    /Pending removal changed/,
+  );
+  assert.equal(fixture.runtime.cancelPendingRemoval(selected), false);
+  assert.equal(fixture.runtime.listPendingRemovals()[0], replacement);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+  assert.ok(existsSync(fixture.checkoutPath));
 });
 
 test("human-approved dirty Manager removal refuses before Herdr remove", async (t) => {
@@ -5388,7 +5420,10 @@ test("human-approved dirty Manager removal refuses before Herdr remove", async (
   };
 
   await assert.rejects(
-    fixture.runtime.approvePendingRemoval("feat/remove-test", fixture.ctx),
+    fixture.runtime.approvePendingRemoval(
+      fixture.runtime.listPendingRemovals()[0],
+      fixture.ctx,
+    ),
     /Checkout is dirty or could not be verified; worktree preserved/,
   );
   assert.equal(humanDialogCount, 1);

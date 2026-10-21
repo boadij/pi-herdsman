@@ -1809,6 +1809,10 @@ function registerExtensionImpl(
                   })),
                 );
                 if (!selected) return;
+                const request = pending.find(
+                  (item) => item.branch === selected,
+                );
+                if (!request) throw new Error("Pending removal is unavailable");
                 const action = await selectMenu(
                   ctx,
                   `Pending removal · ${selected}`,
@@ -1819,15 +1823,18 @@ function registerExtensionImpl(
                 );
                 if (!action) return;
                 if (action === "dismiss") {
-                  projectRuntime.cancelPendingRemoval(selected);
+                  if (!projectRuntime.cancelPendingRemoval(request))
+                    throw new Error(
+                      "Pending removal changed; review the new request",
+                    );
                   ctx.ui.notify(
-                    `Pending removal of ${selected} dismissed.`,
+                    `Pending removal of ${request.branch} dismissed.`,
                     "info",
                   );
                   return;
                 }
                 const result = await projectRuntime.approvePendingRemoval(
-                  selected,
+                  request,
                   ctx,
                 );
                 ctx.ui.notify(

@@ -7396,34 +7396,36 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     );
   };
   const listPendingRemovals = (ctx?: ExtensionContext) => {
-    if (ctx)
-      for (const [branch, pending] of pendingRemovals)
-        if (
-          pending.sessionId !== ctx.sessionManager.getSessionId() ||
-          activeRole() !== "manager"
-        )
-          pendingRemovals.delete(branch);
-    return [...pendingRemovals.values()].map((item) => ({
-      branch: item.branch,
-      checkoutPath: item.checkoutPath,
-    }));
+    for (const [branch, pending] of pendingRemovals) {
+      const lease = host.managerLease();
+      if (
+        (ctx && pending.sessionId !== ctx.sessionManager.getSessionId()) ||
+        activeRole() !== "manager" ||
+        !lease ||
+        !host.sameManagerDescriptor(pending.manager, lease.descriptor)
+      )
+        pendingRemovals.delete(branch);
+    }
+    return [...pendingRemovals.values()];
   };
   const approvePendingRemoval = async (
-    branch: string,
+    selected: PendingRemoval,
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
-    const pending = pendingRemovals.get(branch);
-    if (!pending) throw new Error("Pending removal is no longer available");
-    pendingRemovals.delete(branch);
+    if (pendingRemovals.get(selected.branch) !== selected)
+      throw new Error("Pending removal changed; review the new request");
+    pendingRemovals.delete(selected.branch);
     if (activeRole() !== "manager")
       throw new Error("Manager authority is no longer active");
-    return removeWorktree(branch, ctx, signal ?? ctx.signal, {
-      expected: pending,
+    return removeWorktree(selected.branch, ctx, signal ?? ctx.signal, {
+      expected: selected,
     });
   };
-  const cancelPendingRemoval = (branch: string) =>
-    pendingRemovals.delete(branch);
+  const cancelPendingRemoval = (selected: PendingRemoval) => {
+    if (pendingRemovals.get(selected.branch) !== selected) return false;
+    return pendingRemovals.delete(selected.branch);
+  };
   const setRemovalPreauthorization = async (
     enabled: boolean,
     ctx: ExtensionContext,
