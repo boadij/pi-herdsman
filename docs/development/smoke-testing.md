@@ -379,8 +379,8 @@ Verify both `/herdsman` and `/agents` open the same seven destinations
 Verify active role state is secondary metadata and selected-row contextual help
 updates in the TUI. `/herdsman → Agents` opens only `Running`, `Layout`, and
 `Stop all…`, with the running count and effective placement as secondary
-metadata. `Execution` shows the current ordinary mode and opens the Flexible /
-Orchestrate selector; an assigned Lead shows Managed with `managed-lead` help
+metadata. `Execution` shows the current ordinary mode and opens the flexible /
+orchestrate selector; an assigned Lead shows managed with `managed-lead` help
 and no ordinary mode choices. `/lead` opens the same selector, while
 `/lead flexible` and `/lead orchestrate` select directly through that control.
 Verify Managed Leads cannot select ordinary modes or activate Manager/Chief.
@@ -388,9 +388,9 @@ Using disposable project data only, fork and clone an assigned Lead and verify
 new exact ordinary session IDs, no inherited assignment/Agent ownership or
 role/profile policy, and unchanged source identity through tree navigation and
 resume. Verify stop/resume preserves assignment and identity. Retire only the
-disposable checkout through confirmed Herdr removal; verify Managed · Retired
+disposable checkout through confirmed Herdr removal; verify managed · retired
 and exact-owner recovery without fresh delegation. Exercise unavailable evidence
-and verify Managed · Unavailable denies fresh work. Native history copying does
+and verify managed · unavailable denies fresh work. Native history copying does
 not create an independent checkout or reset process configuration. Record each
 interactive result explicitly; simulated smoke does not prove these checks. Settings contains Default Lead execution,
 Manager auto-start, Context retirement, and Message limits. Verify changing

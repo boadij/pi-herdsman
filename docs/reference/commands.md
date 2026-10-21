@@ -36,9 +36,9 @@ version. Its seven destinations are `Execution`, `Agents`, `Project manager`,
 `Session stats`, `Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
 metadata; the TUI updates contextual help for the selected row.
 
-`Execution` shows the current ordinary Lead mode (`Flexible` or `Orchestrate`).
+`Execution` shows the current ordinary Lead mode (`flexible` or `orchestrate`).
 Selecting it opens the same selector as `/lead`. A dedicated Managed Lead
-shows `Managed`, `Managed · Unavailable`, or `Managed · Retired` according to
+shows `managed`, `managed · unavailable`, or `managed · retired` according to
 verified assignment evidence, and offers no ordinary mode choices.
 
 `/lead` opens the Execution selector. `/lead flexible` and `/lead orchestrate`
@@ -55,7 +55,7 @@ Its running count and current layout are secondary metadata. The root does not
 depend on Agent status or definitions to render.
 
 `Settings` contains `Default Lead execution`, `Manager auto-start`, `Context
-retirement`, `Project overrides…`, and `Message limits`. The default is `Flexible` and applies only
+retirement`, `Project overrides…`, and `Message limits`. The default is `flexible` and applies only
 when a future ordinary Lead session has no persisted execution choice; changing
 it does not change the current session. Manager auto-start and context
 retirement show their effective values and identify project overrides, when

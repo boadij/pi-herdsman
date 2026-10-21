@@ -117,6 +117,7 @@ import {
   buildStatusRows,
   renderRunningOptions,
   formatStatusCounts,
+  managedExecutionLabel,
   createSupervisionWidget,
   type FocusIntent,
   type BreadcrumbSegment,
@@ -2115,12 +2116,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         await host.selectMenu(ctx, "Managed orchestration", [
           {
             value: "managed",
-            label:
-              execution.lifecycle === "retired"
-                ? "Managed · Retired"
-                : execution.lifecycle === "unavailable"
-                  ? "Managed · Unavailable"
-                  : "Managed",
+            label: managedExecutionLabel(execution.lifecycle),
             help: "Dedicated Managed Lead. Use Pi /fork or /clone to continue independently; the Git checkout is shared.",
           },
         ]);
@@ -2132,12 +2128,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         [
           {
             value: "flexible",
-            label: "Flexible",
+            label: "flexible",
             description: execution.mode === "flexible" ? "current" : undefined,
           },
           {
             value: "orchestrate",
-            label: "Orchestrate",
+            label: "orchestrate",
             description:
               execution.mode === "orchestrate" ? "current" : undefined,
           },
@@ -2188,10 +2184,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "default-lead-execution",
               label: "Default Lead execution",
-              description:
-                config.defaultLeadExecution === "flexible"
-                  ? "Flexible"
-                  : "Orchestrate",
+              description: config.defaultLeadExecution,
               help: "Used when a future ordinary Lead session has no persisted execution choice.",
             },
             {
@@ -2241,8 +2234,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ctx,
             "Default Lead execution",
             [
-              { value: "flexible", label: "Flexible" },
-              { value: "orchestrate", label: "Orchestrate" },
+              { value: "flexible", label: "flexible" },
+              { value: "orchestrate", label: "orchestrate" },
             ],
             config.defaultLeadExecution,
           );
@@ -2391,14 +2384,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "execution",
               label: "Execution",
               description: execution.managed
-                ? execution.lifecycle === "retired"
-                  ? "Managed · Retired"
-                  : execution.lifecycle === "unavailable"
-                    ? "Managed · Unavailable"
-                    : "Managed"
-                : execution.mode === "flexible"
-                  ? "Flexible"
-                  : "Orchestrate",
+                ? managedExecutionLabel(execution.lifecycle)
+                : execution.mode,
               help: execution.managed
                 ? "This assigned session uses managed-lead. Use Pi /fork or /clone to continue independently (same Git checkout)."
                 : "Choose this ordinary Lead session's execution profile.",

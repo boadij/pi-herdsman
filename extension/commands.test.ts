@@ -1271,7 +1271,7 @@ test("known managed identity remains unavailable and recovery-only when startup 
   await pi.commandOptions.get("herdsman")!.handler("", context);
   assert.ok(
     presentation.some((item) =>
-      /^Execution\s+Managed · Unavailable$/u.test(item),
+      /^Execution\s+managed · unavailable$/u.test(item),
     ),
   );
   assert.ok(
@@ -6743,7 +6743,7 @@ async function managerDelegateAssignmentTest(
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
         lifecyclePresentation.some((item) =>
-          /^Execution\s+Managed · Unavailable$/u.test(item),
+          /^Execution\s+managed · unavailable$/u.test(item),
         ),
         "ambiguous worktree evidence keeps the permanent Managed identity unavailable",
       );
@@ -6873,7 +6873,7 @@ async function managerDelegateAssignmentTest(
       };
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
-        managedPresentation.some((item) => /^Execution\s+Managed$/u.test(item)),
+        managedPresentation.some((item) => /^Execution\s+managed$/u.test(item)),
       );
 
       failScopeLookup = false;
@@ -6912,7 +6912,7 @@ async function managerDelegateAssignmentTest(
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
-        managedPresentation.some((item) => /^Execution\s+Managed$/u.test(item)),
+        managedPresentation.some((item) => /^Execution\s+managed$/u.test(item)),
       );
 
       reportCheckoutAbsent = true;
@@ -6934,7 +6934,7 @@ async function managerDelegateAssignmentTest(
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
         lifecyclePresentation.some((item) =>
-          /^Execution\s+Managed · Retired$/u.test(item),
+          /^Execution\s+managed · retired$/u.test(item),
         ),
         `committed retirement, Herdr branch absence, and Git worktree absence establish Retired: ${JSON.stringify(lifecyclePresentation)}; records=${JSON.stringify(listPendingRetirements(supervisionRuntime(), repoKey))}`,
       );
@@ -11370,7 +11370,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   await pi.commandOptions.get("agents").handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(prompts[0]?.options, [
-    "Execution  Flexible",
+    "Execution  flexible",
     "Agents",
     "Project manager",
     "Session stats",
@@ -11380,7 +11380,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   ]);
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
-    "Default Lead execution  Flexible",
+    "Default Lead execution  flexible",
     "Manager auto-start  Global off · Effective off (global; untrusted project)",
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Message limits",
@@ -11593,11 +11593,11 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
     const executionFooter = renders[1].findIndex((line) =>
       line.includes("↑↓ navigate"),
     );
-    assert.match(renders[1][executionFooter - 2], /Orchestrate/u);
-    assert.ok(renders[1]?.some((line) => /^→ Flexible\s+current/u.test(line)));
-    assert.ok(renders[2]?.some((line) => /^→ Orchestrate/u.test(line)));
+    assert.match(renders[1][executionFooter - 2], /orchestrate/u);
+    assert.ok(renders[1]?.some((line) => /^→ flexible\s+current/u.test(line)));
+    assert.ok(renders[2]?.some((line) => /^→ orchestrate/u.test(line)));
     assert.ok(
-      renders[3]?.some((line) => /^→ Execution\s+Flexible/u.test(line)),
+      renders[3]?.some((line) => /^→ Execution\s+flexible/u.test(line)),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -12066,7 +12066,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     await command.handler("", context);
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
-      "Default Lead execution  Flexible",
+      "Default Lead execution  flexible",
       "Manager auto-start  Global off · Effective off (global; untrusted project)",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Message limits",
@@ -14806,7 +14806,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   });
   await pi.events.get("session_start")![0](undefined, ctx);
   await t.waitFor(() =>
-    assert.match(widget?.render(120).join("\n") ?? "", /Managed/u),
+    assert.match(widget?.render(120).join("\n") ?? "", /managed/u),
   );
   assert.ok(widget);
   widget!.handleMouse({

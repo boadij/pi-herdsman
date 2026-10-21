@@ -426,10 +426,18 @@ export function compactModelToken(model: string | undefined): string {
   return model?.split("/").at(-1) ?? "";
 }
 
-function activitySpinner(state: AgentLifecycleState, frame: number): string {
+function activityIndicator(state: AgentLifecycleState, frame: number): string {
   return state === "working" || state === "settling" || state === "starting"
     ? spinner[frame % spinner.length]!
-    : " ";
+    : lifecycleMarker(state);
+}
+
+export function managedExecutionLabel(
+  lifecycle?: Extract<StatusExecution, { kind: "managed" }>["lifecycle"],
+): string {
+  return lifecycle === "retired" || lifecycle === "unavailable"
+    ? `managed · ${lifecycle}`
+    : "managed";
 }
 
 export function padVisible(text: string, width: number): string {
@@ -441,7 +449,7 @@ export type StatusRow = {
   paneId?: string;
   sessionId?: string;
   tree: string;
-  spinner: string;
+  indicator: string;
   definition: string;
   agentLabel: string;
   state: string;
@@ -467,7 +475,7 @@ export function buildStatusRows(
       ...(agent.paneId ? { paneId: agent.paneId } : {}),
       ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
       tree,
-      spinner: activitySpinner(agent.state, options.frame ?? 0),
+      indicator: activityIndicator(agent.state, options.frame ?? 0),
       definition: agent.definition || "?",
       agentLabel: agent.label,
       state: lifecycleLabel(agent.state),
@@ -494,7 +502,7 @@ export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
   );
 }
 
-export type StatusDisplayRow = Omit<StatusRow, "tree" | "spinner"> & {
+export type StatusDisplayRow = Omit<StatusRow, "tree" | "indicator"> & {
   text: string;
   labelStart: number;
 };
@@ -518,7 +526,7 @@ function statusColumns(rows: readonly StatusRow[]) {
   );
   const identities = rows.map(
     (row) =>
-      `${row.tree}${row.spinner} ${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}`,
+      `${row.tree}${row.indicator} ${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}`,
   );
   const identityWidth = Math.max(0, ...identities.map(visibleWidth));
   const widths = {
@@ -562,9 +570,9 @@ function renderIdentity(
   theme: any,
 ): string {
   const definition = padVisible(row.definition, definitionWidth);
-  const raw = `${row.tree}${row.spinner} ${definition}  ${row.agentLabel}`;
+  const raw = `${row.tree}${row.indicator} ${definition}  ${row.agentLabel}`;
   return (
-    themed(theme, "muted", `${row.tree}${row.spinner} `) +
+    themed(theme, "muted", `${row.tree}${row.indicator} `) +
     (theme?.bold?.(definition) ?? definition) +
     themed(theme, "muted", `  ${row.agentLabel}`) +
     " ".repeat(Math.max(0, identityWidth - visibleWidth(raw)))
@@ -632,7 +640,7 @@ export function layoutStatusRows(
   return rows.map((row) => ({
     label: row.label,
     labelStart: visibleWidth(
-      `${row.tree}${row.spinner} ${padVisible(row.definition, columns.definitionWidth)}  `,
+      `${row.tree}${row.indicator} ${padVisible(row.definition, columns.definitionWidth)}  `,
     ),
     ...(row.paneId ? { paneId: row.paneId } : {}),
     ...(row.sessionId ? { sessionId: row.sessionId } : {}),
@@ -3855,7 +3863,7 @@ export class StatusWidget {
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
     const execution = s.execution
-      ? ` · ${s.execution.kind === "managed" ? `Managed${s.execution.lifecycle === "retired" ? " · Retired" : s.execution.lifecycle === "unavailable" ? " · Unavailable" : ""}` : s.execution.mode === "flexible" ? "Flexible" : "Orchestrate"}`
+      ? ` · ${s.execution.kind === "managed" ? managedExecutionLabel(s.execution.lifecycle) : s.execution.mode}`
       : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
@@ -3886,7 +3894,7 @@ export class StatusWidget {
       this.hits.push({
         row: 0,
         from,
-        to: from + visibleWidth("Managed"),
+        to: from + visibleWidth("managed"),
         intent: { kind: "assigned-manager" },
       });
     }

@@ -359,7 +359,7 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
     });
     await pi.events.get("session_start")![0](undefined, ctx);
     await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /^● lead · Managed/),
+      assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
     );
     const supervisorTool = pi.tools.find(
       (tool) => tool.name === "message_supervisor",
@@ -705,7 +705,7 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
     assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
     await pi.commandOptions.get("lead")!.handler("flexible", ctx);
     await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /Managed/),
+      assert.match(statusWidget!.render(160)[0], /managed/),
     );
 
     for (const handler of pi.events.get("agent_start") ?? [])
