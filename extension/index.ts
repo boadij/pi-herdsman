@@ -1742,6 +1742,7 @@ function registerExtensionImpl(
                 : ["leave", "remove", "remove-preapproval"]
                     .filter((value) => value.startsWith(command))
                     .map((value) => ({ value, label: value }));
+            if (input === "remove") return [];
             if (input.trim().split(/\s+/u).length > 2) return null;
             const lease = leadRuntime.managerLease;
             if (!lease) return [];
@@ -1823,7 +1824,7 @@ function registerExtensionImpl(
                 );
                 if (!action) return;
                 if (action === "dismiss") {
-                  if (!projectRuntime.cancelPendingRemoval(request))
+                  if (!projectRuntime.cancelPendingRemoval(request, ctx))
                     throw new Error(
                       "Pending removal changed; review the new request",
                     );

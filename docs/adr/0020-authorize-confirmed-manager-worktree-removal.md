@@ -6,6 +6,8 @@
 >
 > **Approval update:** [ADR 0030](0030-project-scoped-manager-removal-approval.md)
 > supersedes the requirement for a separate per-removal human confirmation.
+> [ADR 0031](0031-durable-manager-worktree-removal-approval.md) supersedes
+> only ADR 0030's process-local pending-intent lifetime decision.
 
 [Documentation index](../README.md)
 
@@ -29,8 +31,10 @@ current Manager assignment and checkout authority; Herdr remains the physical
 worktree lifecycle authority and performs checkout removal without force.
 
 Model-facing worktree-removal requests must not wait for human confirmation.
-They register ephemeral pending intent unless a human has preauthorized the
-exact repository; removal always revalidates the exact current target.
+Unless a human has preauthorized the exact repository, they register pending
+intent in the active Pi session branch; removal always revalidates the exact
+current target. The intent survives reload of that session but never grants
+deletion authority.
 
 After authoritative checkout removal, project assignments and pending project
 messages continue to retire under [ADR 0019](0019-retire-project-assignments-when-worktrees-are-absent.md).
@@ -48,8 +52,8 @@ worktree removal or its branch-preservation rationale.
 
 ## Consequences
 
-- Confirmation-required results are neither removal outcomes nor durable
-  pending-removal records; they confer no authority on a later human action.
+- Confirmation-required results are neither removal outcomes nor deletion
+  authority; a human action must revalidate the exact current target.
 
 - Manager/user access does not add a Git or filesystem deletion authority to
   Herdsman; Herdr remains responsible for removing the worktree.

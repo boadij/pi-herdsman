@@ -62,7 +62,11 @@ retirement show their effective values and identify project overrides, when
 present. Global controls edit global defaults only. `Project overrides…` lets a trusted
 project choose Inherit, On, or Off for Manager auto-start and Context retirement;
 it writes the existing `.pi/settings.json` `piHerdsman` settings. Invalid or
-untrusted project settings do not prevent global controls from being used. The
+untrusted project settings do not prevent global controls from being used. An
+active Manager can also inspect and change the verified repository's worktree
+removal confirmation policy here. That choice is stored in user-level Herdsman
+authorization, not project settings; enabling still requires typing `enable`.
+The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
@@ -275,8 +279,11 @@ An active Manager can remove an assigned project checkout with:
 ```
 
 Use `/manager remove` without a branch to review a pending model-requested
-removal. Approval still uses the exact typed word `remove` unless the current
-repository has been explicitly preauthorized by a human.
+removal. Pressing Enter on the exact bare command opens review without branch
+completion; adding a space begins branch completion. Pending review appears in
+native Pi status and survives `/reload` of the same session. Approval still
+uses the exact typed word `remove` unless the current repository has been
+explicitly preauthorized by a human.
 
 An active Manager can enable or disable the repository-scoped opt-in with
 `/manager remove-preapproval on` or `/manager remove-preapproval off`. Enabling
@@ -287,7 +294,8 @@ only the extra prompt.
 
 This command does not activate Manager mode. Completion suggests `leave`,
 `remove`, and `remove-preapproval`, with `on` and `off` after the latter;
-assigned branches are suggested after `remove`. Suggestions are advisory and
+assigned branches are suggested after `remove ` (with a trailing space), not
+after the exact bare `remove`. Suggestions are advisory and
 are not required. Before removal, the shared operation verifies the exact assignment
 and linked checkout, checks that the checkout is clean, and asks for interactive
 confirmation. Type `remove` to confirm. Running owned project execution may be

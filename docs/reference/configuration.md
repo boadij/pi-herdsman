@@ -115,6 +115,11 @@ project property. Global controls remain independent, and an explicit project
 value takes precedence over the global value. Untrusted projects cannot be read
 or edited through this menu. Changes follow the existing preference evaluation
 lifecycle and do not retroactively change an already-running role or operation.
+An active Manager also sees a worktree-removal confirmation policy row for its
+verified repository. This authorization is stored in user-level Herdsman
+configuration, not `.pi/settings.json` or project overrides. Enabling it still
+requires explicit typed confirmation; it waives only the extra per-removal
+prompt and never the guarded removal checks.
 Updates to an existing project settings file coordinate with Pi's settings
 lock. With Pi 1.3.0, concurrent independent writers can still race when
 creating a missing `.pi/settings.json`, because Pi reads the missing file before

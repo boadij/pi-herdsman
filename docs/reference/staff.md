@@ -198,13 +198,17 @@ inference from task completion, review, or inactivity. Herdsman requires the
 active Manager's exact current assignment and matching linked checkout and
 checks clean state and occupants. Without preauthorization, a valid request
 returns promptly with `confirmation_required: true`, `pending: true`, and
-`ok: false`. No removal, execution shutdown, or operation lock occurs. Review
-it with `/manager remove`; unanswered requests do not block coordination. A
-human preauthorization for this exact repository skips only the extra prompt.
+`ok: false`, plus a correlated `request_id`. No removal, execution shutdown, or
+operation lock occurs. Review it with `/manager remove`; unanswered requests do
+not block coordination. Pi keeps the request on the active session branch, so
+it remains reviewable after reloading that same session. A persistent native
+status indicator points to the review command. A human preauthorization for
+this exact repository skips only the extra prompt.
 
-Do not repeat or poll a pending request. Pending intent is ephemeral and never
-authorizes deletion by itself. Each human approval validates current authority
-and the exact recorded target afresh.
+Pending intent never authorizes deletion by itself. Duplicate requests for the
+same current target reuse the request identity; changed assignment or checkout
+replaces it. Requests from another session branch do not carry over. Each human
+approval validates current authority and the exact recorded target afresh.
 
 Both human entry points share one confirmed destructive operation. It requires the
 active Manager's exact current assignment and matching linked checkout, refuses
