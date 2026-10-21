@@ -3018,6 +3018,85 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     "successful exact scope verification restores supervisor tools",
   );
 
+  const rpcRunningStatus = async () => {
+    context.mode = "rpc";
+    const selections = ["Agents", "Running"];
+    context.ui.select = async (_title, options) => {
+      const selection = selections.shift();
+      return selection && options.includes(selection) ? selection : undefined;
+    };
+    await pi.commandOptions.get("herdsman")!.handler("", context);
+    context.mode = "tui";
+  };
+
+  scopePlans.push({ unavailable: true });
+  await rpcRunningStatus();
+  assert.ok(
+    !pi.pi.getActiveTools().includes("read_evidence"),
+    "completed unavailable verification revokes Lead tools before overlapping checks",
+  );
+
+  let releaseOlder!: () => void;
+  let olderStarted!: () => void;
+  const olderGate = new Promise<void>((resolve) => (releaseOlder = resolve));
+  const olderStartedPromise = new Promise<void>(
+    (resolve) => (olderStarted = resolve),
+  );
+  scopePlans.push({ gate: olderGate, started: olderStarted });
+  let olderStatus: Promise<void> | undefined;
+  let newerStatus: Promise<void> | undefined;
+  try {
+    olderStatus = rpcRunningStatus();
+    await olderStartedPromise;
+    scopePlans.push({ unavailable: true });
+    newerStatus = rpcRunningStatus();
+    await newerStatus;
+    assert.ok(!pi.pi.getActiveTools().includes("read_evidence"));
+    releaseOlder();
+    await olderStatus;
+    assert.ok(
+      !pi.pi.getActiveTools().includes("read_evidence"),
+      "older successful verification cannot restore tools after a newer unavailable result",
+    );
+  } finally {
+    releaseOlder();
+    await Promise.allSettled(
+      [olderStatus, newerStatus].filter(
+        (status): status is Promise<void> => status !== undefined,
+      ),
+    );
+  }
+
+  let releaseSessionChange!: () => void;
+  let sessionCheckStarted!: () => void;
+  const sessionChangeGate = new Promise<void>(
+    (resolve) => (releaseSessionChange = resolve),
+  );
+  const sessionCheckStartedPromise = new Promise<void>(
+    (resolve) => (sessionCheckStarted = resolve),
+  );
+  scopePlans.push({});
+  await pi.events.get("session_start")![0](undefined, context);
+  assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
+  scopePlans.push({ gate: sessionChangeGate, started: sessionCheckStarted });
+  const originalSessionId = context.sessionManager.getSessionId;
+  let sessionStatus: Promise<void> | undefined;
+  try {
+    sessionStatus = rpcRunningStatus();
+    await sessionCheckStartedPromise;
+    context.sessionManager.getSessionId = () => "different-session";
+    releaseSessionChange();
+    await sessionStatus;
+    assert.ok(
+      pi.pi.getActiveTools().includes("read_evidence"),
+      "session change leaves the previously active Lead tools unchanged",
+    );
+  } finally {
+    releaseSessionChange();
+    context.sessionManager.getSessionId = originalSessionId;
+    if (sessionStatus) await Promise.allSettled([sessionStatus]);
+  }
+
   scopePlans.push({ unavailable: true });
   await pi.events.get("session_start")![0](undefined, context);
   assert.ok(
@@ -3050,7 +3129,6 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     ),
     "the pending handoff remains durable",
   );
-
 });
 
 test("unassigned Lead does not activate read_evidence", async (t) => {
