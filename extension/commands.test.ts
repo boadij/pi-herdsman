@@ -5105,6 +5105,7 @@ async function managerRemovalFixture(
       : {}),
   };
   let checkoutPresent = true;
+  let checkoutDirty = false;
   let leadRunning = options.runningLead ?? false;
   let stoppedLeadCount = 0;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
@@ -5146,7 +5147,12 @@ async function managerRemovalFixture(
           return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
         if (args[0] === "worktree" && args[1] === "list")
           return { code: 0, stdout: inventoryOutput(), stderr: "" };
-        if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+        if (args[0] === "status")
+          return {
+            code: 0,
+            stdout: checkoutDirty ? "?? dirty-file\n" : "",
+            stderr: "",
+          };
         throw new Error(
           `Unexpected Git command: ${args.join(" ")} (${runOptions.cwd})`,
         );
@@ -5288,6 +5294,9 @@ async function managerRemovalFixture(
   return {
     runtime,
     ctx,
+    setCheckoutDirty: (dirty: boolean) => {
+      checkoutDirty = dirty;
+    },
     assignment: () => assignment,
     checkoutPath,
     calls,
@@ -5359,6 +5368,38 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
     /no longer available/,
   );
   assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("human-approved dirty Manager removal refuses before Herdr remove", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const requested = await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(requested.details.pending, true);
+  let humanDialogCount = 0;
+  fixture.ctx.ui.input = async () => {
+    humanDialogCount++;
+    fixture.setCheckoutDirty(true);
+    return "remove";
+  };
+
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval("feat/remove-test", fixture.ctx),
+    /Checkout is dirty or could not be verified; worktree preserved/,
+  );
+  assert.equal(humanDialogCount, 1);
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(
+    fixture.calls.some((args) => args[1] === "remove"),
+    false,
+    "dirty approval must not invoke Herdr worktree remove",
+  );
+  assert.ok(fixture.assignment());
+  assert.ok(existsSync(fixture.checkoutPath));
 });
 
 test("Manager preauthorization lets explicit model requests use the guarded remover", async (t) => {
