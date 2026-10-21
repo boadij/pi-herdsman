@@ -9,7 +9,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createHash } from "node:crypto";
 import type { RequiredEvidence, ResultBinding } from "./storage.ts";
@@ -273,10 +273,17 @@ export function persistRequiredTextFiles(
   );
 }
 
+export type PreparedAttachment = {
+  name: string;
+  inline: boolean;
+  ref?: string;
+};
+
 export type PreparedMessageInput = {
   text: string;
   canonicalPaths: string[];
   resultBindings: ResultBinding[];
+  attachments: PreparedAttachment[];
 };
 
 export type MessagePreparationOptions = {
@@ -341,8 +348,9 @@ export function prepareMessageInput(
           ? `Mailbox payload is ${options.serializedBytes(text, [])} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
           : "Request exceeds the mailbox size limit",
         operation,
+        { details: { capacity: true } },
       );
-    return { text, canonicalPaths: [], resultBindings: [] };
+    return { text, canonicalPaths: [], resultBindings: [], attachments: [] };
   }
   const regular = resolveRegularFiles(files, cwd, operation);
   const resultBindings = regular.flatMap((file) =>
@@ -368,6 +376,7 @@ export function prepareMessageInput(
         ? `Mailbox payload is ${options.serializedBytes(rendered(), resultBindings)} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
         : "Request exceeds the mailbox size limit",
       operation,
+      { details: { capacity: true } },
     );
   for (const file of regular) {
     const index = regular.indexOf(file);
@@ -451,6 +460,7 @@ export function prepareMessageInput(
             "invalid_request",
             `Attachment could not be fully embedded within the configured limits: ${file.input}`,
             operation,
+            { details: { capacity: true } },
           );
         continue;
       }
@@ -500,6 +510,7 @@ export function prepareMessageInput(
             "invalid_request",
             `Attachment could not be fully embedded within the configured limits: ${file.input}`,
             operation,
+            { details: { capacity: true } },
           );
         continue;
       }
@@ -553,6 +564,7 @@ export function prepareMessageInput(
           "invalid_request",
           `Attachment could not be fully embedded within the configured limits: ${file.input}`,
           operation,
+          { details: { capacity: true } },
         );
     }
   }
@@ -560,6 +572,14 @@ export function prepareMessageInput(
     text: rendered(),
     canonicalPaths: regular.map((file) => file.canonicalPath),
     resultBindings,
+    attachments: regular.map((file, index) => ({
+      name:
+        file.retainedEvidence || file.binding
+          ? file.input
+          : escapeMessageFileName(basename(file.canonicalPath)),
+      inline: sections[index] !== renderMessageFile(file),
+      ...(file.retainedEvidence || file.binding ? { ref: file.input } : {}),
+    })),
   };
 }
 export function displayIdentity(

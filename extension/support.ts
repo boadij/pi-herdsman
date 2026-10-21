@@ -2536,6 +2536,7 @@ export function startupExecutor(
   onAccepted?: (request: RequestRecord) => void | Promise<void>,
   sessionFile = "/tmp/registered-agent.jsonl",
   sessionObservationId?: string,
+  testPaneId = "startup-pane",
 ): {
   exec: ExecHandler;
   mailbox: string;
@@ -2551,7 +2552,7 @@ export function startupExecutor(
   const startupSessionIdentity = sessionObservationId ?? DEFAULT_PI_SESSION_ID;
   let runId = testRunId;
   let ownerSessionId = testRunId ? LEAD_SESSION_ID : "";
-  let activePaneId = "startup-pane";
+  let activePaneId = testPaneId;
   const paneEnvironment: Record<string, string> = {};
   let stopped = false;
   let tabClosed = false;
@@ -2579,15 +2580,15 @@ export function startupExecutor(
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        if (countStartup && args[2] !== "startup-pane") getCount++;
-        if (args[2] !== "startup-pane")
+        if (countStartup && args[2] !== activePaneId) getCount++;
+        if (args[2] !== activePaneId)
           return {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
                 agent: {
                   name: args[2],
-                  pane_id: "startup-pane",
+                  pane_id: activePaneId,
                   tab_id: "startup-tab",
                   workspace_id: WORKSPACE,
                   cwd: testCwd,
@@ -2612,7 +2613,7 @@ export function startupExecutor(
             result: {
               agent: {
                 name: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
-                pane_id: "startup-pane",
+                pane_id: activePaneId,
                 tab_id: "startup-tab",
                 workspace_id: WORKSPACE,
                 cwd: testCwd,
@@ -2743,7 +2744,7 @@ export function startupExecutor(
               result: {
                 tab: { tab_id: "startup-tab" },
                 root_pane: {
-                  pane_id: "startup-pane",
+                  pane_id: activePaneId,
                   terminal_id: "startup-terminal",
                 },
               },
@@ -2762,7 +2763,7 @@ export function startupExecutor(
                   ? []
                   : [
                       {
-                        pane_id: "startup-pane",
+                        pane_id: activePaneId,
                         tab_id: "startup-tab",
                         workspace_id: WORKSPACE,
                         terminal_id: "startup-terminal",
@@ -2840,7 +2841,7 @@ export function startupExecutor(
             id: AGENT_ID,
             result: {
               pane: {
-                pane_id: "startup-pane",
+                pane_id: activePaneId,
                 tab_id: "startup-tab",
                 workspace_id: WORKSPACE,
                 terminal_id: "startup-terminal",
@@ -2862,9 +2863,7 @@ export function startupExecutor(
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              panes: [
-                { pane_id: "startup-pane", rect: { width: 1, height: 1 } },
-              ],
+              panes: [{ pane_id: activePaneId, rect: { width: 1, height: 1 } }],
             },
           }),
           stderr: "",
@@ -2889,7 +2888,7 @@ export function startupExecutor(
             id: AGENT_ID,
             result: {
               pane: {
-                pane_id: "startup-pane",
+                pane_id: activePaneId,
                 terminal_id: "startup-terminal",
               },
             },
@@ -2923,7 +2922,7 @@ export function startupExecutor(
                   );
                   value.agents[0].herdr_agent = alias;
                   value.agents[0].name = alias;
-                  value.agents[0].pane_id = "startup-pane";
+                  value.agents[0].pane_id = activePaneId;
                   value.agents[0].tab_id = "startup-tab";
                   if (reportNullSession) value.agents[0].agent_session = null;
                   return JSON.stringify({ id: AGENT_ID, result: value });

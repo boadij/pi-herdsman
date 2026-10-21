@@ -139,6 +139,7 @@ type AcceptedEvidenceContext = {
   evidenceAssignmentId?: string;
   inheritedEvidence: RequiredEvidence[];
   localEvidence: RequiredEvidence[];
+  currentEvidenceIds?: string[];
 };
 
 export type EvidencePageOptions = Readonly<{
@@ -272,6 +273,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       evidenceAssignmentId: string;
       inheritedEvidence: RequiredEvidence[];
       localEvidence: RequiredEvidence[];
+      currentEvidenceIds?: string[];
       effectiveEvidence: RequiredEvidence[];
     }
   | undefined {
@@ -324,6 +326,15 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       !data.inheritedEvidence.every(isRequiredEvidence) ||
       !Array.isArray(data.localEvidence) ||
       !data.localEvidence.every(isRequiredEvidence) ||
+      (data.currentEvidenceIds !== undefined &&
+        (!Array.isArray(data.currentEvidenceIds) ||
+          new Set(data.currentEvidenceIds).size !==
+            data.currentEvidenceIds.length ||
+          !data.currentEvidenceIds.every(
+            (id) =>
+              typeof id === "string" &&
+              data.inheritedEvidence.some((item) => item.id === id),
+          ))) ||
       (data.projectAssignmentId === undefined &&
         (data.inheritedEvidence.length || data.localEvidence.length)) ||
       new Set(
@@ -366,6 +377,10 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       latest.requestId === data.requestId &&
       (latest.projectAssignmentId !== data.projectAssignmentId ||
         latest.evidenceAssignmentId !== data.evidenceAssignmentId ||
+        !isDeepStrictEqual(
+          latest.currentEvidenceIds ?? [],
+          data.currentEvidenceIds ?? [],
+        ) ||
         latest.inheritedEvidence.length !== data.inheritedEvidence.length ||
         latest.inheritedEvidence.some(
           (item, index) =>
@@ -443,6 +458,9 @@ function persistAcceptedRequiredEvidence(
     localEvidence: (request.localEvidence ?? []).map(
       upgradeAndVerifyRequiredEvidence,
     ),
+    ...(request.currentEvidenceIds
+      ? { currentEvidenceIds: [...request.currentEvidenceIds] }
+      : {}),
   };
   const existing = ctx.sessionManager
     .getBranch()
@@ -1457,6 +1475,9 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
         evidenceAssignmentId: current.evidenceAssignmentId,
         inheritedEvidence: current.inheritedEvidence,
         localEvidence: local,
+        ...(current.currentEvidenceIds !== undefined
+          ? { currentEvidenceIds: [...current.currentEvidenceIds] }
+          : {}),
       } satisfies AcceptedEvidenceContext);
     }
     const effective = [...current.inheritedEvidence, ...local];
@@ -1464,7 +1485,7 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
       content: [
         {
           type: "text" as const,
-          text: `Required evidence updated.\n${effective.length ? effective.map((item) => `- ${item.id.slice(0, 8)}: ${item.name}`).join("\n") : "(none)"}`,
+          text: `Retained evidence updated.\n${effective.length ? effective.map((item) => `- ${item.id.slice(0, 8)}: ${item.name}`).join("\n") : "(none)"}`,
         },
       ],
       details: { evidence: effective },

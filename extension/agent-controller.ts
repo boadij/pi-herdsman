@@ -813,6 +813,7 @@ type ResolvedAssignmentSession = {
     evidenceAssignmentId?: string;
     inheritedEvidence: RequiredEvidence[];
     localEvidence: RequiredEvidence[];
+    currentEvidenceIds?: string[];
     terminal?: Record<string, unknown>;
   };
 };
@@ -884,7 +885,11 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
           ),
       ) ||
       !Array.isArray(previous.localEvidence) ||
-      !Array.isArray(current.localEvidence)
+      !Array.isArray(current.localEvidence) ||
+      !isDeepStrictEqual(
+        previous.currentEvidenceIds ?? [],
+        current.currentEvidenceIds ?? [],
+      )
     )
       return false;
   }
@@ -907,6 +912,7 @@ function currentManagedEvidence(ctx: ExtensionContext):
       evidenceAssignmentId: string;
       inheritedEvidence: RequiredEvidence[];
       localEvidence: RequiredEvidence[];
+      currentEvidenceIds?: string[];
     }
   | undefined {
   const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
@@ -931,7 +937,18 @@ function currentManagedEvidence(ctx: ExtensionContext):
     data?.paneId !== state.paneId ||
     data?.projectAssignmentId !== state.projectAssignmentId ||
     !Array.isArray(data.inheritedEvidence) ||
-    !Array.isArray(data.localEvidence)
+    !Array.isArray(data.localEvidence) ||
+    (data.currentEvidenceIds !== undefined &&
+      (!Array.isArray(data.currentEvidenceIds) ||
+        new Set(data.currentEvidenceIds).size !==
+          data.currentEvidenceIds.length ||
+        !data.currentEvidenceIds.every(
+          (id: unknown) =>
+            typeof id === "string" &&
+            data.inheritedEvidence.some(
+              (item: RequiredEvidence) => item.id === id,
+            ),
+        )))
   )
     throw new Error(
       "Managed-agent required-evidence session metadata is foreign or malformed",
@@ -942,6 +959,9 @@ function currentManagedEvidence(ctx: ExtensionContext):
     evidenceAssignmentId: data.evidenceAssignmentId,
     inheritedEvidence: data.inheritedEvidence,
     localEvidence: data.localEvidence,
+    ...(data.currentEvidenceIds
+      ? { currentEvidenceIds: [...data.currentEvidenceIds] }
+      : {}),
   };
 }
 type AssignmentSessionSelector =
@@ -1973,6 +1993,17 @@ export function resolveAssignmentSession(
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
           !record.localEvidence.every(isRequiredEvidence) ||
+          (record.currentEvidenceIds !== undefined &&
+            (!Array.isArray(record.currentEvidenceIds) ||
+              new Set(record.currentEvidenceIds).size !==
+                record.currentEvidenceIds.length ||
+              !record.currentEvidenceIds.every(
+                (id: unknown) =>
+                  typeof id === "string" &&
+                  record.inheritedEvidence.some(
+                    (item: RequiredEvidence) => item.id === id,
+                  ),
+              ))) ||
           (record.projectAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
           new Set(
@@ -2185,6 +2216,17 @@ export function resolveAssignmentSession(
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
           !record.localEvidence.every(isRequiredEvidence) ||
+          (record.currentEvidenceIds !== undefined &&
+            (!Array.isArray(record.currentEvidenceIds) ||
+              new Set(record.currentEvidenceIds).size !==
+                record.currentEvidenceIds.length ||
+              !record.currentEvidenceIds.every(
+                (id: unknown) =>
+                  typeof id === "string" &&
+                  record.inheritedEvidence.some(
+                    (item: RequiredEvidence) => item.id === id,
+                  ),
+              ))) ||
           (record.projectAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
           new Set(
@@ -2247,6 +2289,9 @@ export function resolveAssignmentSession(
           ...record,
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
+          ...(record.currentEvidenceIds
+            ? { currentEvidenceIds: [...record.currentEvidenceIds] }
+            : {}),
         };
         if (!isDeepStrictEqual(upgradedRecord, record))
           manager.appendCustomEntry(
@@ -2278,6 +2323,9 @@ export function resolveAssignmentSession(
             : {}),
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
+          ...(record.currentEvidenceIds
+            ? { currentEvidenceIds: [...record.currentEvidenceIds] }
+            : {}),
           ...(historicalTerminal ? { terminal: historicalTerminal } : {}),
         };
       }
@@ -2685,6 +2733,7 @@ export function requestRecordBytesFor(
     projectAssignmentId: string;
     evidenceAssignmentId: string;
     requiredEvidence: readonly RequiredEvidence[];
+    currentEvidenceIds?: readonly string[];
   },
 ): number {
   return mailboxRecordBytes({
@@ -2701,7 +2750,13 @@ export function requestRecordBytesFor(
     text,
     ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
     ...(evidence
-      ? { ...evidence, requiredEvidence: [...evidence.requiredEvidence] }
+      ? {
+          ...evidence,
+          requiredEvidence: [...evidence.requiredEvidence],
+          ...(evidence.currentEvidenceIds
+            ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
+            : {}),
+        }
       : {}),
     createdAt,
   });
@@ -2723,6 +2778,7 @@ export function prospectiveAssignmentFits(
     projectAssignmentId: string;
     evidenceAssignmentId: string;
     requiredEvidence: readonly RequiredEvidence[];
+    currentEvidenceIds?: readonly string[];
   },
 ): boolean {
   return (
@@ -2739,7 +2795,13 @@ export function prospectiveAssignmentFits(
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       ...(evidence
-        ? { ...evidence, requiredEvidence: [...evidence.requiredEvidence] }
+        ? {
+            ...evidence,
+            requiredEvidence: [...evidence.requiredEvidence],
+            ...(evidence.currentEvidenceIds
+              ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
+              : {}),
+          }
         : {}),
       createdAt,
     }) <= mailboxLimitBytes
@@ -3962,6 +4024,7 @@ export function createAgentController(
         requiredEvidence: readonly RequiredEvidence[];
         inheritedEvidence?: readonly RequiredEvidence[];
         localEvidence?: readonly RequiredEvidence[];
+        currentEvidenceIds?: readonly string[];
       };
     } = {},
   ): Promise<string> => {
@@ -3995,6 +4058,13 @@ export function createAgentController(
               : {}),
             ...(submitOptions.evidence.localEvidence
               ? { localEvidence: [...submitOptions.evidence.localEvidence] }
+              : {}),
+            ...(submitOptions.evidence.currentEvidenceIds
+              ? {
+                  currentEvidenceIds: [
+                    ...submitOptions.evidence.currentEvidenceIds,
+                  ],
+                }
               : {}),
           }
         : {}),
@@ -6385,6 +6455,13 @@ export function createAgentController(
                 ...(nestedEvidence?.localEvidence ?? []),
               ]
             : (projectAssignment?.requiredEvidence ?? []);
+        const currentEvidenceIds =
+          continuationEvidence?.currentEvidenceIds ??
+          nestedEvidence?.currentEvidenceIds ??
+          (scope.kind === "root"
+            ? projectAssignment?.currentEvidenceIds
+            : undefined) ??
+          [];
         let handoffAdditions: RequiredEvidence[] = [];
         let retainedSelections: MessageFileInput[] = [];
         const promoteMatchingEvidence = (file: string): MessageFileInput => {
@@ -6550,6 +6627,9 @@ export function createAgentController(
             evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
             inheritedEvidence: nestedEvidence.inheritedEvidence,
             localEvidence,
+            ...(nestedEvidence.currentEvidenceIds !== undefined
+              ? { currentEvidenceIds: [...nestedEvidence.currentEvidenceIds] }
+              : {}),
           });
           nestedEvidence = { ...nestedEvidence, localEvidence };
           requiredEvidence = [
@@ -6580,8 +6660,22 @@ export function createAgentController(
                 ? {
                     inheritedEvidence: continuationEvidence.inheritedEvidence,
                     localEvidence: continuationEvidence.localEvidence,
+                    currentEvidenceIds: continuationEvidence.currentEvidenceIds,
                   }
-                : {}),
+                : scope.kind === "managed-agent" && nestedEvidence
+                  ? {
+                      inheritedEvidence: nestedEvidence.inheritedEvidence,
+                      localEvidence: nestedEvidence.localEvidence,
+                      currentEvidenceIds: nestedEvidence.currentEvidenceIds,
+                    }
+                  : scope.kind === "root" && projectAssignment
+                    ? {
+                        inheritedEvidence: requiredEvidence,
+                        localEvidence: [],
+                        currentEvidenceIds:
+                          projectAssignment.currentEvidenceIds,
+                      }
+                    : {}),
             }
           : undefined;
         const requiredFiles: MessageFileInput[] = requiredEvidence.map(
@@ -6671,21 +6765,81 @@ export function createAgentController(
             representedEvidenceIds.add(addition.id);
           }
         }
+        const currentEvidence = currentEvidenceIds.map((id) => {
+          const entry = requiredEvidence.find((item) => item.id === id);
+          const inherited =
+            continuationEvidence?.inheritedEvidence ??
+            nestedEvidence?.inheritedEvidence ??
+            requiredEvidence;
+          if (!entry || !inherited.some((item) => item.id === id))
+            fail(
+              "invalid_request",
+              "Current evidence selection is invalid",
+              p.action,
+            );
+          return entry;
+        });
+        const automaticCurrentFiles: MessageFileInput[] = [];
+        for (const entry of currentEvidence) {
+          if (
+            selectedEvidenceIds.has(entry.id) ||
+            representedEvidenceIds.has(entry.id)
+          )
+            continue;
+          const index = requiredEvidence.findIndex(
+            (item) => item.id === entry.id,
+          );
+          automaticCurrentFiles.push(requiredFiles[index]!);
+          representedEvidenceIds.add(entry.id);
+        }
         const historicalEvidence = requiredEvidence.filter(
-          (entry) => !selectedEvidenceIds.has(entry.id),
+          (entry) =>
+            !selectedEvidenceIds.has(entry.id) &&
+            !currentEvidenceIds.includes(entry.id),
         );
         const manifest = historicalEvidence.length
-          ? `\n\nRequired historical evidence:\n${historicalEvidence
+          ? `\n\nEarlier retained evidence (available on demand):\n${historicalEvidence
               .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
               .join(
                 "\n",
-              )}\nUse read_evidence when historical details are needed.`
+              )}\nConsult relevant entries with read_evidence when needed. You do not need to read every reference.`
           : "";
         const assignmentTask = `${p.task}${manifest}`;
-        const prepareAssignmentInput = (assignmentLabel: string) =>
-          prepareMessageInput(
-            assignmentTask,
-            assignmentFiles,
+        let automaticReferenceFallback = false;
+        let assignmentTaskToSend = assignmentTask;
+        const referenceOnlyTask = () =>
+          `${assignmentTask}\n\nCurrent evidence — reference-only batch:\n${currentEvidence
+            .filter((entry) => !selectedEvidenceIds.has(entry.id))
+            .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
+            .join(
+              "\n",
+            )}\nThis batch was not embedded. Use read_evidence to retrieve the items relevant to your task.`;
+        const useReferenceOnlyBatch = () => {
+          automaticReferenceFallback = true;
+          assignmentTaskToSend = referenceOnlyTask();
+        };
+        const prepareAssignmentInput = (
+          assignmentLabel: string,
+          includeAutomatic = true,
+        ) => {
+          const fallbackManifest =
+            includeAutomatic || !automaticCurrentFiles.length
+              ? ""
+              : `\n\nCurrent evidence — reference-only batch:\n${currentEvidence
+                  .filter((entry) => !selectedEvidenceIds.has(entry.id))
+                  .map(
+                    (entry) =>
+                      `- ${semanticEvidenceRef(entry)} — ${entry.name}`,
+                  )
+                  .join(
+                    "\n",
+                  )}\nThis batch was not embedded. Use read_evidence to retrieve the items relevant to your task.`;
+          const input = prepareMessageInput(
+            `${assignmentTask}${fallbackManifest}`,
+            [
+              ...(includeAutomatic ? automaticCurrentFiles : []),
+              ...assignmentFiles,
+            ],
             ctx.cwd,
             p.action,
             "Task",
@@ -6694,8 +6848,18 @@ export function createAgentController(
               verifiedEvidence,
               fileOrder: "textFirst",
               requireInline: true,
-              fits: (text, resultBindings) =>
-                prospectiveAssignmentFits(
+              fits: (text, resultBindings) => {
+                const bindings = [...resultBindings];
+                if (automaticReferenceFallback)
+                  for (const entry of currentEvidence)
+                    if (
+                      "result" in entry &&
+                      !bindings.some(
+                        (binding) => binding.ref === entry.result.ref,
+                      )
+                    )
+                      bindings.push(entry.result);
+                return prospectiveAssignmentFits(
                   options.build,
                   assignment!.runId,
                   assignment!.ownerSessionId,
@@ -6706,14 +6870,65 @@ export function createAgentController(
                   assignment!.createdAt,
                   assignment!.requestId,
                   limits.mailbox.bytes,
-                  resultBindings,
+                  bindings,
                   evidenceMetadata,
-                ),
+                );
+              },
             },
           );
+          if (!includeAutomatic) {
+            const bindings = [...input.resultBindings];
+            for (const entry of currentEvidence)
+              if (
+                !selectedEvidenceIds.has(entry.id) &&
+                "result" in entry &&
+                !bindings.some((binding) => binding.ref === entry.result.ref)
+              )
+                bindings.push(entry.result);
+            if (
+              !prospectiveAssignmentFits(
+                options.build,
+                assignment!.runId,
+                assignment!.ownerSessionId,
+                assignment!.workspaceId,
+                assignmentLabel,
+                input.text,
+                "",
+                assignment!.createdAt,
+                assignment!.requestId,
+                limits.mailbox.bytes,
+                bindings,
+                evidenceMetadata,
+              )
+            )
+              fail(
+                "invalid_request",
+                "Current evidence references exceed the configured mailbox limit",
+                p.action,
+              );
+            return { ...input, resultBindings: bindings };
+          }
+          return input;
+        };
+        const prepareAssignmentForLabel = (assignmentLabel: string) => {
+          automaticReferenceFallback = false;
+          assignmentTaskToSend = assignmentTask;
+          try {
+            return prepareAssignmentInput(assignmentLabel);
+          } catch (error) {
+            if (
+              !(error instanceof OperationError) ||
+              error.detail.details?.capacity !== true ||
+              !automaticCurrentFiles.length
+            )
+              throw error;
+            useReferenceOnlyBatch();
+            return prepareAssignmentInput(assignmentLabel, false);
+          }
+        };
         // The label is knowable until a mailbox collision changes it; only Herdr's
         // pane identity remains unknown until startup returns.
-        assignmentInput = prepareAssignmentInput(label);
+        assignmentInput = prepareAssignmentForLabel(label);
         const preparedBody = expandAgentBodyFiles(
           definition.body,
           assignmentInput.canonicalPaths,
@@ -6783,7 +6998,7 @@ export function createAgentController(
                   'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
                   p.action,
                 );
-              assignmentInput = prepareAssignmentInput(label);
+              assignmentInput = prepareAssignmentForLabel(label);
               mailbox = agentMailboxPath(workspaceId, label);
               continue;
             } catch (retryError) {
@@ -6805,7 +7020,7 @@ export function createAgentController(
                   'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
                   p.action,
                 );
-              assignmentInput = prepareAssignmentInput(label);
+              assignmentInput = prepareAssignmentForLabel(label);
               mailbox = agentMailboxPath(workspaceId, label);
               continue;
             }
@@ -7155,32 +7370,70 @@ export function createAgentController(
           });
           // Herdr chooses the pane only while starting. Re-render now that the
           // authoritative final envelope identity is known.
-          assignmentInput = prepareMessageInput(
-            assignmentTask,
-            assignmentFiles,
-            ctx.cwd,
-            p.action,
-            "Task",
-            {
-              inlineLimitBytes: limits.inline.bytes,
-              mailboxLimitBytes: limits.mailbox.bytes,
-              verifiedEvidence,
-              fileOrder: "textFirst",
-              requireInline: true,
-              serializedBytes: (text, resultBindings) =>
-                requestRecordBytesFor(
-                  options.build,
-                  runtime,
-                  "task",
-                  text,
-                  undefined,
-                  assignment!.createdAt,
-                  assignment!.requestId,
-                  resultBindings,
-                  evidenceMetadata,
-                ),
-            },
-          );
+          const prepareFinalAssignment = () =>
+            prepareMessageInput(
+              assignmentTaskToSend,
+              [
+                ...(!automaticReferenceFallback ? automaticCurrentFiles : []),
+                ...assignmentFiles,
+              ],
+              ctx.cwd,
+              p.action,
+              "Task",
+              {
+                inlineLimitBytes: limits.inline.bytes,
+                mailboxLimitBytes: limits.mailbox.bytes,
+                verifiedEvidence,
+                fileOrder: "textFirst",
+                requireInline: true,
+                serializedBytes: (text, resultBindings) => {
+                  const bindings = [...resultBindings];
+                  if (automaticReferenceFallback)
+                    for (const entry of currentEvidence)
+                      if (
+                        "result" in entry &&
+                        !bindings.some(
+                          (binding) => binding.ref === entry.result.ref,
+                        )
+                      )
+                        bindings.push(entry.result);
+                  return requestRecordBytesFor(
+                    options.build,
+                    runtime,
+                    "task",
+                    text,
+                    undefined,
+                    assignment!.createdAt,
+                    assignment!.requestId,
+                    bindings,
+                    evidenceMetadata,
+                  );
+                },
+              },
+            );
+          try {
+            assignmentInput = prepareFinalAssignment();
+          } catch (error) {
+            if (
+              automaticReferenceFallback ||
+              !automaticCurrentFiles.length ||
+              !(error instanceof OperationError) ||
+              error.detail.details?.capacity !== true
+            )
+              throw error;
+            useReferenceOnlyBatch();
+            assignmentInput = prepareFinalAssignment();
+          }
+          if (automaticReferenceFallback) {
+            const bindings = [...assignmentInput.resultBindings];
+            for (const entry of currentEvidence)
+              if (
+                "result" in entry &&
+                !bindings.some((binding) => binding.ref === entry.result.ref)
+              )
+                bindings.push(entry.result);
+            assignmentInput = { ...assignmentInput, resultBindings: bindings };
+          }
           await validateIntegration(runtime, ctx, {
             signal,
             waitForSession: true,
@@ -7215,6 +7468,8 @@ export function createAgentController(
                       nestedEvidence.evidenceAssignmentId ||
                     JSON.stringify(current.inheritedEvidence) !==
                       JSON.stringify(nestedEvidence.inheritedEvidence) ||
+                    JSON.stringify(current.currentEvidenceIds ?? []) !==
+                      JSON.stringify(nestedEvidence.currentEvidenceIds ?? []) ||
                     JSON.stringify(current.localEvidence) !==
                       JSON.stringify(nestedEvidence.localEvidence)
                   )
@@ -7265,6 +7520,10 @@ export function createAgentController(
                       continuationEvidence.evidenceAssignmentId ||
                     JSON.stringify(record.inheritedEvidence) !==
                       JSON.stringify(continuationEvidence.inheritedEvidence) ||
+                    JSON.stringify(record.currentEvidenceIds ?? []) !==
+                      JSON.stringify(
+                        continuationEvidence.currentEvidenceIds ?? [],
+                      ) ||
                     JSON.stringify(record.localEvidence) !==
                       JSON.stringify(continuationEvidence.localEvidence)
                   )
@@ -7323,9 +7582,15 @@ export function createAgentController(
                     current.assignment.id !== projectAssignment.id ||
                     (!resumed &&
                       scope.kind === "root" &&
-                      JSON.stringify(
+                      (JSON.stringify(
                         current.assignment.requiredEvidence ?? [],
-                      ) !== JSON.stringify(requiredEvidence))
+                      ) !== JSON.stringify(requiredEvidence) ||
+                        JSON.stringify(
+                          current.assignment.currentEvidenceIds ?? [],
+                        ) !==
+                          JSON.stringify(
+                            projectAssignment.currentEvidenceIds ?? [],
+                          )))
                   )
                     throw new Error(
                       "Project assignment or required evidence changed during Agent startup; retry delegation",
@@ -7336,6 +7601,27 @@ export function createAgentController(
           );
           accepted = true;
           options.onChanged();
+          const inlineNames = new Set(
+            (assignmentInput?.attachments ?? [])
+              .filter((attachment) => attachment.inline && attachment.ref)
+              .map((attachment) => attachment.ref!),
+          );
+          const currentRefs = currentEvidence.map(semanticEvidenceRef);
+          const historicalRefs = historicalEvidence.map(semanticEvidenceRef);
+          const evidenceReceipt = {
+            currentInline: currentRefs.filter((ref) => inlineNames.has(ref)),
+            explicitInline: (assignmentInput?.attachments ?? [])
+              .filter(
+                (attachment) =>
+                  attachment.inline &&
+                  !currentRefs.includes(attachment.ref ?? ""),
+              )
+              .map((attachment) => attachment.name),
+            referenced: [
+              ...currentRefs.filter((ref) => !inlineNames.has(ref)),
+              ...historicalRefs,
+            ],
+          };
           return {
             ok: true,
             action: p.action,
@@ -7346,6 +7632,7 @@ export function createAgentController(
             session_id: runtime.piSessionId,
             session_path: runtime.piSessionFile,
             request_id: requestId,
+            evidence: evidenceReceipt,
           };
         } catch (caught) {
           if (promptWriteFailed) throw caught;
