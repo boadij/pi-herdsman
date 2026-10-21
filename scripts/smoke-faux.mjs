@@ -33,6 +33,9 @@ const modelIds = [
   "agent-crash-target",
   "agent-crash-parent",
   "agent-crash-child",
+  "federated-peer-a",
+  "federated-peer-b",
+  "federated-peer-lead",
 ];
 
 function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
@@ -575,6 +578,131 @@ export function decide(model, context) {
     return waitForResult(
       "Waiting for the exact assigned Lead readiness message.",
     );
+  }
+  if (model === "federated-peer-a") {
+    if (
+      messages.some(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("PEER_E2E_REPLY_OK"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
+    const send = prompt.includes("PEER_E2E_A_SEND");
+    const list = correlatedCall(messages, "list_peers");
+    if (send && !list) return call("list_peers", {});
+    if (send && list && !correlatedCall(messages, "message_peer")) {
+      const peers = JSON.parse(text(list.result));
+      const peer = peers.peers?.find((candidate) => candidate.machine);
+      if (!peer) throw new Error("federation smoke found no remote Manager");
+      const result = prompt.match(/result:([0-9a-f-]{36})/)?.[0];
+      if (!result) throw new Error("federation smoke omitted result evidence");
+      return call("message_peer", {
+        session: peer.session,
+        message:
+          "PEER_E2E_REQUEST: delegate the attached spec and report the result.",
+        files: ["spec.md", result],
+      });
+    }
+    if (send && correlatedCall(messages, "message_peer"))
+      return fauxAssistantMessage("PEER_E2E_A_SENT");
+    if (prompt.includes("PEER_E2E_A_POLL")) {
+      const promptIndex = messages.lastIndexOf(lastUser(messages));
+      if (!correlatedCall(messages.slice(promptIndex), "list_peers"))
+        return call("list_peers", {});
+      if (
+        messages.some(
+          (message) =>
+            message.role === "user" &&
+            text(message).includes("PEER_E2E_REPLY_OK"),
+        )
+      )
+        return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
+      return waitForResult("Waiting for the originating Manager reply.");
+    }
+    throw new Error("Unexpected federated-peer A transcript");
+  }
+  if (model === "federated-peer-b") {
+    const inbound = messages.find(
+      (message) =>
+        message.role === "user" && text(message).includes("PEER_E2E_REQUEST"),
+    );
+    const origin = text(inbound).match(
+      /Peer message from ([0-9a-f-]{36}):/,
+    )?.[1];
+    if (inbound && !origin)
+      throw new Error(
+        "federation smoke could not identify the exact origin session",
+      );
+    if (!inbound) return waitForResult("Waiting for a remote Manager request.");
+    const assignment = correlatedCall(messages, "delegate_project");
+    if (!assignment) {
+      const forwardable =
+        text(inbound).split("Forwardable received files:\n")[1] ?? "";
+      const refs = [
+        ...forwardable.matchAll(/^(?:spec\.md|[0-9a-f-]{36}): ([^\n]+)/gmu),
+      ].map((match) => match[1].trim());
+      if (refs.length < 2)
+        throw new Error(
+          "federation smoke did not receive forwardable evidence",
+        );
+      return call("delegate_project", {
+        branch: `herdsman/federation-smoke-${origin.slice(0, 8)}`,
+        task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifact, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
+        files: refs,
+      });
+    }
+    if (
+      !messages.some(
+        (message, index) =>
+          index > assignment.resultIndex &&
+          message.role === "user" &&
+          text(message).includes("PEER_E2E_LOCAL_RESULT"),
+      )
+    )
+      return waitForResult("Waiting for the local Lead result.");
+    if (correlatedCall(messages, "message_peer"))
+      return fauxAssistantMessage("PEER_E2E_B_REPLIED");
+    return call("message_peer", {
+      session: origin,
+      message:
+        "PEER_E2E_REPLY_OK: local delegation inspected the forwarded evidence.",
+    });
+  }
+  if (model === "federated-peer-lead") {
+    const promptMessage = text(lastUser(messages));
+    if (!promptMessage.includes("PEER_E2E_LOCAL_TASK"))
+      throw new Error("Unexpected federation Lead task");
+    const paths = [
+      ...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu),
+    ].map((match) => match[1]);
+    if (paths.length < 2)
+      throw new Error("federation Lead did not receive both evidence refs");
+    const successfulReads = messages
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => message.content ?? [])
+      .filter(
+        (part) =>
+          part.type === "toolCall" &&
+          part.name === "read" &&
+          messages.some(
+            (candidate) =>
+              candidate.role === "toolResult" &&
+              candidate.toolName === "read" &&
+              candidate.toolCallId === part.id &&
+              !candidate.isError,
+          ),
+      );
+    if (successfulReads.length < paths.length) {
+      const path = paths[successfulReads.length];
+      return call("read", { path });
+    }
+    if (correlatedCall(messages, "message_supervisor"))
+      return fauxAssistantMessage("PEER_E2E_LOCAL_RESULT");
+    return call("message_supervisor", {
+      message:
+        "PEER_E2E_LOCAL_RESULT: inspected forwarded spec and result evidence.",
+    });
   }
   if (model === "agent-terminal-failure") {
     const matched = correlatedCall(messages, "delegate_agent");

@@ -3,9 +3,11 @@ import test from "node:test";
 import {
   listRemotePeerOutbounds,
   parsePeerSshTarget,
+  peerRecoveryRequest,
   persistRemotePeerOutbound,
   removeRemotePeerOutbound,
 } from "./peer-transport.ts";
+import { assertPeerDataRoot } from "./peer-correspondence.ts";
 import { randomUUID } from "node:crypto";
 
 test("saved SSH targets preserve URI ports and SSH config aliases", () => {
@@ -63,4 +65,30 @@ test("saved SSH targets reject URI paths and option-shaped aliases", () => {
       () => parsePeerSshTarget(target),
       /Unsupported saved SSH target/,
     );
+});
+
+test("peer recovery carries the verified endpoint root and rejects mismatches", () => {
+  const expectedDataRoot = "/test/agent/pi-herdsman";
+  const request = JSON.parse(
+    peerRecoveryRequest(
+      {
+        id: randomUUID(),
+        capability: "a".repeat(64),
+        originSession: randomUUID(),
+        originGeneration: randomUUID(),
+        previousOriginGeneration: randomUUID(),
+        recipientSession: randomUUID(),
+        recipientGeneration: randomUUID(),
+      },
+      expectedDataRoot,
+    ),
+  );
+  assert.equal(request.expectedDataRoot, expectedDataRoot);
+  assert.doesNotThrow(() =>
+    assertPeerDataRoot(expectedDataRoot, request.expectedDataRoot),
+  );
+  assert.throws(
+    () => assertPeerDataRoot("/different/root", request.expectedDataRoot),
+    /data root/,
+  );
 });

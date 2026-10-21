@@ -32,6 +32,21 @@ export type RemotePeerSnapshot = Readonly<{
   }>;
 }>;
 
+export function peerRecoveryRequest(
+  request: Readonly<{
+    id: string;
+    capability: string;
+    originSession: string;
+    originGeneration: string;
+    previousOriginGeneration: string;
+    recipientSession: string;
+    recipientGeneration: string;
+  }>,
+  expectedDataRoot: string,
+): string {
+  return JSON.stringify({ ...request, expectedDataRoot });
+}
+
 const COMMAND_TIMEOUT_MS = 15_000;
 const OUTPUT_LIMIT = 1024 * 1024;
 const OUTBOUND_LIMIT = 64 * 1024;
@@ -226,7 +241,7 @@ export function parsePeerSshTarget(target: string): {
 
 export async function runPeerEndpoint(
   machine: SavedPeerMachine,
-  action: "probe" | "accept",
+  action: "probe" | "accept" | "poll" | "ack" | "finalize" | "recover",
   input?: string,
 ): Promise<string> {
   const target = parsePeerSshTarget(machine.target);

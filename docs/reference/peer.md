@@ -120,6 +120,14 @@ stored separately and verified before Pi delivery.
 Remote Manager sends are retained locally until the remote endpoint confirms
 durable acceptance; failed sends remain queued and are retried when the Manager
 lists peers again. Acceptance is not delivery to Pi or completion of the
-requested work. The current remote path does not yet provide return-message
-retrieval without reverse SSH, so remote replies and disconnect/reconnect
-round-trips are not supported by this release.
+requested work. An accepted request also establishes a capability-scoped,
+durable return correspondence. The recipient Manager can reply to the exact
+originating session with `message_peer`; the reply is queued at the recipient
+and retrieved over the original SSH route when the originating Manager lists
+peers. Replies remain queued until acknowledged, so a disconnect and later
+reconnection does not require reverse SSH. Recovery is allowed only for the
+same exact Pi session after it has re-established live Manager authority; a
+replacement session is not substituted. Requests also verify the endpoint's
+effective Herdsman data root against the discovered route before recovery or
+reply transfer. Delivery to Pi and completion of the requested work remain
+separate states.
