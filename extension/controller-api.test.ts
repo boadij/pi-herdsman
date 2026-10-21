@@ -23,6 +23,7 @@ import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
+  MANAGED_AGENT_BOOTSTRAP_EVENT,
   OTHER_HERDSMAN_BUILD,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
@@ -12118,4 +12119,91 @@ test("root delegation rejection preserves safe authorization state across determ
     profileValid = true;
     await denied(); // valid profile, but its allow-list excludes this definition
   }
+});
+
+test("rolls back when root delegation policy denies after bootstrap preparation", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const pi = fakePi();
+  const context = fakeContext() as any;
+  let allowed = true;
+  let reachedPrepare!: () => void;
+  let resumePrepare!: () => void;
+  const prepared = new Promise<void>((resolve) => {
+    reachedPrepare = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    resumePrepare = resolve;
+  });
+  pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
+    if (event.phase === "prepare")
+      event.register("test/policy-gate", async () => {
+        reachedPrepare();
+        await gate;
+        return { payload: "prepared" };
+      });
+  });
+  const controller = createAgentController(
+    pi.pi as never,
+    {
+      scope: { kind: "root" },
+      rootDelegationPolicy: () => (allowed ? "all" : new Set(["other"])),
+      rootDelegationGeneration: () => ({
+        sessionId: context.sessionManager.getSessionId(),
+        roleGeneration: 1,
+        role: "lead",
+        authority: undefined,
+        profile: undefined,
+      }),
+      build: HERDSMAN_BUILD,
+      extensionPath: "test",
+      isContextRetired: () => false,
+      snapshotDependencies: {
+        runtimeForLabel: () => undefined,
+        readLeadSessionIds: () => [],
+        staleAfterMs: 60_000,
+      },
+      persistedTranscriptReady: () => false,
+      agentDefinitions: async () => [
+        {
+          name: "implementer",
+          path: "/tmp/implementer.md",
+          frontmatter: {},
+          body: "",
+        },
+      ],
+      readTranscript: () => ({ transcript: "", truncated: false }),
+      workspaceId: () => WORKSPACE,
+      sendResultMessage: () => undefined,
+      sendAskMessage: () => undefined,
+      sessionRetired: () => false,
+      appendError: () => undefined,
+      onChanged: () => undefined,
+      onWorkChanged: () => undefined,
+      reportWatcherError: () => undefined,
+    } as any,
+  );
+
+  const delegation = controller.action(context, {
+    action: "delegate",
+    definition: "implementer",
+    task: "disposable policy rollback test",
+  } as any);
+  await prepared;
+  allowed = false;
+  resumePrepare();
+  await assert.rejects(delegation, (error: unknown) => {
+    assert.ok(error instanceof OperationError);
+    assert.equal(error.detail.category, "invalid_request");
+    assert.equal(
+      error.detail.message,
+      "Agent definition implementer is not allowed",
+    );
+    assert.equal(error.detail.rollbackOccurred, true);
+    return true;
+  });
+  assert.equal(
+    pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+    "the late authorization rejection occurs before launch",
+  );
 });
