@@ -9237,6 +9237,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     branch,
     text: "Current cleanup project",
     requiredEvidence: [inherited],
+    currentEvidenceIds: [inherited.id],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -9285,6 +9286,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
               evidenceAssignmentId: request.evidenceAssignmentId,
               inheritedEvidence: request.requiredEvidence ?? [],
               localEvidence: request.localEvidence ?? [],
+              currentEvidenceIds: request.currentEvidenceIds,
             },
           },
         ],
@@ -9359,8 +9361,22 @@ test("scoped assignment result delivery persists terminal ownership and removes 
       "delegated task should be accepted by the child mailbox",
     );
     assert.equal(accepted!.projectAssignmentId, assignment.id);
-    assert.equal(accepted!.localEvidence, undefined);
     assert.deepEqual(accepted!.requiredEvidence, [inherited]);
+    assert.deepEqual(accepted!.inheritedEvidence, [inherited]);
+    assert.deepEqual(accepted!.localEvidence, []);
+    assert.deepEqual(accepted!.currentEvidenceIds, [inherited.id]);
+    const acceptedEvidenceEntry = nativeSessions
+      .get(sessionId)!
+      .entries.find(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-agent-required-evidence",
+      ) as any;
+    assert.ok(acceptedEvidenceEntry, "Agent persists accepted evidence");
+    assert.deepEqual(acceptedEvidenceEntry.data.inheritedEvidence, [inherited]);
+    assert.deepEqual(acceptedEvidenceEntry.data.localEvidence, []);
+    assert.deepEqual(acceptedEvidenceEntry.data.currentEvidenceIds, [
+      inherited.id,
+    ]);
 
     const mailbox = agentMailboxPath(WORKSPACE, label);
     const acceptedState = readAgentState(mailbox)!;
@@ -9714,6 +9730,11 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.deepEqual(accepted!.requiredEvidence, [inherited, local]);
     assert.deepEqual(accepted!.currentEvidenceIds, [inherited.id]);
     assert.deepEqual(accepted!.localEvidence, [local]);
+    assert.ok(
+      accepted!.text.includes("accepted inherited plan contents") ||
+        accepted!.text.includes("Current evidence — reference-only batch"),
+      "nested Agent receives the current batch inline or as a truthful reference fallback",
+    );
     const firstRequest = structuredClone(accepted!);
     const childState = readAgentState(childMailbox)!;
     assert.ok(childPi && childContext);

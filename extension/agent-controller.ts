@@ -6664,7 +6664,14 @@ export function createAgentController(
                       localEvidence: nestedEvidence.localEvidence,
                       currentEvidenceIds: nestedEvidence.currentEvidenceIds,
                     }
-                  : {}),
+                  : scope.kind === "root" && projectAssignment
+                    ? {
+                        inheritedEvidence: requiredEvidence,
+                        localEvidence: [],
+                        currentEvidenceIds:
+                          projectAssignment.currentEvidenceIds,
+                      }
+                    : {}),
             }
           : undefined;
         const requiredFiles: MessageFileInput[] = requiredEvidence.map(
