@@ -2069,7 +2069,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(
     (tool.parameters as { properties: { retain: { description: string } } })
       .properties.retain.description,
-    "For Manager messages to assigned project Leads: retain both message text and files as required evidence for future Agents. Use for lasting requirements and accepted reviews; omit for temporary communication.",
+    "For Manager messages to assigned project Leads: retain both message text and files as evidence available to eligible descendant Agents. They can inspect relevant references as needed; use for lasting requirements and accepted reviews, not temporary communication.",
   );
   const delegateTool = pi.tools.find(
     (candidate) => candidate.name === "delegate_project",

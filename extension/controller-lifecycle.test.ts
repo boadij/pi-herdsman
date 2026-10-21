@@ -5467,7 +5467,10 @@ test("managed project delegation references supported evidence larger than the i
   realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
   realFs.writeFileSync(
     configPath,
-    JSON.stringify({ inlineAttachmentLimitBytes: 1024 }),
+    JSON.stringify({
+      inlineAttachmentLimitBytes: 16 * 1024,
+      mailboxPayloadLimitBytes: 50 * 1024,
+    }),
   );
 
   const socket = join(
@@ -5477,8 +5480,10 @@ test("managed project delegation references supported evidence larger than the i
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
   const branch = `evidence-reference-${randomUUID()}`;
-  const content = "large supported evidence\n".repeat(256);
+  const content = "large supported evidence\n".repeat(1024);
   const largeExplicitPath = join(tmpdir(), `large-explicit-${randomUUID()}.md`);
+  const smallExplicitPath = join(tmpdir(), `small-explicit-${randomUUID()}.md`);
+  realFs.writeFileSync(smallExplicitPath, "explicit supporting patch");
   const largeExplicit = "large explicit attachment\n".repeat(65536);
   const nonRegularPath = join(tmpdir(), `non-regular-${randomUUID()}`);
   realFs.writeFileSync(largeExplicitPath, largeExplicit);
@@ -5490,6 +5495,8 @@ test("managed project delegation references supported evidence larger than the i
     "plan.md",
     content,
   );
+  const collisionPath = join(tmpdir(), snapshot.ref);
+  realFs.writeFileSync(collisionPath, "unrelated inline file");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
@@ -5497,10 +5504,12 @@ test("managed project delegation references supported evidence larger than the i
     branch,
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
+    currentEvidenceIds: [snapshot.id],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
   const label = `er-${randomUUID().slice(0, 8)}`;
+  const finalPaneId = "pane-" + "p".repeat(46_000);
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -5516,6 +5525,9 @@ test("managed project delegation references supported evidence larger than the i
     (request) => {
       accepted = request;
     },
+    undefined,
+    undefined,
+    finalPaneId,
   );
   const pi = fakePi({
     exec: async (command: string, args: string[]) => {
@@ -5622,13 +5634,43 @@ test("managed project delegation references supported evidence larger than the i
       undefined,
       "failed current delivery must not be advertised as accepted",
     );
+    const automatic = await registeredAgentTool(pi, "delegate").execute(
+      "automatic-reference-fallback",
+      {
+        definition: "agent",
+        label,
+        task: "use the current retained plan",
+        files: [smallExplicitPath, collisionPath],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(accepted);
+    assert.equal(accepted!.paneId, finalPaneId);
+    assert.match(accepted!.text, /Current evidence — reference-only batch/);
+    assert.ok(accepted!.text.includes(`- ${snapshot.ref} — plan.md`));
+    assert.ok(
+      accepted!.text.includes(`<file name="${realpathSync(collisionPath)}"`),
+    );
+    assert.ok(accepted!.text.includes("unrelated inline file"));
+    assert.match(accepted!.text, /explicit supporting patch/);
+    assert.deepEqual(automatic.details.evidence, {
+      currentInline: [],
+      explicitInline: [basename(smallExplicitPath), snapshot.ref],
+      referenced: [snapshot.ref],
+    });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(collisionPath, { force: true });
     realFs.rmSync(largeExplicitPath, { force: true });
+    realFs.rmSync(smallExplicitPath, { force: true });
     realFs.rmSync(nonRegularPath, { recursive: true, force: true });
     if (process.platform !== "win32") realFs.rmSync(fifoPath, { force: true });
     if (previousConfig === undefined)
@@ -5931,6 +5973,7 @@ test("managed project delegation preserves inherited semantic result identity ov
     branch,
     text: "Implement the assigned project",
     requiredEvidence: [inherited],
+    currentEvidenceIds: [inherited.id],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -9214,6 +9257,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     branch,
     text: "Current cleanup project",
     requiredEvidence: [inherited],
+    currentEvidenceIds: [inherited.id],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -9262,6 +9306,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
               evidenceAssignmentId: request.evidenceAssignmentId,
               inheritedEvidence: request.requiredEvidence ?? [],
               localEvidence: request.localEvidence ?? [],
+              currentEvidenceIds: request.currentEvidenceIds,
             },
           },
         ],
@@ -9336,8 +9381,22 @@ test("scoped assignment result delivery persists terminal ownership and removes 
       "delegated task should be accepted by the child mailbox",
     );
     assert.equal(accepted!.projectAssignmentId, assignment.id);
-    assert.equal(accepted!.localEvidence, undefined);
     assert.deepEqual(accepted!.requiredEvidence, [inherited]);
+    assert.deepEqual(accepted!.inheritedEvidence, [inherited]);
+    assert.deepEqual(accepted!.localEvidence, []);
+    assert.deepEqual(accepted!.currentEvidenceIds, [inherited.id]);
+    const acceptedEvidenceEntry = nativeSessions
+      .get(sessionId)!
+      .entries.find(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-agent-required-evidence",
+      ) as any;
+    assert.ok(acceptedEvidenceEntry, "Agent persists accepted evidence");
+    assert.deepEqual(acceptedEvidenceEntry.data.inheritedEvidence, [inherited]);
+    assert.deepEqual(acceptedEvidenceEntry.data.localEvidence, []);
+    assert.deepEqual(acceptedEvidenceEntry.data.currentEvidenceIds, [
+      inherited.id,
+    ]);
 
     const mailbox = agentMailboxPath(WORKSPACE, label);
     const acceptedState = readAgentState(mailbox)!;
@@ -9514,6 +9573,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       evidenceAssignmentId: parentRequestId,
       inheritedEvidence: [inherited],
       localEvidence: [local],
+      currentEvidenceIds: [inherited.id],
     },
   };
   const parentEntries: any[] = [identity, parentEvidence];
@@ -9699,7 +9759,13 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.equal(accepted!.ownerSessionId, parentSessionId);
     assert.equal(accepted!.projectAssignmentId, projectAssignmentId);
     assert.deepEqual(accepted!.requiredEvidence, [inherited, local]);
-    assert.equal(accepted!.localEvidence, undefined);
+    assert.deepEqual(accepted!.currentEvidenceIds, [inherited.id]);
+    assert.deepEqual(accepted!.localEvidence, [local]);
+    assert.ok(
+      accepted!.text.includes("accepted inherited plan contents") ||
+        accepted!.text.includes("Current evidence — reference-only batch"),
+      "nested Agent receives the current batch inline or as a truthful reference fallback",
+    );
     const firstRequest = structuredClone(accepted!);
     const childState = readAgentState(childMailbox)!;
     assert.ok(childPi && childContext);
@@ -9750,6 +9816,16 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       undefined,
       undefined,
       activeChildContext,
+    );
+    const updatedAcceptedEvidence = [...(childPi.entries as any[])]
+      .reverse()
+      .find(
+        (entry) => entry?.customType === "pi-herdsman-agent-required-evidence",
+      )!.data;
+    assert.deepEqual(
+      updatedAcceptedEvidence.currentEvidenceIds,
+      [inherited.id],
+      "local evidence retention preserves the inherited current batch",
     );
     for (const handler of childPi.events.get("agent_start") ?? [])
       await handler(undefined, activeChildContext);
@@ -9880,8 +9956,13 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       local,
       retainedNote,
     ]);
-    assert.deepEqual(accepted!.inheritedEvidence, [inherited, local]);
-    assert.deepEqual(accepted!.localEvidence, [retainedNote]);
+    assert.deepEqual(accepted!.inheritedEvidence, [inherited]);
+    assert.deepEqual(accepted!.localEvidence, [local, retainedNote]);
+    assert.deepEqual(
+      accepted!.currentEvidenceIds,
+      [inherited.id],
+      "continuation preserves access to the inherited current batch",
+    );
     assert.ok(
       accepted!.localEvidence?.some((item) => item.id === retainedNote.id),
       "continued request retains the remaining local note",

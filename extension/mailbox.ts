@@ -92,6 +92,7 @@ export interface RequestRecord {
   requiredEvidence?: RequiredEvidence[];
   inheritedEvidence?: RequiredEvidence[];
   localEvidence?: RequiredEvidence[];
+  currentEvidenceIds?: string[];
   projectAssignmentId?: string;
   evidenceAssignmentId?: string;
   createdAt: number;
@@ -432,6 +433,7 @@ function validate(
             "requiredEvidence",
             "inheritedEvidence",
             "localEvidence",
+            "currentEvidenceIds",
             "projectAssignmentId",
             "evidenceAssignmentId",
             "createdAt",
@@ -698,6 +700,21 @@ function validate(
       )
         throw new Error("Inconsistent request evidence assignment");
     }
+    if (
+      v.currentEvidenceIds !== undefined &&
+      (v.kind !== "task" ||
+        !Array.isArray(v.currentEvidenceIds) ||
+        new Set(v.currentEvidenceIds).size !== v.currentEvidenceIds.length ||
+        !v.currentEvidenceIds.every(
+          (id: unknown) =>
+            typeof id === "string" &&
+            (
+              (v.inheritedEvidence as RequiredEvidence[] | undefined) ??
+              (v.requiredEvidence as RequiredEvidence[] | undefined)
+            )?.some((item) => item.id === id),
+        ))
+    )
+      throw new Error("Invalid request current evidence selection");
     const hasProjectAssignmentId = v.projectAssignmentId !== undefined;
     const hasEvidenceAssignmentId = v.evidenceAssignmentId !== undefined;
     if (

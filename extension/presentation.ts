@@ -2291,6 +2291,30 @@ export function formatToolModelResult(
       ? [`Assignment request: ${v.assignment_request_id}`]
       : []),
     ...(action === "reply" && value(v.ask_id) ? [`Ask: ${v.ask_id}`] : []),
+    ...((action === "delegate" || action === "continue") &&
+    v.evidence &&
+    typeof v.evidence === "object"
+      ? (() => {
+          const evidence = v.evidence as Record<string, unknown>;
+          const lines = [
+            "Assignment accepted. Evidence included in the accepted task:",
+          ];
+          for (const [key, title] of [
+            ["currentInline", "Current evidence — inline"],
+            ["explicitInline", "Explicit attachments — inline"],
+            ["referenced", "Evidence — references"],
+          ] as const) {
+            const items = Array.isArray(evidence[key])
+              ? evidence[key].filter(
+                  (item): item is string => typeof item === "string",
+                )
+              : [];
+            if (items.length)
+              lines.push(`${title}:`, ...items.map((item) => `- ${item}`));
+          }
+          return lines;
+        })()
+      : []),
     ...cleanup,
   ].join("\n");
 }

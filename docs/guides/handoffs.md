@@ -50,7 +50,10 @@ See the [staff-tool reference](../reference/staff.md#message_staff) and
 
 Each new descendant assignment receives the effective required-evidence set
 when that assignment is accepted, merged with explicit `files` for that
-handoff and deduplicated by verified version and result binding. Project
+handoff and deduplicated by verified version and result binding. The Manager's
+latest retained update identifies one current batch for future eligible
+descendants; other required entries remain historical and reference-first.
+Project
 descendants inherit project requirements; nested descendants also inherit
 relevant additions owned by their Agent parent. Siblings do not inherit one
 another's local additions. An inherited snapshot keeps its original
@@ -62,24 +65,32 @@ assignment evidence and still requires valid ownership authority. Retired
 project assignments cannot be resumed.
 
 For each managed-Agent assignment, the task and current files are presented
-before historical requirements. Explicitly supplied files and evidence newly
-retained by that handoff are current evidence and use the existing complete
-content preparation. Previously accepted requirements are listed as short
-semantic references, regardless of their size; they are not automatically
-embedded. Selecting an accepted reference through `files` presents that exact
-version as current evidence without retaining it again. All accepted
+before historical requirements. A complete Manager-selected current batch is
+embedded when it fits the configured limits; if the automatic batch exceeds
+capacity, it is presented as semantic references as a whole. Explicit
+attachments remain strict: an explicit file that cannot be embedded rejects
+the handoff. Previously accepted requirements outside that batch are listed
+as semantic references. Selecting an accepted reference through `files`
+presents that exact version as a current explicit attachment. All accepted
 requirements remain part of the assignment; presentation does not change their
 authority or ownership. The initial project brief is delivered as task text
 and separately retained for descendants without duplicating it in the initial
-message.
+message. A saved Agent continuation keeps the current-batch selection accepted
+with that session, even if the Manager later changes the project batch.
+Successful Agent delegation and continuation return a receipt of the inline
+and referenced evidence in the accepted task. It confirms mailbox acceptance,
+not that the Agent read, understood, or applied the evidence.
 
-Required file evidence is an immutable snapshot of supported UTF-8 text no
+Retained file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
 fails explicitly. Current evidence must fit complete-content delivery limits;
-it is not replaced with a path-only reference. Historical required evidence is
+it is not replaced with a path-only reference. Earlier retained evidence is
 identified by a stable semantic `evidence:` reference. The authorized
 recipient can use `read_evidence` to retrieve bounded content for references
-in its accepted evidence set. Agent results preserve their existing semantic
+in its accepted evidence set. Retained evidence remains available throughout
+eligible descendant assignments. Agents should inspect evidence relevant to
+their task and decisions; they are not expected to read every historical entry.
+Agent results preserve their existing semantic
 `result:` bindings. Historical references do not grant access by themselves,
 and internal snapshot paths are not exposed as evidence identities.
 Ordinary files supplied to `message_staff`, `message_supervisor`, or
@@ -95,12 +106,12 @@ This is not general attachment or conversation inheritance. Automatic required
 evidence applies to verified managed project assignments and their nested
 managed-Agent assignments, not to an ordinary Lead's whole session. Evidence
 availability does not grant execution or control authority. An unassigned Lead
-or unrelated session acquires no automatic evidence scope. Required evidence
+or unrelated session acquires no automatic evidence scope. Retained evidence
 removal remains an internal exact-ID capability; there is no standalone
 model-facing evidence-management tool. Removing a requirement does not erase
 prior Pi-session entries or evidence already accepted by an Agent.
 For project-owned requirements, a Manager can use the existing project
-assignment action menu: **Required evidence** → select an entry to inspect its
+assignment action menu: **Retained evidence** → select an entry to inspect its
 ID, name, and origin → **Remove** → confirm. This removes only the exact
 project-owned requirement; inherited baseline entries are protected. It does
 not delete snapshots or source files. The project menu does not remove

@@ -31,24 +31,26 @@ Use these high-salience rules for the model-facing agent boundary:
   execute or assign overlapping work while it is delegated.
 - For any coordination tool that accepts `files`, pass every user-supplied or
   already-available artifact relevant to what the recipient must do or decide
-  that is not already registered as required evidence for the recipient's
+  that is not already registered as retained evidence for the recipient's
   verified assignment. Do not assume another session inherits arbitrary
   conversation or attachments. Preserve exact supplied result refs when
   forwarding them and omit unrelated evidence. `files` carries evidence, not
   runtime capability.
-- For a verified managed project assignment, required evidence is supplied to
+- For a verified managed project assignment, retained evidence is supplied to
   new descendant assignments automatically. Use `files` for relevant evidence
-  not registered as required or specific to one recipient. When forwarding
-  evidence that must remain required downstream, set `retain: true` on
+  not registered as retained or specific to one recipient. When forwarding
+  evidence that must remain available downstream, set `retain: true` on
   `message_staff` (Manager, retaining its message text and files for the
   target project assignment) or `delegate_agent` (retaining its files, not its
   task text, eligible managed Agents only, for their own descendants).
+  Retained evidence is available to eligible descendants; inspect relevant
+  references as needed, not every entry.
   Project-wide requirements are controlled only by the Manager. Leads forward
   continuing findings through `message_supervisor.files` for Manager evaluation;
   ordinary delegation files remain recipient-specific. On supported operations,
   omitted or false `retain` keeps files one-time. Never assume retention if it fails.
   Ordinary Leads without a verified project assignment have no automatic
-  required-evidence scope.
+  retained-evidence scope.
 - When agent work is unresolved, handle required agent control, then continue
   only necessary work you still own or end the turn without concluding; agent
   results or attention will resume the session automatically. Do not check
@@ -216,7 +218,7 @@ authority, and acceptance criteria.
 
 Treat supplied files as message evidence. Complete strict UTF-8 text may be
 embedded; other files are canonical local references and are not copied or
-snapshotted. The exception is required evidence in a verified project
+snapshotted. The exception is retained evidence in a verified project
 assignment: supported text up to 1 MiB is preserved and automatically
 propagated to new descendants; unsupported or oversized evidence cannot be
 registered. Reference delivery to a preserved snapshot remains possible when
@@ -405,7 +407,7 @@ Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 `message_staff`. Manager has those same direct-report tools, peer tools, and
 `delegate_project`, `resume_project`, and `stop_lead`.
 For administrative removal of a project-owned evidence requirement, use the
-Manager project-assignment action menu: **Required evidence**, inspect the
+Manager project-assignment action menu: **Retained evidence**, inspect the
 entry, then **Remove** and confirm. Inherited requirements are protected; this
 does not delete snapshots or change evidence already accepted by Agents.
 `inspect_staff` provides bounded live terminal/process evidence;

@@ -28,6 +28,13 @@ requirements, rather than relying on instructions to discourage promotion.
 
 ## Consequences
 
+The latest Manager retention update selects the current batch for later
+eligible descendants; earlier required entries remain historical references.
+Accepted Agent sessions freeze that selection for exact continuation. Receipts
+for successful Agent delegation describe only evidence in the acknowledged
+task and do not claim it was consumed. Presentation changes do not transfer
+Manager authority.
+
 Leads can forward findings directly for immediate correction. Promoting new
 continuing requirements needs an additional evidence handoff to the Manager,
 who decides whether to retain them through existing staff messaging.

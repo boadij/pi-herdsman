@@ -1019,7 +1019,7 @@ function registerExtensionImpl(
       retain: Type.Optional(
         Type.Boolean({
           description:
-            "For Manager messages to assigned project Leads: retain both message text and files as required evidence for future Agents. Use for lasting requirements and accepted reviews; omit for temporary communication.",
+            "For Manager messages to assigned project Leads: retain both message text and files as evidence available to eligible descendant Agents. They can inspect relevant references as needed; use for lasting requirements and accepted reviews, not temporary communication.",
         }),
       ),
     },
