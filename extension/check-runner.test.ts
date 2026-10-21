@@ -8,8 +8,8 @@ import { CHECK_TIMEOUT_MS, runTestRunner } from "../scripts/check.mjs";
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-test("check suite deadline allows 180 seconds", () => {
-  assert.equal(CHECK_TIMEOUT_MS, 180_000);
+test("check suite deadline allows 240 seconds", () => {
+  assert.equal(CHECK_TIMEOUT_MS, 240_000);
 });
 
 async function waitForPids(path: string, timeoutMs: number) {
