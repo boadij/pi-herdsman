@@ -202,7 +202,8 @@ exactly-once delivery for both completed and failed terminal results.
 
 ## Session continuation
 
-Agent cleanup does not delete the Pi session. To continue completed context,
+Agent cleanup does not delete the Pi session. To continue completed or
+deliberately abandoned context,
 use the exact returned session with `continue_agent`; Pi Herdsman starts a new agent
 generation for the new assignment. The continuation uses the saved cwd, session
 history, definition, and logical label together with the current effective
@@ -210,8 +211,14 @@ authorized definition configuration. Its omitted model and thinking fields
 restore the saved session settings, while explicit definition fields override
 them. The caller cannot rename the continued session.
 After normal mailbox cleanup, scoped continuation is allowed only when the
-saved assignment evidence matches its terminal result and the project remains
-currently authorized. Missing or conflicting provenance fails closed.
+saved assignment evidence matches its terminal result, or a successful clean
+close receipt matches both the accepted assignment and exact session, and the
+project remains currently authorized. Close receipts with cleanup warnings,
+missing acceptance/closure correlation, or conflicting provenance fail closed.
+Closing a generation abandons its unfinished task; continuation starts a new
+generation from the saved conversation and does not replay its unfinished work.
+A crash after mailbox cleanup but before Pi persists the close result leaves no
+historical closure proof, so continuation fails closed.
 Session continuation does not retain the old Herdr tab. A still-live
 generation may be restored from its exact managed identity, while ordinary
 same-workspace tab movement remains presentation-only and does not change

@@ -295,6 +295,14 @@ test("parent delegates two same-definition children with exact ownership", async
           context,
         );
       assert.equal(started.details.ok, true, JSON.stringify(started.details));
+      context.sessionManager.getEntries().push({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "delegate_agent",
+          details: started.details,
+        },
+      });
       const childMailbox = agentMailboxPath(
         WORKSPACE,
         started.details.agent as string,
@@ -421,10 +429,22 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
+      const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
         .find((tool) => tool.name === "close_agent")!
         .execute("close", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+      assert.deepEqual(closed.details.closed_assignment, {
+        owner_session_id: beforeClose.ownerSessionId,
+        session_id: beforeClose.piSessionId,
+        session_path: beforeClose.piSessionFile,
+        run_id: beforeClose.runId,
+        request_id: beforeClose.activeRequestId,
+        agent: beforeClose.agentLabel,
+        definition: "child",
+        pane_id: beforeClose.paneId,
+        workspace_id: beforeClose.workspaceId,
+      });
       assert.equal(
         readAgentState(agentMailboxPath(WORKSPACE, label)),
         undefined,

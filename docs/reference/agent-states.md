@@ -5,13 +5,13 @@
 The public state is a safe-control projection built from live lifecycle and
 durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
-| State      | Meaning                                                                                                  |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                |
-| `blocked`  | Active assignment waits for an owner answer or another condition.                                        |
-| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.     |
-| `unknown`  | Exact safe control state cannot be proved.                                                               |
-| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved. |
+| State      | Meaning                                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                             |
+| `blocked`  | Active assignment waits for an owner answer or another condition.                                                     |
+| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.                  |
+| `unknown`  | Exact safe control state cannot be proved, including an idle restored conversation with an unresolved active request. |
+| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved.              |
 
 ## `available_tools` is authoritative
 
@@ -59,6 +59,11 @@ or integration handoff. Do not assign another task to a settling agent.
 `settling` alone is not timeout-worthy and does not generate generic health
 attention. A durable `result_error` within settling may still produce direct
 owner attention so the stored persistence recovery can be handled.
+An idle Pi lifecycle with an active request is not evidence of a pending
+completion or a live managed execution; it projects as `unknown` unless an
+explicit handoff, completion, or recovery operation is pending. A restored Pi
+conversation preserves history, not the identity or liveness of its former
+managed execution.
 
 ## `unknown`
 

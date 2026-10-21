@@ -625,7 +625,6 @@ export function agentControlState(
       return "blocked";
     }
     if (lifecycle === "blocked") return "blocked";
-    if (lifecycle === "idle" || lifecycle === "done") return "settling";
     return "unknown";
   }
   if (lifecycle === "idle" || lifecycle === "done") return "settling";

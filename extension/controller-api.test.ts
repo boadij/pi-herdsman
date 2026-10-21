@@ -7526,6 +7526,92 @@ test("owned continuation requires a matching persisted child edge", () => {
         ),
       /ownership tree/,
     );
+    const accepted = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        details: {
+          ok: true,
+          owner_session_id: LEAD_SESSION_ID,
+          session_id: id,
+          session_path: path,
+          agent: "agent",
+          definition: "agent",
+          request_id: randomUUID(),
+        },
+      },
+    };
+    const requestId = accepted.message.details.request_id;
+    const close = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "close_agent",
+        details: {
+          ok: true,
+          action: "close",
+          closed_assignment: {
+            owner_session_id: LEAD_SESSION_ID,
+            session_id: id,
+            session_path: path,
+            run_id: randomUUID(),
+            request_id: requestId,
+            agent: "agent",
+            definition: "agent",
+            pane_id: "pane",
+            workspace_id: `closed-${id}`,
+          },
+        },
+      },
+    };
+    assert.equal(
+      resolveAssignmentSession(fakeContext([accepted, close]), id).id,
+      id,
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([
+            accepted,
+            {
+              ...close,
+              message: {
+                ...close.message,
+                details: {
+                  ...close.message.details,
+                  cleanup_error: "incomplete",
+                },
+              },
+            },
+          ]),
+          id,
+        ),
+      /ownership tree/,
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([
+            accepted,
+            {
+              ...close,
+              message: {
+                ...close.message,
+                details: {
+                  ...close.message.details,
+                  closed_assignment: {
+                    ...close.message.details.closed_assignment,
+                    request_id: randomUUID(),
+                  },
+                },
+              },
+            },
+          ]),
+          id,
+        ),
+      /ownership tree/,
+    );
     for (const details of [
       { ownerSessionId: randomUUID() },
       { piSessionId: randomUUID() },
@@ -10040,7 +10126,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(noChildWork.details.agents[0].state, "settling");
+    assert.equal(noChildWork.details.agents[0].state, "unknown");
     assert.ok(
       !noChildWork.details.agents[0].available_tools.includes("steer_agent"),
     );
@@ -10640,7 +10726,7 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(activeList.details.agents[0].state, "settling");
+      assert.equal(activeList.details.agents[0].state, "unknown");
       assert.equal(activeList.details.agents[0].active_request_id, requestA);
       assert.equal(
         activeList.details.agents[0].available_tools.includes("delegate_agent"),

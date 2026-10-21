@@ -138,6 +138,10 @@ Only the direct owner may use `close_agent` to abandon the lost generation. When
 If `close_agent` is absent, resolve the condition blocking its close preflight first.
 Herdsman never redelegates or continues it automatically. Moved or conflicting
 evidence is `unknown`, not `lost`, and remains fail-closed.
+After a verified clean close, the direct owner may explicitly continue the exact
+saved session. This starts a new generation and does not replay the abandoned
+assignment; an idle restored Pi conversation alone remains `unknown` until its
+managed execution identity or absence is proved.
 
 ## Inactivity advisory
 
