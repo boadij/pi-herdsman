@@ -1379,7 +1379,10 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
       required: ["message"],
     },
   };
-  const system = (toolsAdded?: typeof tool[], toolsRemoved?: { name: string }[]) => ({
+  const system = (
+    toolsAdded?: (typeof tool)[],
+    toolsRemoved?: { name: string }[],
+  ) => ({
     role: "system" as const,
     content: "",
     ...(toolsAdded ? { toolsAdded } : {}),
@@ -1389,7 +1392,7 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   const prompt = {
     role: "user" as const,
     content:
-      'Call message_supervisor exactly once with this exact text: MANAGER_HANDOFF_READY. Then end the turn.',
+      "Call message_supervisor exactly once with this exact text: MANAGER_HANDOFF_READY. Then end the turn.",
     timestamp: 2,
   };
   const availableMessages = [system([tool]), prompt];
@@ -1404,7 +1407,10 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   );
 
   const unavailableMessages = [system(), prompt];
-  assert.equal(managerHandoffSupervisorToolAvailable(unavailableMessages), false);
+  assert.equal(
+    managerHandoffSupervisorToolAvailable(unavailableMessages),
+    false,
+  );
   assert.throws(
     () =>
       decideSmokeFaux("manager-handoff-lead", {
@@ -1412,7 +1418,11 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
       }),
     { message: "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED" },
   );
-  const removedMessages = [system([tool]), system(undefined, [{ name: tool.name }]), prompt];
+  const removedMessages = [
+    system([tool]),
+    system(undefined, [{ name: tool.name }]),
+    prompt,
+  ];
   assert.equal(managerHandoffSupervisorToolAvailable(removedMessages), false);
 });
 
