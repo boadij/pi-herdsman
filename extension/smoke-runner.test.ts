@@ -437,6 +437,12 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         {
           ...projection,
           private: "PRIVATE_PATH",
+          rootSession: {
+            path: "PRIVATE_SESSION_PATH",
+            summary: "PRIVATE_TRANSCRIPT_SUMMARY",
+          },
+          panes: { output: "PRIVATE_PANE_OUTPUT" },
+          mailbox: "PRIVATE_MAILBOX_CONTENT",
           coreDelegation: {
             ...projection.coreDelegation,
             private: "PRIVATE_TASK",
@@ -447,6 +453,7 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         failureEvidence.coreDelegation,
         projection.coreDelegation,
       );
+      assert.equal("diagnostics" in failureEvidence, false);
       const artifact = await preserveFailureEvidence(failureEvidence);
       try {
         const saved = await readFile(artifact, "utf8");

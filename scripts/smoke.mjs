@@ -9402,13 +9402,6 @@ async function main() {
             collectDiagnostics(ctx, owned, failure),
           )
         : null;
-      evidence = sanitizedFailureEvidence(
-        ctx,
-        failure,
-        classifySmokeFailure(phase, error),
-        "PENDING",
-        diagnosticProjection,
-      );
       const markerPath = join(
         paths.piAgent,
         "pi-herdsman",
@@ -9434,10 +9427,13 @@ async function main() {
         );
         ctx.firstRequestObserved = provenance.trim().length > 0;
       } catch {}
-      evidence.sessionStartObserved = ctx.sessionStartObserved;
-      evidence.firstRequestObserved = ctx.firstRequestObserved ?? false;
-      evidence.firstRequestVerified = ctx.firstRequestVerified ?? false;
-      evidence.diagnostics = diagnosticProjection;
+      evidence = sanitizedFailureEvidence(
+        ctx,
+        failure,
+        classifySmokeFailure(phase, error),
+        "PENDING",
+        diagnosticProjection,
+      );
       const artifact = await preserveFailureEvidence(evidence);
       ctx.failureArtifact = artifact;
       console.error(`failure evidence: ${artifact}`);
