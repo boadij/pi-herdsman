@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { after, mock, test } from "node:test";
+import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
@@ -122,12 +122,10 @@ const {
   parseSessionEntries: nativeParseSessionEntries,
   truncateTail: nativeTruncateTail,
 } = await import("@earendil-works/pi-coding-agent");
-after(() => {
+process.on("exit", () => {
   realFs.rmSync(testTmpRoot, { recursive: true, force: true });
+  realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true });
 });
-process.on("exit", () =>
-  realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true }),
-);
 mock.module("node:fs", {
   namedExports: {
     accessSync: realFs.accessSync,
@@ -361,6 +359,9 @@ mock.module("@earendil-works/pi-coding-agent", {
               },
             ],
           getBranch: () => session?.entries ?? [],
+          appendCustomEntry: (customType: string, data: unknown) => {
+            session?.entries.push({ type: "custom", customType, data });
+          },
           buildContextEntries: () =>
             session?.contextEntries ??
             session?.entries ?? [

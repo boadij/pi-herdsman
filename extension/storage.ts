@@ -23,6 +23,8 @@ const RESULT_PREFIX = "result:";
 const RESULT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEMANTIC_RESULT_REF = /^result:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
+const SEMANTIC_EVIDENCE_REF =
+  /^evidence:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
 const INCIDENTAL_METADATA = new Set([
   ".ds_store",
   "desktop.ini",
@@ -42,6 +44,7 @@ export type ResultBinding = Readonly<{
 export type RequiredEvidence = Readonly<
   | {
       id: string;
+      ref?: string;
       name: string;
       sourceAssignmentId: string;
       path: string;
@@ -66,8 +69,13 @@ export function isRequiredEvidence(value: unknown): value is RequiredEvidence {
     return false;
   if (Object.hasOwn(r, "result"))
     return Object.keys(r).length === 3 && isResultBinding(r.result);
+  const keys = Object.keys(r).sort();
+  const legacyKeys = ["id", "name", "path", "sha256", "sourceAssignmentId"];
+  const semanticKeys = [...legacyKeys, "ref"].sort();
   return (
-    Object.keys(r).length === 5 &&
+    (keys.join("\0") === legacyKeys.join("\0") ||
+      keys.join("\0") === semanticKeys.join("\0")) &&
+    (!Object.hasOwn(r, "ref") || isCanonicalSemanticEvidenceRef(r.ref)) &&
     typeof r.sourceAssignmentId === "string" &&
     EVIDENCE_ID.test(r.sourceAssignmentId) &&
     typeof r.path === "string" &&
@@ -75,6 +83,64 @@ export function isRequiredEvidence(value: unknown): value is RequiredEvidence {
     typeof r.sha256 === "string" &&
     /^[a-f0-9]{64}$/.test(r.sha256)
   );
+}
+
+export function isCanonicalSemanticEvidenceRef(
+  value: unknown,
+): value is string {
+  if (typeof value !== "string") return false;
+  const match = SEMANTIC_EVIDENCE_REF.exec(value);
+  return !!match && Number.isSafeInteger(Number(match[2]));
+}
+
+/** Existing result identities remain unchanged; legacy snapshots must be upgraded before display. */
+export function semanticEvidenceRef(evidence: RequiredEvidence): string {
+  if ("result" in evidence) return evidence.result.ref;
+  if (!evidence.ref)
+    throw new Error("required evidence has no semantic reference");
+  return evidence.ref;
+}
+
+/** Lazily gives pre-reference snapshots one durable identity without changing snapshot provenance. */
+export function upgradeRequiredEvidence(value: unknown): RequiredEvidence {
+  if (!isRequiredEvidence(value)) throw new Error("invalid required evidence");
+  if ("result" in value || value.ref) return value;
+  const ref = reserveSemanticEvidenceRef(value.id, value.name);
+  return { ...value, ref };
+}
+
+/** Checks an existing snapshot identity without allocating or repairing it. */
+export function verifySemanticEvidenceReservation(
+  evidenceId: string,
+  ref: string,
+): void {
+  if (!EVIDENCE_ID.test(evidenceId) || !isCanonicalSemanticEvidenceRef(ref))
+    throw new Error("invalid semantic evidence reservation");
+  const match = SEMANTIC_EVIDENCE_REF.exec(ref)!;
+  const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+  const paths = [
+    join(root, "by-id", evidenceId),
+    join(root, "refs", match[1]!, match[2]!),
+  ];
+  const contents = paths.map((path) => {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error("invalid semantic evidence reservation");
+    return readFileSync(path, "utf8");
+  });
+  const [byId, byRef] = contents;
+  if (byId !== `${ref}\n` || byRef !== `${evidenceId}\n`)
+    throw new Error("invalid semantic evidence reservation");
+}
+
+/** Upgrades legacy snapshots first, then verifies the durable identity. */
+export function upgradeAndVerifyRequiredEvidence(
+  value: unknown,
+): RequiredEvidence {
+  const evidence = upgradeRequiredEvidence(value);
+  if (!("result" in evidence))
+    verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
+  return evidence;
 }
 
 export function requiredEvidenceDirectory(assignmentId: string): string {
@@ -155,6 +221,7 @@ export function persistRequiredEvidenceSnapshot(
     }
     return {
       id,
+      ref: reserveSemanticEvidenceRef(id, name),
       name: safeEvidenceName(name),
       sourceAssignmentId: assignmentId,
       path,
@@ -166,6 +233,71 @@ export function persistRequiredEvidenceSnapshot(
       unlinkSync(temporary);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+export function reserveSemanticEvidenceRef(
+  evidenceId: string,
+  name: string,
+): string {
+  if (!EVIDENCE_ID.test(evidenceId)) throw new Error("invalid evidence id");
+  const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+  const byId = join(root, "by-id");
+  mkdirSync(byId, { recursive: true, mode: 0o700 });
+  chmodSync(byId, 0o700);
+  const mapping = join(byId, evidenceId);
+  try {
+    const existing = readFileSync(mapping, "utf8").trim();
+    if (isCanonicalSemanticEvidenceRef(existing)) return existing;
+    throw new Error("invalid semantic evidence reservation");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const label =
+    safeEvidenceName(name)
+      .replace(/\.[^.]*$/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^[^a-z]+/, "")
+      .slice(0, 32) || "evidence";
+  const directory = join(root, "refs", label);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  let index = 1;
+  for (const entry of readdirSync(directory)) {
+    if (/^[1-9][0-9]*$/.test(entry)) index = Math.max(index, Number(entry) + 1);
+  }
+  for (;;) {
+    if (!Number.isSafeInteger(index))
+      throw new Error("Semantic evidence index exhausted");
+    const ref = `evidence:${label}#${index}`;
+    try {
+      writeFileSync(join(directory, String(index)), `${evidenceId}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+        flush: true,
+      });
+      try {
+        writeFileSync(mapping, `${ref}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+          flush: true,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        return reserveSemanticEvidenceRef(evidenceId, name);
+      }
+      return ref;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        index++;
+        continue;
+      }
+      throw error;
     }
   }
 }

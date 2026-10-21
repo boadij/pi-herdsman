@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
 import type { TestContext } from "node:test";
@@ -38,12 +38,17 @@ import {
   projectAssignmentPath,
   managerDescriptorPath,
   readSessionKind,
+  readProjectAssignment,
   readManagerDescriptor,
   removeProjectAssignment,
+  migrateProjectAssignmentEvidence,
+  findProjectAssignmentBySession,
+  globalProjectAssignmentSnapshot,
   supervisionRuntime,
   writeProjectAssignment,
   writeProjectMessage,
 } from "./supervision.ts";
+import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
 import {
   CHILD_SESSION_ID,
@@ -115,6 +120,34 @@ import {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+
+test("read_evidence is added only to assigned project Lead tools", async () => {
+  const { createLeadToolState } = await import("./lead-runtime.ts");
+  const tools = ["read", "bash", "read_evidence", "delegate_agent"];
+  const state = createLeadToolState(
+    () => tools.map((name) => ({ name })),
+    ["delegate_agent"],
+    [],
+  );
+  const definition = {
+    name: "project-lead",
+    path: "/project-lead.md",
+    body: "",
+    frontmatter: { tools: ["read"] },
+  } as any;
+  assert.deepEqual(
+    state.projectRoleTools(["read", "bash"], definition, ["read_evidence"]),
+    ["read", "read_evidence"],
+  );
+  assert.deepEqual(state.projectRoleTools(["read", "bash"], definition, []), [
+    "read",
+  ]);
+  assert.deepEqual(state.normalizeLeadTools(["read", "bash"]), [
+    "read",
+    "bash",
+  ]);
+  assert.deepEqual(state.normalizeLeadTools(["read"]), ["read"]);
+});
 const { claimAgentMailbox, removeAgentMailbox } = await import("./mailbox.ts");
 const ownedSessionContext = (
   id: string,
@@ -1130,8 +1163,36 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     "review.md",
     "parent review body",
   );
-  const retainedFile = join(tmpdir(), `agent-local-${randomUUID()}.md`);
+  // Session startup cleans testTmpRoot; keep this source outside it.
+  const retainedFile = join("/tmp", `agent-local-${randomUUID()}.md`);
   realFs.writeFileSync(retainedFile, "agent-local reviewer note");
+  const retainedFileAfterResult = join(
+    "/tmp",
+    `agent-local-after-result-${randomUUID()}.md`,
+  );
+  realFs.writeFileSync(
+    retainedFileAfterResult,
+    "agent-local note after result",
+  );
+  const resultCanonicalRef = resultRef(randomUUID());
+  const resultSemanticRef = "result:reviewer#2";
+  const resultArtifact = resultPath(resultCanonicalRef.slice("result:".length));
+  realFs.mkdirSync(resolve(resultArtifact, ".."), { recursive: true });
+  realFs.writeFileSync(resultArtifact, "interleaved result content");
+  const acceptedResultCanonicalRef = resultRef(randomUUID());
+  const acceptedResultArtifact = resultPath(
+    acceptedResultCanonicalRef.slice("result:".length),
+  );
+  realFs.mkdirSync(resolve(acceptedResultArtifact, ".."), { recursive: true });
+  realFs.writeFileSync(acceptedResultArtifact, "already accepted result");
+  const acceptedResult = {
+    id: randomUUID(),
+    name: "result:reviewer#1",
+    result: {
+      ref: "result:reviewer#1",
+      canonicalRef: acceptedResultCanonicalRef,
+    },
+  } as const;
   const parent = {
     ...managedState(label, parentRequestId),
     projectAssignmentId,
@@ -1214,10 +1275,34 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       projectAssignmentId,
       evidenceAssignmentId: parentRequestId,
       inheritedEvidence: [inherited],
-      localEvidence: [local],
+      localEvidence: [local, acceptedResult],
     },
   };
-  const contextEntries: any[] = [identity, acceptedContext];
+  const { ref: _inheritedRef, ...legacyInherited } = inherited;
+  const { ref: _localRef, ...legacyLocal } = local;
+  const legacyContext = {
+    ...acceptedContext,
+    data: {
+      ...acceptedContext.data,
+      inheritedEvidence: [legacyInherited],
+      localEvidence: [legacyLocal, acceptedResult],
+    },
+  };
+  const contextEntries: any[] = [
+    identity,
+    legacyContext,
+    acceptedContext,
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: acceptedResult.result,
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: { ref: resultSemanticRef, canonicalRef: resultCanonicalRef },
+    },
+  ];
   const context = fakeAgentContext(contextEntries);
   const appendEntry = pi.pi.appendEntry.bind(pi.pi);
   pi.pi.appendEntry = ((customType: string, data: unknown) => {
@@ -1249,29 +1334,20 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       }),
       false,
     );
-    const failedHandoff = await nestedDelegate.execute(
-      "nested-retained-failed-handoff",
-      {
-        definition: "agent",
-        task: "x".repeat(131072 - requestRecordBytes("agent", "", "")),
-        files: [retainedFile],
-        retain: true,
-      },
+    const evidenceReader = pi.tools.find(
+      (tool) => tool.name === "read_evidence",
+    )!;
+    const acceptedRead = await evidenceReader.execute(
+      "read-upgraded-session-evidence",
+      { ref: inherited.ref },
       undefined,
       undefined,
       context,
     );
-    assert.equal(failedHandoff.details.ok, false);
-    assert.match(
-      JSON.stringify(failedHandoff.details),
-      /Required evidence was retained, but Agent delegation failed/,
-    );
-    assert.equal(published, undefined);
-    assert.deepEqual(
-      listProjectAssignments(projectRuntime, "repo-key").find(
-        (item) => item.branch === projectBranch,
-      )?.requiredEvidence,
-      [laterProjectRequirement],
+    assert.match(acceptedRead.content[0].text, /parent plan body/);
+    assert.ok(
+      realFs.existsSync(retainedFile),
+      `fixture missing before retain: ${retainedFile}`,
     );
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
@@ -1280,7 +1356,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
         {
           definition: "agent",
           task: "child task",
-          files: [retainedFile],
+          files: [
+            retainedFile,
+            `${dirname(retainedFile)}${sep}.${sep}${basename(retainedFile)}`,
+            resultSemanticRef,
+            retainedFileAfterResult,
+          ],
           retain: true,
         },
         undefined,
@@ -1290,19 +1371,86 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
     assert.ok(published);
-    assert.equal(published!.requiredEvidence?.length, 3);
+    assert.equal(published!.requiredEvidence?.length, 6);
+    assert.equal(
+      published!.requiredEvidence!.filter(
+        (entry) =>
+          "path" in entry &&
+          readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry) ===
+            "agent-local reviewer note",
+      ).length,
+      1,
+    );
     assert.equal(
       readRequiredEvidenceSnapshot(
         parentRequestId,
-        published!.requiredEvidence![2]!,
+        published!.requiredEvidence![3]!,
       ),
       "agent-local reviewer note",
     );
     assert.equal(published!.projectAssignmentId, projectAssignmentId);
     assert.equal(published!.evidenceAssignmentId, published!.requestId);
-    assert.match(published!.text, /parent plan body/);
-    assert.match(published!.text, /parent review body/);
+    assert.ok(
+      published!.text.indexOf("Task:") <
+        published!.text.indexOf("agent-local reviewer note"),
+      published!.text,
+    );
+    assert.equal(
+      published!.text.match(/agent-local reviewer note/g)?.length,
+      1,
+    );
+    const orderedCurrent = [
+      "agent-local reviewer note",
+      "result:reviewer#2",
+      "interleaved result content",
+      "agent-local note after result",
+    ].map((content) => published!.text.indexOf(content));
+    assert.ok(
+      orderedCurrent.every((index) => index >= 0),
+      published!.text,
+    );
+    assert.deepEqual(
+      orderedCurrent,
+      [...orderedCurrent].sort((a, b) => a - b),
+      published!.text,
+    );
+    for (const ref of [inherited.ref!, local.ref!]) {
+      assert.ok(published!.text.indexOf(ref) < orderedCurrent[0]!);
+      assert.equal(published!.text.split(ref).length - 1, 1);
+    }
+    assert.equal(published!.text.split("result:reviewer#2").length - 1, 1);
+    assert.ok(!published!.text.includes(published!.requiredEvidence![3]!.path));
+    assert.match(published!.text, /evidence:plan#1 — plan\.md/);
+    assert.match(published!.text, /evidence:review#1 — review\.md/);
+    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
+    const retained = published!.requiredEvidence![3]!;
+    assert.ok(!("result" in retained));
+    realFs.rmSync(retainedFile, { force: true });
+    realFs.rmSync(retainedFileAfterResult, { force: true });
+    realFs.rmSync(resultArtifact, { force: true });
 
+    const retainedBeforeAcceptedResult = join(
+      "/tmp",
+      `agent-local-before-existing-result-${randomUUID()}.md`,
+    );
+    const retainedAfterAcceptedResult = join(
+      "/tmp",
+      `agent-local-after-existing-result-${randomUUID()}.md`,
+    );
+    realFs.writeFileSync(
+      retainedBeforeAcceptedResult,
+      "text before accepted result",
+    );
+    realFs.writeFileSync(
+      retainedAfterAcceptedResult,
+      "text after accepted result",
+    );
+    stopConsumer?.();
+    stopConsumer = undefined;
+    published = undefined;
+
+    stopConsumer?.();
+    published = undefined;
     assert.deepEqual(
       listProjectAssignments(projectRuntime, "repo-key").find(
         (item) => item.branch === projectBranch,
@@ -1315,7 +1463,16 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
         "nested-project-evidence-ordinary-child",
-        { definition: "agent", task: "ordinary child task" },
+        {
+          definition: "agent",
+          task: "ordinary child task",
+          files: [
+            retainedBeforeAcceptedResult,
+            "result:reviewer#1",
+            retainedAfterAcceptedResult,
+          ],
+          retain: true,
+        },
         undefined,
         undefined,
         context,
@@ -1330,13 +1487,44 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       ordinaryChild.details.agent as string,
     );
     assert.ok(published);
+    const mixedOrder = [
+      "text before accepted result",
+      "result:reviewer#1",
+      "already accepted result",
+      "text after accepted result",
+    ].map((content) => published!.text.indexOf(content));
+    assert.ok(
+      mixedOrder.every((index) => index >= 0),
+      published!.text,
+    );
+    assert.deepEqual(
+      mixedOrder,
+      [...mixedOrder].sort((a, b) => a - b),
+    );
+    assert.equal(published!.text.split("result:reviewer#1").length - 1, 1);
+    assert.equal(
+      published!.text.split("already accepted result").length - 1,
+      1,
+    );
+    realFs.rmSync(retainedBeforeAcceptedResult, { force: true });
+    realFs.rmSync(retainedAfterAcceptedResult, { force: true });
+    realFs.rmSync(acceptedResultArtifact, { force: true });
     assert.deepEqual(published!.requiredEvidence?.slice(0, 2), [
       inherited,
       local,
     ]);
-    assert.equal(published!.requiredEvidence?.length, 3);
-    assert.match(published!.text, /parent plan body/);
-    assert.match(published!.text, /parent review body/);
+    assert.equal(published!.requiredEvidence?.length, 8);
+    assert.ok(
+      published!.requiredEvidence?.some(
+        (entry) =>
+          "result" in entry && entry.result.ref === "result:reviewer#1",
+      ),
+    );
+    assert.doesNotMatch(published!.text, /agent-local reviewer note/);
+    assert.ok(!published!.text.includes(retained.path));
+    assert.match(published!.text, /evidence:plan#1 — plan\.md/);
+    assert.match(published!.text, /evidence:review#1 — review\.md/);
+    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
     assert.doesNotMatch(
       published!.text,
       /project requirement not accepted by parent/,
@@ -2694,9 +2882,181 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     },
   ];
   let scopeUnavailable = false;
+  let scopeDelay: Promise<void> | undefined;
+  let scopeLookupStarted!: () => void;
+  let scopeLookups = 0;
+  let secondScopeLookupStarted!: () => void;
   const startup = startupExecutor("agent", () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
     entries,
+    allTools: [{ name: "read_evidence" }, { name: "message_supervisor" }],
+    exec: async (command, args) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+        if (scopeDelay) {
+          if (++scopeLookups === 1) scopeLookupStarted();
+          if (scopeLookups === 2) secondScopeLookupStarted();
+          await scopeDelay;
+        }
+        return scopeUnavailable
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                error: {
+                  code: "not_git_worktree",
+                  message: "Workspace is not a Git worktree",
+                },
+              }),
+              stderr: "",
+              code: 1,
+            }
+          : {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  source: {
+                    repo_key: "repo-key",
+                    repo_name: "project",
+                    source_workspace_id: WORKSPACE,
+                  },
+                  worktrees: [],
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+      }
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => false;
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    for (const handler of pi.events.get("session_shutdown") ?? [])
+      await handler(undefined, context);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
+  });
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  for (const handler of pi.events.get("agent_start") ?? [])
+    await handler(undefined, context);
+  assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
+  assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
+  assert.ok(pi.pi.getActiveTools().includes("message_supervisor"));
+  let releaseScope!: () => void;
+  scopeDelay = new Promise<void>((resolve) => {
+    releaseScope = resolve;
+  });
+  const scopeStarted = new Promise<void>((resolve) => {
+    scopeLookupStarted = resolve;
+  });
+  const secondScopeStarted = new Promise<void>((resolve) => {
+    secondScopeLookupStarted = resolve;
+  });
+  context.isIdle = () => true;
+  const refreshing = pi.events.get("agent_settled")![0](
+    { aborted: false },
+    context,
+  );
+  await scopeStarted;
+  assert.ok(
+    pi.pi.getActiveTools().includes("read_evidence"),
+    "reader before refresh",
+  );
+  const concurrentStart = pi.events.get("session_start")![0](
+    undefined,
+    context,
+  );
+  await secondScopeStarted;
+  assert.ok(
+    pi.pi.getActiveTools().includes("read_evidence"),
+    "reader remains available during the pending scope refresh",
+  );
+  releaseScope();
+  await Promise.all([refreshing, concurrentStart]);
+  scopeDelay = undefined;
+  assert.ok(
+    pi.pi.getActiveTools().includes("read_evidence"),
+    "successful exact scope verification restores Managed Lead tools",
+  );
+  assert.ok(
+    pi.pi.getActiveTools().includes("message_supervisor"),
+    "successful exact scope verification restores supervisor tools",
+  );
+  scopeUnavailable = true;
+  for (const handler of pi.events.get("agent_settled") ?? [])
+    await handler({ aborted: false }, context);
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi_herdsman_state_error" &&
+        /Cannot verify (?:the original managed project scope|the current project assignment)/.test(
+          entry.data.error,
+        ),
+    ),
+    "production runtime records the fail-closed assignment diagnostic",
+  );
+  assert.equal(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "finished",
+    ),
+    false,
+    "a managed Lead must not finish when assignment scope cannot be verified",
+  );
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === reportId,
+    ),
+    "the pending handoff remains durable",
+  );
+});
+
+test("unassigned Lead does not activate read_evidence", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const socket = join(tmpdir(), `unassigned-scope-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  supervisionRuntime(socket);
+  const startedAt = Date.now();
+  const runReportId = randomUUID();
+  const reportId = randomUUID();
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId: runReportId,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "report_pending",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId,
+        runReportId,
+        message: "Existing assigned handoff",
+        target: "project",
+      },
+    },
+  ];
+  let scopeUnavailable = false;
+  const startup = startupExecutor("agent", () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({
+    entries,
+    allTools: [{ name: "read_evidence" }],
     exec: async (command, args) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return scopeUnavailable
@@ -2730,50 +3090,18 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     },
   });
   const context = fakeContext(entries);
-  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.isIdle = () => false;
   registerExtension!(pi.pi as never);
   t.after(async () => {
     for (const handler of pi.events.get("session_shutdown") ?? [])
       await handler(undefined, context);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    delete process.env.HERDR_SOCKET_PATH;
   });
   for (const handler of pi.events.get("session_start") ?? [])
     await handler(undefined, context);
-  scopeUnavailable = true;
-  context.isIdle = () => true;
-  for (const handler of pi.events.get("agent_settled") ?? [])
-    await handler({ aborted: false }, context);
-
-  assert.ok(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi_herdsman_state_error" &&
-        /Cannot verify (?:the original managed project scope|the current project assignment)/.test(
-          entry.data.error,
-        ),
-    ),
-    "production runtime records the fail-closed assignment diagnostic",
-  );
-  assert.equal(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-herd-run" &&
-        entry.data?.phase === "finished",
-    ),
-    false,
-    "a managed Lead must not finish when assignment scope cannot be verified",
-  );
-  assert.ok(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-herd-run" &&
-        entry.data?.phase === "report_pending" &&
-        entry.data?.reportId === reportId,
-    ),
-    "the pending handoff remains durable",
-  );
+  for (const handler of pi.events.get("agent_start") ?? [])
+    await handler(undefined, context);
+  assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
+  assert.ok(!pi.pi.getActiveTools().includes("read_evidence"));
 });
 
 test("aborted Lead settlement waits for active child work before finishing the herd", async () => {
@@ -4893,6 +5221,10 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
     assert.match(accepted!.text, /reviewer finding to retain/);
     assert.match(
       accepted!.text,
+      /evidence:project-brief#1 — project-brief\.txt/,
+    );
+    assert.doesNotMatch(
+      accepted!.text,
       /initial brief: preserve backward compatibility/,
     );
     assert.deepEqual(
@@ -4924,25 +5256,57 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
   }
 });
 
-test("assigned Lead delivers the project brief to reviewers without supplied files", async () => {
+test("assigned Lead migrates legacy project evidence and preserves attachment order", async () => {
+  const { READ_EVIDENCE_MAX_BYTES } =
+    await import("./managed-agent-runtime.ts");
   setLeadEnvironment();
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.HERDR_PANE_ID = "lead-pane";
   const socket = join(tmpdir(), `project-brief-reviewer-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
   const runtime = supervisionRuntime(socket);
+  const assignedSessionId = randomUUID();
   const branch = `brief-reviewer-${randomUUID()}`;
   const brief = "initial project brief: preserve backward compatibility";
   const snapshot = persistRequiredEvidenceSnapshot(
-    LEAD_SESSION_ID,
+    assignedSessionId,
     "project-brief.txt",
     brief,
   );
+  const olderBrief = persistRequiredEvidenceSnapshot(
+    assignedSessionId,
+    "older-notes.txt",
+    "small historical note",
+  );
+  const historicalBrief = persistRequiredEvidenceSnapshot(
+    assignedSessionId,
+    "historical-plan.txt",
+    "unselected historical plan",
+  );
+  const longEvidence = persistRequiredEvidenceSnapshot(
+    assignedSessionId,
+    "long-evidence.txt",
+    "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+  );
+  const ordinaryPath = join(PI_AGENTS_DIR, `ordinary-${randomUUID()}.txt`);
+  const ordinaryText = "ordinary current attachment";
+  realFs.writeFileSync(ordinaryPath, ordinaryText, "utf8");
+  const { ref: _snapshotRef, ...legacySnapshot } = snapshot;
+  const { ref: _olderRef, ...legacyOlderBrief } = olderBrief;
+  const { ref: _historicalRef, ...legacyHistoricalBrief } = historicalBrief;
+  const { ref: _longRef, ...legacyLongEvidence } = longEvidence;
   const assignment = {
     version: 2 as const,
-    id: LEAD_SESSION_ID,
+    id: assignedSessionId,
     repoKey: "repo-key",
     branch,
     text: brief,
-    requiredEvidence: [snapshot],
+    requiredEvidence: [
+      legacySnapshot,
+      legacyOlderBrief,
+      legacyHistoricalBrief,
+      legacyLongEvidence,
+    ],
   };
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
@@ -4963,21 +5327,52 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
       accepted = request;
     },
   );
+  const projectTopology = {
+    id: AGENT_ID,
+    result: {
+      source: {
+        repo_key: "repo-key",
+        repo_name: "project",
+        source_workspace_id: WORKSPACE,
+      },
+      worktrees: [{ open_workspace_id: WORKSPACE }],
+    },
+  };
+  const startedAt = Date.now();
+  const runReportId = randomUUID();
+  const reportId = randomUUID();
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "started",
+        sessionId: assignedSessionId,
+        startedAt,
+        reportId: runReportId,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "report_pending",
+        sessionId: assignedSessionId,
+        startedAt,
+        reportId,
+        runReportId,
+        message: "Existing assigned handoff",
+        target: "project",
+      },
+    },
+  ];
   const pi = fakePi({
+    entries,
+    allTools: [{ name: "read_evidence" }],
     exec: async (command: string, args: string[]) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              source: {
-                repo_key: "repo-key",
-                repo_name: "project",
-                source_workspace_id: WORKSPACE,
-              },
-              worktrees: [],
-            },
-          }),
+          stdout: JSON.stringify(projectTopology),
           stderr: "",
           code: 0,
         };
@@ -4985,8 +5380,10 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     },
   });
   const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => assignedSessionId;
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
+  context.isIdle = () => false;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
@@ -4994,22 +5391,86 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
   try {
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
+      details: { id: assignedSessionId, branch },
       timestamp: Date.now(),
       content: `Project assignment for branch\n${brief}`,
     };
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    for (const handler of pi.events.get("agent_start") ?? [])
-      await handler(undefined, context);
     branchEntries.push({
       type: "custom_message",
       customType: assignmentMessage.customType,
       message: assignmentMessage,
     });
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
     for (const handler of pi.events.get("message_start") ?? [])
       await handler({ message: assignmentMessage }, context);
     await assertManagedLeadRole(pi, context);
+
+    const globalMatches =
+      globalProjectAssignmentSnapshot().get(assignedSessionId) ?? [];
+    assert.equal(
+      globalMatches.length,
+      1,
+      "global assignment session match count",
+    );
+    assert.equal(
+      globalMatches[0]!.socketHash,
+      createHash("sha256").update(process.env.HERDR_SOCKET_PATH!).digest("hex"),
+      "assignment socket hash must match HERDR_SOCKET_PATH",
+    );
+    const worktreeScope = await worktreeGroupScope(
+      pi.pi as never,
+      context,
+      WORKSPACE,
+    );
+    assert.equal(worktreeScope.repoKey, "repo-key", "Herdr source.repo_key");
+    assert.equal(worktreeScope.repoName, "project", "Herdr source.repo_name");
+    assert.equal(
+      worktreeScope.primaryWorkspaceId,
+      WORKSPACE,
+      "Herdr source.source_workspace_id",
+    );
+    assert.ok(
+      projectTopology.result.worktrees.some(
+        (worktree) => worktree.open_workspace_id === WORKSPACE,
+      ),
+      "relevant workspace must be present in worktrees",
+    );
+    assert.ok(
+      worktreeScope.workspaceIds.includes(WORKSPACE),
+      "current workspace must be in the verified topology",
+    );
+    const scopeAssignments = findProjectAssignmentBySession(
+      runtime,
+      worktreeScope.repoKey,
+      assignedSessionId,
+    );
+    assert.equal(
+      scopeAssignments.length,
+      1,
+      "projectAssignmentForScope session match count",
+    );
+    assert.equal(
+      scopeAssignments[0]!.branch,
+      branch,
+      "exact repo/branch assignment",
+    );
+    assert.equal(scopeAssignments[0]!.id, assignment.id);
+    assert.deepEqual(
+      scopeAssignments[0]!.requiredEvidence?.map((entry) => entry.ref),
+      [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
+      "normal active-Lead access upgrades legacy evidence without resume_project",
+    );
+    assert.ok(
+      pi.tools.some((tool) => tool.name === "read_evidence"),
+      "assigned Lead reader offer",
+    );
+    assert.ok(
+      pi.pi.getActiveTools().includes("read_evidence"),
+      `assigned Lead reader readiness: ${pi.pi.getActiveTools().join(",")}`,
+    );
 
     const result = await registeredAgentTool(pi, "delegate").execute(
       "project-brief-reviewer",
@@ -5017,6 +5478,7 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
         definition: "reviewer",
         label,
         task: "Review this project",
+        files: [olderBrief.ref!, ordinaryPath, snapshot.ref!],
       },
       undefined,
       undefined,
@@ -5025,23 +5487,113 @@ test("assigned Lead delivers the project brief to reviewers without supplied fil
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
+    const migratedAssignment = readProjectAssignment(
+      runtime,
+      "repo-key",
+      branch,
+    );
+    assert.deepEqual(
+      migratedAssignment?.requiredEvidence?.map((entry) => entry.id),
+      [snapshot.id, olderBrief.id, historicalBrief.id, longEvidence.id],
+      "active assignment migration preserves existing evidence identities",
+    );
+    assert.deepEqual(
+      migratedAssignment?.requiredEvidence?.map((entry) => entry.ref),
+      [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
+      "active Lead delegation persists stable refs without resume_project",
+    );
+    assert.ok(
+      accepted!.text.indexOf("Task:\nReview this project") <
+        accepted!.text.indexOf("<file "),
+    );
+    const orderedCurrent = ["small historical note", ordinaryText, brief].map(
+      (content) => accepted!.text.indexOf(content),
+    );
+    assert.ok(orderedCurrent.every((index) => index >= 0));
+    assert.deepEqual(
+      orderedCurrent,
+      [...orderedCurrent].sort((a, b) => a - b),
+    );
+    for (const content of ["small historical note", ordinaryText, brief])
+      assert.equal(accepted!.text.split(content).length - 1, 1);
     assert.match(
       accepted!.text,
       /initial project brief: preserve backward compatibility/,
     );
+    assert.match(
+      accepted!.text,
+      new RegExp(`${historicalBrief.ref} — historical-plan\\.txt`),
+    );
+    assert.doesNotMatch(accepted!.text, /unselected historical plan/);
+    assert.ok(!accepted!.text.includes(LEAD_SESSION_ID));
+    assert.ok(!accepted!.text.includes(snapshot.path));
     assert.match(accepted!.text, /Review this project/);
     assert.deepEqual(
       accepted!.requiredEvidence?.map((entry) =>
         readRequiredEvidenceSnapshot(assignment.id, entry),
       ),
-      [brief],
+      [
+        brief,
+        "small historical note",
+        "unselected historical plan",
+        "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+      ],
     );
+    const reader = pi.tools.find((tool) => tool.name === "read_evidence");
+    assert.ok(reader, "assigned Lead must have the scoped evidence reader");
+    const read = await reader.execute(
+      "read-current-evidence",
+      { ref: snapshot.ref },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(
+      JSON.stringify(read),
+      /initial project brief: preserve backward compatibility/,
+    );
+    const firstLongRead = await reader.execute(
+      "read-long-evidence",
+      { ref: longEvidence.ref },
+      undefined,
+      undefined,
+      context,
+    );
+    const firstLongText = firstLongRead.content[0].text;
+    assert.ok(Buffer.byteLength(firstLongText) <= READ_EVIDENCE_MAX_BYTES);
+    const cursor = firstLongText.match(
+      /\[More evidence: call read_evidence with offset=(\d+), byteOffset=(\d+)\]$/,
+    );
+    assert.ok(cursor, "root Lead reader exposes model-visible continuation");
+    const secondLongRead = await reader.execute(
+      "read-long-evidence-next",
+      {
+        ref: longEvidence.ref,
+        offset: Number(cursor[1]),
+        byteOffset: Number(cursor[2]),
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const firstChunk = firstLongText.replace(/\n\[More evidence:.*\]$/, "");
+    const secondChunk = secondLongRead.content[0].text;
+    assert.doesNotMatch(secondChunk, /\[More evidence:/);
+    assert.equal(
+      firstChunk + secondChunk,
+      "z".repeat(READ_EVIDENCE_MAX_BYTES + 1000),
+    );
+    assert.ok(Buffer.byteLength(secondChunk) <= READ_EVIDENCE_MAX_BYTES);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     realFs.rmSync(snapshot.path, { force: true });
+    realFs.rmSync(olderBrief.path, { force: true });
+    realFs.rmSync(historicalBrief.path, { force: true });
+    realFs.rmSync(longEvidence.path, { force: true });
+    realFs.rmSync(ordinaryPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -5200,24 +5752,16 @@ test("managed project delegation references supported evidence larger than the i
       undefined,
       context,
     );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(accepted);
-    assert.ok(
-      accepted!.text.includes(
-        `<file name="${realpathSync(snapshot.path)}" bytes="${Buffer.byteLength(content)}" />`,
-      ),
-      "request must include a usable reference to the immutable snapshot",
-    );
     assert.equal(
-      accepted!.requiredEvidence?.[0]?.sourceAssignmentId,
-      LEAD_SESSION_ID,
+      result.details.ok,
+      false,
+      "unretained current attachments must not degrade to path-only delivery",
     );
-    assert.ok(
-      accepted!.text.includes(
-        `<file name="${realpathSync(largeExplicitPath)}" bytes="${Buffer.byteLength(largeExplicit)}" />`,
-      ),
-      "oversized explicit input must remain reference-only rather than being read for deduplication",
+    assert.match(JSON.stringify(result.details), /could not be fully embedded/);
+    assert.equal(
+      accepted,
+      undefined,
+      "failed current delivery must not be advertised as accepted",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -5352,6 +5896,12 @@ test("managed project delegation keeps small changed content and deduplicates ma
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
     assert.match(accepted!.text, /newer plan body/);
+    assert.match(accepted!.text, /duplicate plan body/);
+    assert.match(
+      accepted!.text,
+      /<file name="evidence:plan#\d+" label="plan\.md"/,
+    );
+    assert.doesNotMatch(accepted!.text, /evidence:plan#\d+ — plan\.md/);
     assert.equal(accepted!.text.match(/duplicate plan body/g)?.length, 1);
     assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
   } finally {
@@ -5377,13 +5927,13 @@ test("managed project delegation keeps changed original-path content alongside r
   const branch = `evidence-changed-${randomUUID()}`;
   const inheritedContent = `Inherited evidence body ${"i".repeat(75000)}`;
   const currentContent = `Current review evidence ${"c".repeat(75000)}`;
-  const snapshot = persistRequiredEvidenceSnapshot(
-    LEAD_SESSION_ID,
-    "plan.md",
-    inheritedContent,
-  );
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
   const originalPath = join("/tmp", originalRelativePath);
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    originalRelativePath,
+    inheritedContent,
+  );
   realFs.writeFileSync(originalPath, currentContent);
   const assignment = {
     version: 2 as const,
@@ -5482,10 +6032,8 @@ test("managed project delegation keeps changed original-path content alongside r
       "current explicit evidence must be embedded in full",
     );
     assert.ok(
-      accepted!.text.includes(
-        `<file name="${realpathSync(snapshot.path)}" bytes="${Buffer.byteLength(inheritedContent)}" />`,
-      ),
-      "inherited required evidence remains available by verified reference",
+      accepted!.text.includes(`${snapshot.ref} — ${originalRelativePath}`),
+      "inherited required evidence remains available by semantic reference",
     );
     assert.deepEqual(accepted!.requiredEvidence, [snapshot]);
     assert.equal(
@@ -6021,6 +6569,66 @@ test("each direct managed Lead turn returns its response", async () => {
       ),
       { recursive: true, force: true },
     );
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("legacy project evidence gets a durable ref before resume and keeps it across reloads", () => {
+  setLeadEnvironment();
+  const socket = join(
+    tmpdir(),
+    `project-evidence-migration-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `evidence-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "accepted-plan.md",
+    "keep the accepted plan",
+  );
+  const { ref: _ref, ...legacySnapshot } = snapshot;
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "assigned task",
+    requiredEvidence: [legacySnapshot],
+  };
+  try {
+    writeProjectAssignment(runtime, assignment);
+    const path = projectAssignmentPath(runtime, "repo-key", branch);
+    // Simulate a durable pre-ref assignment created by an earlier version.
+    realFs.writeFileSync(path, `${JSON.stringify(assignment)}\n`);
+    const upgraded = migrateProjectAssignmentEvidence(
+      runtime,
+      "repo-key",
+      branch,
+    )!;
+    const ref = upgraded.requiredEvidence![0]!.ref;
+    assert.match(ref!, /^evidence:accepted-plan#[1-9][0-9]*$/);
+    assert.equal(upgraded.requiredEvidence![0]!.id, snapshot.id);
+    assert.equal(
+      upgraded.requiredEvidence![0]!.sourceAssignmentId,
+      LEAD_SESSION_ID,
+    );
+    assert.equal(upgraded.requiredEvidence![0]!.path, snapshot.path);
+    assert.equal(upgraded.requiredEvidence![0]!.sha256, snapshot.sha256);
+    assert.deepEqual(
+      readProjectAssignment(runtime, "repo-key", branch),
+      upgraded,
+    );
+    assert.deepEqual(
+      migrateProjectAssignmentEvidence(runtime, "repo-key", branch),
+      upgraded,
+    );
+    assert.deepEqual(
+      readProjectAssignment(runtime, "repo-key", branch),
+      upgraded,
+    );
+  } finally {
+    removeProjectAssignment(runtime, "repo-key", branch);
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
@@ -8615,6 +9223,55 @@ test("session continuation starts a new agent generation with current prompt con
     }
     resetAgentMailbox(savedMailbox);
     writeAgentState(savedMailbox, savedState);
+    const savedEvidenceRecord = session.entries.find(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-agent-required-evidence",
+    ) as any;
+    const originalInheritedEvidence =
+      savedEvidenceRecord.data.inheritedEvidence[0];
+    for (const forgedRef of [
+      "evidence:unreserved-continuation#1",
+      localEvidence.ref,
+    ]) {
+      savedEvidenceRecord.data.inheritedEvidence[0] = {
+        ...originalInheritedEvidence,
+        ref: forgedRef,
+      };
+      writeValidPiSessionFile(session);
+      const persistedEvidenceRecord = realFs
+        .readFileSync(session.path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-agent-required-evidence",
+        );
+      assert.equal(
+        persistedEvidenceRecord.data.inheritedEvidence[0].ref,
+        forgedRef,
+      );
+      const forged = await registeredAgentTool(pi, "continue").execute(
+        "id",
+        { session: session.path, task: "do not accept forged evidence" },
+        undefined,
+        undefined,
+        ownedSessionContext(session.id, name),
+      );
+      assert.equal(forged.details.ok, false, JSON.stringify(forged.details));
+      assert.equal(forged.details.error?.category, "invalid_request");
+      assert.equal(
+        forged.details.error.message,
+        "Saved assignment evidence is unavailable or invalid",
+      );
+      assert.ok(!JSON.stringify(forged).includes("continued plan"));
+      assert.ok(
+        !JSON.stringify(forged).includes(originalInheritedEvidence.path),
+      );
+      assert.ok(!JSON.stringify(forged).includes(forgedRef));
+    }
+    savedEvidenceRecord.data.inheritedEvidence[0] = originalInheritedEvidence;
+    writeValidPiSessionFile(session);
     const unavailableEvidencePath = `${inheritedEvidence.path}.unavailable`;
     realFs.renameSync(inheritedEvidence.path, unavailableEvidencePath);
     try {
@@ -8635,7 +9292,7 @@ test("session continuation starts a new agent generation with current prompt con
       );
       assert.match(
         unavailableEvidence.details.error.message,
-        /Saved assignment evidence .* is unavailable/,
+        /Saved assignment evidence is unavailable or invalid/,
       );
     } finally {
       realFs.renameSync(unavailableEvidencePath, inheritedEvidence.path);
@@ -8657,6 +9314,23 @@ test("session continuation starts a new agent generation with current prompt con
       ...currentAssignment,
       requiredEvidence: [],
     });
+    const { ref: _savedRef, ...preReferenceEvidence } =
+      savedEvidenceRecord.data.inheritedEvidence[0];
+    savedEvidenceRecord.data.inheritedEvidence[0] = preReferenceEvidence;
+    writeValidPiSessionFile(session);
+    const persistedLegacyRecord = realFs
+      .readFileSync(session.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-required-evidence",
+      );
+    assert.equal(
+      "ref" in persistedLegacyRecord.data.inheritedEvidence[0],
+      false,
+    );
     await pi.events.get("session_start")![0](
       undefined,
       projectAssignmentContext,
@@ -8707,8 +9381,16 @@ test("session continuation starts a new agent generation with current prompt con
     ]);
     assert.deepEqual(continuedRequest!.inheritedEvidence, [inheritedEvidence]);
     assert.deepEqual(continuedRequest!.localEvidence, [localEvidence]);
-    assert.match(continuedRequest!.text, /continued plan/);
-    assert.match(continuedRequest!.text, /continued review/);
+    assert.ok(
+      continuedRequest!.text.includes(`${inheritedEvidence.ref} — plan.md`),
+    );
+    assert.ok(
+      continuedRequest!.text.includes(`${localEvidence.ref} — review.md`),
+    );
+    assert.doesNotMatch(
+      continuedRequest!.text,
+      /continued plan|continued review/,
+    );
     const sessionIndex = launched[0].args.indexOf("--session");
     assert.equal(
       launched[0].args[sessionIndex + 1],

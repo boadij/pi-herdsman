@@ -31,6 +31,8 @@ import {
   isIncidentalMetadata,
   isResultBinding,
   isRequiredEvidence,
+  upgradeAndVerifyRequiredEvidence,
+  verifySemanticEvidenceReservation,
   type RequiredEvidence,
   type ResultBinding,
 } from "./storage.ts";
@@ -2180,6 +2182,7 @@ function writeProjectAssignmentUnlocked(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
 ): void {
+  assignment = upgradeProjectAssignmentEvidence(assignment);
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
@@ -2219,6 +2222,45 @@ function writeProjectAssignmentUnlocked(
   }
 }
 
+function upgradeProjectAssignmentEvidence(
+  assignment: ProjectAssignment,
+): ProjectAssignment {
+  if (!assignment.requiredEvidence?.length) return assignment;
+  const requiredEvidence = assignment.requiredEvidence.map(
+    upgradeAndVerifyRequiredEvidence,
+  );
+  if (
+    requiredEvidence.every(
+      (evidence, index) => evidence === assignment.requiredEvidence![index],
+    )
+  )
+    return assignment;
+  return {
+    ...assignment,
+    requiredEvidence,
+  };
+}
+
+/** Persist legacy snapshot refs under the assignment authority lock before a resume advertises them. */
+export function migrateProjectAssignmentEvidence(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  expectedAssignmentId?: string,
+): ProjectAssignment | undefined {
+  return withProjectAssignmentLock(() => {
+    const current = readProjectAssignment(runtime, repoKey, branch);
+    if (
+      !current ||
+      (expectedAssignmentId && current.id !== expectedAssignmentId)
+    )
+      return undefined;
+    const upgraded = upgradeProjectAssignmentEvidence(current);
+    if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
+    return upgraded;
+  });
+}
+
 export function readProjectAssignment(
   runtime: SupervisionRuntime,
   repoKey: string,
@@ -2254,6 +2296,13 @@ function readProjectAssignmentFile(
   }
   if (!validProjectAssignment(value))
     throw projectAssignmentReadError(path, "invalid assignment schema");
+  try {
+    for (const evidence of value.requiredEvidence ?? [])
+      if (!("result" in evidence) && evidence.ref)
+        verifySemanticEvidenceReservation(evidence.id, evidence.ref);
+  } catch {
+    throw projectAssignmentReadError(path, "invalid evidence identity");
+  }
   if (projectAssignmentBytes(value) > PROJECT_ASSIGNMENT_MAX_BYTES)
     throw projectAssignmentReadError(path, "assignment payload is too large");
   if (

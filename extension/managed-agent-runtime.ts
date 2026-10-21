@@ -96,12 +96,18 @@ import {
 import { fail, OperationError } from "./errors.ts";
 import { readConfig, readEffectiveConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
+import { readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
 import {
   isRequiredEvidence,
   readRequiredEvidenceSnapshot,
+  resolveResultRef,
+  semanticEvidenceRef,
   type RequiredEvidence,
   type ResultBinding,
   persistRequiredEvidenceSnapshot,
+  upgradeAndVerifyRequiredEvidence,
+  verifySemanticEvidenceReservation,
 } from "./storage.ts";
 import {
   agentDefinitionEnabled,
@@ -115,6 +121,8 @@ ${FILE_HANDOFF_GUIDANCE}`;
 
 export const AGENT_REQUIRED_EVIDENCE_ENTRY =
   "pi-herdsman-agent-required-evidence";
+export const READ_EVIDENCE_MAX_BYTES = 16 * 1024;
+export const READ_EVIDENCE_MAX_LINES = 200;
 const SESSION_REQUEST_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -132,6 +140,130 @@ type AcceptedEvidenceContext = {
   inheritedEvidence: RequiredEvidence[];
   localEvidence: RequiredEvidence[];
 };
+
+export type EvidencePageOptions = Readonly<{
+  /** 1-based line number; defaults to 1. */
+  offset?: number;
+  /** Byte offset within the selected line, used only for long-line continuation. */
+  byteOffset?: number;
+  /** Positive line limit, at most READ_EVIDENCE_MAX_LINES. */
+  limit?: number;
+}>;
+
+export type EvidencePage = Readonly<{
+  content: string;
+  nextOffset?: number;
+  nextByteOffset?: number;
+}>;
+
+const EVIDENCE_CONTINUATION_RESERVE = 128;
+
+export function evidencePageContent(page: EvidencePage): string {
+  if (page.nextOffset === undefined) return page.content;
+  return `${page.content}\n[More evidence: call read_evidence with offset=${page.nextOffset}, byteOffset=${page.nextByteOffset ?? 0}]`;
+}
+
+/** Reads only the caller-provided accepted set; this helper does not authorize that set. */
+export function readEvidencePage(
+  authorizedEvidence: readonly RequiredEvidence[],
+  ref: string,
+  options: EvidencePageOptions = {},
+): EvidencePage {
+  const offset = options.offset ?? 1;
+  const limit = options.limit ?? READ_EVIDENCE_MAX_LINES;
+  const byteOffset = options.byteOffset ?? 0;
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 1 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > READ_EVIDENCE_MAX_LINES ||
+    !Number.isSafeInteger(byteOffset) ||
+    byteOffset < 0
+  )
+    throw new Error("Evidence page unavailable");
+
+  try {
+    const matches = authorizedEvidence.filter(
+      (item) => isRequiredEvidence(item) && semanticEvidenceRef(item) === ref,
+    );
+    if (matches.length !== 1) throw new Error();
+    const evidence = matches[0]!;
+    if (!("result" in evidence))
+      verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
+    let content: string;
+    if ("result" in evidence) {
+      const path = resolveResultRef(evidence.result.canonicalRef);
+      if (!path) throw new Error();
+      // Reuse the accepted-binding file validation before reading its artifact.
+      validateMessageFiles([evidence.result], process.cwd(), "read_evidence");
+      content = new TextDecoder("utf-8", { fatal: true }).decode(
+        readFileSync(path),
+      );
+    } else {
+      content = readRequiredEvidenceSnapshot(
+        evidence.sourceAssignmentId,
+        evidence,
+      );
+    }
+    const bytes = Buffer.from(content, "utf8");
+    const lines: Buffer[] = [];
+    let start = 0;
+    for (let i = 0; i < bytes.length; i++) {
+      if (bytes[i] === 10) {
+        lines.push(bytes.subarray(start, i + 1));
+        start = i + 1;
+      }
+    }
+    if (start < bytes.length || bytes.length === 0)
+      lines.push(bytes.subarray(start));
+    if (
+      offset > lines.length + 1 ||
+      (offset === lines.length + 1 && byteOffset)
+    )
+      throw new Error();
+    let lineIndex = offset - 1;
+    let cursor = byteOffset;
+    let budget = READ_EVIDENCE_MAX_BYTES - EVIDENCE_CONTINUATION_RESERVE;
+    let count = 0;
+    const page: Buffer[] = [];
+    while (lineIndex < lines.length && count < limit && budget > 0) {
+      const line = lines[lineIndex]!;
+      if (cursor > line.length) throw new Error();
+      if (cursor < line.length && (line[cursor]! & 0xc0) === 0x80)
+        throw new Error();
+      let end = Math.min(line.length, cursor + budget);
+      while (end > cursor && end < line.length && (line[end]! & 0xc0) === 0x80)
+        end--;
+      if (end === cursor && cursor < line.length) throw new Error();
+      page.push(line.subarray(cursor, end));
+      budget -= end - cursor;
+      if (end < line.length) {
+        return {
+          content: Buffer.concat(page).toString("utf8"),
+          nextOffset: lineIndex + 1,
+          nextByteOffset: end,
+        };
+      }
+      lineIndex++;
+      cursor = 0;
+      count++;
+    }
+    const nextOffset = lineIndex < lines.length ? lineIndex + 1 : undefined;
+    const nextContent = Buffer.concat(page).toString("utf8");
+    const result = {
+      content: nextContent,
+      ...(nextOffset ? { nextOffset, nextByteOffset: 0 } : {}),
+    };
+    if (
+      Buffer.byteLength(evidencePageContent(result)) > READ_EVIDENCE_MAX_BYTES
+    )
+      throw new Error();
+    return result;
+  } catch {
+    throw new Error("Evidence reference unavailable or invalid");
+  }
+}
 
 /** Read only the exact session branch; malformed or foreign entries fail closed. */
 export function managedAgentRequiredEvidence(ctx: ExtensionContext):
@@ -158,6 +290,22 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
     );
   let latest: AcceptedEvidenceContext | undefined;
   const localEvidenceById = new Map<string, RequiredEvidence>();
+  const sameVerifiedEvidenceAfterRefUpgrade = (
+    previous: RequiredEvidence,
+    current: RequiredEvidence,
+  ): boolean => {
+    if (isDeepStrictEqual(previous, current)) return true;
+    if (
+      "path" in previous &&
+      "path" in current &&
+      previous.ref === undefined &&
+      current.ref !== undefined
+    ) {
+      const { ref: _ref, ...withoutRef } = current;
+      return isDeepStrictEqual(previous, withoutRef);
+    }
+    return false;
+  };
   for (const entry of matches as any[]) {
     const data = entry.data as AcceptedEvidenceContext;
     if (
@@ -188,6 +336,9 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       throw new Error(
         "Managed-agent required-evidence session metadata is malformed",
       );
+    for (const evidence of [...data.inheritedEvidence, ...data.localEvidence])
+      if (!("result" in evidence) && evidence.ref)
+        verifySemanticEvidenceReservation(evidence.id, evidence.ref);
     if (data.requestId !== assignment.activeRequestId) continue;
     if (
       !identity ||
@@ -206,7 +357,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       );
     for (const item of data.localEvidence) {
       const previous = localEvidenceById.get(item.id);
-      if (previous && !isDeepStrictEqual(previous, item))
+      if (previous && !sameVerifiedEvidenceAfterRefUpgrade(previous, item))
         throw new Error("Conflicting managed-agent required-evidence metadata");
       localEvidenceById.set(item.id, item);
     }
@@ -215,12 +366,22 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       latest.requestId === data.requestId &&
       (latest.projectAssignmentId !== data.projectAssignmentId ||
         latest.evidenceAssignmentId !== data.evidenceAssignmentId ||
-        !isDeepStrictEqual(latest.inheritedEvidence, data.inheritedEvidence) ||
+        latest.inheritedEvidence.length !== data.inheritedEvidence.length ||
+        latest.inheritedEvidence.some(
+          (item, index) =>
+            !sameVerifiedEvidenceAfterRefUpgrade(
+              item,
+              data.inheritedEvidence[index]!,
+            ),
+        ) ||
         latest.localEvidence.some((item) => {
           const retained = data.localEvidence.find(
             (next) => next.id === item.id,
           );
-          return retained !== undefined && !isDeepStrictEqual(item, retained);
+          return (
+            retained !== undefined &&
+            !sameVerifiedEvidenceAfterRefUpgrade(item, retained)
+          );
         }))
     )
       throw new Error("Conflicting managed-agent required-evidence metadata");
@@ -274,10 +435,14 @@ function persistAcceptedRequiredEvidence(
     ...(request.evidenceAssignmentId
       ? { evidenceAssignmentId: request.evidenceAssignmentId }
       : {}),
-    inheritedEvidence: [
-      ...(request.inheritedEvidence ?? request.requiredEvidence ?? []),
-    ],
-    localEvidence: [...(request.localEvidence ?? [])],
+    inheritedEvidence: (
+      request.inheritedEvidence ??
+      request.requiredEvidence ??
+      []
+    ).map(upgradeAndVerifyRequiredEvidence),
+    localEvidence: (request.localEvidence ?? []).map(
+      upgradeAndVerifyRequiredEvidence,
+    ),
   };
   const existing = ctx.sessionManager
     .getBranch()
@@ -1573,13 +1738,32 @@ export function registerManagedAgentInputHandlers(
       );
       return { action: "handled" };
     }
+    let acceptedRequest = request;
     try {
-      if (request.kind === "task")
-        for (const evidence of request.requiredEvidence ?? [])
+      if (request.kind === "task") {
+        const inheritedEvidence = (
+          request.inheritedEvidence ??
+          request.requiredEvidence ??
+          []
+        ).map(upgradeAndVerifyRequiredEvidence);
+        const localEvidence = (request.localEvidence ?? []).map(
+          upgradeAndVerifyRequiredEvidence,
+        );
+        const requiredEvidence = (request.requiredEvidence ?? []).map(
+          upgradeAndVerifyRequiredEvidence,
+        );
+        acceptedRequest = {
+          ...request,
+          requiredEvidence,
+          inheritedEvidence,
+          localEvidence,
+        };
+        for (const evidence of requiredEvidence)
           if ("result" in evidence)
             validateMessageFiles([evidence.result], ctx.cwd, "task");
           else
             readRequiredEvidenceSnapshot(evidence.sourceAssignmentId, evidence);
+      }
     } catch (error) {
       options.requestState.acknowledgeAndDiscard(
         id,
@@ -1618,7 +1802,7 @@ export function registerManagedAgentInputHandlers(
     }
     if (request.kind === "task") {
       try {
-        persistAcceptedRequiredEvidence(pi, ctx, request, state);
+        persistAcceptedRequiredEvidence(pi, ctx, acceptedRequest, state);
       } catch (error) {
         options.requestState.acknowledgeAndDiscard(
           id,
@@ -2501,6 +2685,7 @@ export function registerManagedAgentRuntime(
           {
             inlineLimitBytes: limits.inline.bytes,
             mailboxLimitBytes: limits.mailbox.bytes,
+            requireInline: true,
             serializedBytes: (text, bindings) =>
               askRecordBytes(
                 state,

@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-Managed-agent operations are exposed as nine distinct tools:
+Managed-agent operations are exposed as distinct tools:
 
 ```text
 list_agents
@@ -14,6 +14,7 @@ reply_agent
 close_agent
 inspect_agent
 read_agent_transcript
+read_evidence
 ```
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
@@ -348,6 +349,30 @@ without a corresponding tool result. That absence does not itself prove that
 the tool is still running. `inspect_agent` remains the live terminal/process
 observation path. Transcript is read-only and does not change agent state.
 
+## `read_evidence`
+
+```json
+{
+  "ref": "evidence:accepted-plan#1",
+  "offset": 1,
+  "limit": 200,
+  "byteOffset": 0
+}
+```
+
+`read_evidence` is available to managed Agents and assigned project Leads. It
+reads only an exact reference in evidence accepted by the caller's assignment;
+the reference itself grants no authorization. `ref` is required. `offset` is
+an optional 1-based line number (default `1`), `limit` is an optional positive
+line count (default `200`, maximum `200`), and `byteOffset` is an optional
+non-negative byte offset within the selected line (default `0`), for resuming a
+long line. The result contains `content` and, when more content remains,
+`nextOffset` and `nextByteOffset`; pass those values back as `offset` and
+`byteOffset` to continue. Pages are capped at 16 KiB and 200 lines. Long-line
+continuation offsets preserve UTF-8 boundaries. Unavailable, stale, foreign,
+ambiguous, or invalid references fail closed with a generic error that does
+not disclose storage paths.
+
 ## `files`
 
 `files` is valid on `delegate_agent`, `continue_agent`, `steer_agent`,
@@ -360,12 +385,15 @@ exact direct-agent label and index shown in a completion and resolve against the
 calling Pi session's current branch before ordinary file preparation; see
 [Result handoff](../guides/handoffs.md).
 Ordinary paths are resolved from the controller cwd, checked as readable regular
-files, canonicalized with `realpath`, and embedded only when the exact message
-limit permits. Otherwise they remain canonical references. Semantic direct refs
-resolve against the current branch and remain reusable in the receiving branch
-through a hidden binding; canonical `result:<request-id>` refs remain logical
-result references when explicitly supplied as evidence. `files` remains a
-`string[]` for all three forms.
+files, and canonicalized with `realpath`. Path inputs that fit the exact message
+limit are embedded; only operations that permit reference delivery may retain
+oversized ordinary paths as canonical references. Fresh `delegate_agent`
+assignments require current attachments to fit the complete inline-content
+limits; oversized attachments are rejected, never replaced with path-only
+references. Semantic direct refs resolve against the current branch and remain
+reusable in the receiving branch through a hidden binding; canonical
+`result:<request-id>` refs remain logical result references when explicitly
+supplied as evidence. `files` remains a `string[]` for all three forms.
 
 `files` remains explicit per-message evidence; arbitrary caller conversation
 and attachments are not inherited. A fresh managed Agent in a verified project

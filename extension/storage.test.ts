@@ -20,6 +20,13 @@ import {
   resultPath,
   resultRef,
   reserveSemanticResultRef,
+  reserveSemanticEvidenceRef,
+  semanticEvidenceRef,
+  upgradeRequiredEvidence,
+  upgradeAndVerifyRequiredEvidence,
+  verifySemanticEvidenceReservation,
+  isRequiredEvidence,
+  isCanonicalSemanticEvidenceRef,
   persistRequiredEvidenceSnapshot,
   readRequiredEvidenceSnapshot,
   requiredEvidenceDirectory,
@@ -73,6 +80,158 @@ test("semantic result refs are uniquely reserved across independent allocations"
     assert.equal(reserveSemanticResultRef(label, 2).index, 18);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("semantic evidence refs are stable, collision-safe, and separate from result refs", () => {
+  const firstId = randomUUID();
+  const secondId = randomUUID();
+  const name = `review-${firstId.slice(0, 8)}.md`;
+  const label = name.slice(0, -3);
+  const first = reserveSemanticEvidenceRef(firstId, name);
+  const second = reserveSemanticEvidenceRef(secondId, name);
+  try {
+    assert.equal(first, `evidence:${label}#1`);
+    assert.equal(second, `evidence:${label}#2`);
+    assert.equal(reserveSemanticEvidenceRef(firstId, "renamed.md"), first);
+    assert.equal(
+      semanticEvidenceRef({
+        id: firstId,
+        name: "review.md",
+        result: {
+          ref: "result:reviewer#1",
+          canonicalRef: "result:550e8400-e29b-41d4-a716-446655440000",
+        },
+      }),
+      "result:reviewer#1",
+    );
+    for (const ref of [
+      "evidence:Review#1",
+      "evidence:review#0",
+      "evidence:review#01",
+      "evidence:review#9007199254740992",
+    ]) {
+      assert.equal(isCanonicalSemanticEvidenceRef(ref), false);
+    }
+    assert.equal(isCanonicalSemanticEvidenceRef(first), true);
+  } finally {
+    const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+    rmSync(join(root, "by-id", firstId), { force: true });
+    rmSync(join(root, "by-id", secondId), { force: true });
+    rmSync(join(root, "refs", label), { recursive: true, force: true });
+  }
+});
+
+test("semantic evidence reservation verification is read-only and checks both directions", () => {
+  const firstId = randomUUID();
+  const secondId = randomUUID();
+  const first = reserveSemanticEvidenceRef(firstId, "reserved-one.md");
+  const second = reserveSemanticEvidenceRef(secondId, "reserved-two.md");
+  assert.doesNotThrow(() => verifySemanticEvidenceReservation(firstId, first));
+  assert.throws(() =>
+    verifySemanticEvidenceReservation(randomUUID(), "evidence:forged#1"),
+  );
+  assert.throws(() => verifySemanticEvidenceReservation(firstId, second));
+  const forged = {
+    id: randomUUID(),
+    ref: "evidence:unreserved#1",
+    name: "forged.md",
+    sourceAssignmentId: randomUUID(),
+    path: "/private/forged",
+    sha256: "a".repeat(64),
+  };
+  assert.throws(() => upgradeAndVerifyRequiredEvidence(forged));
+  const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+  rmSync(join(root, "by-id", firstId), { force: true });
+  assert.throws(() => verifySemanticEvidenceReservation(firstId, first));
+  rmSync(join(root, "by-id", secondId), { force: true });
+  rmSync(join(root, "refs", "reserved-one"), { recursive: true, force: true });
+  rmSync(join(root, "refs", "reserved-two"), { recursive: true, force: true });
+});
+
+test("legacy snapshot records remain valid and upgrade without changing provenance", () => {
+  const assignmentId = randomUUID();
+  const name = `plan-${assignmentId.slice(0, 8)}.md`;
+  const entry = persistRequiredEvidenceSnapshot(assignmentId, name, "plan\n");
+  try {
+    const { ref: _ref, ...legacy } = entry;
+    assert.equal(isRequiredEvidence(legacy), true);
+    const upgraded = upgradeRequiredEvidence(legacy);
+    assert.equal(upgraded.id, legacy.id);
+    assert.equal(upgraded.name, legacy.name);
+    assert.equal("result" in upgraded, false);
+    if ("result" in upgraded) assert.fail("expected snapshot");
+    assert.equal(upgraded.path, legacy.path);
+    assert.equal(upgraded.sha256, legacy.sha256);
+    assert.equal(upgraded.sourceAssignmentId, assignmentId);
+    assert.equal(
+      upgraded.ref,
+      reserveSemanticEvidenceRef(legacy.id, legacy.name),
+    );
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignmentId, upgraded),
+      "plan\n",
+    );
+    assert.equal(upgradeRequiredEvidence(legacy).ref, upgraded.ref);
+  } finally {
+    rmSync(requiredEvidenceDirectory(assignmentId), {
+      recursive: true,
+      force: true,
+    });
+    const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+    rmSync(join(root, "by-id", entry.id), { force: true });
+    rmSync(join(root, "refs", name.slice(0, -3)), {
+      recursive: true,
+      force: true,
+    });
+  }
+});
+
+test("required evidence accepts only exact legacy, semantic, and result record shapes", () => {
+  const assignmentId = randomUUID();
+  const name = `shape-${assignmentId.slice(0, 8)}.md`;
+  const label = name.slice(0, -3);
+  const snapshot = persistRequiredEvidenceSnapshot(assignmentId, name, "body");
+  const { ref: _ref, ...legacy } = snapshot;
+  const result = {
+    id: randomUUID(),
+    name: "prior result",
+    result: {
+      ref: "result:reviewer#1",
+      canonicalRef: "result:550e8400-e29b-41d4-a716-446655440000",
+    },
+  };
+  try {
+    assert.equal(isRequiredEvidence(legacy), true);
+    assert.equal(isRequiredEvidence(snapshot), true);
+    assert.equal(isRequiredEvidence(result), true);
+    assert.equal(isRequiredEvidence({ ...legacy, extra: true }), false);
+    assert.equal(isRequiredEvidence({ ...snapshot, extra: true }), false);
+    assert.equal(isRequiredEvidence({ ...snapshot, ref: undefined }), false);
+    assert.equal(
+      isRequiredEvidence({ ...legacy, ref: "evidence:shape#1" }),
+      true,
+    );
+    assert.equal(
+      isRequiredEvidence({ ...legacy, ref: "evidence:shape#01" }),
+      false,
+    );
+    assert.equal(isRequiredEvidence({ ...result, extra: true }), false);
+    assert.equal(
+      isRequiredEvidence({
+        ...result,
+        canonicalRef: "result:550e8400-e29b-41d4-a716-446655440000",
+      }),
+      false,
+    );
+  } finally {
+    rmSync(requiredEvidenceDirectory(assignmentId), {
+      recursive: true,
+      force: true,
+    });
+    const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+    rmSync(join(root, "by-id", snapshot.id), { force: true });
+    rmSync(join(root, "refs", label), { recursive: true, force: true });
   }
 });
 

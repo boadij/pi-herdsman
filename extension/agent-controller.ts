@@ -17,7 +17,7 @@ import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
-import { join, resolve, isAbsolute } from "node:path";
+import { basename, join, resolve, isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -71,8 +71,11 @@ import {
   type ResultBinding,
   herdsmanTempRoot,
   readRequiredEvidenceSnapshot,
+  verifySemanticEvidenceReservation,
+  upgradeAndVerifyRequiredEvidence,
   isRequiredEvidence,
   resolveResultRef,
+  semanticEvidenceRef,
   type RequiredEvidence,
 } from "./storage.ts";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
@@ -609,10 +612,51 @@ export function resolveMessageFiles(
   ctx: ExtensionContext,
   files: readonly string[] | undefined,
   operation: string,
+  acceptedEvidence: readonly RequiredEvidence[] = [],
 ): MessageFileInput[] {
   if (!files?.length) return [];
   return files.map((file) => {
+    if (file.startsWith("evidence:")) {
+      const matches = acceptedEvidence.filter(
+        (entry) => !("result" in entry) && entry.ref === file,
+      );
+      if (matches.length !== 1)
+        fail(
+          matches.length ? "target_ambiguous" : "target_not_found",
+          `Evidence reference ${file} is not available in the accepted evidence scope`,
+          operation,
+        );
+      const evidence = matches[0]!;
+      try {
+        verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
+        readRequiredEvidenceSnapshot(evidence.sourceAssignmentId, evidence);
+      } catch {
+        fail(
+          "invalid_request",
+          `Evidence reference ${file} is unavailable or invalid`,
+          operation,
+        );
+      }
+      return {
+        kind: "retainedEvidence",
+        ref: semanticEvidenceRef(evidence),
+        name: evidence.name,
+        path: evidence.path,
+        sha256: evidence.sha256,
+      };
+    }
     if (!file.startsWith("result:") || !file.includes("#")) return file;
+    const acceptedResults = acceptedEvidence.filter(
+      (entry): entry is Extract<RequiredEvidence, { result: ResultBinding }> =>
+        "result" in entry && entry.result.ref === file,
+    );
+    if (acceptedResults.length > 1)
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} is ambiguous in the accepted evidence scope`,
+        operation,
+      );
+    if (acceptedResults.length === 1) return acceptedResults[0]!.result;
     if (!parseSemanticResultRef(file))
       fail(
         "invalid_request",
@@ -788,6 +832,29 @@ function requiredEvidenceEntriesForRequest(
 function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
   const records = entries.map((entry) => entry?.data);
   const itemsById = new Map<string, RequiredEvidence>();
+  const sameEvidenceAfterRefUpgrade = (
+    previous: unknown,
+    current: unknown,
+  ): boolean => {
+    if (!isRequiredEvidence(previous) || !isRequiredEvidence(current))
+      return false;
+    if (isDeepStrictEqual(previous, current)) return true;
+    if (
+      "path" in previous &&
+      "path" in current &&
+      previous.ref === undefined &&
+      current.ref !== undefined
+    ) {
+      try {
+        verifySemanticEvidenceReservation(current.id, current.ref);
+      } catch {
+        return false;
+      }
+      const { ref: _ref, ...upgraded } = current;
+      return isDeepStrictEqual(previous, upgraded);
+    }
+    return false;
+  };
   for (let index = 1; index < records.length; index++) {
     const previous = records[index - 1];
     const current = records[index];
@@ -805,8 +872,17 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
         "paneId",
         "projectAssignmentId",
         "evidenceAssignmentId",
-        "inheritedEvidence",
       ].some((field) => !isDeepStrictEqual(previous[field], current[field])) ||
+      !Array.isArray(previous.inheritedEvidence) ||
+      !Array.isArray(current.inheritedEvidence) ||
+      previous.inheritedEvidence.length !== current.inheritedEvidence.length ||
+      previous.inheritedEvidence.some(
+        (item: unknown, itemIndex: number) =>
+          !sameEvidenceAfterRefUpgrade(
+            item,
+            current.inheritedEvidence[itemIndex],
+          ),
+      ) ||
       !Array.isArray(previous.localEvidence) ||
       !Array.isArray(current.localEvidence)
     )
@@ -816,7 +892,8 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
     if (!Array.isArray(record?.localEvidence)) return false;
     for (const item of record.localEvidence as RequiredEvidence[]) {
       const previous = itemsById.get(item.id);
-      if (previous && !isDeepStrictEqual(previous, item)) return false;
+      if (previous && !sameEvidenceAfterRefUpgrade(previous, item))
+        return false;
       itemsById.set(item.id, item);
     }
   }
@@ -2144,17 +2221,49 @@ export function resolveAssignmentSession(
             "Saved assignment evidence does not match the exact owned session",
             "continue",
           );
+        let upgradedInheritedEvidence: RequiredEvidence[];
+        let upgradedLocalEvidence: RequiredEvidence[];
+        try {
+          for (const item of [
+            ...record.inheritedEvidence,
+            ...record.localEvidence,
+          ])
+            if ("path" in item && item.ref !== undefined)
+              verifySemanticEvidenceReservation(item.id, item.ref);
+          upgradedInheritedEvidence = record.inheritedEvidence.map(
+            upgradeAndVerifyRequiredEvidence,
+          );
+          upgradedLocalEvidence = record.localEvidence.map(
+            upgradeAndVerifyRequiredEvidence,
+          );
+        } catch {
+          fail(
+            "invalid_request",
+            "Saved assignment evidence is unavailable or invalid",
+            "continue",
+          );
+        }
+        const upgradedRecord = {
+          ...record,
+          inheritedEvidence: upgradedInheritedEvidence,
+          localEvidence: upgradedLocalEvidence,
+        };
+        if (!isDeepStrictEqual(upgradedRecord, record))
+          manager.appendCustomEntry(
+            "pi-herdsman-agent-required-evidence",
+            upgradedRecord,
+          );
         for (const item of [
-          ...record.inheritedEvidence,
-          ...record.localEvidence,
+          ...upgradedInheritedEvidence,
+          ...upgradedLocalEvidence,
         ])
           if ("path" in item) {
             try {
               readRequiredEvidenceSnapshot(item.sourceAssignmentId, item);
-            } catch (error) {
+            } catch {
               fail(
                 "invalid_request",
-                `Saved assignment evidence ${item.name} is unavailable: ${String(error)}`,
+                "Saved assignment evidence is unavailable or invalid",
                 "continue",
               );
             }
@@ -2167,8 +2276,8 @@ export function resolveAssignmentSession(
           ...(record.evidenceAssignmentId
             ? { evidenceAssignmentId: record.evidenceAssignmentId }
             : {}),
-          inheritedEvidence: [...record.inheritedEvidence],
-          localEvidence: [...record.localEvidence],
+          inheritedEvidence: upgradedInheritedEvidence,
+          localEvidence: upgradedLocalEvidence,
           ...(historicalTerminal ? { terminal: historicalTerminal } : {}),
         };
       }
@@ -4281,6 +4390,7 @@ export function createAgentController(
       {
         inlineLimitBytes: limits.inlineAttachmentLimitBytes,
         mailboxLimitBytes: limits.mailboxPayloadLimitBytes,
+        requireInline: true,
         fits: (text, resultBindings) =>
           mailboxRecordBytes({
             version: 5,
@@ -6275,6 +6385,44 @@ export function createAgentController(
                 ...(nestedEvidence?.localEvidence ?? []),
               ]
             : (projectAssignment?.requiredEvidence ?? []);
+        let handoffAdditions: RequiredEvidence[] = [];
+        let retainedSelections: MessageFileInput[] = [];
+        const promoteMatchingEvidence = (file: string): MessageFileInput => {
+          try {
+            const [snapshot] = snapshotTextFiles([file], ctx.cwd, p.action, {
+              maxBytes: 1024 * 1024,
+            });
+            if (!snapshot) return file;
+            const digest = createHash("sha256")
+              .update(snapshot.text, "utf8")
+              .digest("hex");
+            const matches = requiredEvidence.filter(
+              (entry): entry is Extract<RequiredEvidence, { path: string }> =>
+                "path" in entry && entry.sha256 === digest,
+            );
+            const named = matches.filter(
+              (entry) => entry.name === basename(file),
+            );
+            const matched =
+              named.length === 1
+                ? named[0]
+                : matches.length === 1
+                  ? matches[0]
+                  : undefined;
+            if (!matched) return file;
+            verifySemanticEvidenceReservation(matched.id, matched.ref!);
+            readRequiredEvidenceSnapshot(matched.sourceAssignmentId, matched);
+            return {
+              kind: "retainedEvidence",
+              ref: semanticEvidenceRef(matched),
+              name: matched.name,
+              path: matched.path,
+              sha256: matched.sha256,
+            };
+          } catch {
+            return file;
+          }
+        };
         if (p.retain === true) {
           if (scope.kind !== "managed-agent" || !nestedEvidence)
             fail(
@@ -6304,7 +6452,14 @@ export function createAgentController(
               "Managed-Agent assignment changed before evidence retention",
               p.action,
             );
-          const supplied = resolveMessageFiles(ctx, p.files, p.action);
+          const supplied = resolveMessageFiles(
+            ctx,
+            p.files,
+            p.action,
+            requiredEvidence,
+          ).map((file) =>
+            typeof file === "string" ? promoteMatchingEvidence(file) : file,
+          );
           const existingPaths = new Set(
             requiredEvidence
               .filter(
@@ -6325,26 +6480,47 @@ export function createAgentController(
               )
               .map((entry) => entry.result.ref),
           );
-          const newFiles = supplied.filter((file) =>
-            typeof file === "string"
-              ? !existingPaths.has(resolve(ctx.cwd, file))
-              : !existingRefs.has(file.ref),
-          );
-          const additions: RequiredEvidence[] = [
-            ...persistRequiredTextFiles(
-              nestedEvidence.evidenceAssignmentId,
-              newFiles.filter(
-                (file): file is string => typeof file === "string",
-              ),
-              ctx.cwd,
-              p.action,
-            ),
-            ...newFiles.flatMap((file) =>
-              typeof file === "string"
-                ? []
-                : [{ id: randomUUID(), name: file.ref, result: file }],
-            ),
-          ];
+          const additions: RequiredEvidence[] = [];
+          const retainedPaths = new Set<string>();
+          retainedSelections = supplied.flatMap((file) => {
+            if (typeof file === "string") {
+              let canonicalPath: string | undefined;
+              try {
+                canonicalPath = realpathSync(resolve(ctx.cwd, file));
+              } catch {
+                // Let snapshot validation report invalid paths as before.
+              }
+              if (
+                canonicalPath &&
+                (existingPaths.has(canonicalPath) ||
+                  retainedPaths.has(canonicalPath))
+              )
+                return [];
+              const [addition] = persistRequiredTextFiles(
+                nestedEvidence.evidenceAssignmentId,
+                [file],
+                ctx.cwd,
+                p.action,
+              );
+              if (!addition) return [];
+              if (canonicalPath) retainedPaths.add(canonicalPath);
+              additions.push(addition);
+              return [
+                {
+                  kind: "retainedEvidence" as const,
+                  ref: semanticEvidenceRef(addition),
+                  name: addition.name,
+                  path: addition.path,
+                  sha256: addition.sha256,
+                },
+              ];
+            }
+            if ("kind" in file || existingRefs.has(file.ref)) return [file];
+            const addition = { id: randomUUID(), name: file.ref, result: file };
+            additions.push(addition);
+            return [file];
+          });
+          handoffAdditions = additions;
           const localEvidence = [...nestedEvidence.localEvidence];
           for (const addition of additions)
             if (
@@ -6412,15 +6588,22 @@ export function createAgentController(
           (entry) => {
             if ("result" in entry) return entry.result;
             try {
+              verifySemanticEvidenceReservation(entry.id, entry.ref!);
               readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry);
-            } catch (error) {
+            } catch {
               fail(
                 "invalid_request",
-                `Required evidence ${entry.name} is unavailable: ${String(error)}`,
+                `Required evidence ${entry.name} is unavailable`,
                 p.action,
               );
             }
-            return entry.path;
+            return {
+              kind: "retainedEvidence",
+              ref: semanticEvidenceRef(entry),
+              name: entry.name,
+              path: entry.path,
+              sha256: entry.sha256,
+            };
           },
         );
         const verifiedEvidence = requiredEvidence.filter(
@@ -6428,48 +6611,80 @@ export function createAgentController(
             "path" in entry,
         );
         const explicitFiles = (
-          p.retain === true ? [] : resolveMessageFiles(ctx, p.files, p.action)
-        ).filter((file) => {
-          if (typeof file !== "string") return true;
+          p.retain === true
+            ? retainedSelections
+            : resolveMessageFiles(ctx, p.files, p.action, requiredEvidence)
+        ).map((file) => {
+          if (typeof file !== "string") return file;
           try {
-            const [snapshot] = snapshotTextFiles([file], ctx.cwd, p.action, {
-              maxBytes: 1024 * 1024,
+            const path = realpathSync(resolve(ctx.cwd, file));
+            const result = requiredEvidence.find((entry) => {
+              if (!("result" in entry)) return false;
+              const resultPath = resolveResultRef(entry.result.canonicalRef);
+              return resultPath && realpathSync(resultPath) === path;
             });
-            const digest = createHash("sha256")
-              .update(snapshot.text, "utf8")
-              .digest("hex");
-            return !verifiedEvidence.some((entry) => entry.sha256 === digest);
+            if (result && "result" in result) return result.result;
           } catch {
-            return true;
+            // Keep ordinary attachment validation in prepareMessageInput.
           }
+          return promoteMatchingEvidence(file);
         });
-        const inheritedResultPaths = new Set(
-          requiredFiles.flatMap((file) => {
-            if (typeof file === "string") return [];
-            try {
-              const path = resolveResultRef(file.canonicalRef);
-              return path ? [realpathSync(path)] : [];
-            } catch {
-              return [];
-            }
-          }),
+        const selectedEvidenceIds = new Set<string>();
+        for (const file of explicitFiles) {
+          if (typeof file === "string") continue;
+          const matched =
+            "kind" in file
+              ? requiredEvidence.find(
+                  (entry) => !("result" in entry) && entry.ref === file.ref,
+                )
+              : requiredEvidence.find(
+                  (entry) => "result" in entry && entry.result.ref === file.ref,
+                );
+          if (matched) selectedEvidenceIds.add(matched.id);
+        }
+        for (const addition of handoffAdditions)
+          selectedEvidenceIds.add(addition.id);
+        const representedEvidenceIds = new Set<string>();
+        const assignmentFiles = explicitFiles.flatMap((file) => {
+          const index =
+            typeof file === "string"
+              ? -1
+              : requiredEvidence.findIndex((entry) =>
+                  "kind" in file
+                    ? !("result" in entry) && entry.ref === file.ref
+                    : "result" in entry && entry.result.ref === file.ref,
+                );
+          if (index < 0) return [file];
+          const entry = requiredEvidence[index]!;
+          if (!selectedEvidenceIds.has(entry.id)) return [file];
+          if (representedEvidenceIds.has(entry.id)) return [];
+          representedEvidenceIds.add(entry.id);
+          return [requiredFiles[index]!];
+        });
+        for (const addition of handoffAdditions) {
+          if (representedEvidenceIds.has(addition.id)) continue;
+          const index = requiredEvidence.findIndex(
+            (entry) => entry.id === addition.id,
+          );
+          if (index >= 0) {
+            assignmentFiles.push(requiredFiles[index]!);
+            representedEvidenceIds.add(addition.id);
+          }
+        }
+        const historicalEvidence = requiredEvidence.filter(
+          (entry) => !selectedEvidenceIds.has(entry.id),
         );
-        const assignmentFiles = [
-          ...explicitFiles.filter((file) => {
-            if (typeof file !== "string") return true;
-            try {
-              return !inheritedResultPaths.has(
-                realpathSync(resolve(ctx.cwd, file)),
-              );
-            } catch {
-              return true;
-            }
-          }),
-          ...requiredFiles,
-        ];
+        const manifest = historicalEvidence.length
+          ? `\n\nRequired historical evidence:\n${historicalEvidence
+              .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
+              .join(
+                "\n",
+              )}\nUse read_evidence when historical details are needed.`
+          : "";
+        const assignmentTask = `${p.task}${manifest}`;
         const prepareAssignmentInput = (assignmentLabel: string) =>
           prepareMessageInput(
-            p.task,
+            assignmentTask,
             assignmentFiles,
             ctx.cwd,
             p.action,
@@ -6477,6 +6692,8 @@ export function createAgentController(
             {
               inlineLimitBytes: limits.inline.bytes,
               verifiedEvidence,
+              fileOrder: "textFirst",
+              requireInline: true,
               fits: (text, resultBindings) =>
                 prospectiveAssignmentFits(
                   options.build,
@@ -6939,7 +7156,7 @@ export function createAgentController(
           // Herdr chooses the pane only while starting. Re-render now that the
           // authoritative final envelope identity is known.
           assignmentInput = prepareMessageInput(
-            p.task,
+            assignmentTask,
             assignmentFiles,
             ctx.cwd,
             p.action,
@@ -6948,6 +7165,8 @@ export function createAgentController(
               inlineLimitBytes: limits.inline.bytes,
               mailboxLimitBytes: limits.mailbox.bytes,
               verifiedEvidence,
+              fileOrder: "textFirst",
+              requireInline: true,
               serializedBytes: (text, resultBindings) =>
                 requestRecordBytesFor(
                   options.build,
@@ -7327,6 +7546,53 @@ export function createAgentController(
       ),
     );
     const emptyParameters = Type.Object({}, { additionalProperties: false });
+    if (controllerScope.kind === "root") {
+      pi.registerTool({
+        name: "read_evidence",
+        label: "Read accepted evidence",
+        exposure: "model-only",
+        description:
+          "Read a bounded page from evidence accepted by this assigned project Lead.",
+        parameters: Type.Object(
+          {
+            ref: Type.String({ minLength: 1 }),
+            offset: Type.Optional(Type.Integer({ minimum: 1 })),
+            limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+            byteOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+          },
+          { additionalProperties: false },
+        ),
+        execute: async (
+          _id: string,
+          params: any,
+          _signal: AbortSignal | undefined,
+          _update: unknown,
+          ctx: ExtensionContext,
+        ) => {
+          try {
+            const scope = await options.projectEvidence?.(ctx);
+            if (!scope) throw new Error();
+            const { evidencePageContent, readEvidencePage } =
+              await import("./managed-agent-runtime.ts");
+            let page;
+            await scope.revalidate(() => {
+              page = readEvidencePage(
+                scope.assignment.requiredEvidence,
+                params.ref,
+                params,
+              );
+            });
+            if (!page) throw new Error();
+            return {
+              content: [{ type: "text", text: evidencePageContent(page) }],
+              details: page,
+            };
+          } catch {
+            throw new Error("Evidence reference unavailable or invalid");
+          }
+        },
+      });
+    }
     const agentListParameters = emptyParameters;
     const agentDelegateParameters = Type.Object(
       {

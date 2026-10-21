@@ -35,6 +35,7 @@ import {
   listProjectMessages,
   readChiefMessage,
   removeChiefMessage,
+  migrateProjectAssignmentEvidence,
   listProjectMessageHeaders,
   readProjectMessage,
   supervisionRuntime,
@@ -3334,14 +3335,12 @@ export function registerLeadRuntime(
       return options.leadRuntime?.leadContext
         ? ownedAgentManagementTools(options.leadRuntime.leadContext)
         : [];
-    if (leadExecutionPending)
-      return leadToolState
-        .normalizeLeadTools([])
-        .filter(
-          (name) => name !== "delegate_agent" && name !== "continue_agent",
-        );
+    if (leadExecutionPending) return leadToolState.normalizeLeadTools([]);
     if (sessionKind.kind === "managed")
-      return leadToolState.normalizeLeadTools(baseline);
+      return leadToolState.appendRegisteredTools(
+        leadToolState.normalizeLeadTools(baseline),
+        ["read_evidence"],
+      );
     if (!leadExecution) return leadToolState.normalizeLeadTools(baseline);
     if (!leadExecution.valid) return leadToolState.normalizeLeadTools([]);
     return leadToolState.projectLeadTools(baseline, leadExecution.definition);
@@ -3539,8 +3538,18 @@ export function registerLeadRuntime(
         throw new Error(
           "Managed project execution requires a current exact assignment",
         );
+      const migrated = migrateProjectAssignmentEvidence(
+        options.coordinationHost.supervisionRuntime(),
+        assignment.repoKey,
+        assignment.branch,
+        assignment.id,
+      );
+      if (!migrated || migrated.id !== assignment.id)
+        throw new Error(
+          "Managed project execution requires a current exact assignment",
+        );
       return {
-        assignment,
+        assignment: migrated,
         revalidate: (operation: () => Promise<void> | void) =>
           roleTransitions.withProjectAssignmentLock(
             assignment.repoKey,
@@ -4112,6 +4121,7 @@ export function registerLeadRuntime(
           "Project assignment conflicts with permanent session identity",
         );
       managedLifecycle = "assigned";
+      roleTransitions.reconcileRoleTools();
       return assignment;
     }
     const pendingRetirement =
@@ -7567,7 +7577,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         true,
         branch,
       );
-    const existing = readProjectAssignment(runtime, manager.repoKey, branch);
+    const existing =
+      operation.action === "resume"
+        ? migrateProjectAssignmentEvidence(runtime, manager.repoKey, branch)
+        : readProjectAssignment(runtime, manager.repoKey, branch);
     if (existing && existing.repoKey !== manager.repoKey)
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && existing)

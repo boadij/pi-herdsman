@@ -65,9 +65,19 @@ type RegularFile = {
   dev: number;
   ino: number;
   binding?: ResultBinding;
+  retainedEvidence?: RetainedEvidenceFileInput;
 };
 
-export type MessageFileInput = string | ResultBinding;
+export type RetainedEvidenceFileInput = Readonly<{
+  kind: "retainedEvidence";
+  ref: string;
+  name: string;
+  path: string;
+  sha256: string;
+}>;
+
+export type MessageFileInput =
+  string | ResultBinding | RetainedEvidenceFileInput;
 
 function failUnknownResultRef(input: string, operation: string): never {
   fail(
@@ -84,10 +94,16 @@ function resolveRegularFiles(
   skipCanonicalPaths: Iterable<string> = [],
 ): RegularFile[] {
   const skipped = new Set(skipCanonicalPaths);
-  const seen = new Set<string>();
+  const seen = new Map<string, RegularFile>();
   return inputs.flatMap((value) => {
+    const retained = typeof value !== "string" && "kind" in value;
     const input = typeof value === "string" ? value : value.ref;
-    const target = typeof value === "string" ? value : value.canonicalRef;
+    const target =
+      typeof value === "string"
+        ? value
+        : retained
+          ? value.path
+          : value.canonicalRef;
     let path: string;
     let resolvedResultPath: string | undefined;
     let canonicalPath: string;
@@ -95,7 +111,15 @@ function resolveRegularFiles(
       resolvedResultPath = resolveResultRef(target);
       path = resolvedResultPath ?? resolve(cwd, target);
       canonicalPath = realpathSync(path);
-      if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
+      if (skipped.has(canonicalPath)) return [];
+      const existing = seen.get(canonicalPath);
+      if (existing) {
+        if (retained) {
+          existing.input = value.ref;
+          existing.retainedEvidence = value;
+        }
+        return [];
+      }
       const beforeOpen = statSync(canonicalPath);
       if (!beforeOpen.isFile()) throw new Error("not a regular file");
       const fd = openSync(
@@ -107,18 +131,21 @@ function resolveRegularFiles(
         if (!opened.isFile()) throw new Error("not a regular file");
         if (opened.dev !== beforeOpen.dev || opened.ino !== beforeOpen.ino)
           throw new Error("file changed during validation");
-        seen.add(canonicalPath);
-        return [
-          {
-            input,
-            path,
-            canonicalPath,
-            bytes: opened.size,
-            dev: opened.dev,
-            ino: opened.ino,
-            ...(typeof value === "string" ? {} : { binding: value }),
-          },
-        ];
+        const file: RegularFile = {
+          input,
+          path,
+          canonicalPath,
+          bytes: opened.size,
+          dev: opened.dev,
+          ino: opened.ino,
+          ...(typeof value === "string"
+            ? {}
+            : retained
+              ? { retainedEvidence: value }
+              : { binding: value }),
+        };
+        seen.set(canonicalPath, file);
+        return [file];
       } finally {
         closeSync(fd);
       }
@@ -262,6 +289,7 @@ export type MessagePreparationOptions = {
   ) => number;
   verifiedEvidence?: readonly Pick<RequiredEvidence, "path" | "sha256">[];
   requireInline?: boolean;
+  fileOrder?: "filesFirst" | "textFirst";
 };
 
 function escapeMessageFileName(path: string): string {
@@ -275,14 +303,17 @@ function escapeMessageFileName(path: string): string {
 }
 
 function renderMessageFile(file: RegularFile, content?: string): string {
-  const result = file.input.startsWith("result:");
-  const name = escapeMessageFileName(result ? file.input : file.canonicalPath);
-  const path = result
-    ? ` path="${escapeMessageFileName(file.canonicalPath)}"`
+  const semantic =
+    file.binding || file.retainedEvidence || file.input.startsWith("result:");
+  const name = escapeMessageFileName(
+    semantic ? file.input : file.canonicalPath,
+  );
+  const label = file.retainedEvidence
+    ? ` label="${escapeMessageFileName(file.retainedEvidence.name)}"`
     : "";
   if (content === undefined)
-    return `<file name="${name}"${path} bytes="${file.bytes}" />`;
-  return `<file name="${name}" bytes="${file.bytes}">\n${content}\n</file>`;
+    return `<file name="${name}"${label} bytes="${file.bytes}" />`;
+  return `<file name="${name}"${label} bytes="${file.bytes}">\n${content}\n</file>`;
 }
 
 export function prepareMessageInput(
@@ -318,7 +349,11 @@ export function prepareMessageInput(
     file.binding ? [file.binding] : [],
   );
   const sections = regular.map((file) => renderMessageFile(file));
-  const rendered = () => [...sections, `${heading}:\n${text}`].join("\n\n");
+  const rendered = () =>
+    (options.fileOrder === "textFirst"
+      ? [`${heading}:\n${text}`, ...sections]
+      : [...sections, `${heading}:\n${text}`]
+    ).join("\n\n");
   const fits =
     options.fits ??
     ((value: string, bindings: readonly ResultBinding[]) =>
@@ -346,7 +381,7 @@ export function prepareMessageInput(
     let bytes: Buffer;
     try {
       resolvedResultPath = resolveResultRef(
-        file.binding?.canonicalRef ?? file.input,
+        file.retainedEvidence?.path ?? file.binding?.canonicalRef ?? file.input,
       );
       // O_NONBLOCK prevents a path replaced by a FIFO from blocking this
       // preparation step. The descriptor is also the one that gets read.
@@ -357,9 +392,14 @@ export function prepareMessageInput(
       const current = fstatSync(fd);
       const readVersion = fstatSync(fd, { bigint: true });
       if (!current.isFile()) throw new Error("not a regular file");
-      const verified = options.verifiedEvidence?.find(
-        (entry) => realpathSync(entry.path) === file.canonicalPath,
-      );
+      const verified = file.retainedEvidence
+        ? {
+            path: file.retainedEvidence.path,
+            sha256: file.retainedEvidence.sha256,
+          }
+        : options.verifiedEvidence?.find(
+            (entry) => realpathSync(entry.path) === file.canonicalPath,
+          );
       if (
         current.dev !== file.dev ||
         current.ino !== file.ino ||
@@ -385,14 +425,24 @@ export function prepareMessageInput(
         ((options.fits !== undefined ||
           options.serializedBytes === undefined) &&
           !fits(
-            sections
-              .map((section, i) =>
-                i === index
-                  ? renderMessageFile(file, "x".repeat(current.size))
-                  : section,
-              )
-              .concat(`${heading}:\n${text}`)
-              .join("\n\n"),
+            (options.fileOrder === "textFirst"
+              ? [
+                  `${heading}:\n${text}`,
+                  ...sections.map((section, i) =>
+                    i === index
+                      ? renderMessageFile(file, "x".repeat(current.size))
+                      : section,
+                  ),
+                ]
+              : [
+                  ...sections.map((section, i) =>
+                    i === index
+                      ? renderMessageFile(file, "x".repeat(current.size))
+                      : section,
+                  ),
+                  `${heading}:\n${text}`,
+                ]
+            ).join("\n\n"),
             resultBindings,
           ));
       if (cannotInline && !verified) {

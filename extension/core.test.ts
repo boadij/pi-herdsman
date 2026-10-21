@@ -479,6 +479,164 @@ test("prepares mixed message files as complete text or references", () => {
   assert.doesNotMatch(prepared.text, /\0/);
 });
 
+test("renders retained evidence by semantic identity without exposing its path", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-retained-evidence-"));
+  const path = join(cwd, "private-snapshot-uuid");
+  const content = "accepted plan";
+  writeFileSync(path, content);
+  const evidence = {
+    kind: "retainedEvidence" as const,
+    ref: "evidence:accepted-plan#1",
+    name: "plan <approved>.md",
+    path,
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+  try {
+    const prepared = prepareMessageInput(
+      "Use the plan",
+      [evidence, path],
+      cwd,
+      "assign",
+      "Task",
+    );
+    assert.match(
+      prepared.text,
+      /<file name="evidence:accepted-plan#1" label="plan &lt;approved&gt;.md" bytes="13">\naccepted plan\n<\/file>/,
+    );
+    assert.equal(prepared.text.includes(path), false);
+    assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("retained refs never expose paths even when they resemble result refs", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-retained-ref-"));
+  const path = join(cwd, "private-snapshot");
+  writeFileSync(path, "content");
+  try {
+    const prepared = prepareMessageInput(
+      "Use evidence",
+      [
+        {
+          kind: "retainedEvidence",
+          ref: "result:malformed#1",
+          name: "plan.md",
+          path,
+          sha256: createHash("sha256").update("content").digest("hex"),
+        },
+      ],
+      cwd,
+      "assign",
+      "Task",
+    );
+    assert.ok(prepared.text.includes('name="result:malformed#1"'));
+    assert.equal(prepared.text.includes(path), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("retained evidence hides the path when deduplicated after a result binding", () => {
+  const requestId = "770e8400-e29b-41d4-a716-446655440000";
+  const path = resultPath(requestId);
+  const content = "oversized retained snapshot";
+  const binding = {
+    ref: "result:researcher#1",
+    canonicalRef: resultRef(requestId),
+  };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+  try {
+    const prepared = prepareMessageInput(
+      "Use the retained evidence",
+      [
+        binding,
+        {
+          kind: "retainedEvidence",
+          ref: "evidence:accepted-plan#1",
+          name: "accepted-plan.md",
+          path,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        },
+      ],
+      tmpdir(),
+      "assign",
+      "Task",
+      { inlineLimitBytes: 1 },
+    );
+    assert.match(
+      prepared.text,
+      /<file name="evidence:accepted-plan#1" label="accepted-plan.md" bytes="27" \/>/,
+    );
+    assert.equal(prepared.text.includes(realpathSync(path)), false);
+    assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
+    assert.deepEqual(prepared.resultBindings, [binding]);
+  } finally {
+    rmSync(path, { force: true });
+  }
+});
+
+test("retained evidence uses text-first ordering for rendering and fit checks", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-order-"));
+  const path = join(cwd, "current.txt");
+  writeFileSync(path, "current");
+  const observed: string[] = [];
+  try {
+    const prepared = prepareMessageInput(
+      "Do this first",
+      [path],
+      cwd,
+      "assign",
+      "Task",
+      {
+        fileOrder: "textFirst",
+        fits: (value) => {
+          observed.push(value);
+          return true;
+        },
+      },
+    );
+    assert.ok(prepared.text.startsWith("Task:\nDo this first\n\n<file"));
+    assert.ok(
+      observed.every((value) => value.startsWith("Task:\nDo this first")),
+    );
+    const unchanged = prepareMessageInput(
+      "Do this first",
+      [path],
+      cwd,
+      "assign",
+      "Task",
+    );
+    assert.ok(unchanged.text.startsWith("<file"));
+    assert.ok(unchanged.text.endsWith("Task:\nDo this first"));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("rejects retained evidence whose snapshot digest changed", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-retained-digest-"));
+  const path = join(cwd, "snapshot");
+  writeFileSync(path, "altered");
+  try {
+    const retained = {
+      kind: "retainedEvidence" as const,
+      ref: "evidence:plan#1",
+      name: "plan.md",
+      path,
+      sha256: createHash("sha256").update("original").digest("hex"),
+    };
+    for (const files of [[retained], [path, retained]])
+      assert.throws(
+        () => prepareMessageInput("check", files, cwd, "assign", "Task"),
+        /Required evidence integrity check failed/,
+      );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("resolves result references through shared message file preparation", () => {
   const requestId = "550e8400-e29b-41d4-a716-446655440000";
   const path = resultPath(requestId);
@@ -495,12 +653,8 @@ test("resolves result references through shared message file preparation", () =>
     );
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
     assert.ok(prepared.text.includes(resultRef(requestId)));
-    assert.ok(prepared.text.includes(realpathSync(path)));
-    assert.ok(
-      prepared.text.includes(
-        `<file name="${resultRef(requestId)}" path="${realpathSync(path)}"`,
-      ),
-    );
+    assert.equal(prepared.text.includes(realpathSync(path)), false);
+    assert.ok(prepared.text.includes(`<file name="${resultRef(requestId)}"`));
 
     const embedded = prepareMessageInput(
       "Inspect the result again",
@@ -545,13 +699,18 @@ test("preserves semantic result bindings while resolving and deduplicating files
       "assign",
       "Task",
       {
+        inlineLimitBytes: 1,
         serializedBytes: (_text, bindings) => {
           assert.deepEqual(bindings, [binding]);
           return 0;
         },
       },
     );
-    assert.match(prepared.text, /<file name="result:researcher#1"/);
+    assert.match(
+      prepared.text,
+      /<file name="result:researcher#1" bytes="17" \/>/,
+    );
+    assert.doesNotMatch(prepared.text, new RegExp(realpathSync(path)));
     assert.doesNotMatch(prepared.text, new RegExp(resultRef(requestId)));
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
     assert.deepEqual(prepared.resultBindings, [binding]);
@@ -815,7 +974,28 @@ test("rejects required evidence when its identity changes before preparation", (
             },
           ],
         }),
-      /Required evidence identity check failed/,
+      /file changed during validation|Required evidence identity check failed/,
+    );
+    assert.throws(
+      () =>
+        prepareMessageInput(
+          "implement",
+          [
+            {
+              kind: "retainedEvidence",
+              ref: "evidence:plan#1",
+              name: "plan.md",
+              path,
+              sha256: createHash("sha256")
+                .update("approved plan")
+                .digest("hex"),
+            },
+          ],
+          cwd,
+          "assign",
+          "Task",
+        ),
+      /file changed during validation|Required evidence identity check failed/,
     );
   } finally {
     candidateReadPath = undefined;
