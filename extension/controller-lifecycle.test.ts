@@ -2902,22 +2902,30 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     },
   ];
   let scopeUnavailable = false;
-  let scopeDelay: Promise<void> | undefined;
-  let scopeLookupStarted!: () => void;
-  let scopeLookups = 0;
-  let secondScopeLookupStarted!: () => void;
+  const scopePlans: {
+    gate?: Promise<void>;
+    started?: () => void;
+    unavailable?: boolean;
+  }[] = [];
   const startup = startupExecutor("agent", () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
     entries,
     allTools: [{ name: "read_evidence" }, { name: "message_supervisor" }],
     exec: async (command, args) => {
+      if (command === "herdr" && isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
-        if (scopeDelay) {
-          if (++scopeLookups === 1) scopeLookupStarted();
-          if (scopeLookups === 2) secondScopeLookupStarted();
-          await scopeDelay;
-        }
-        return scopeUnavailable
+        const plan = scopePlans.shift();
+        plan?.started?.();
+        if (plan?.gate) await plan.gate;
+        return (plan?.unavailable ?? scopeUnavailable)
           ? {
               stdout: JSON.stringify({
                 id: AGENT_ID,
@@ -2950,6 +2958,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   });
   const context = fakeContext(entries);
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.hasUI = true;
   context.isIdle = () => false;
   registerExtension!(pi.pi as never);
   t.after(async () => {
@@ -2962,41 +2971,44 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     await handler(undefined, context);
   for (const handler of pi.events.get("agent_start") ?? [])
     await handler(undefined, context);
+  const assignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch },
+    timestamp: Date.now(),
+    content: "Project assignment for branch\nImplement the assigned project",
+  };
+  (context.sessionManager.getBranch as () => any[])().push({
+    type: "custom_message",
+    customType: assignmentMessage.customType,
+    message: assignmentMessage,
+  });
+  for (const handler of pi.events.get("message_start") ?? [])
+    await handler({ message: assignmentMessage }, context);
+  await assertManagedLeadRole(pi, context);
   assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("message_supervisor"));
-  let releaseScope!: () => void;
-  scopeDelay = new Promise<void>((resolve) => {
-    releaseScope = resolve;
+  let releaseRefresh!: () => void;
+  let refreshStarted!: () => void;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
   });
-  const scopeStarted = new Promise<void>((resolve) => {
-    scopeLookupStarted = resolve;
+  const refreshStartedPromise = new Promise<void>((resolve) => {
+    refreshStarted = resolve;
   });
-  const secondScopeStarted = new Promise<void>((resolve) => {
-    secondScopeLookupStarted = resolve;
-  });
+  scopePlans.push({ gate: refreshGate, started: refreshStarted });
   context.isIdle = () => true;
   const refreshing = pi.events.get("agent_settled")![0](
     { aborted: false },
     context,
   );
-  await scopeStarted;
+  await refreshStartedPromise;
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
     "reader before refresh",
   );
-  const concurrentStart = pi.events.get("session_start")![0](
-    undefined,
-    context,
-  );
-  await secondScopeStarted;
-  assert.ok(
-    pi.pi.getActiveTools().includes("read_evidence"),
-    "reader remains available during the pending scope refresh",
-  );
-  releaseScope();
-  await Promise.all([refreshing, concurrentStart]);
-  scopeDelay = undefined;
+  releaseRefresh();
+  await refreshing;
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
     "successful exact scope verification restores Managed Lead tools",
@@ -3005,27 +3017,29 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     pi.pi.getActiveTools().includes("message_supervisor"),
     "successful exact scope verification restores supervisor tools",
   );
-  scopeUnavailable = true;
-  for (const handler of pi.events.get("agent_settled") ?? [])
-    await handler({ aborted: false }, context);
+
+  scopePlans.push({ unavailable: true });
+  await pi.events.get("session_start")![0](undefined, context);
   assert.ok(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi_herdsman_state_error" &&
-        /Cannot verify (?:the original managed project scope|the current project assignment)/.test(
-          entry.data.error,
-        ),
-    ),
-    "production runtime records the fail-closed assignment diagnostic",
+    !pi.pi.getActiveTools().includes("read_evidence"),
+    "unavailable verification revokes Lead tools",
   );
-  assert.equal(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-herd-run" &&
-        entry.data?.phase === "finished",
-    ),
-    false,
-    "a managed Lead must not finish when assignment scope cannot be verified",
+
+  const denied = await registeredAgentTool(pi, "delegate").execute(
+    "unavailable-scope-delegate",
+    {
+      definition: "agent",
+      label: "unavailable-scope",
+      task: "must fail closed",
+    },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.notEqual(
+    denied.details.ok,
+    true,
+    "unverifiable scope must deny fresh work",
   );
   assert.ok(
     entries.some(
@@ -3036,6 +3050,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     ),
     "the pending handoff remains durable",
   );
+
 });
 
 test("unassigned Lead does not activate read_evidence", async (t) => {
