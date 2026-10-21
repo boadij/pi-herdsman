@@ -3326,6 +3326,20 @@ test("managed marker has an independent visible-only hit region", (t) => {
   });
   widget.render(80);
   assert.equal(click(start), undefined);
+
+  for (const lifecycle of ["unavailable", "retired"] as const) {
+    widget.setSnapshot({
+      agents: [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: [{ text: "lead" }],
+      execution: { kind: "managed", lifecycle },
+      identityOnly: true,
+    });
+    widget.render(80);
+    assert.equal(click(start), undefined, lifecycle);
+  }
+  assert.deepEqual(selected, []);
 });
 
 test("widget uses logical labels in the shared row formatter", (t) => {
