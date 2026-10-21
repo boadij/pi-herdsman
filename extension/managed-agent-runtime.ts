@@ -1475,6 +1475,9 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
         evidenceAssignmentId: current.evidenceAssignmentId,
         inheritedEvidence: current.inheritedEvidence,
         localEvidence: local,
+        ...(current.currentEvidenceIds !== undefined
+          ? { currentEvidenceIds: [...current.currentEvidenceIds] }
+          : {}),
       } satisfies AcceptedEvidenceContext);
     }
     const effective = [...current.inheritedEvidence, ...local];
@@ -1482,7 +1485,7 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
       content: [
         {
           type: "text" as const,
-          text: `Required evidence updated.\n${effective.length ? effective.map((item) => `- ${item.id.slice(0, 8)}: ${item.name}`).join("\n") : "(none)"}`,
+          text: `Retained evidence updated.\n${effective.length ? effective.map((item) => `- ${item.id.slice(0, 8)}: ${item.name}`).join("\n") : "(none)"}`,
         },
       ],
       details: { evidence: effective },

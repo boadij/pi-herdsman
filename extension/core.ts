@@ -570,7 +570,7 @@ export function prepareMessageInput(
       name:
         file.retainedEvidence || file.binding
           ? file.input
-          : basename(file.canonicalPath),
+          : escapeMessageFileName(basename(file.canonicalPath)),
       inline: sections[index] !== renderMessageFile(file),
     })),
   };

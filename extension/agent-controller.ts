@@ -6623,6 +6623,9 @@ export function createAgentController(
             evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
             inheritedEvidence: nestedEvidence.inheritedEvidence,
             localEvidence,
+            ...(nestedEvidence.currentEvidenceIds !== undefined
+              ? { currentEvidenceIds: [...nestedEvidence.currentEvidenceIds] }
+              : {}),
           });
           nestedEvidence = { ...nestedEvidence, localEvidence };
           requiredEvidence = [
@@ -6784,15 +6787,26 @@ export function createAgentController(
             !currentEvidenceIds.includes(entry.id),
         );
         const manifest = historicalEvidence.length
-          ? `\n\nRequired historical evidence:\n${historicalEvidence
+          ? `\n\nEarlier retained evidence (available on demand):\n${historicalEvidence
               .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
               .join(
                 "\n",
-              )}\nUse read_evidence when historical details are needed.`
+              )}\nConsult relevant entries with read_evidence when needed. You do not need to read every reference.`
           : "";
         const assignmentTask = `${p.task}${manifest}`;
         let automaticReferenceFallback = false;
         let assignmentTaskToSend = assignmentTask;
+        const referenceOnlyTask = () =>
+          `${assignmentTask}\n\nCurrent evidence — reference-only batch:\n${currentEvidence
+            .filter((entry) => !selectedEvidenceIds.has(entry.id))
+            .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
+            .join(
+              "\n",
+            )}\nThis batch was not embedded. Use read_evidence to retrieve the items relevant to your task.`;
+        const useReferenceOnlyBatch = () => {
+          automaticReferenceFallback = true;
+          assignmentTaskToSend = referenceOnlyTask();
+        };
         const prepareAssignmentInput = (
           assignmentLabel: string,
           includeAutomatic = true,
@@ -6808,7 +6822,7 @@ export function createAgentController(
                   )
                   .join(
                     "\n",
-                  )}\nUse read_evidence for the current batch before proceeding.`;
+                  )}\nThis batch was not embedded. Use read_evidence to retrieve the items relevant to your task.`;
           const input = prepareMessageInput(
             `${assignmentTask}${fallbackManifest}`,
             [
@@ -6897,13 +6911,7 @@ export function createAgentController(
               !automaticCurrentFiles.length
             )
               throw error;
-            automaticReferenceFallback = true;
-            assignmentTaskToSend = `${assignmentTask}\n\nCurrent evidence — reference-only batch:\n${currentEvidence
-              .filter((entry) => !selectedEvidenceIds.has(entry.id))
-              .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
-              .join(
-                "\n",
-              )}\nUse read_evidence for the current batch before proceeding.`;
+            useReferenceOnlyBatch();
             return prepareAssignmentInput(assignmentLabel, false);
           }
         };
@@ -7351,46 +7359,60 @@ export function createAgentController(
           });
           // Herdr chooses the pane only while starting. Re-render now that the
           // authoritative final envelope identity is known.
-          assignmentInput = prepareMessageInput(
-            assignmentTaskToSend,
-            [
-              ...(!automaticReferenceFallback ? automaticCurrentFiles : []),
-              ...assignmentFiles,
-            ],
-            ctx.cwd,
-            p.action,
-            "Task",
-            {
-              inlineLimitBytes: limits.inline.bytes,
-              mailboxLimitBytes: limits.mailbox.bytes,
-              verifiedEvidence,
-              fileOrder: "textFirst",
-              requireInline: true,
-              serializedBytes: (text, resultBindings) => {
-                const bindings = [...resultBindings];
-                if (automaticReferenceFallback)
-                  for (const entry of currentEvidence)
-                    if (
-                      "result" in entry &&
-                      !bindings.some(
-                        (binding) => binding.ref === entry.result.ref,
+          const prepareFinalAssignment = () =>
+            prepareMessageInput(
+              assignmentTaskToSend,
+              [
+                ...(!automaticReferenceFallback ? automaticCurrentFiles : []),
+                ...assignmentFiles,
+              ],
+              ctx.cwd,
+              p.action,
+              "Task",
+              {
+                inlineLimitBytes: limits.inline.bytes,
+                mailboxLimitBytes: limits.mailbox.bytes,
+                verifiedEvidence,
+                fileOrder: "textFirst",
+                requireInline: true,
+                serializedBytes: (text, resultBindings) => {
+                  const bindings = [...resultBindings];
+                  if (automaticReferenceFallback)
+                    for (const entry of currentEvidence)
+                      if (
+                        "result" in entry &&
+                        !bindings.some(
+                          (binding) => binding.ref === entry.result.ref,
+                        )
                       )
-                    )
-                      bindings.push(entry.result);
-                return requestRecordBytesFor(
-                  options.build,
-                  runtime,
-                  "task",
-                  text,
-                  undefined,
-                  assignment!.createdAt,
-                  assignment!.requestId,
-                  bindings,
-                  evidenceMetadata,
-                );
+                        bindings.push(entry.result);
+                  return requestRecordBytesFor(
+                    options.build,
+                    runtime,
+                    "task",
+                    text,
+                    undefined,
+                    assignment!.createdAt,
+                    assignment!.requestId,
+                    bindings,
+                    evidenceMetadata,
+                  );
+                },
               },
-            },
-          );
+            );
+          try {
+            assignmentInput = prepareFinalAssignment();
+          } catch (error) {
+            if (
+              automaticReferenceFallback ||
+              !automaticCurrentFiles.length ||
+              !(error instanceof OperationError) ||
+              error.detail.details?.capacity !== true
+            )
+              throw error;
+            useReferenceOnlyBatch();
+            assignmentInput = prepareFinalAssignment();
+          }
           if (automaticReferenceFallback) {
             const bindings = [...assignmentInput.resultBindings];
             for (const entry of currentEvidence)

@@ -5514,7 +5514,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             : []),
         { value: "remove", label: "Remove worktree…" },
         ...(host.activeRole() === "manager"
-          ? [{ value: "required-evidence", label: "Required evidence" }]
+          ? [{ value: "required-evidence", label: "Retained evidence" }]
           : []),
       ];
       const action = await uiActions.selectMenu(ctx, selection.branch, actions);
@@ -5558,7 +5558,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           } else {
             const selectedEvidence = await uiActions.selectMenu(
               ctx,
-              `Required evidence · ${selection.branch}`,
+              `Retained evidence · ${selection.branch}`,
               entries.map((entry) => ({
                 value: entry.id,
                 label: `${entry.id} · ${entry.name} · ${"sourceAssignmentId" in entry ? `project ${entry.sourceAssignmentId}` : `result ${entry.result.ref}`}`,
@@ -8581,7 +8581,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       content: [
         {
           type: "text" as const,
-          text: `Required evidence updated. Current assignment evidence:\n${(updated.requiredEvidence ?? []).map((entry) => `- ${entry.id}: ${entry.name}`).join("\n") || "- none"}`,
+          text: `Retained evidence updated. Current assignment evidence:\n${(updated.requiredEvidence ?? []).map((entry) => `- ${entry.id}: ${entry.name}`).join("\n") || "- none"}`,
         },
       ],
       details: {

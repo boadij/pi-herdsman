@@ -470,7 +470,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
         items: readonly any[],
       ) => {
         menuTitles.push(title);
-        if (title.startsWith("Required evidence ·")) {
+        if (title.startsWith("Retained evidence ·")) {
           assert.deepEqual(
             items.map((item) => item.value),
             [evidenceId1, evidenceId2],
@@ -525,7 +525,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
   ]);
   assert.deepEqual(menuTitles, [
     "feature/ui-evidence",
-    "Required evidence · feature/ui-evidence",
+    "Retained evidence · feature/ui-evidence",
     `${evidenceId2}\nshared.md\nOrigin: project assignment ${assignmentId}`,
     `Remove required evidence ${evidenceId2}?`,
   ]);
@@ -670,8 +670,8 @@ test("registered Manager command removes persisted required evidence through the
           ? "Remove requirement"
           : rendered.includes(evidenceId)
             ? evidenceId
-            : rendered.includes("Required evidence")
-              ? "Required evidence"
+            : rendered.includes("Retained evidence")
+              ? "Retained evidence"
               : undefined;
       assert.ok(choice, `unexpected menu:\n${rendered}`);
       assert.ok(
@@ -711,7 +711,7 @@ test("registered Manager command removes persisted required evidence through the
   await pi.commandOptions.get("manager").handler("", context);
   assert.deepEqual(selected.slice(0, 5), [
     "feature/evidence-bridge",
-    "Required evidence",
+    "Retained evidence",
     evidenceId,
     "Remove requirement",
     "Remove requirement",

@@ -81,13 +81,16 @@ Successful Agent delegation and continuation return a receipt of the inline
 and referenced evidence in the accepted task. It confirms mailbox acceptance,
 not that the Agent read, understood, or applied the evidence.
 
-Required file evidence is an immutable snapshot of supported UTF-8 text no
+Retained file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
 fails explicitly. Current evidence must fit complete-content delivery limits;
-it is not replaced with a path-only reference. Historical required evidence is
+it is not replaced with a path-only reference. Earlier retained evidence is
 identified by a stable semantic `evidence:` reference. The authorized
 recipient can use `read_evidence` to retrieve bounded content for references
-in its accepted evidence set. Agent results preserve their existing semantic
+in its accepted evidence set. Retained evidence remains available throughout
+eligible descendant assignments. Agents should inspect evidence relevant to
+their task and decisions; they are not expected to read every historical entry.
+Agent results preserve their existing semantic
 `result:` bindings. Historical references do not grant access by themselves,
 and internal snapshot paths are not exposed as evidence identities.
 Ordinary files supplied to `message_staff`, `message_supervisor`, or
@@ -103,12 +106,12 @@ This is not general attachment or conversation inheritance. Automatic required
 evidence applies to verified managed project assignments and their nested
 managed-Agent assignments, not to an ordinary Lead's whole session. Evidence
 availability does not grant execution or control authority. An unassigned Lead
-or unrelated session acquires no automatic evidence scope. Required evidence
+or unrelated session acquires no automatic evidence scope. Retained evidence
 removal remains an internal exact-ID capability; there is no standalone
 model-facing evidence-management tool. Removing a requirement does not erase
 prior Pi-session entries or evidence already accepted by an Agent.
 For project-owned requirements, a Manager can use the existing project
-assignment action menu: **Required evidence** → select an entry to inspect its
+assignment action menu: **Retained evidence** → select an entry to inspect its
 ID, name, and origin → **Remove** → confirm. This removes only the exact
 project-owned requirement; inherited baseline entries are protected. It does
 not delete snapshots or source files. The project menu does not remove

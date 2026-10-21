@@ -43,6 +43,8 @@ Use these high-salience rules for the model-facing agent boundary:
   `message_staff` (Manager, retaining its message text and files for the
   target project assignment) or `delegate_agent` (retaining its files, not its
   task text, eligible managed Agents only, for their own descendants).
+  Retained evidence is available to eligible descendants; inspect relevant
+  references as needed, not every entry.
   Project-wide requirements are controlled only by the Manager. Leads forward
   continuing findings through `message_supervisor.files` for Manager evaluation;
   ordinary delegation files remain recipient-specific. On supported operations,
@@ -405,7 +407,7 @@ Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 `message_staff`. Manager has those same direct-report tools, peer tools, and
 `delegate_project`, `resume_project`, and `stop_lead`.
 For administrative removal of a project-owned evidence requirement, use the
-Manager project-assignment action menu: **Required evidence**, inspect the
+Manager project-assignment action menu: **Retained evidence**, inspect the
 entry, then **Remove** and confirm. Inherited requirements are protected; this
 does not delete snapshots or change evidence already accepted by Agents.
 `inspect_staff` provides bounded live terminal/process evidence;
