@@ -155,7 +155,8 @@ jobs:
             supervisor-agent \
             terminal-failure \
             agent-terminal-failure \
-            manager-handoff
+            manager-handoff \
+            agent-crash-recovery
           do
             echo "::group::Simulated smoke: $scenario"
             npm run smoke -- "$scenario" --simulated

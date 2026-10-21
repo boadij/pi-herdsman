@@ -7861,6 +7861,156 @@ test("owned continuation requires a matching persisted child edge", () => {
         ),
       /ownership tree/,
     );
+    const accepted = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        details: {
+          ok: true,
+          owner_session_id: LEAD_SESSION_ID,
+          session_id: id,
+          session_path: path,
+          agent: "agent",
+          definition: "agent",
+          request_id: randomUUID(),
+        },
+      },
+    };
+    const requestId = accepted.message.details.request_id;
+    const close = {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "close_agent",
+        details: {
+          ok: true,
+          action: "close",
+          closed_assignment: {
+            owner_session_id: LEAD_SESSION_ID,
+            session_id: id,
+            session_path: path,
+            run_id: randomUUID(),
+            request_id: requestId,
+            agent: "agent",
+            definition: "agent",
+            pane_id: "pane",
+            workspace_id: `closed-${id}`,
+          },
+        },
+      },
+    };
+    assert.equal(
+      resolveAssignmentSession(fakeContext([accepted, close]), id).id,
+      id,
+    );
+    const earlierTerminal = ownershipResult(id, LEAD_SESSION_ID, { path });
+    earlierTerminal.details.requestId = requestId;
+    assert.throws(
+      () =>
+        resolveAssignmentSession(fakeContext([earlierTerminal, accepted]), id),
+      /latest accepted assignment outcome/,
+    );
+    const acceptedAsNonMessage = {
+      ...accepted,
+      type: "custom",
+    };
+    assert.equal(
+      resolveAssignmentSession(
+        fakeContext([earlierTerminal, acceptedAsNonMessage]),
+        id,
+      ).id,
+      id,
+      "non-message entries are not treated as newer accepted receipts",
+    );
+    const closeAsNonMessage = { ...close, type: "custom" };
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([accepted, closeAsNonMessage]),
+          id,
+        ),
+      /ownership tree/,
+      "non-message entries are not treated as closure receipts",
+    );
+    const latestAcceptance = structuredClone(accepted);
+    latestAcceptance.message.details.request_id = randomUUID();
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([earlierTerminal, accepted, latestAcceptance]),
+          id,
+        ),
+      /latest accepted assignment outcome/,
+      "a completed older generation cannot authorize an accepted generation without an outcome",
+    );
+    const latestClose = structuredClone(close);
+    latestClose.message.details.closed_assignment.request_id =
+      latestAcceptance.message.details.request_id;
+    assert.equal(
+      resolveAssignmentSession(
+        fakeContext([earlierTerminal, accepted, latestAcceptance, latestClose]),
+        id,
+      ).id,
+      id,
+      "the latest accepted generation is eligible after its matching clean close",
+    );
+    const contradictoryTerminal = ownershipResult(id, LEAD_SESSION_ID, {
+      path,
+    });
+    contradictoryTerminal.details.requestId = requestId;
+    contradictoryTerminal.details.piSessionId = id;
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([accepted, close, contradictoryTerminal]),
+          id,
+        ),
+      /Conflicting terminal and closure provenance/,
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([
+            accepted,
+            {
+              ...close,
+              message: {
+                ...close.message,
+                details: {
+                  ...close.message.details,
+                  cleanup_error: "incomplete",
+                },
+              },
+            },
+          ]),
+          id,
+        ),
+      /ownership tree/,
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([
+            accepted,
+            {
+              ...close,
+              message: {
+                ...close.message,
+                details: {
+                  ...close.message.details,
+                  closed_assignment: {
+                    ...close.message.details.closed_assignment,
+                    request_id: randomUUID(),
+                  },
+                },
+              },
+            },
+          ]),
+          id,
+        ),
+      /ownership tree/,
+    );
     for (const details of [
       { ownerSessionId: randomUUID() },
       { piSessionId: randomUUID() },
@@ -10271,7 +10421,7 @@ test("successful controls persist their definition before runtime teardown", asy
   }
 });
 
-test("lead steers a blocked parent waiting for direct-child work", async () => {
+test("lead steers a parent waiting for direct-child work only while working", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -10388,7 +10538,11 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       "blocked",
       JSON.stringify(listed.details),
     );
-    assert.ok(listed.details.agents[0].available_tools.includes("steer_agent"));
+    assert.equal(
+      listed.details.agents[0].available_tools.includes("steer_agent"),
+      false,
+      "child-waiting projection does not prove the parent execution is live",
+    );
     const listedChild = (listed.details.agents as any[]).find(
       (agent) => agent.agent === child.agentLabel,
     );
@@ -10429,7 +10583,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(noChildWork.details.agents[0].state, "settling");
+    assert.equal(noChildWork.details.agents[0].state, "unknown");
     assert.ok(
       !noChildWork.details.agents[0].available_tools.includes("steer_agent"),
     );
@@ -10517,6 +10671,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     removeRequest(parentMailbox, handoffRequestId);
 
+    const idleSteer = await agentTool(pi, "steer").execute(
+      "steer",
+      { agent: parent.agentLabel, message: "continue" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(idleSteer.details.ok, false);
+    assert.equal(idleSteer.details.error.category, "agent_busy");
+    assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    parentStatus = "working";
     const steered = await agentTool(pi, "steer").execute(
       "steer",
       { agent: parent.agentLabel, message: "continue" },
@@ -10528,6 +10693,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
     assert.deepEqual(readAgentState(childMailbox), childBefore);
 
+    parentStatus = "idle";
     writeAgentState(childMailbox, {
       ...child,
       activeRequestId: undefined,
@@ -10554,8 +10720,10 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.equal(completedChild.details.agents[0].state, "blocked");
-    assert.ok(
+    assert.equal(
       completedChild.details.agents[0].available_tools.includes("steer_agent"),
+      false,
+      "an idle parent remains non-steerable while a child result is pending",
     );
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -10741,7 +10909,9 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
 
     writeAgentState(parentMailbox, parent);
     writeAgentState(childMailbox, child);
-    const recoveredPositive = fakePi({ exec: base });
+    const recoveredPositive = fakePi({
+      exec: agentControllerExecutor(parent, [child]),
+    });
     registerExtension!(recoveredPositive.pi as never);
     const recoveredPositiveList = await agentTool(
       recoveredPositive,
@@ -11029,7 +11199,7 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(activeList.details.agents[0].state, "settling");
+      assert.equal(activeList.details.agents[0].state, "unknown");
       assert.equal(activeList.details.agents[0].active_request_id, requestA);
       assert.equal(
         activeList.details.agents[0].available_tools.includes("delegate_agent"),

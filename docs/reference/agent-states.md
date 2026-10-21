@@ -5,13 +5,13 @@
 The public state is a safe-control projection built from live lifecycle and
 durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
-| State      | Meaning                                                                                                  |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                |
-| `blocked`  | Active assignment waits for an owner answer or another condition.                                        |
-| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.     |
-| `unknown`  | Exact safe control state cannot be proved.                                                               |
-| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved. |
+| State      | Meaning                                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                             |
+| `blocked`  | Active assignment waits for an owner answer or another condition.                                                     |
+| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.                  |
+| `unknown`  | Exact safe control state cannot be proved, including an idle restored conversation with an unresolved active request. |
+| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved.              |
 
 ## `available_tools` is authoritative
 
@@ -28,8 +28,10 @@ Lead-owned parent, that preflight includes its owned descendant cascade.
 revalidates identity, ownership, mailbox state, and lifecycle immediately before
 mutation.
 
-A delegating agent may be blocked while direct agent work is pending and still accept
-steering when `steer_agent` is listed, but it cannot expose `interrupt_agent` without a
+A delegating agent may be blocked while direct agent work is pending. That
+projection alone does not prove the parent execution is live: an idle restored
+parent is not steerable. `steer_agent` is listed only while the managed
+execution is currently reported as working; `interrupt_agent` also requires a
 currently working Pi operation. Stale or inactive fields are advisory and do
 not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
@@ -45,8 +47,9 @@ An agent waiting on a valid `ask_owner` reply projects as `blocked` after its as
 turn settles. Answer through the exact direct owner using `reply_agent` with the exact `agent` identity.
 
 A delegating parent can also project as `blocked` while it waits for direct
-children. That is progress-capable parent waiting, not evidence that the child
-runtime is externally blocked. Recovery attention for `blocked` is reserved for
+children. This records the durable dependency, not proof that the parent process
+is currently making progress. `steer_agent` is available only if the parent is
+currently reported as working. Recovery attention for `blocked` is reserved for
 a live Herdr runtime that reports `blocked` while an active request exists and
 no `ask_owner` question is pending.
 
@@ -59,6 +62,11 @@ or integration handoff. Do not assign another task to a settling agent.
 `settling` alone is not timeout-worthy and does not generate generic health
 attention. A durable `result_error` within settling may still produce direct
 owner attention so the stored persistence recovery can be handled.
+An idle Pi lifecycle with an active request is not evidence of a pending
+completion or a live managed execution; it projects as `unknown` unless an
+explicit handoff, completion, or recovery operation is pending. A restored Pi
+conversation preserves history, not the identity or liveness of its former
+managed execution.
 
 ## `unknown`
 

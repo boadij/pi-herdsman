@@ -186,8 +186,8 @@ it.
 
 Simulated acceptance uses real Pi, Herdsman, and Herdr processes without model
 credentials. It does not verify real-model decisions. The supported simulated
-scenarios are `core`, `continuation`, `chief-tree`, `supervisor-agent`, and
-`terminal-failure`.
+scenarios include `core`, `continuation`, `chief-tree`, `supervisor-agent`,
+`terminal-failure`, and `agent-crash-recovery`.
 
 `npm run validate` remains unchanged and does not run smoke. Manual/live smoke
 remains separate and opt-in. For cross-process Pi/Herdr behavior outside the CI

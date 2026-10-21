@@ -973,6 +973,124 @@ type OwnedAssignmentSession = {
   label: string;
 };
 
+function closedAssignmentReceipt(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  child: OwnedAssignmentSession,
+): Record<string, unknown> | undefined {
+  const accepted = acceptedAssignmentReceipts(entries, ownerSessionId, child);
+  const closed = entries.flatMap((entry, index) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("type" in entry) ||
+      entry.type !== "message" ||
+      !("message" in entry)
+    )
+      return [];
+    const message = entry.message as any;
+    const details = message?.details;
+    const proof = details?.closed_assignment;
+    if (
+      message?.role !== "toolResult" ||
+      message.toolName !== "close_agent" ||
+      message.isError === true ||
+      details?.ok !== true ||
+      details.action !== "close" ||
+      details.cleanup_error !== undefined ||
+      details.cleanup_errors !== undefined ||
+      !proof ||
+      proof.owner_session_id !== ownerSessionId ||
+      proof.session_id !== child.id ||
+      proof.definition !== child.definition ||
+      proof.agent !== child.label ||
+      typeof proof.session_path !== "string" ||
+      !validId(proof.run_id) ||
+      !validId(proof.request_id) ||
+      typeof proof.pane_id !== "string" ||
+      !proof.pane_id.trim() ||
+      typeof proof.workspace_id !== "string" ||
+      !proof.workspace_id.trim()
+    )
+      return [];
+    try {
+      return canonicalSessionPath(proof.session_path) === child.path
+        ? [{ index, proof: proof as Record<string, unknown> }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const latestAccepted = accepted.at(-1);
+  const matches = latestAccepted
+    ? closed.filter(
+        ({ index, proof }) =>
+          latestAccepted.index < index &&
+          latestAccepted.requestId === proof.request_id,
+      )
+    : [];
+  if (!matches.length || matches.length !== 1) return undefined;
+  const { proof } = matches[0]!;
+  return proof;
+}
+
+function acceptedAssignmentReceipts(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  child: OwnedAssignmentSession,
+): { index: number; requestId: string }[] {
+  return entries.flatMap((entry, index) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("type" in entry) ||
+      entry.type !== "message" ||
+      !("message" in entry)
+    )
+      return [];
+    const message = entry.message as any;
+    const details = message?.details;
+    if (
+      message?.role !== "toolResult" ||
+      ![
+        "delegate_agent",
+        "continue_agent",
+        "agent_delegate",
+        "agent_continue",
+      ].includes(message.toolName) ||
+      message.isError === true ||
+      details?.ok !== true ||
+      details.owner_session_id !== ownerSessionId ||
+      details.session_id !== child.id ||
+      details.agent !== child.label ||
+      details.definition !== child.definition ||
+      typeof details.session_path !== "string" ||
+      !validId(details.request_id)
+    )
+      return [];
+    try {
+      return canonicalSessionPath(details.session_path) === child.path
+        ? [{ index, requestId: details.request_id }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function closedAssignmentChildren(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+): OwnedAssignmentSession[] {
+  const candidates = ownedAssignmentChildren(entries, ownerSessionId, true);
+  const closed = new Map<string, OwnedAssignmentSession>();
+  for (const child of candidates) {
+    if (closedAssignmentReceipt(entries, ownerSessionId, child))
+      closed.set(`${child.id}\0${child.path}`, child);
+  }
+  return [...closed.values()];
+}
+
 export type AgentSessionIdentity = {
   sessionId: string;
   definition: string;
@@ -1929,7 +2047,10 @@ export function resolveAssignmentSession(
     ownerId: string,
     entries: readonly unknown[],
   ): ResolvedAssignmentSession | undefined => {
-    const children = ownedAssignmentChildren(entries, ownerId);
+    const children = [
+      ...ownedAssignmentChildren(entries, ownerId),
+      ...closedAssignmentChildren(entries, ownerId),
+    ];
     for (const child of children) {
       if (
         selector.kind === "id"
@@ -2042,6 +2163,70 @@ export function resolveAssignmentSession(
         );
       const currentState = matchingStates[0];
       let historicalTerminal: Record<string, unknown> | undefined;
+      const latestAccepted = acceptedAssignmentReceipts(
+        entries,
+        ownerId,
+        child,
+      ).at(-1);
+      const historicalClose = closedAssignmentReceipt(entries, ownerId, child);
+      if (latestAccepted && !currentState && !historicalClose) {
+        const hasLatestTerminal = entries.some((entry, index) => {
+          if (index <= latestAccepted.index) return false;
+          const result = ownedAssignmentResult(entry, ownerId);
+          const details = agentResultDetails(entry);
+          if (
+            result?.id !== child.id ||
+            details?.requestId !== latestAccepted.requestId
+          )
+            return false;
+          try {
+            return canonicalSessionPath(result.path) === child.path;
+          } catch {
+            return false;
+          }
+        });
+        if (!hasLatestTerminal)
+          fail(
+            "invalid_request",
+            "Cannot verify the latest accepted assignment outcome",
+            "continue",
+          );
+      }
+      if (historicalClose) {
+        if (
+          entries
+            .map(agentResultDetails)
+            .some(
+              (proof) =>
+                proof?.requestId === historicalClose.request_id &&
+                proof.piSessionId === child.id,
+            )
+        )
+          fail(
+            "invalid_request",
+            "Conflicting terminal and closure provenance",
+            "continue",
+          );
+        try {
+          statSync(
+            agentMailboxPath(
+              historicalClose.workspace_id as string,
+              historicalClose.agent as string,
+            ),
+          );
+          fail(
+            "invalid_request",
+            "Cannot verify mailbox cleanup because the historical mailbox still exists",
+            "continue",
+          );
+        } catch (error) {
+          if (
+            error instanceof OperationError ||
+            (error as NodeJS.ErrnoException).code !== "ENOENT"
+          )
+            throw error;
+        }
+      }
       if (hasProjectEvidenceHistory && !currentState) {
         if (!evidenceBranch)
           fail(
@@ -2063,7 +2248,28 @@ export function resolveAssignmentSession(
             (details): details is Record<string, unknown> =>
               !!details && details.requestId === latestRequestId,
           );
-        if (
+        if (historicalClose) {
+          const evidenceRecord = latestBranchEvidence?.data;
+          if (
+            !evidenceRecord ||
+            historicalClose.request_id !== latestRequestId ||
+            historicalClose.run_id !== evidenceRecord.runId ||
+            historicalClose.owner_session_id !==
+              evidenceRecord.ownerSessionId ||
+            historicalClose.session_id !== child.id ||
+            canonicalSessionPath(historicalClose.session_path as string) !==
+              child.path ||
+            historicalClose.definition !== child.definition ||
+            historicalClose.agent !== child.label ||
+            historicalClose.workspace_id !== evidenceRecord.workspaceId ||
+            historicalClose.pane_id !== evidenceRecord.paneId
+          )
+            fail(
+              "invalid_request",
+              "Cannot verify the closed assignment for saved evidence",
+              "continue",
+            );
+        } else if (
           !proofs.length ||
           proofs.some((proof) => !sameTerminalProvenance(proof, proofs[0]!))
         )
@@ -2072,48 +2278,51 @@ export function resolveAssignmentSession(
             "Cannot verify the current accepted assignment for saved evidence",
             "continue",
           );
-        historicalTerminal = proofs[0];
+        historicalTerminal = historicalClose ? undefined : proofs[0];
         if (
-          !historicalTerminal ||
-          !validId(historicalTerminal.requestId as string) ||
-          !validId(historicalTerminal.runId as string) ||
-          historicalTerminal.ownerSessionId !== ownerId ||
-          historicalTerminal.piSessionId !== child.id ||
-          typeof historicalTerminal.piSessionFile !== "string" ||
-          canonicalSessionPath(historicalTerminal.piSessionFile) !==
-            child.path ||
-          historicalTerminal.agentDefinition !== child.definition ||
-          historicalTerminal.agentLabel !== child.label ||
-          typeof historicalTerminal.workspaceId !== "string" ||
-          !historicalTerminal.workspaceId.trim() ||
-          typeof historicalTerminal.paneId !== "string" ||
-          !historicalTerminal.paneId.trim() ||
-          (historicalTerminal.status !== "completed" &&
-            historicalTerminal.status !== "failed")
+          !historicalClose &&
+          (!historicalTerminal ||
+            !validId(historicalTerminal.requestId as string) ||
+            !validId(historicalTerminal.runId as string) ||
+            historicalTerminal.ownerSessionId !== ownerId ||
+            historicalTerminal.piSessionId !== child.id ||
+            typeof historicalTerminal.piSessionFile !== "string" ||
+            canonicalSessionPath(historicalTerminal.piSessionFile) !==
+              child.path ||
+            historicalTerminal.agentDefinition !== child.definition ||
+            historicalTerminal.agentLabel !== child.label ||
+            typeof historicalTerminal.workspaceId !== "string" ||
+            !historicalTerminal.workspaceId.trim() ||
+            typeof historicalTerminal.paneId !== "string" ||
+            !historicalTerminal.paneId.trim() ||
+            (historicalTerminal.status !== "completed" &&
+              historicalTerminal.status !== "failed"))
         )
           fail(
             "invalid_request",
             "Cannot verify the terminal result for saved evidence",
             "continue",
           );
-        try {
-          statSync(
-            agentMailboxPath(
-              historicalTerminal.workspaceId as string,
-              historicalTerminal.agentLabel as string,
-            ),
-          );
-          fail(
-            "invalid_request",
-            "Cannot verify mailbox cleanup because the historical mailbox still exists",
-            "continue",
-          );
-        } catch (error) {
-          if (
-            error instanceof OperationError ||
-            (error as NodeJS.ErrnoException).code !== "ENOENT"
-          )
-            throw error;
+        if (!historicalClose) {
+          try {
+            statSync(
+              agentMailboxPath(
+                historicalTerminal!.workspaceId as string,
+                historicalTerminal!.agentLabel as string,
+              ),
+            );
+            fail(
+              "invalid_request",
+              "Cannot verify mailbox cleanup because the historical mailbox still exists",
+              "continue",
+            );
+          } catch (error) {
+            if (
+              error instanceof OperationError ||
+              (error as NodeJS.ErrnoException).code !== "ENOENT"
+            )
+              throw error;
+          }
         }
       }
       const exactIdState =
@@ -2144,7 +2353,8 @@ export function resolveAssignmentSession(
             );
       const currentRequestId = currentState
         ? (currentState.activeRequestId ?? currentState.completedRequestId)
-        : (historicalTerminal?.requestId as string | undefined);
+        : ((historicalTerminal?.requestId ?? historicalClose?.request_id) as
+            string | undefined);
       if (hasProjectEvidenceHistory && !currentRequestId)
         fail(
           "invalid_request",
@@ -2247,16 +2457,27 @@ export function resolveAssignmentSession(
           identity.label !== record.agentLabel ||
           record.requestId !== currentRequestId ||
           record.agentLabel !==
-            (currentState?.agentLabel ?? historicalTerminal?.agentLabel) ||
+            (currentState?.agentLabel ??
+              historicalTerminal?.agentLabel ??
+              historicalClose?.agent) ||
           (record.projectAssignmentId !== currentState?.projectAssignmentId &&
             currentState !== undefined) ||
-          record.runId !== (currentState?.runId ?? historicalTerminal?.runId) ||
+          record.runId !==
+            (currentState?.runId ??
+              historicalTerminal?.runId ??
+              historicalClose?.run_id) ||
           record.ownerSessionId !==
             (currentState?.ownerSessionId ??
-              historicalTerminal?.ownerSessionId) ||
+              historicalTerminal?.ownerSessionId ??
+              historicalClose?.owner_session_id) ||
           record.workspaceId !==
-            (currentState?.workspaceId ?? historicalTerminal?.workspaceId) ||
-          record.paneId !== (currentState?.paneId ?? historicalTerminal?.paneId)
+            (currentState?.workspaceId ??
+              historicalTerminal?.workspaceId ??
+              historicalClose?.workspace_id) ||
+          record.paneId !==
+            (currentState?.paneId ??
+              historicalTerminal?.paneId ??
+              historicalClose?.pane_id)
         )
           fail(
             "invalid_request",
@@ -3006,12 +3227,12 @@ export async function managedAgentSnapshots(
       : "unknown";
     const pendingDirectChildWork = pendingOwners.has(durableIdentityKey(state));
     const waitingForChildren =
-      liveState === "settling" &&
       !!state.activeRequestId &&
+      pendingDirectChildWork &&
+      (lifecycleState === "idle" || lifecycleState === "done") &&
       !completionPending &&
       !handoffPending &&
-      !state.resultError &&
-      pendingDirectChildWork;
+      !state.resultError;
     const existingLiveProjection = waitingForChildren ? "blocked" : liveState;
     const projectedState =
       completionPending || state.resultError
@@ -3024,7 +3245,7 @@ export async function managedAgentSnapshots(
     const steerable =
       presence.kind === "live" &&
       !state.pendingAskId &&
-      (projectedState === "working" || waitingForChildren);
+      projectedState === "working";
     const now = Date.now();
     const listed = {
       label: state.agentLabel,
@@ -4606,10 +4827,56 @@ export function createAgentController(
         options.appendError(context, "pi_herdsman_cleanup_error", failure);
       throw failure;
     }
+    const ownerSessionId = context.sessionManager.getSessionId();
+    const closedRequestId =
+      state.activeRequestId ?? state.resultError?.requestId;
+    const closedAssignment =
+      !warnings.size &&
+      state.ownerSessionId === ownerSessionId &&
+      !!state.piSessionId &&
+      !!state.piSessionFile &&
+      !!closedRequestId &&
+      validId(closedRequestId) &&
+      validId(state.runId) &&
+      context.sessionManager.getEntries().some((entry: any) => {
+        const message = entry?.message;
+        const details = message?.details;
+        return (
+          entry?.type === "message" &&
+          message?.role === "toolResult" &&
+          [
+            "delegate_agent",
+            "continue_agent",
+            "agent_delegate",
+            "agent_continue",
+          ].includes(message.toolName) &&
+          message.isError !== true &&
+          details?.ok === true &&
+          details.owner_session_id === ownerSessionId &&
+          details.session_id === state.piSessionId &&
+          details.session_path === state.piSessionFile &&
+          details.request_id === closedRequestId &&
+          details.agent === state.agentLabel &&
+          details.definition === candidate.agentDefinition
+        );
+      })
+        ? {
+            owner_session_id: ownerSessionId,
+            session_id: state.piSessionId,
+            session_path: state.piSessionFile,
+            run_id: state.runId,
+            request_id: closedRequestId,
+            agent: state.agentLabel,
+            definition: candidate.agentDefinition,
+            pane_id: state.paneId,
+            workspace_id: state.workspaceId,
+          }
+        : undefined;
     return {
       ok: true,
       action: "close",
       agent: agentLabel,
+      ...(closedAssignment ? { closed_assignment: closedAssignment } : {}),
       presentation_agent_definition: candidate.agentDefinition,
       ...(warnings.size === 1
         ? { cleanup_error: [...warnings.values()][0] }
@@ -6342,6 +6609,11 @@ export function createAgentController(
               ({ state }) => `${state.workspaceId}\0${state.paneId}`,
             ),
           );
+          const closedReceipt = closedAssignmentReceipt(
+            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getSessionId(),
+            resumed,
+          );
           for (const agent of snapshot.liveAgents)
             if (
               herdrSessionsMatch(
@@ -6355,10 +6627,28 @@ export function createAgentController(
               !statePanes.has(
                 `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
               )
-            )
+            ) {
+              if (
+                closedReceipt?.workspace_id === agent.workspace_id &&
+                closedReceipt.pane_id === agent.pane_id &&
+                typeof agent.pane_id === "string"
+              ) {
+                try {
+                  await paneProcess(pi, ctx, agent.pane_id, signal);
+                } catch (error) {
+                  if (
+                    error instanceof OperationError &&
+                    error.detail.operation === "herdr pane process-info" &&
+                    error.detail.details?.herdrCode === "pane_not_found"
+                  )
+                    continue;
+                  throw error;
+                }
+              }
               representations.add(
                 `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
               );
+            }
           if (representations.size > 1)
             fail(
               "target_ambiguous",

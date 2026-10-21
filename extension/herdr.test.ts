@@ -4470,6 +4470,90 @@ test("close accepts a same-workspace tab move without historical tab identity", 
   );
 });
 
+test("close accepts exact pane_not_found after a full server restore", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi" as const,
+    agent: "pi" as const,
+    kind: "id" as const,
+    value: "session-1",
+  };
+  const calls: string[][] = [];
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "agent get")
+        return response({
+          agent: {
+            name: "agent-1",
+            pane_id: "pane-1",
+            workspace_id: "workspace-1",
+            tab_id: "tab-1",
+            cwd: "/tmp",
+            agent_session: session,
+          },
+        });
+      if (key === "pane get")
+        return response({
+          pane: {
+            pane_id: "pane-1",
+            workspace_id: "workspace-1",
+            tab_id: "tab-1",
+            cwd: "/tmp",
+            agent_session: session,
+          },
+        });
+      if (key === "tab list") return response({ tabs: [{ tab_id: "tab-1" }] });
+      if (key === "pane process-info")
+        return {
+          code: 1,
+          stdout: JSON.stringify({
+            id: "cli:pane:process_info",
+            error: { code: "pane_not_found", message: "pane not found" },
+          }),
+          stderr: "",
+        };
+      throw new Error(
+        `unexpected or destructive Herdr call: ${args.join(" ")}`,
+      );
+    },
+  } as any;
+
+  try {
+    await closeHerdrPane(pi, { cwd: "/tmp" } as any, "agent-1", {
+      paneId: "pane-1",
+      workspaceId: "workspace-1",
+      cwd: "/tmp",
+      session: { id: "session-1" },
+    });
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+  assert.deepEqual(
+    calls.map((args) => args.slice(0, 2)),
+    [
+      ["agent", "get"],
+      ["pane", "get"],
+      ["tab", "list"],
+      ["pane", "process-info"],
+    ],
+  );
+  assert.equal(
+    calls.some((args) => args[0] === "pane" && args[1] === "close"),
+    false,
+    "a missing pane is already physically closed",
+  );
+});
+
 test("completed agent shell transition closes the pane without stop keys", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;

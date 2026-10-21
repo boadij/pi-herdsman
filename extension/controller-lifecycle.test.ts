@@ -340,6 +340,14 @@ test("parent delegates two same-definition children with exact ownership", async
           context,
         );
       assert.equal(started.details.ok, true, JSON.stringify(started.details));
+      context.sessionManager.getEntries().push({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "delegate_agent",
+          details: started.details,
+        },
+      });
       const childMailbox = agentMailboxPath(
         WORKSPACE,
         started.details.agent as string,
@@ -466,10 +474,22 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
+      const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
         .find((tool) => tool.name === "close_agent")!
         .execute("close", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+      assert.deepEqual(closed.details.closed_assignment, {
+        owner_session_id: beforeClose.ownerSessionId,
+        session_id: beforeClose.piSessionId,
+        session_path: beforeClose.piSessionFile,
+        run_id: beforeClose.runId,
+        request_id: beforeClose.activeRequestId,
+        agent: beforeClose.agentLabel,
+        definition: "child",
+        pane_id: beforeClose.paneId,
+        workspace_id: beforeClose.workspaceId,
+      });
       assert.equal(
         readAgentState(agentMailboxPath(WORKSPACE, label)),
         undefined,
@@ -9933,6 +9953,16 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     const continuation = parentPi.tools.find(
       (tool) => tool.name === "continue_agent",
     );
+    const persistToolResult = (toolName: string, result: any) =>
+      parentContext.sessionManager.getEntries().push({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName,
+          details: result.details,
+          ...(result.isError ? { isError: true } : {}),
+        },
+      });
     assert.ok(delegate);
     assert.ok(continuation);
     const delegated = await delegate.execute(
@@ -9949,6 +9979,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       parentContext,
     );
     assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    persistToolResult("delegate_agent", delegated);
     assert.equal(delegated.details.session_id, childSessionId);
     assert.equal(delegated.details.session_path, childSessionPath);
     const childMailbox = agentMailboxPath(WORKSPACE, childLabel);
@@ -10135,6 +10166,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       parentContext,
     );
     assert.equal(resumed.details.ok, true, JSON.stringify(resumed.details));
+    persistToolResult("continue_agent", resumed);
     assert.equal(resumed.details.session_id, childSessionId);
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
@@ -10171,6 +10203,105 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     assert.ok(
       !accepted!.requiredEvidence.some((item) => item.id === removedItem.id),
       "removed local evidence is not revived in inherited evidence",
+    );
+    const interruptedState = readAgentState(childMailbox)!;
+    const resultError = {
+      code: "write_failure" as const,
+      message: "simulated result persistence failure",
+      requestId: accepted!.requestId,
+      runId: accepted!.runId,
+      ownerSessionId: accepted!.ownerSessionId,
+      workspaceId: accepted!.workspaceId,
+      agentLabel: accepted!.agentLabel,
+      paneId: accepted!.paneId,
+      originalStatus: "completed" as const,
+      attempts: 1,
+      failedAt: Date.now(),
+      retrySafe: false as const,
+      cleanupSafe: true as const,
+      nextAction: "close the Agent before continuing",
+    };
+    writeAgentState(childMailbox, {
+      ...interruptedState,
+      activeRequestId: undefined,
+      completedRequestId: undefined,
+      resultError,
+      updatedAt: Date.now(),
+    });
+    childEntries.push({
+      type: "custom",
+      customType: "pi-herdsman-agent-required-evidence",
+      data: {
+        version: 1,
+        sessionId: childSessionId,
+        requestId: accepted!.requestId,
+        runId: accepted!.runId,
+        ownerSessionId: accepted!.ownerSessionId,
+        workspaceId: accepted!.workspaceId,
+        agentLabel: accepted!.agentLabel,
+        paneId: accepted!.paneId,
+        projectAssignmentId: accepted!.projectAssignmentId,
+        evidenceAssignmentId: accepted!.evidenceAssignmentId,
+        inheritedEvidence: accepted!.inheritedEvidence ?? [],
+        localEvidence: accepted!.localEvidence ?? [],
+      },
+    });
+    let childEntryId: string | null = null;
+    const latestSessionEntries = childEntries.map((entry) => {
+      const persisted = {
+        ...entry,
+        id: randomUUID(),
+        parentId: childEntryId,
+        timestamp: new Date().toISOString(),
+      };
+      childEntryId = persisted.id;
+      return persisted;
+    });
+    realFs.writeFileSync(
+      childSessionPath,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: childSessionId,
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      })}\n${latestSessionEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+    const closed = await parentPi.tools
+      .find((tool) => tool.name === "close_agent")!
+      .execute(
+        "close-after-result-error",
+        { agent: childLabel },
+        undefined,
+        undefined,
+        parentContext,
+      );
+    assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+    assert.equal(
+      closed.details.closed_assignment.request_id,
+      resultError.requestId,
+    );
+    persistToolResult("close_agent", closed);
+    const continuedAfterClose = await continuation.execute(
+      "continue-after-result-error-close",
+      {
+        session: childSessionId!,
+        task: "continue without replaying the abandoned assignment",
+      },
+      undefined,
+      undefined,
+      parentContext,
+    );
+    assert.equal(
+      continuedAfterClose.details.ok,
+      true,
+      JSON.stringify(continuedAfterClose.details),
+    );
+    assert.equal(continuedAfterClose.details.session_id, childSessionId);
+    assert.notEqual(
+      continuedAfterClose.details.request_id,
+      resultError.requestId,
     );
     assert.equal(
       accepted!.evidenceAssignmentId,

@@ -2584,16 +2584,28 @@ export async function closeHerdrPane(
     expected?.allowPostCompletionTransition === true;
   const release = await lockLifecycle(ctx, signal);
   try {
-    const initial = await proveExactRunningAgent(
-      pi,
-      ctx,
-      herdrAgent,
-      expected ?? {},
-      undefined,
-      "close",
-      false,
-      signal,
-    );
+    let initial: RunningAgentProof;
+    try {
+      initial = await proveExactRunningAgent(
+        pi,
+        ctx,
+        herdrAgent,
+        expected ?? {},
+        undefined,
+        "close",
+        false,
+        signal,
+      );
+    } catch (error) {
+      // A restored server registry can outlive its pane; exact pane_not_found proves there is nothing to close.
+      if (
+        error instanceof OperationError &&
+        error.detail.operation === "herdr pane process-info" &&
+        error.detail.details?.herdrCode === "pane_not_found"
+      )
+        return;
+      throw error;
+    }
     const proved = await proveExactRunningAgent(
       pi,
       ctx,
