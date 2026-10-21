@@ -6714,9 +6714,16 @@ async function runManagerRecoverySmoke(ctx) {
     assert.equal(await lstat(assignmentPath).then(() => true), true);
 
     const dirtyMarker = join(worktreePath, ".smoke-manager-removal-dirty");
-    await writeFile(dirtyMarker, "owned smoke fixture\n", { flag: "wx" });
     try {
-      const approvalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
+      const approvalPrompt = `The previous removal request was dismissed. This is a new safety check: call remove_worktree exactly once for branch ${branch} now. Do not use another tool.`;
+      const priorRemovalResults = sessionEntries(
+        (await rootSnapshot()).contents,
+      ).filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "remove_worktree",
+      ).length;
       markStage(ctx, "manager-removal-approval-request");
       await promptRoot(approvalPrompt);
       await waitForEvidence(
@@ -6724,18 +6731,20 @@ async function runManagerRecoverySmoke(ctx) {
         "manager-removal-approval-pending",
         async () => {
           const session = await rootSnapshot();
-          const result = session
-            ? sessionEntries(session.contents)
-                .filter(
-                  (entry) =>
-                    entry.type === "message" &&
-                    entry.message?.role === "toolResult" &&
-                    entry.message.toolName === "remove_worktree",
-                )
-                .at(-1)
-            : null;
+          const results = session
+            ? sessionEntries(session.contents).filter(
+                (entry) =>
+                  entry.type === "message" &&
+                  entry.message?.role === "toolResult" &&
+                  entry.message.toolName === "remove_worktree",
+              )
+            : [];
+          const result = results.at(-1);
           return {
-            done: result?.message?.details?.pending === true,
+            done:
+              results.length === priorRemovalResults + 1 &&
+              result?.message?.details?.pending === true &&
+              result.message.details.branch === branch,
             progress: { pending: result?.message?.details?.pending === true },
             evidence: session ? summarizeSession(session.contents) : null,
           };
@@ -6758,12 +6767,43 @@ async function runManagerRecoverySmoke(ctx) {
       ]);
       await waitForEvidence(
         ctx,
-        "manager-removal-approval-safety-refusal",
+        "manager-removal-confirmation-dialog",
         async () => {
           const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
           return {
-            done: /dirty|modified/i.test(text),
-            progress: { safetyRefusal: /dirty|modified/i.test(text) },
+            done: text.includes("Type remove to confirm."),
+            progress: {
+              confirmationDialog: text.includes("Type remove to confirm."),
+            },
+            evidence: text.slice(-1000),
+          };
+        },
+        { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+      );
+      await writeFile(dirtyMarker, "owned smoke fixture\n", { flag: "wx" });
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-text",
+        ctx.rootPaneId,
+        "remove",
+      ]);
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-keys",
+        ctx.rootPaneId,
+        "enter",
+      ]);
+      await waitForEvidence(
+        ctx,
+        "manager-removal-approval-safety-refusal",
+        async () => {
+          const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+          const normalized = text.replace(/\s+/gu, " ");
+          const refusal =
+            "Checkout is dirty or could not be verified; worktree preserved";
+          return {
+            done: normalized.includes(refusal),
+            progress: { safetyRefusal: normalized.includes(refusal) },
             evidence: text.slice(-1200),
           };
         },
@@ -6772,7 +6812,7 @@ async function runManagerRecoverySmoke(ctx) {
       assert.equal((await matchingWorktrees()).length, 1);
       assert.equal(await lstat(assignmentPath).then(() => true), true);
     } finally {
-      await unlink(dirtyMarker);
+      await rm(dirtyMarker, { force: true });
     }
 
     markStage(ctx, "manager-removal-preauthorization");

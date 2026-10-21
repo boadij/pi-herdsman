@@ -7458,6 +7458,29 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     setWorktreeRemovalPreapproved(manager.repoKey, enabled);
     return isWorktreeRemovalPreapproved(manager.repoKey) === enabled;
   };
+  const getRemovalPreauthorization = async (ctx: ExtensionContext) => {
+    const manager = await host.currentManager(ctx);
+    if (host.activeRole() !== "manager" || !manager)
+      throw new Error("Only the active Manager can inspect this setting");
+    const group = await host.worktreeGroupScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      ctx.signal,
+    );
+    if (
+      group.repoKey !== manager.repoKey ||
+      group.primaryWorkspaceId !== manager.workspaceId
+    )
+      throw new Error("Manager worktree group is not authoritative");
+    const current = await host.currentManager(ctx);
+    if (!current || !host.sameManagerDescriptor(current, manager))
+      throw new Error("Manager authority changed while reading this setting");
+    return {
+      repoKey: manager.repoKey,
+      enabled: isWorktreeRemovalPreapproved(manager.repoKey),
+    };
+  };
   const {
     pi,
     leadRuntime,
@@ -9068,6 +9091,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     approvePendingRemoval,
     cancelPendingRemoval,
     setRemovalPreauthorization,
+    getRemovalPreauthorization,
     executeStaff,
     updateAssignmentEvidence,
     inspectRequiredEvidence,

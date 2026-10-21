@@ -1723,14 +1723,23 @@ function registerExtensionImpl(
             const input = prefix.trimStart();
             const [command, branchPrefix] = input.split(/\s+/u);
             if (!command)
-              return ["leave", "remove"].map((value) => ({
+              return ["leave", "remove", "remove-preapproval"].map((value) => ({
                 value,
                 label: value,
               }));
+            if (command === "remove-preapproval")
+              return input.trim().split(/\s+/u).length === 2
+                ? ["on", "off"]
+                    .filter((value) => value.startsWith(branchPrefix ?? ""))
+                    .map((value) => ({
+                      value: `remove-preapproval ${value}`,
+                      label: value,
+                    }))
+                : null;
             if (command !== "remove")
               return input.includes(" ")
                 ? null
-                : ["leave", "remove"]
+                : ["leave", "remove", "remove-preapproval"]
                     .filter((value) => value.startsWith(command))
                     .map((value) => ({ value, label: value }));
             if (input.trim().split(/\s+/u).length > 2) return null;
@@ -1754,6 +1763,15 @@ function registerExtensionImpl(
           handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
             const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
             if (args[0] === "remove-preapproval") {
+              if (args.length === 1) {
+                const policy =
+                  await projectRuntime.getRemovalPreauthorization(ctx);
+                ctx.ui.notify(
+                  `Worktree removal confirmation: ${policy.enabled ? "skipped" : "required"} for ${policy.repoKey}.`,
+                  "info",
+                );
+                return;
+              }
               if (args.length !== 2 || !["on", "off"].includes(args[1]!)) {
                 ctx.ui.notify(
                   "Usage: /manager remove-preapproval <on|off>",

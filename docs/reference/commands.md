@@ -281,12 +281,14 @@ repository has been explicitly preauthorized by a human.
 An active Manager can enable or disable the repository-scoped opt-in with
 `/manager remove-preapproval on` or `/manager remove-preapproval off`. Enabling
 requires typing `enable` in a confirmation naming the verified repository;
-disabling takes effect immediately. The opt-in waives only the extra prompt.
+disabling takes effect immediately. `/manager remove-preapproval` reports the
+effective policy for the verified current Manager repository. The opt-in waives
+only the extra prompt.
 
-This command does not activate Manager mode. It accepts a manually typed branch;
-completion suggests `leave` or `remove`, then branches assigned to the active
-Manager's repository after `remove`. Suggestions are advisory and are not
-required. Before removal, the shared operation verifies the exact assignment
+This command does not activate Manager mode. Completion suggests `leave`,
+`remove`, and `remove-preapproval`, with `on` and `off` after the latter;
+assigned branches are suggested after `remove`. Suggestions are advisory and
+are not required. Before removal, the shared operation verifies the exact assignment
 and linked checkout, checks that the checkout is clean, and asks for interactive
 confirmation. Type `remove` to confirm. Running owned project execution may be
 stopped and will not be automatically restarted if a later removal step fails.

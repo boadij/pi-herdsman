@@ -6541,10 +6541,19 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions(""), [
       { value: "leave", label: "leave" },
       { value: "remove", label: "remove" },
+      { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
       { value: "remove", label: "remove" },
+      { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
+    assert.deepEqual(
+      managerCommand.getArgumentCompletions("remove-preapproval o"),
+      [
+        { value: "remove-preapproval on", label: "on" },
+        { value: "remove-preapproval off", label: "off" },
+      ],
+    );
     assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
     ]);
