@@ -11,8 +11,20 @@ type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
 const correspondences: any[] = [];
 const diagnostics: unknown[] = [];
+const deliveredReplies: any[] = [];
+let diagnosticAttempts = 0;
+let failNextDiagnosticAppend = false;
 let nextSnapshots: Snapshot[] = [];
-let failRecipientRecovery = false;
+let failRecoveryForB = false;
+let abortRecoveryForB: (() => void) | undefined;
+let cReplyAcknowledged = false;
+const cReply = {
+  id: "reply-C",
+  text: "reply from C",
+  digest: realTransport.peerPayloadDigest({ text: "reply from C" }),
+  createdAt: 1,
+};
+const endpointCalls: { action: string; recipientSession?: string }[] = [];
 let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   const snapshot = nextSnapshots.shift();
   if (!snapshot) throw new Error("missing test snapshot");
@@ -29,12 +41,41 @@ mock.module("./peer-transport.ts", {
       action: string,
       input?: string,
     ) => {
-      if (action === "recover-recipient" && failRecipientRecovery)
-        throw new Error("injected recipient recovery failure");
-      const envelope = JSON.parse(input ?? "{}") as {
+      const request = JSON.parse(input ?? "{}") as {
+        id?: string;
+        recipientSession?: string;
+        replyId?: string;
         record?: { id?: string };
       };
-      const id = envelope.record?.id;
+      endpointCalls.push({
+        action,
+        recipientSession: request.recipientSession,
+      });
+      if (action === "recover-recipient") {
+        if (request.recipientSession === "peer-B" && failRecoveryForB) {
+          abortRecoveryForB?.();
+          throw new Error("injected recipient recovery failure");
+        }
+        return JSON.stringify({ recovered: true });
+      }
+      if (action === "recover") return JSON.stringify({ recovered: true });
+      if (action === "poll")
+        return JSON.stringify({
+          dataRoot,
+          replies:
+            request.recipientSession === "peer-C" && !cReplyAcknowledged
+              ? [cReply]
+              : [],
+        });
+      if (action === "ack") {
+        if (
+          request.recipientSession === "peer-C" &&
+          request.replyId === cReply.id
+        )
+          cReplyAcknowledged = true;
+        return JSON.stringify({ acknowledged: true });
+      }
+      const id = request.record?.id;
       deliveries.push(id ?? "");
       return JSON.stringify({ accepted: true, id });
     },
@@ -45,18 +86,31 @@ mock.module("./peer-correspondence.ts", {
     ...realCorrespondence,
     listPeerCorrespondences: () => correspondences,
     updatePeerRecipientGeneration: (
-      _id: string,
+      id: string,
       _capability: string,
       _recipient: string,
       _previous: string,
       next: string,
     ) => {
-      const current = correspondences[0];
+      const current = correspondences.find((item) => item.id === id);
       if (current) current.recipientGeneration = next;
     },
-    updatePeerOriginGeneration: () => {},
-    storePeerCorrespondence: (item: unknown) => {
-      correspondences[0] = item;
+    updatePeerOriginGeneration: (
+      id: string,
+      _cap: string,
+      _origin: string,
+      _previous: string,
+      next: string,
+    ) => {
+      const current = correspondences.find((item) => item.id === id);
+      if (current) current.originGeneration = next;
+    },
+    storePeerCorrespondence: (item: any) => {
+      const index = correspondences.findIndex(
+        (current) => current.id === item.id,
+      );
+      if (index < 0) correspondences.push(item);
+      else correspondences[index] = item;
     },
     createPeerCorrespondence: (item: unknown) => item,
   },
@@ -103,7 +157,13 @@ function fixture() {
   machines.length = 0;
   correspondences.length = 0;
   diagnostics.length = 0;
-  failRecipientRecovery = false;
+  deliveredReplies.length = 0;
+  diagnosticAttempts = 0;
+  failNextDiagnosticAppend = false;
+  endpointCalls.length = 0;
+  failRecoveryForB = false;
+  abortRecoveryForB = undefined;
+  cReplyAcknowledged = false;
   nextSnapshots = [];
   deliveries.length = 0;
   probeImpl = async () => {
@@ -150,7 +210,17 @@ function fixture() {
       _ctx: unknown,
       _type: string,
       error: unknown,
-    ) => diagnostics.push(error),
+    ) => {
+      diagnosticAttempts++;
+      if (failNextDiagnosticAppend) {
+        failNextDiagnosticAppend = false;
+        throw new Error("injected diagnostic append failure");
+      }
+      diagnostics.push(error);
+    },
+    writeCoordinationMessage: (record: unknown) =>
+      deliveredReplies.push(record),
+    importResultBindings: () => {},
     messageLimits: async () => ({
       inline: { bytes: 10000 },
       mailbox: { bytes: 10000 },
@@ -175,14 +245,9 @@ function fixture() {
 const list = (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
+  signal?: AbortSignal,
 ) =>
-  runtime.peerMessage(
-    "list",
-    { action: "list" },
-    undefined,
-    undefined,
-    context,
-  );
+  runtime.peerMessage("list", { action: "list" }, signal, undefined, context);
 const send = (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
@@ -241,32 +306,153 @@ test("published route remains sendable during refresh and a stale discovery cann
   );
 });
 
-test("successful probe refresh survives later recipient recovery failure", async (t) => {
+test("a correspondence failure is isolated, deduplicated, and retried", async (t) => {
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  nextSnapshots = [snapshot([remote("peer-B", "generation-1")])];
+  nextSnapshots = [
+    snapshot([
+      remote("peer-B", "generation-1"),
+      remote("peer-C", "generation-C"),
+    ]),
+  ];
   await list(f.runtime, f.context);
 
-  correspondences.push({
-    id: "correspondence-B",
-    capability: "capability-B",
-    originSession: self,
-    originGeneration: claim.id,
-    recipientSession: "peer-B",
-    recipientGeneration: "generation-1",
-    finalized: false,
-  });
-  failRecipientRecovery = true;
-  probeImpl = async () => snapshot([remote("peer-B", "generation-2")]);
-  const refreshed = await list(f.runtime, f.context);
-  assert.equal(refreshed.details?.unavailable_machines, undefined);
-  assert.equal(diagnostics.length, 1);
-  assert.match(String(diagnostics[0]), /injected recipient recovery failure/);
+  correspondences.push(
+    {
+      id: "correspondence-B",
+      capability: "capability-B",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-B",
+      recipientGeneration: "generation-1",
+      finalized: false,
+    },
+    {
+      id: "correspondence-C",
+      capability: "capability-C",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-C",
+      recipientGeneration: "generation-C",
+      finalized: false,
+    },
+  );
+  failRecoveryForB = true;
+  failNextDiagnosticAppend = true;
+  probeImpl = async () =>
+    snapshot([
+      remote("peer-B", "generation-2"),
+      remote("peer-C", "generation-C"),
+    ]);
+  const first = await list(f.runtime, f.context);
+  assert.equal(first.details?.unavailable_machines, undefined);
+  assert.equal(diagnostics.length, 0, "failed diagnostic append is contained");
+  assert.equal(deliveredReplies.length, 1);
+  assert.equal(deliveredReplies[0].id, cReply.id);
+  assert.ok(
+    endpointCalls.some(
+      (call) => call.action === "poll" && call.recipientSession === "peer-C",
+    ),
+  );
+  assert.ok(
+    endpointCalls.some(
+      (call) => call.action === "ack" && call.recipientSession === "peer-C",
+    ),
+  );
 
-  failRecipientRecovery = false;
+  await list(f.runtime, f.context);
+  assert.equal(
+    diagnostics.length,
+    1,
+    "recovery error is reported after append succeeds",
+  );
+  assert.match(String(diagnostics[0]), /injected recipient recovery failure/);
+  await list(f.runtime, f.context);
+  assert.equal(diagnostics.length, 1, "same B recovery error is reported once");
+  assert.equal(
+    diagnosticAttempts,
+    2,
+    "failed append is retried once, then deduplicated",
+  );
+  assert.equal(
+    deliveredReplies.length,
+    1,
+    "C's acknowledged reply is not redelivered",
+  );
+
+  failRecoveryForB = false;
+  await list(f.runtime, f.context);
+  assert.equal(correspondences[0].recipientGeneration, "generation-2");
+  assert.equal(diagnostics.length, 1);
+  assert.ok(
+    endpointCalls.some(
+      (call) =>
+        call.action === "recover-recipient" &&
+        call.recipientSession === "peer-B",
+    ),
+  );
   const sent = await send(f.runtime, f.context, "peer-B");
   assert.equal(sent.details?.accepted, true);
+});
+
+test("aborted correspondence recovery stops later correspondence processing", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [
+    snapshot([
+      remote("peer-B", "generation-1"),
+      remote("peer-C", "generation-C"),
+    ]),
+  ];
+  await list(f.runtime, f.context);
+  correspondences.push(
+    {
+      id: "correspondence-B",
+      capability: "capability-B",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-B",
+      recipientGeneration: "generation-1",
+      finalized: false,
+    },
+    {
+      id: "correspondence-C",
+      capability: "capability-C",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-C",
+      recipientGeneration: "generation-C",
+      finalized: false,
+    },
+  );
+
+  const controller = new AbortController();
+  failRecoveryForB = true;
+  abortRecoveryForB = () => controller.abort();
+  probeImpl = async () =>
+    snapshot([
+      remote("peer-B", "generation-2"),
+      remote("peer-C", "generation-C"),
+    ]);
+  const result = await list(f.runtime, f.context, controller.signal);
+
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(result.details?.unavailable_machines, undefined);
+  assert.deepEqual(diagnostics, []);
+  assert.ok(
+    endpointCalls.some(
+      (call) =>
+        call.action === "recover-recipient" &&
+        call.recipientSession === "peer-B",
+    ),
+  );
+  assert.equal(
+    endpointCalls.some((call) => call.recipientSession === "peer-C"),
+    false,
+  );
+  assert.deepEqual(deliveredReplies, []);
 });
 
 test("genuine remote probe failure remains listed as unavailable", async (t) => {

@@ -10280,6 +10280,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     }
   >();
   const ambiguousRemoteSessions = new Set<string>();
+  const lastPeerCorrespondenceErrors = new Map<string, string>();
   let latestPeerDiscovery = 0;
   const deliverRemoteOutbound = async (
     machine: SavedPeerMachine,
@@ -10775,222 +10776,255 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     peer.piSessionId === correspondence.recipientSession,
                 );
                 if (!remote) continue;
-                if (remote.claim.id !== correspondence.recipientGeneration) {
-                  const recovery = JSON.parse(
-                    await runPeerEndpoint(
-                      machine,
-                      "recover-recipient",
-                      JSON.stringify({
-                        id: correspondence.id,
-                        expectedDataRoot: snapshot.dataRoot,
-                        capability: correspondence.capability,
-                        originSession: correspondence.originSession,
-                        originGeneration: correspondence.originGeneration,
-                        recipientSession: correspondence.recipientSession,
-                        recipientGeneration: correspondence.recipientGeneration,
-                        newRecipientGeneration: remote.claim.id,
-                      }),
-                      signal,
-                    ),
-                  ) as { recovered?: unknown };
-                  if (recovery.recovered !== true) continue;
-                  updatePeerRecipientGeneration(
-                    correspondence.id,
-                    correspondence.capability,
-                    correspondence.recipientSession,
-                    correspondence.recipientGeneration,
-                    remote.claim.id,
-                  );
-                  correspondence.recipientGeneration = remote.claim.id;
-                }
-                if (correspondence.originGeneration !== own.claim.id) {
-                  const recovery = JSON.parse(
-                    await runPeerEndpoint(
-                      machine,
-                      "recover",
-                      peerRecoveryRequest(
-                        {
+                try {
+                  if (remote.claim.id !== correspondence.recipientGeneration) {
+                    const recovery = JSON.parse(
+                      await runPeerEndpoint(
+                        machine,
+                        "recover-recipient",
+                        JSON.stringify({
                           id: correspondence.id,
+                          expectedDataRoot: snapshot.dataRoot,
                           capability: correspondence.capability,
                           originSession: correspondence.originSession,
-                          originGeneration: own.claim.id,
-                          previousOriginGeneration:
-                            correspondence.originGeneration,
+                          originGeneration: correspondence.originGeneration,
                           recipientSession: correspondence.recipientSession,
                           recipientGeneration:
                             correspondence.recipientGeneration,
-                        },
-                        snapshot.dataRoot,
+                          newRecipientGeneration: remote.claim.id,
+                        }),
+                        signal,
                       ),
-                      signal,
-                    ),
-                  ) as { recovered?: unknown };
-                  if (recovery.recovered !== true) continue;
-                  updatePeerOriginGeneration(
-                    correspondence.id,
-                    correspondence.capability,
-                    self,
-                    correspondence.originGeneration,
-                    own.claim.id,
-                  );
-                  correspondence.originGeneration = own.claim.id;
-                }
-                const request = JSON.stringify({
-                  id: correspondence.id,
-                  expectedDataRoot: snapshot.dataRoot,
-                  capability: correspondence.capability,
-                  originSession: correspondence.originSession,
-                  originGeneration: correspondence.originGeneration,
-                  recipientSession: correspondence.recipientSession,
-                  recipientGeneration: correspondence.recipientGeneration,
-                });
-                const polled = await tryPollPeerReplies(() =>
-                  runPeerEndpoint(machine, "poll", request, signal),
-                );
-                if (polled === undefined) continue;
-                const response = JSON.parse(polled) as {
-                  dataRoot?: unknown;
-                  hasReplies?: unknown;
-                  replies?: Array<{
-                    id?: unknown;
-                    digest?: unknown;
-                    text?: unknown;
-                    attachments?: unknown;
-                    resultBindings?: unknown;
-                    createdAt?: unknown;
-                    acknowledged?: unknown;
-                  }>;
-                };
-                if (!Array.isArray(response.replies))
-                  throw new Error("invalid remote peer reply batch");
-                if (typeof response.dataRoot !== "string")
-                  throw new Error("peer reply endpoint omitted its data root");
-                assertPeerDataRoot(response.dataRoot, snapshot.dataRoot);
-                for (const reply of response.replies) {
-                  if (
-                    typeof reply.id !== "string" ||
-                    typeof reply.text !== "string" ||
-                    typeof reply.digest !== "string" ||
-                    typeof reply.createdAt !== "number" ||
-                    !Number.isFinite(reply.createdAt) ||
-                    (reply.attachments !== undefined &&
-                      !Array.isArray(reply.attachments)) ||
-                    (reply.resultBindings !== undefined &&
-                      (!Array.isArray(reply.resultBindings) ||
-                        !reply.resultBindings.every(isResultBinding))) ||
-                    peerPayloadDigest({
-                      text: reply.text,
-                      ...(reply.attachments?.length
-                        ? { attachments: reply.attachments }
-                        : {}),
-                      ...(Array.isArray(reply.resultBindings)
-                        ? { resultBindings: reply.resultBindings }
-                        : {}),
-                    }) !== reply.digest
-                  )
-                    throw new Error("invalid remote peer reply");
-                  let replyText = reply.text;
-                  const receivedRefs: string[] = [];
-                  for (const rawAttachment of (reply.attachments ??
-                    []) as Array<{
-                    name?: unknown;
-                    ref?: unknown;
-                    marker?: unknown;
-                    text?: unknown;
-                    sha256?: unknown;
-                  }>) {
-                    if (
-                      typeof rawAttachment.name !== "string" ||
-                      typeof rawAttachment.marker !== "string" ||
-                      typeof rawAttachment.text !== "string" ||
-                      typeof rawAttachment.sha256 !== "string" ||
-                      createHash("sha256")
-                        .update(rawAttachment.text, "utf8")
-                        .digest("hex") !== rawAttachment.sha256
-                    )
-                      throw new Error("invalid remote reply attachment");
-                    const markerIndex = replyText.indexOf(rawAttachment.marker);
-                    if (
-                      markerIndex < 0 ||
-                      replyText.indexOf(
-                        rawAttachment.marker,
-                        markerIndex + 1,
-                      ) !== -1
-                    )
-                      throw new Error("reply attachment marker is ambiguous");
-                    replyText =
-                      replyText.slice(0, markerIndex) +
-                      rawAttachment.text +
-                      replyText.slice(
-                        markerIndex + rawAttachment.marker.length,
-                      );
-                    const binding = Array.isArray(reply.resultBindings)
-                      ? (reply.resultBindings as ResultBinding[]).find(
-                          (item) => item.ref === rawAttachment.ref,
-                        )
-                      : undefined;
-                    const localPath = binding
-                      ? persistPeerResultArtifact(
-                          binding.canonicalRef,
-                          rawAttachment.text,
-                        )
-                      : persistPeerAttachment(
-                          rawAttachment.name,
-                          rawAttachment.text,
-                        );
-                    receivedRefs.push(
-                      `${rawAttachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : localPath}`,
+                    ) as { recovered?: unknown };
+                    if (recovery.recovered !== true) continue;
+                    updatePeerRecipientGeneration(
+                      correspondence.id,
+                      correspondence.capability,
+                      correspondence.recipientSession,
+                      correspondence.recipientGeneration,
+                      remote.claim.id,
                     );
+                    correspondence.recipientGeneration = remote.claim.id;
                   }
-                  const resultBindings = Array.isArray(reply.resultBindings)
-                    ? (reply.resultBindings as ResultBinding[])
-                    : [];
-                  const resolution = resolvePeerResultBindings(
-                    ctx,
-                    resultBindings,
+                  if (correspondence.originGeneration !== own.claim.id) {
+                    const recovery = JSON.parse(
+                      await runPeerEndpoint(
+                        machine,
+                        "recover",
+                        peerRecoveryRequest(
+                          {
+                            id: correspondence.id,
+                            capability: correspondence.capability,
+                            originSession: correspondence.originSession,
+                            originGeneration: own.claim.id,
+                            previousOriginGeneration:
+                              correspondence.originGeneration,
+                            recipientSession: correspondence.recipientSession,
+                            recipientGeneration:
+                              correspondence.recipientGeneration,
+                          },
+                          snapshot.dataRoot,
+                        ),
+                        signal,
+                      ),
+                    ) as { recovered?: unknown };
+                    if (recovery.recovered !== true) continue;
+                    updatePeerOriginGeneration(
+                      correspondence.id,
+                      correspondence.capability,
+                      self,
+                      correspondence.originGeneration,
+                      own.claim.id,
+                    );
+                    correspondence.originGeneration = own.claim.id;
+                  }
+                  const request = JSON.stringify({
+                    id: correspondence.id,
+                    expectedDataRoot: snapshot.dataRoot,
+                    capability: correspondence.capability,
+                    originSession: correspondence.originSession,
+                    originGeneration: correspondence.originGeneration,
+                    recipientSession: correspondence.recipientSession,
+                    recipientGeneration: correspondence.recipientGeneration,
+                  });
+                  const polled = await tryPollPeerReplies(() =>
+                    runPeerEndpoint(machine, "poll", request, signal),
                   );
-                  replyText += describePeerResultConflicts(
-                    resolution.conflicts,
-                  );
-                  const record: ChiefMessageRecord = {
-                    version: 2,
-                    build: HERDSMAN_BUILD,
-                    id: reply.id,
-                    leaseId: correspondence.recipientGeneration,
-                    kind: "peer_message",
-                    fromSessionId: correspondence.recipientSession,
-                    toSessionId: self,
-                    leadSessionId: correspondence.recipientSession,
-                    peerSource: { role: "manager" },
-                    text: `${replyText}${receivedRefs.length ? `\n\nForwardable received files:\n${receivedRefs.join("\n")}` : ""}`,
-                    ...(resolution.bindings.length
-                      ? { resultBindings: resolution.bindings }
-                      : {}),
-                    createdAt: reply.createdAt,
+                  if (polled === undefined) continue;
+                  const response = JSON.parse(polled) as {
+                    dataRoot?: unknown;
+                    hasReplies?: unknown;
+                    replies?: Array<{
+                      id?: unknown;
+                      digest?: unknown;
+                      text?: unknown;
+                      attachments?: unknown;
+                      resultBindings?: unknown;
+                      createdAt?: unknown;
+                      acknowledged?: unknown;
+                    }>;
                   };
-                  writeCoordinationMessage(record, peerRuntime());
-                  importResultBindings(
-                    pi,
-                    ctx,
-                    resolution.bindings,
-                    "peer.reply",
-                  );
-                  const ack = JSON.parse(
-                    await runPeerEndpoint(
-                      machine,
-                      "ack",
-                      JSON.stringify({
-                        ...JSON.parse(request),
-                        replyId: reply.id,
-                      }),
-                      signal,
-                    ),
-                  ) as { acknowledged?: unknown };
-                  if (ack.acknowledged !== true)
-                    throw new Error("remote peer reply acknowledgement failed");
+                  if (!Array.isArray(response.replies))
+                    throw new Error("invalid remote peer reply batch");
+                  if (typeof response.dataRoot !== "string")
+                    throw new Error(
+                      "peer reply endpoint omitted its data root",
+                    );
+                  assertPeerDataRoot(response.dataRoot, snapshot.dataRoot);
+                  for (const reply of response.replies) {
+                    if (
+                      typeof reply.id !== "string" ||
+                      typeof reply.text !== "string" ||
+                      typeof reply.digest !== "string" ||
+                      typeof reply.createdAt !== "number" ||
+                      !Number.isFinite(reply.createdAt) ||
+                      (reply.attachments !== undefined &&
+                        !Array.isArray(reply.attachments)) ||
+                      (reply.resultBindings !== undefined &&
+                        (!Array.isArray(reply.resultBindings) ||
+                          !reply.resultBindings.every(isResultBinding))) ||
+                      peerPayloadDigest({
+                        text: reply.text,
+                        ...(reply.attachments?.length
+                          ? { attachments: reply.attachments }
+                          : {}),
+                        ...(Array.isArray(reply.resultBindings)
+                          ? { resultBindings: reply.resultBindings }
+                          : {}),
+                      }) !== reply.digest
+                    )
+                      throw new Error("invalid remote peer reply");
+                    let replyText = reply.text;
+                    const receivedRefs: string[] = [];
+                    for (const rawAttachment of (reply.attachments ??
+                      []) as Array<{
+                      name?: unknown;
+                      ref?: unknown;
+                      marker?: unknown;
+                      text?: unknown;
+                      sha256?: unknown;
+                    }>) {
+                      if (
+                        typeof rawAttachment.name !== "string" ||
+                        typeof rawAttachment.marker !== "string" ||
+                        typeof rawAttachment.text !== "string" ||
+                        typeof rawAttachment.sha256 !== "string" ||
+                        createHash("sha256")
+                          .update(rawAttachment.text, "utf8")
+                          .digest("hex") !== rawAttachment.sha256
+                      )
+                        throw new Error("invalid remote reply attachment");
+                      const markerIndex = replyText.indexOf(
+                        rawAttachment.marker,
+                      );
+                      if (
+                        markerIndex < 0 ||
+                        replyText.indexOf(
+                          rawAttachment.marker,
+                          markerIndex + 1,
+                        ) !== -1
+                      )
+                        throw new Error("reply attachment marker is ambiguous");
+                      replyText =
+                        replyText.slice(0, markerIndex) +
+                        rawAttachment.text +
+                        replyText.slice(
+                          markerIndex + rawAttachment.marker.length,
+                        );
+                      const binding = Array.isArray(reply.resultBindings)
+                        ? (reply.resultBindings as ResultBinding[]).find(
+                            (item) => item.ref === rawAttachment.ref,
+                          )
+                        : undefined;
+                      const localPath = binding
+                        ? persistPeerResultArtifact(
+                            binding.canonicalRef,
+                            rawAttachment.text,
+                          )
+                        : persistPeerAttachment(
+                            rawAttachment.name,
+                            rawAttachment.text,
+                          );
+                      receivedRefs.push(
+                        `${rawAttachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : localPath}`,
+                      );
+                    }
+                    const resultBindings = Array.isArray(reply.resultBindings)
+                      ? (reply.resultBindings as ResultBinding[])
+                      : [];
+                    const resolution = resolvePeerResultBindings(
+                      ctx,
+                      resultBindings,
+                    );
+                    replyText += describePeerResultConflicts(
+                      resolution.conflicts,
+                    );
+                    const record: ChiefMessageRecord = {
+                      version: 2,
+                      build: HERDSMAN_BUILD,
+                      id: reply.id,
+                      leaseId: correspondence.recipientGeneration,
+                      kind: "peer_message",
+                      fromSessionId: correspondence.recipientSession,
+                      toSessionId: self,
+                      leadSessionId: correspondence.recipientSession,
+                      peerSource: { role: "manager" },
+                      text: `${replyText}${receivedRefs.length ? `\n\nForwardable received files:\n${receivedRefs.join("\n")}` : ""}`,
+                      ...(resolution.bindings.length
+                        ? { resultBindings: resolution.bindings }
+                        : {}),
+                      createdAt: reply.createdAt,
+                    };
+                    writeCoordinationMessage(record, peerRuntime());
+                    importResultBindings(
+                      pi,
+                      ctx,
+                      resolution.bindings,
+                      "peer.reply",
+                    );
+                    const ack = JSON.parse(
+                      await runPeerEndpoint(
+                        machine,
+                        "ack",
+                        JSON.stringify({
+                          ...JSON.parse(request),
+                          replyId: reply.id,
+                        }),
+                        signal,
+                      ),
+                    ) as { acknowledged?: unknown };
+                    if (ack.acknowledged !== true)
+                      throw new Error(
+                        "remote peer reply acknowledgement failed",
+                      );
+                  }
+                  // A reply is progress, not route retirement. Keep the verified
+                  // Manager-pair correspondence until explicit retirement.
+                  lastPeerCorrespondenceErrors.delete(correspondence.id);
+                } catch (error) {
+                  if (signal?.aborted) break;
+                  const message =
+                    error instanceof Error ? error.message : String(error);
+                  if (
+                    lastPeerCorrespondenceErrors.get(correspondence.id) !==
+                    message
+                  ) {
+                    try {
+                      appendDurableError(
+                        pi,
+                        ctx,
+                        "pi_herdsman_state_error",
+                        error,
+                      );
+                      lastPeerCorrespondenceErrors.set(
+                        correspondence.id,
+                        message,
+                      );
+                    } catch {
+                      // One diagnostic failure must not block other correspondences.
+                    }
+                  }
                 }
-                // A reply is progress, not route retirement. Keep the verified
-                // Manager-pair correspondence until explicit retirement.
               }
             }
           } catch (error) {
