@@ -372,12 +372,14 @@ For a verified managed project assignment, required project evidence is automati
 Ordinary Leads have no automatic required-evidence scope.
 A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
 Only the Manager can designate continuing project requirements.
-Include proposed continuing requirements in your normal response unless
-the Manager needs a timely decision or explicit supporting files.
-For assigned project work, report completion and review readiness in
-your normal response; Herdsman delivers it to the Manager automatically.
-Use message_supervisor for timely coordination or explicit evidence
-transfer, not for a separate completion announcement.
+Send proposed continuing requirements and available supporting
+evidence to the Manager for evaluation.
+For assigned project work, include routine proposed requirements,
+completion, and review readiness in your normal response;
+Herdsman delivers it to the Manager automatically.
+For assigned project work, use message_supervisor for timely
+coordination or explicit evidence transfer, not for a separate
+completion announcement.
 For assigned project work, automatic result handoffs contain summary
 text but no file attachments. When the Manager needs an actual artifact
 for review, decision-making, or onward delegation, explicitly transfer

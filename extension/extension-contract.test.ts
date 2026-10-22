@@ -3947,9 +3947,12 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     );
     assert.match(
       charter,
-      /report completion and review readiness in\s+your normal response; Herdsman delivers it to the Manager automatically\./,
+      /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
     );
-    assert.match(charter, /not for a separate completion announcement/);
+    assert.match(
+      charter,
+      /For assigned project work, use message_supervisor for timely\s+coordination or explicit evidence transfer, not for a separate\s+completion announcement\./,
+    );
     assert.match(
       charter,
       /delegation task and ordinary files are recipient-specific/,
@@ -4036,15 +4039,23 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /report completion and review readiness in\s+your normal response/,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /not for a separate completion announcement/,
+    /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /integration, validation, or onward handoff/,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /Send proposed continuing requirements and available supporting\s+evidence to the Manager for evaluation\./,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /For assigned project work, use message_supervisor for timely\s+coordination or explicit evidence transfer, not for a separate\s+completion announcement\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
