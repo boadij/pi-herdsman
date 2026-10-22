@@ -2645,6 +2645,7 @@ export function registerLeadRuntime(
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
   let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
+  let assignmentVerificationGeneration = 0;
   let leadExecutionPending = false;
   let startupTools: string[] = [];
   let startupWasManaged = false;
@@ -3739,9 +3740,7 @@ export function registerLeadRuntime(
       const previous = managedLifecycle;
       try {
         await currentProjectAssignment(ctx);
-      } catch {
-        managedLifecycle = "unavailable";
-      }
+      } catch {}
       if (previous !== managedLifecycle) roleTransitions.reconcileRoleTools();
     }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
@@ -4050,6 +4049,7 @@ export function registerLeadRuntime(
     signal: AbortSignal,
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
+    assignmentVerificationGeneration++;
     const identity = readSessionKind(
       ctx.sessionManager.getEntries(),
       sessionId,
@@ -4146,111 +4146,125 @@ export function registerLeadRuntime(
       throw new Error("Session identity is unavailable");
     const identity = sessionKind;
     if (identity.kind === "ordinary") return undefined;
-    if (identity.kind === "managed") managedLifecycle = "unavailable";
-    const replacement = roleHost.readProjectAssignment(
-      roleHost.supervisionRuntime(),
-      identity.repoKey,
-      identity.branch,
-    );
-    if (replacement && replacement.id !== identity.sessionId) {
-      managedLifecycle = "retired";
-      return undefined;
-    }
-    const scope = await roleTransitions.currentWorktreeScope(ctx);
-    if (
-      sessionKind !== identity ||
-      ctx.sessionManager.getSessionId() !== identity.sessionId
-    )
-      throw new Error("Session changed while resolving assignment");
-    const assignment = scope
-      ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
-      : undefined;
-    const validScope = scope?.repoKey === identity.repoKey;
-    if (validScope && assignment) {
+    const generation = ++assignmentVerificationGeneration;
+    const publish = (lifecycle: "assigned" | "unavailable" | "retired") => {
       if (
-        assignment.repoKey !== identity.repoKey ||
-        assignment.branch !== identity.branch
+        sessionKind === identity &&
+        ctx.sessionManager.getSessionId() === identity.sessionId &&
+        generation === assignmentVerificationGeneration
       )
-        throw new Error(
-          "Project assignment conflicts with permanent session identity",
-        );
-      managedLifecycle = "assigned";
-      roleTransitions.reconcileRoleTools();
-      return assignment;
-    }
-    const pendingRetirement =
-      !replacement &&
-      listPendingRetirements(
+        managedLifecycle = lifecycle;
+    };
+    try {
+      const replacement = roleHost.readProjectAssignment(
         roleHost.supervisionRuntime(),
         identity.repoKey,
-      ).some(
-        (retired) =>
-          retired.id === identity.sessionId &&
-          retired.branch === identity.branch,
+        identity.branch,
       );
-    let retirementVerified = false;
-    if (pendingRetirement) {
-      // The retirement commit is durable; verify checkout absence again before presenting it.
-      const workspaceId =
-        (validScope ? scope.primaryWorkspaceId : undefined) ??
-        process.env.HERDR_WORKSPACE_ID;
-      if (workspaceId) {
-        const topology = await roleHost.runHerdr(
-          pi,
-          ctx,
-          ["worktree", "list", "--workspace", workspaceId],
-          { signal: ctx.signal },
-        );
+      if (replacement && replacement.id !== identity.sessionId) {
+        publish("retired");
+        return undefined;
+      }
+      const scope = await roleTransitions.currentWorktreeScope(ctx);
+      if (
+        sessionKind !== identity ||
+        ctx.sessionManager.getSessionId() !== identity.sessionId
+      )
+        throw new Error("Session changed while resolving assignment");
+      const assignment = scope
+        ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
+        : undefined;
+      const validScope = scope?.repoKey === identity.repoKey;
+      if (validScope && assignment) {
         if (
-          sessionKind !== identity ||
-          ctx.sessionManager.getSessionId() !== identity.sessionId
+          assignment.repoKey !== identity.repoKey ||
+          assignment.branch !== identity.branch
         )
-          throw new Error("Session changed while verifying retirement");
-        if (
-          topology?.source?.repo_key === identity.repoKey &&
-          typeof topology.source.source_checkout_path === "string" &&
-          Array.isArray(topology.worktrees) &&
-          !topology.worktrees.some(
-            (worktree: any) => worktree.branch === identity.branch,
-          )
-        ) {
-          const inventory = await pi.exec(
-            "git",
-            ["worktree", "list", "--porcelain", "-z"],
-            {
-              cwd: topology.source.source_checkout_path,
-              signal: ctx.signal,
-              timeout: 10_000,
-            },
+          throw new Error(
+            "Project assignment conflicts with permanent session identity",
           );
-          const worktrees =
-            inventory.code === 0 &&
-            !inventory.killed &&
-            !inventory.stderr?.trim()
-              ? parseGitWorktreeInventory(inventory.stdout)
-              : undefined;
+        publish("assigned");
+        roleTransitions.reconcileRoleTools();
+        return assignment;
+      }
+      const pendingRetirement =
+        !replacement &&
+        listPendingRetirements(
+          roleHost.supervisionRuntime(),
+          identity.repoKey,
+        ).some(
+          (retired) =>
+            retired.id === identity.sessionId &&
+            retired.branch === identity.branch,
+        );
+      let retirementVerified = false;
+      if (pendingRetirement) {
+        // The retirement commit is durable; verify checkout absence again before presenting it.
+        const workspaceId =
+          (validScope ? scope.primaryWorkspaceId : undefined) ??
+          process.env.HERDR_WORKSPACE_ID;
+        if (workspaceId) {
+          const topology = await roleHost.runHerdr(
+            pi,
+            ctx,
+            ["worktree", "list", "--workspace", workspaceId],
+            { signal: ctx.signal },
+          );
           if (
             sessionKind !== identity ||
             ctx.sessionManager.getSessionId() !== identity.sessionId
           )
             throw new Error("Session changed while verifying retirement");
           if (
-            worktrees &&
-            !worktrees.some((worktree) => worktree.branch === identity.branch)
+            topology?.source?.repo_key === identity.repoKey &&
+            typeof topology.source.source_checkout_path === "string" &&
+            Array.isArray(topology.worktrees) &&
+            !topology.worktrees.some(
+              (worktree: any) => worktree.branch === identity.branch,
+            )
           ) {
-            managedLifecycle = "retired";
-            retirementVerified = true;
+            const inventory = await pi.exec(
+              "git",
+              ["worktree", "list", "--porcelain", "-z"],
+              {
+                cwd: topology.source.source_checkout_path,
+                signal: ctx.signal,
+                timeout: 10_000,
+              },
+            );
+            const worktrees =
+              inventory.code === 0 &&
+              !inventory.killed &&
+              !inventory.stderr?.trim()
+                ? parseGitWorktreeInventory(inventory.stdout)
+                : undefined;
+            if (
+              sessionKind !== identity ||
+              ctx.sessionManager.getSessionId() !== identity.sessionId
+            )
+              throw new Error("Session changed while verifying retirement");
+            if (
+              worktrees &&
+              !worktrees.some((worktree) => worktree.branch === identity.branch)
+            ) {
+              publish("retired");
+              retirementVerified = true;
+            }
           }
         }
       }
+      if (!validScope && !retirementVerified)
+        throw new Error(
+          pendingRetirement && !process.env.HERDR_WORKSPACE_ID
+            ? "Cannot verify retired managed project checkout"
+            : "Cannot verify the original managed project scope",
+        );
+      publish(retirementVerified ? "retired" : "unavailable");
+      return undefined;
+    } catch (error) {
+      publish("unavailable");
+      throw error;
     }
-    if (!validScope && !retirementVerified)
-      throw new Error(
-        pendingRetirement && !process.env.HERDR_WORKSPACE_ID
-          ? "Cannot verify retired managed project checkout"
-          : "Cannot verify the original managed project scope",
-      );
-    return undefined;
   };
   const resolveExecutionDefinition = (
     ctx: ExtensionContext,
@@ -4553,6 +4567,7 @@ export function registerLeadRuntime(
     clearLeadExecution: () => {
       startupTools = pi.getActiveTools();
       startupWasManaged = sessionKind?.kind === "managed";
+      assignmentVerificationGeneration++;
       sessionKind = undefined;
       managedLifecycle = "unavailable";
       leadExecution = undefined;
