@@ -101,6 +101,7 @@ import {
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   matchPiProvenance,
+  managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -2726,11 +2727,22 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
 
 test("Manager handoff readiness waits for verified Lead process provenance", async () => {
   let observations = 0;
+  let provenanceContents = '{"sessionId":"other-session"}\n';
+  const foregroundProcesses = [{ pid: 42 }];
   const pid = await waitForEvidence(
     {},
     "manager-handoff-assignment",
     async () => {
-      const proof = ++observations === 1 ? null : { pid: 42 };
+      if (++observations === 2)
+        provenanceContents =
+          '{"sessionId":"lead-session","packageName":"@earendil-works/pi-coding-agent","piVersion":"1.2.3","model":"manager-handoff-lead","hasAgentDefinitions":true,"pid":42}\n';
+      const proof = managerHandoffLeadProcessProof(
+        provenanceContents,
+        "lead-session",
+        "pane-1",
+        foregroundProcesses,
+        "1.2.3",
+      );
       return {
         done: managerHandoffAssignmentReady(true, true, proof),
         value: proof?.pid,
@@ -2740,6 +2752,24 @@ test("Manager handoff readiness waits for verified Lead process provenance", asy
   );
   assert.equal(observations, 2);
   assert.equal(pid, 42);
+
+  const validRow =
+    '{"sessionId":"lead-session","packageName":"@earendil-works/pi-coding-agent","piVersion":"1.2.3","model":"manager-handoff-lead","hasAgentDefinitions":true,"pid":42}';
+  for (const contents of [
+    validRow.replace('"model":"manager-handoff-lead"', '"model":"wrong-model"'),
+    `${validRow}\n${validRow}\n`,
+  ])
+    assert.throws(
+      () =>
+        managerHandoffLeadProcessProof(
+          contents,
+          "lead-session",
+          "pane-1",
+          foregroundProcesses,
+          "1.2.3",
+        ),
+      { code: "SMOKE_EVIDENCE" },
+    );
 
   observations = 0;
   await assert.rejects(

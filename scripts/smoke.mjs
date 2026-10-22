@@ -3222,6 +3222,29 @@ export function matchPiProvenance(
   }
 }
 
+export function managerHandoffLeadProcessProof(
+  provenanceContents,
+  sessionId,
+  paneId,
+  foregroundProcesses,
+  expectedPiVersion,
+) {
+  const records = provenanceContents
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  if (!records.some((record) => record.sessionId === sessionId)) return null;
+  return matchPiProvenance(
+    records,
+    sessionId,
+    paneId,
+    foregroundProcesses,
+    "manager-handoff-lead",
+    true,
+    expectedPiVersion,
+  );
+}
+
 export function requireSmokeEvidence(condition, message) {
   if (!condition) {
     const error = new Error(message);
@@ -4111,20 +4134,14 @@ async function runManagerHandoffSmoke(ctx) {
             if (error.code !== "ENOENT") throw error;
             throw observationFailure("Lead Pi provenance is not available yet");
           }
-          const records = provenanceContents
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .map((line) => JSON.parse(line));
-          processProof = matchPiProvenance(
-            records,
+          processProof = managerHandoffLeadProcessProof(
+            provenanceContents,
             row.session,
             lead.pane_id,
             processes,
-            "manager-handoff-lead",
-            true,
             ctx.expectedPiVersion,
           );
-          provenanceMatch = "true";
+          provenanceMatch = String(!!processProof);
         } else {
           provenanceMatch = "false";
         }
