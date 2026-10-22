@@ -5,6 +5,7 @@ import {
   realpathSync,
   watch,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import {
@@ -42,21 +43,29 @@ const modelIds = [
 ];
 
 function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
-  let directory = dirname(realpathSync(entryPoint));
-  while (true) {
+  if (entryPoint) {
     try {
-      const metadata = JSON.parse(
-        readFileSync(join(directory, "package.json"), "utf8"),
-      );
-      if (metadata.name === "@earendil-works/pi-coding-agent") return metadata;
+      let directory = dirname(realpathSync(entryPoint));
+      while (true) {
+        try {
+          const metadata = JSON.parse(
+            readFileSync(join(directory, "package.json"), "utf8"),
+          );
+          if (metadata.name === "@earendil-works/pi-coding-agent")
+            return metadata;
+        } catch {}
+        const parent = dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
     } catch {}
-    const parent = dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
   }
-  throw new Error(
-    "Could not resolve Pi package metadata from executing entry point",
-  );
+  const version = execFileSync("pi", ["--version"], { encoding: "utf8" })
+    .trim()
+    .replace(/^v/u, "");
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version))
+    throw new Error("Could not resolve Pi package metadata from executing CLI");
+  return { name: "@earendil-works/pi-coding-agent", version };
 }
 
 function text(message) {
@@ -628,6 +637,12 @@ export function decide(model, context) {
         throw new Error("federation discovery found no remote Manager");
       return fauxAssistantMessage("PEER_E2E_A_DISCOVERED");
     }
+    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST")) {
+      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST_DONE");
+    }
+    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS")) {
+      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS_DONE");
+    }
     const send = prompt.includes("PEER_E2E_A_SEND");
     const list = correlatedCall(messages, "list_peers");
     if (send && !list) return call("list_peers", {});
@@ -731,7 +746,9 @@ export function decide(model, context) {
         (message.role === "user" || message.type === "custom_message") &&
         text(message).includes("PEER_E2E_REQUEST"),
     );
-    const inbound = inbounds[0];
+    const inbound =
+      inbounds.find((message) => forwardableRefs(message).length >= 3) ??
+      inbounds[0];
     if (
       inbounds.some((message) =>
         text(message).includes("PEER_E2E_SINGLE_REQUEST"),
@@ -1022,8 +1039,10 @@ export default function install(pi) {
       let piPackage;
       try {
         piPackage = piPackageFromExecutingCli();
-      } catch {
-        throw new Error("Could not resolve Pi package metadata");
+      } catch (error) {
+        throw new Error("Could not resolve Pi package metadata", {
+          cause: error,
+        });
       }
       if (
         piPackage.name !== "@earendil-works/pi-coding-agent" ||

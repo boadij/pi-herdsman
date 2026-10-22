@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   listRemotePeerOutbounds,
   parsePeerSshTarget,
   peerRecoveryRequest,
   persistRemotePeerOutbound,
+  peerPayloadDigest as transportPayloadDigest,
   removeRemotePeerOutbound,
+  resolveRemotePeerOutboundRetry,
+  tryClaimRemotePeerOutbound,
+  runPeerEndpoint,
   tryPollPeerReplies,
 } from "./peer-transport.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -50,9 +58,15 @@ test("remote peer outbox survives until acknowledged delivery", () => {
     dataRoot: "/test/agent/pi-herdsman",
     session: randomUUID(),
     claimId: randomUUID(),
+    recipientSession: randomUUID(),
+    digest: "a".repeat(64),
     envelope: JSON.stringify({ record: { id } }),
   };
   persistRemotePeerOutbound(outbound);
+  const claim = tryClaimRemotePeerOutbound(id);
+  assert.ok(claim);
+  assert.equal(tryClaimRemotePeerOutbound(id), undefined);
+  claim();
   assert.deepEqual(
     listRemotePeerOutbounds().find((item) => item.id === id),
     outbound,
@@ -62,6 +76,116 @@ test("remote peer outbox survives until acknowledged delivery", () => {
     listRemotePeerOutbounds().some((item) => item.id === id),
     false,
   );
+});
+
+test("queued transfer retries only after definitive absence and exact-session generation proof", () => {
+  const id = randomUUID();
+  const origin = randomUUID();
+  const recipient = randomUUID();
+  const oldGeneration = randomUUID();
+  const newGeneration = randomUUID();
+  const record = { id, fromSessionId: origin, toSessionId: recipient };
+  const attachments: unknown[] = [];
+  const digest = transportPayloadDigest({ record, attachments });
+  const outbound = {
+    id,
+    machine: {
+      id: "test-machine",
+      label: "test-machine",
+      target: "test-machine",
+      reachable: true,
+    },
+    dataRoot: "/test/root",
+    session: origin,
+    claimId: randomUUID(),
+    recipientSession: recipient,
+    digest,
+    envelope: JSON.stringify({
+      record,
+      recipientClaimId: oldGeneration,
+      attachments,
+      correspondence: {
+        originSession: origin,
+        recipientSession: recipient,
+        recipientGeneration: oldGeneration,
+      },
+    }),
+  };
+  const snapshot = {
+    dataRoot: outbound.dataRoot,
+    peers: [
+      { role: "manager", piSessionId: recipient, claim: { id: newGeneration } },
+    ],
+  };
+  const absent = { dataRoot: outbound.dataRoot, id, digest, status: "absent" };
+  const retry = resolveRemotePeerOutboundRetry(outbound, absent, snapshot);
+  assert.equal(retry.kind, "retry");
+  if (retry.kind !== "retry") return;
+  const updated = JSON.parse(retry.envelope);
+  assert.equal(updated.record.id, id);
+  assert.equal(updated.recipientClaimId, newGeneration);
+  assert.equal(updated.correspondence.recipientGeneration, newGeneration);
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(
+      outbound,
+      { ...absent, status: "accepted" },
+      snapshot,
+    ),
+    { kind: "accepted" },
+  );
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(outbound, absent, {
+      ...snapshot,
+      peers: [
+        {
+          role: "manager",
+          piSessionId: randomUUID(),
+          claim: { id: newGeneration },
+        },
+      ],
+    }),
+    { kind: "pending" },
+  );
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(
+      outbound,
+      { ...absent, status: "pending" },
+      snapshot,
+    ),
+    { kind: "pending" },
+  );
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(
+      outbound,
+      { ...absent, digest: "f".repeat(64) },
+      snapshot,
+    ),
+    { kind: "pending" },
+  );
+});
+
+test("SSH stdin EPIPE rejects the transport without an uncaught process error", async (t) => {
+  if (process.platform === "win32")
+    return t.skip("uses a POSIX fake ssh executable");
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-peer-ePIPE-"));
+  const ssh = join(directory, "ssh");
+  writeFileSync(ssh, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  chmodSync(ssh, 0o700);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${directory}:${oldPath ?? ""}`;
+  try {
+    await assert.rejects(
+      runPeerEndpoint(
+        { id: "fixture", label: "fixture", target: "fixture", reachable: true },
+        "accept",
+        "x".repeat(4 * 1024 * 1024),
+      ),
+    );
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("saved SSH targets reject URI paths and option-shaped aliases", () => {

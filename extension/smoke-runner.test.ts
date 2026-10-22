@@ -3132,12 +3132,18 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line));
+    const piPackage = JSON.parse(
+      await readFile(
+        resolve("node_modules/@earendil-works/pi-coding-agent/package.json"),
+        "utf8",
+      ),
+    );
     assert.deepEqual(provenance, [
       {
         pid: process.pid,
         sessionId: "faux-test-session",
         packageName: "@earendil-works/pi-coding-agent",
-        piVersion: "1.4.0",
+        piVersion: piPackage.version,
         model: "chief-tree",
         hasAgentDefinitions: false,
       },

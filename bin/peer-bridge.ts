@@ -36,11 +36,12 @@ if (
     "finalize",
     "recover",
     "recover-recipient",
+    "status",
   ].includes(action) ||
   process.argv.length !== 3
 ) {
   console.error(
-    "usage: pi-herdsman-peer probe|accept|poll|ack|finalize|recover|recover-recipient",
+    "usage: pi-herdsman-peer probe|accept|status|poll|ack|finalize|recover|recover-recipient",
   );
   process.exit(2);
 }
@@ -92,7 +93,55 @@ if (action === "probe") {
     previousOriginGeneration?: string;
     newRecipientGeneration?: string;
     replyId?: string;
+    digest?: string;
   };
+  if (action === "status") {
+    const { id, originSession, recipientSession, digest, expectedDataRoot } =
+      envelope;
+    assertPeerDataRoot(herdsmanDataRoot(), expectedDataRoot ?? "");
+    if (
+      !process.env.SSH_CONNECTION ||
+      typeof id !== "string" ||
+      typeof originSession !== "string" ||
+      typeof recipientSession !== "string" ||
+      typeof digest !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(digest)
+    )
+      throw new Error("invalid peer acceptance status request");
+    const key = createHash("sha256")
+      .update(`${originSession}\0${id}`)
+      .digest("hex");
+    const marker = join(runtime.root, "peer-acceptances", `${key}.json`);
+    try {
+      const prior = JSON.parse(readFileSync(marker, "utf8")) as {
+        digest?: unknown;
+        status?: unknown;
+        recipientSession?: unknown;
+      };
+      const status =
+        prior.digest !== digest || prior.recipientSession !== recipientSession
+          ? "conflict"
+          : prior.status === "accepted"
+            ? "accepted"
+            : prior.status === "pending"
+              ? "pending"
+              : "conflict";
+      console.log(
+        JSON.stringify({ dataRoot: herdsmanDataRoot(), id, digest, status }),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      console.log(
+        JSON.stringify({
+          dataRoot: herdsmanDataRoot(),
+          id,
+          digest,
+          status: "absent",
+        }),
+      );
+    }
+    process.exit(0);
+  }
   if (action !== "accept") {
     const {
       id,
@@ -149,14 +198,32 @@ if (action === "probe") {
       );
       console.log(JSON.stringify({ recovered: true, id }));
     } else if (action === "poll") {
-      const replies = pollPeerReplies(
-        id,
-        capability,
-        originSession,
-        originGeneration,
-        recipientSession,
-        recipientGeneration,
-      );
+      let replies: ReturnType<typeof pollPeerReplies>;
+      try {
+        replies = pollPeerReplies(
+          id,
+          capability,
+          originSession,
+          originGeneration,
+          recipientSession,
+          recipientGeneration,
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(
+          JSON.stringify({
+            action: "poll",
+            correspondenceId: id,
+            originSession,
+            originGeneration,
+            recipientSession,
+            recipientGeneration,
+            expectedDataRoot: envelope.expectedDataRoot,
+            error: detail,
+          }),
+        );
+        process.exit(1);
+      }
       console.log(
         JSON.stringify({
           dataRoot: herdsmanDataRoot(),
@@ -207,15 +274,6 @@ if (action === "probe") {
     throw new Error("invalid peer transfer");
   if (!Array.isArray(envelope.attachments) || envelope.attachments.length > 32)
     throw new Error("invalid peer transfer evidence");
-  if (
-    !listPeerLeadRecords(runtime).some(
-      (peer) =>
-        peer.role === "manager" &&
-        peer.piSessionId === record.toSessionId &&
-        peer.claim.id === envelope.recipientClaimId,
-    )
-  )
-    throw new Error("exact destination Manager is not live");
   const connection = process.env.SSH_CONNECTION;
   if (!connection)
     throw new Error("authenticated SSH connection identity is unavailable");
@@ -227,7 +285,10 @@ if (action === "probe") {
     envelope.correspondence.originGeneration !== record.leaseId
   )
     throw new Error("peer correspondence does not match message route");
-  const digest = peerPayloadDigest(envelope);
+  const digest = peerPayloadDigest({
+    record,
+    attachments: envelope.attachments,
+  });
   const markerDir = join(runtime.root, "peer-acceptances");
   mkdirSync(markerDir, { recursive: true, mode: 0o700 });
   const key = createHash("sha256")
@@ -238,18 +299,32 @@ if (action === "probe") {
     const prior = JSON.parse(readFileSync(marker, "utf8")) as {
       digest?: unknown;
       status?: unknown;
+      recipientSession?: unknown;
     };
-    if (prior.digest !== digest)
+    if (
+      prior.digest !== digest ||
+      prior.recipientSession !== record.toSessionId
+    )
       throw new Error("conflicting peer message identity");
     if (prior.status === "accepted") {
       console.log(JSON.stringify({ accepted: true, id: record.id }));
       process.exit(0);
     }
+    throw new Error("peer message acceptance is pending; status is ambiguous");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (
+      !listPeerLeadRecords(runtime).some(
+        (peer) =>
+          peer.role === "manager" &&
+          peer.piSessionId === record.toSessionId &&
+          peer.claim.id === envelope.recipientClaimId,
+      )
+    )
+      throw new Error("exact destination Manager is not live");
     writeFileSync(
       marker,
-      `${JSON.stringify({ connection, digest, status: "pending" })}\n`,
+      `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId })}\n`,
       {
         encoding: "utf8",
         flag: "wx",
@@ -307,7 +382,7 @@ if (action === "probe") {
   const markerTemp = `${marker}.${randomUUID()}.tmp`;
   writeFileSync(
     markerTemp,
-    `${JSON.stringify({ connection, digest, status: "accepted" })}\n`,
+    `${JSON.stringify({ connection, digest, status: "accepted", recipientSession: record.toSessionId })}\n`,
     {
       encoding: "utf8",
       flag: "wx",

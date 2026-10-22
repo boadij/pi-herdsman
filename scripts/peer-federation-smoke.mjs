@@ -2,7 +2,7 @@
 // Disposable, explicitly owned Docker fixture for the real peer-federation smoke.
 // Run with `node scripts/peer-federation-smoke.mjs`; set PEER_SMOKE_KEEP=1 to
 // retain resources for diagnosis (the printed manifest is the cleanup authority).
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -27,6 +27,7 @@ const resources = {
   imageTag: null,
   containers: [],
 };
+resources.diagnosticsEnabled = process.env.PEER_SMOKE_DIAGNOSTICS === "1";
 resources.evidence = {
   semanticRef: undefined,
 };
@@ -229,6 +230,9 @@ try {
       `${ssh}:/var/lib/herdsman/ssh`,
       "--env",
       `SSH_AUTHORIZED_KEYS=${authorizedKey}`,
+      ...(resources.diagnosticsEnabled
+        ? ["--env", "PEER_FEDERATION_DIAGNOSTICS=1"]
+        : []),
       imageTag,
     ]);
     resources.containers.push(id);
@@ -343,6 +347,154 @@ try {
     "-e",
     `PATH=${fixturePath(side)}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
   ];
+  const readContainerText = (side, path) => {
+    const result = spawnSync(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv(side),
+        resources[side].container,
+        "cat",
+        path,
+      ],
+      { encoding: "utf8" },
+    );
+    return result.status === 0 ? result.stdout : undefined;
+  };
+  const readContainerJsonLines = (side, path) =>
+    (readContainerText(side, path) ?? "")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return { malformed: line.slice(0, 200) };
+        }
+      });
+  const capturePeerDiagnostics = () => {
+    if (!resources.diagnosticsEnabled) return undefined;
+    const diagnostics = {
+      runId,
+      outbox: [],
+      sshWrapper: {},
+      recipientAcceptanceMarkers: [],
+      recipientInbox: [],
+      runtimeTrace: {},
+    };
+    const outboxDirectory = `${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/remote-outbound`;
+    const outboxFiles = exec("a", [
+      "sh",
+      "-c",
+      `find ${outboxDirectory} -maxdepth 1 -type f -name '*.json' -print 2>/dev/null || true`,
+    ])
+      .split("\n")
+      .filter(Boolean);
+    diagnostics.outbox = outboxFiles.flatMap((path) => {
+      try {
+        const outbound = JSON.parse(
+          exec("a", ["cat", path], ["--user", "herdsman"]),
+        );
+        const envelope = JSON.parse(outbound.envelope);
+        return [
+          {
+            id: outbound.id,
+            digest: outbound.digest,
+            machine: outbound.machine,
+            recipientSession: outbound.recipientSession,
+            originSession: outbound.session,
+            record: {
+              id: envelope.record?.id,
+              kind: envelope.record?.kind,
+              fromSessionId: envelope.record?.fromSessionId,
+              toSessionId: envelope.record?.toSessionId,
+              leaseId: envelope.record?.leaseId,
+              textMarkers: [
+                ...(envelope.record?.text ?? "").matchAll(/PEER_E2E_[A-Z_]+/gu),
+              ].map(([marker]) => marker),
+            },
+            recipientClaimId: envelope.recipientClaimId,
+          },
+        ];
+      } catch (error) {
+        return [{ path, error: String(error) }];
+      }
+    });
+    for (const [side, paths] of Object.entries({
+      a: [
+        `${fixturePath("a")}/last-status-request.json`,
+        `${fixturePath("a")}/last-status-response.json`,
+        `${fixturePath("a")}/last-status.stderr`,
+        `${fixturePath("a")}/last-accept.json`,
+        `${fixturePath("a")}/last-accept.stderr`,
+      ],
+      b: [],
+    })) {
+      diagnostics.sshWrapper[side] = Object.fromEntries(
+        paths.map((path) => [
+          path.split("/").at(-1),
+          readContainerText(side, path),
+        ]),
+      );
+    }
+    const acceptanceDirectory = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/peer-acceptances`;
+    const markerPaths = exec("b", [
+      "sh",
+      "-c",
+      `find ${acceptanceDirectory} -maxdepth 1 -type f -name '*.json' -print 2>/dev/null || true`,
+    ])
+      .split("\n")
+      .filter(Boolean);
+    diagnostics.recipientAcceptanceMarkers = markerPaths.flatMap((path) => {
+      try {
+        return [
+          {
+            path: path.split("/").at(-1),
+            ...JSON.parse(exec("b", ["cat", path], ["--user", "herdsman"])),
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+    const inboxDirectory = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/inbox`;
+    const inboxPaths = exec("b", [
+      "sh",
+      "-c",
+      `find ${inboxDirectory} -maxdepth 1 -type f -name '*.json' -print 2>/dev/null || true`,
+    ])
+      .split("\n")
+      .filter(Boolean);
+    diagnostics.recipientInbox = inboxPaths.flatMap((path) => {
+      try {
+        const record = JSON.parse(
+          exec("b", ["cat", path], ["--user", "herdsman"]),
+        );
+        return [
+          {
+            path: path.split("/").at(-1),
+            id: record.id,
+            from: record.fromSessionId,
+            to: record.toSessionId,
+            kind: record.kind,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+    for (const side of ["a", "b"]) {
+      diagnostics.runtimeTrace[side] = readContainerJsonLines(
+        side,
+        `${resources[side].runtime.piAgentDir}/pi-herdsman/runtime/peer-federation-diagnostics.jsonl`,
+      );
+    }
+    resources.peerDiagnostics = diagnostics;
+    save();
+    return diagnostics;
+  };
   for (const side of ["a", "b"]) {
     const container = resources[side].container;
     const base = fixturePath(side);
@@ -357,7 +509,8 @@ try {
       [
         "#!/bin/sh",
         'case "$*" in',
-        `  *'pi-herdsman-peer accept'*) umask 077; cat > ${base}/last-accept.json; test -f ${base}/first-accept.json || cp ${base}/last-accept.json ${base}/first-accept.json; test ! -f ${base}/block-accept || exit 255; exec /usr/bin/ssh "$@" < ${base}/last-accept.json ;;`,
+        `  *'pi-herdsman-peer accept'*) umask 077; cat > ${base}/last-accept.json; test -f ${base}/first-accept.json || cp ${base}/last-accept.json ${base}/first-accept.json; if test -f ${base}/tracked-outbound-id && grep -Fq "$(cat ${base}/tracked-outbound-id)" ${base}/last-accept.json; then echo "$(cat ${base}/tracked-outbound-id)" >> ${base}/accept-attempts; fi; test ! -f ${base}/block-accept || exit 255; if test -f ${base}/drop-accept-ack; then rm ${base}/drop-accept-ack; /usr/bin/ssh "$@" < ${base}/last-accept.json >/dev/null 2> ${base}/last-accept.stderr; exit $?; fi; exec /usr/bin/ssh "$@" < ${base}/last-accept.json 2> ${base}/last-accept.stderr ;;`,
+        `  *'pi-herdsman-peer status'*) umask 077; cat > ${base}/last-status-request.json; /usr/bin/ssh "$@" < ${base}/last-status-request.json > ${base}/last-status-response.json 2> ${base}/last-status.stderr; rc=$?; cat ${base}/last-status-response.json; exit $rc ;;`,
         `  *'pi-herdsman-peer recover-recipient'*) umask 077; cat > ${base}/last-recipient-recovery.json; exec /usr/bin/ssh "$@" < ${base}/last-recipient-recovery.json ;;`,
         `  *'pi-herdsman-peer poll'*) test ! -f ${base}/block-poll || { cat > /dev/null; exit 255; }; exec /usr/bin/ssh "$@" ;;`,
         '  *) exec /usr/bin/ssh "$@" ;;',
@@ -658,6 +811,11 @@ try {
     "extension/peer-transport.ts",
     `${resources.b.container}:${fixturePath("b")}/peer-transport.ts`,
   ]);
+  command("docker", [
+    "cp",
+    "extension/lock.ts",
+    `${resources.b.container}:${fixturePath("b")}/lock.ts`,
+  ]);
   const digest = (value) => createHash("sha256").update(value).digest("hex");
   resources.evidence = {
     ...resources.evidence,
@@ -802,18 +960,64 @@ try {
     a: aSession.sessionPath,
     b: resources.b.managerSessionFile,
   });
-  herdr("a", [
-    "pane",
-    "wait-output",
-    resources.a.paneId,
-    "--match",
-    "PEER_E2E_A_DISCOVERED",
-    "--timeout",
-    "60000",
-  ]);
+  try {
+    herdr("a", [
+      "pane",
+      "wait-output",
+      resources.a.paneId,
+      "--match",
+      "PEER_E2E_A_DISCOVERED",
+      "--timeout",
+      "60000",
+    ]);
+  } catch (error) {
+    throw new Error(
+      `A discovery failed; pane=${herdr("a", ["pane", "read", resources.a.paneId, "--source", "recent", "--lines", "120"])}; session=${exec("a", ["tail", "-n", "80", resources.a.managerSessionFile])}; B=${herdr("b", ["pane", "read", resources.b.paneId, "--source", "recent", "--lines", "80"])}; ${error.message}`,
+    );
+  }
   stage("pi-list-peers-confirmed", {
     session: resources.a.remoteProbe?.session,
     listedManager: resources.b.remoteProbe?.session,
+  });
+  const statusRoundTrip = JSON.parse(
+    command(
+      "docker",
+      [
+        "exec",
+        "-i",
+        "--user",
+        "herdsman",
+        ...herdrEnv("a"),
+        resources.a.container,
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "herdsman@peer-b",
+        "pi-herdsman-peer",
+        "status",
+      ],
+      {
+        input: JSON.stringify({
+          id: randomUUID(),
+          originSession: resources.a.managerSessionId,
+          recipientSession: resources.a.remoteProbe.session,
+          digest: "0".repeat(64),
+          expectedDataRoot: resources.a.remoteProbe.dataRoot,
+        }),
+      },
+    ),
+  );
+  if (statusRoundTrip.status !== "absent")
+    throw new Error(
+      `test SSH wrapper did not return the acceptance status response: ${JSON.stringify(statusRoundTrip)}`,
+    );
+  stage("acceptance-status-stdout-round-trip", {
+    status: statusRoundTrip.status,
   });
   if (process.env.PEER_SMOKE_PHASE === "delivery") {
     herdr("a", [
@@ -1144,6 +1348,10 @@ try {
   resources.a.requestSubmission = submitted;
   exec("a", ["rm", `${resources.a.runtime.home}/block-accept`]);
   save();
+  if (resources.diagnosticsEnabled)
+    stage("outbound-retry-observation-start", {
+      diagnostics: capturePeerDiagnostics(),
+    });
 
   // B's marker proves the background outbox retry delivered two requests,
   // delegated the evidence locally, and queued progress plus completion.
@@ -1158,10 +1366,14 @@ try {
       "60000",
     ]);
   } catch (error) {
+    const diagnostics = capturePeerDiagnostics();
+    if (diagnostics) stage("B-reply-wait-failed-diagnostics", diagnostics);
     throw new Error(
-      `B did not finish the peer request; B=${herdr("b", ["pane", "read", resources.b.paneId, "--source", "recent", "--lines", "120"])}; BLogs=${command("docker", ["logs", "--since", resources.startedAt, resources.b.container], { allowFailure: true })}; A=${herdr("a", ["pane", "read", resources.a.paneId, "--source", "recent", "--lines", "120"])}; Aoutbox=${exec("a", ["sh", "-c", `find ${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/remote-outbound -maxdepth 1 -type f -print -exec cat {} \\;`], ["--user", "herdsman"])}; ${error.message}`,
+      `B did not finish the peer request; diagnostics=${JSON.stringify(diagnostics)}; B=${herdr("b", ["pane", "read", resources.b.paneId, "--source", "recent", "--lines", "120"])}; BLogs=${command("docker", ["logs", "--since", resources.startedAt, resources.b.container], { allowFailure: true })}; A=${herdr("a", ["pane", "read", resources.a.paneId, "--source", "recent", "--lines", "120"])}; Aoutbox=${exec("a", ["sh", "-c", `find ${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/remote-outbound -maxdepth 1 -type f -print -exec cat {} \\;`], ["--user", "herdsman"])}; ${error.message}`,
     );
   }
+  if (resources.diagnosticsEnabled)
+    stage("B-replied-diagnostics", capturePeerDiagnostics());
   const correspondenceFiles = exec("b", [
     "sh",
     "-c",
@@ -1650,6 +1862,242 @@ try {
     throw new Error(
       `same-session Manager recovery did not preserve identity and replace generation: ${JSON.stringify(resumedProbe)}`,
     );
+  // Persist one queued transfer addressed to B's old generation while A is
+  // offline. The first reconnect loses the acceptance ACK; the next poll must
+  // resolve the durable marker instead of resubmitting the transfer.
+  const queued = JSON.parse(envelopeText);
+  const queuedId = randomUUID();
+  queued.record.id = queuedId;
+  queued.record.fromSessionId = resources.a.managerSessionId;
+  queued.record.leaseId = resumedManager.claim.id;
+  queued.record.toSessionId = originalSession;
+  queued.record.text = `${queued.record.text}\nPEER_E2E_RESTART_QUEUED_OUTBOUND`;
+  queued.record.createdAt = Date.now();
+  queued.recipientClaimId = originalGeneration;
+  queued.correspondence = {
+    id: randomUUID(),
+    capability: randomBytes(32).toString("hex"),
+    originSession: resources.a.managerSessionId,
+    originGeneration: resumedManager.claim.id,
+    recipientSession: originalSession,
+    recipientGeneration: originalGeneration,
+    acceptanceId: queuedId,
+    replies: [],
+  };
+  const canonical = (value) => {
+    if (value === null || typeof value !== "object")
+      return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+      .join(",")}}`;
+  };
+  const queuedDigest = digest(
+    canonical({ record: queued.record, attachments: queued.attachments }),
+  );
+  const outbound = {
+    id: queuedId,
+    machine: {
+      id: resources.a.savedPeer.id,
+      label: `${runId}-b`,
+      target: "ssh://herdsman@peer-b",
+      reachable: true,
+    },
+    dataRoot: expectedBDataRoot,
+    session: resources.a.managerSessionId,
+    claimId: resumedManager.claim.id,
+    recipientSession: originalSession,
+    digest: queuedDigest,
+    envelope: JSON.stringify(queued),
+  };
+  const outboxPath = `${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/remote-outbound/${queuedId}.json`;
+  const outboxFile = join(root, `${queuedId}.json`);
+  writeFileSync(outboxFile, `${JSON.stringify(outbound)}\n`, { mode: 0o600 });
+  exec("a", [
+    "mkdir",
+    "-p",
+    join(
+      resources.a.runtime.piAgentDir,
+      "pi-herdsman/runtime/peers-v2/remote-outbound",
+    ),
+  ]);
+  exec("a", [
+    "chown",
+    "-R",
+    "herdsman:herdsman",
+    join(
+      resources.a.runtime.piAgentDir,
+      "pi-herdsman/runtime/peers-v2/remote-outbound",
+    ),
+  ]);
+  command("docker", [
+    "cp",
+    outboxFile,
+    `${resources.a.container}:${outboxPath}`,
+  ]);
+  exec("a", ["chown", "herdsman:herdsman", outboxPath]);
+  exec("a", ["touch", `${fixturePath("a")}/drop-accept-ack`]);
+  exec("a", [
+    "sh",
+    "-c",
+    `printf '%s' ${queuedId} > ${fixturePath("a")}/tracked-outbound-id`,
+  ]);
+  resources.outboundGenerationRecovery = {
+    id: queuedId,
+    digest: queuedDigest,
+    recipientSession: originalSession,
+    oldGeneration: originalGeneration,
+    newGeneration: recoveredRecipient.claim.id,
+  };
+  save();
+  const firstRecoveryPrompt = herdr("a", [
+    "agent",
+    "prompt",
+    resources.a.paneId,
+    "PEER_E2E_A_OUTBOUND_RECOVERY_FIRST",
+    "--wait",
+    "--timeout",
+    "60000",
+  ]);
+  const acceptanceKey = digest(`${resources.a.managerSessionId}\0${queuedId}`);
+  const markerPath = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/peer-acceptances/${acceptanceKey}.json`;
+  let markerExists = false;
+  for (let attempt = 0; attempt < 240; attempt++) {
+    markerExists =
+      spawnSync("docker", [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv("b"),
+        resources.b.container,
+        "test",
+        "-f",
+        markerPath,
+      ]).status === 0;
+    if (markerExists) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  const outboxExists =
+    spawnSync("docker", [
+      "exec",
+      "--user",
+      "herdsman",
+      ...herdrEnv("a"),
+      resources.a.container,
+      "test",
+      "-f",
+      outboxPath,
+    ]).status === 0;
+  const attemptLog = spawnSync(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "herdsman",
+      ...herdrEnv("a"),
+      resources.a.container,
+      "cat",
+      `${fixturePath("a")}/accept-attempts`,
+    ],
+    { encoding: "utf8" },
+  );
+  const statusRequestLog = spawnSync(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "herdsman",
+      ...herdrEnv("a"),
+      resources.a.container,
+      "cat",
+      `${fixturePath("a")}/last-status-request.json`,
+    ],
+    { encoding: "utf8" },
+  );
+  const statusResponseLog = spawnSync(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "herdsman",
+      ...herdrEnv("a"),
+      resources.a.container,
+      "cat",
+      `${fixturePath("a")}/last-status-response.json`,
+    ],
+    { encoding: "utf8" },
+  );
+  stage("queued-outbound-first-attempt", {
+    queuedId,
+    markerExists,
+    outboxExists,
+    attempts: attemptLog.stdout,
+    statusRequest: statusRequestLog.stdout,
+    statusResponse: statusResponseLog.stdout,
+    prompt: firstRecoveryPrompt.slice(-500),
+  });
+  if (!markerExists)
+    throw new Error(
+      `queued outbound recovery did not create its acceptance marker (outbox=${outboxExists})`,
+    );
+  const acceptedMarker = JSON.parse(
+    exec("b", ["cat", markerPath], ["--user", "herdsman"]),
+  );
+  if (
+    acceptedMarker.status !== "accepted" ||
+    acceptedMarker.digest !== queuedDigest ||
+    acceptedMarker.recipientSession !== originalSession
+  )
+    throw new Error(
+      `queued transfer was not durably accepted after recipient generation recovery: ${JSON.stringify(acceptedMarker)}`,
+    );
+  herdr("a", [
+    "agent",
+    "prompt",
+    resources.a.paneId,
+    "PEER_E2E_A_OUTBOUND_RECOVERY_STATUS",
+    "--wait",
+    "--timeout",
+    "60000",
+  ]);
+  let stillQueued = true;
+  for (let attempt = 0; attempt < 240; attempt++) {
+    stillQueued =
+      spawnSync("docker", [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv("a"),
+        resources.a.container,
+        "test",
+        "-f",
+        outboxPath,
+      ]).status === 0;
+    if (!stillQueued) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  if (stillQueued)
+    throw new Error(
+      "accepted transfer was resubmitted/retained instead of resolved by its durable status",
+    );
+  const attempts = exec(
+    "a",
+    ["cat", `${fixturePath("a")}/accept-attempts`],
+    ["--user", "herdsman"],
+  )
+    .trim()
+    .split("\n");
+  if (attempts.filter((attempt) => attempt === queuedId).length !== 1)
+    throw new Error(
+      `lost-ACK recovery resubmitted accepted transfer: ${JSON.stringify(attempts)}`,
+    );
+  resources.outboundGenerationRecovery.lostAckResolved = true;
+  stage(
+    "queued-outbound-generation-recovered",
+    resources.outboundGenerationRecovery,
+  );
+  save();
   resources.a.recoveredOriginSession = resumedManager.piSessionId;
   resources.a.recoveredOriginGeneration = resumedManager.claim.id;
   resources.a.staleGenerationRejected = true;
@@ -1696,6 +2144,13 @@ try {
     )
     .slice(-20);
   const persistedReply = JSON.stringify(aReplyEntries);
+  if (
+    (persistedReply.match(/PEER_E2E_REPLY_PROGRESS/gu) ?? []).length !== 1 ||
+    (persistedReply.match(/PEER_E2E_REPLY_FINAL/gu) ?? []).length !== 1
+  )
+    throw new Error(
+      `A did not persist each progress/final reply exactly once: ${persistedReply}`,
+    );
   const fallbackRef = resources.evidence.bResultRef;
   const sourceArtifactPath = `${resources.a.runtime.piAgentDir}/pi-herdsman/results/${resources.evidence.resultRef.slice("result:".length)}`;
   const fallbackArtifactPath = `${resources.a.runtime.piAgentDir}/pi-herdsman/results/${fallbackRef.slice("result:".length)}`;
@@ -1754,22 +2209,53 @@ try {
       (part) => part.type === "toolCall" && part.name === "message_peer",
     ),
   );
-  const polledAfterSubmission = aSessionEntries.some(
+  const firstReplyReceipt = aSessionEntries.findIndex(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.content.includes("PEER_E2E_REPLY_PROGRESS"),
+  );
+  const modelPolledBeforeReceipt = aSessionEntries.some(
     (entry, index) =>
       index > lastMessagePeerCall &&
+      index < firstReplyReceipt &&
       entry.message?.content?.some(
         (part) => part.type === "toolCall" && part.name === "list_peers",
       ),
   );
-  if (lastMessagePeerCall < 0 || polledAfterSubmission)
+  const autonomousReceipt = {
+    messagePeerAt: aSessionEntries[lastMessagePeerCall]?.timestamp,
+    replyReceiptAt: aSessionEntries[firstReplyReceipt]?.timestamp,
+    replyIds: aSessionEntries
+      .filter(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.content.includes("PEER_E2E_REPLY_"),
+      )
+      .map((entry) => entry.details?.id),
+    modelListPeersBeforeReceipt: aSessionEntries.filter(
+      (entry, index) =>
+        index > lastMessagePeerCall &&
+        index < firstReplyReceipt &&
+        entry.message?.content?.some(
+          (part) => part.type === "toolCall" && part.name === "list_peers",
+        ),
+    ).length,
+  };
+  if (
+    lastMessagePeerCall < 0 ||
+    firstReplyReceipt <= lastMessagePeerCall ||
+    modelPolledBeforeReceipt
+  )
     throw new Error(
-      `idle reconciliation depended on a post-submission model list_peers call (last message_peer index=${lastMessagePeerCall})`,
+      `reply receipt depended on a model list_peers call (message_peer=${lastMessagePeerCall}, reply receipt=${firstReplyReceipt}, model list_peers before receipt=${modelPolledBeforeReceipt})`,
     );
+  stage("autonomous-reply-receipt-proven", autonomousReceipt);
   resources.exchange = {
     requestReplyComplete: true,
     replyCompletionMarker: "PEER_E2E_A_RECEIVED_REPLY",
     replyEvidenceForwarded: true,
     backgroundReconciliation: true,
+    autonomousReplyReceipt: autonomousReceipt,
     disconnectedAndReconnected: true,
     aForwardResult: aForward.slice(-300),
   };

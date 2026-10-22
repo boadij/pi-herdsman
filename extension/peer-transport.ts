@@ -4,11 +4,14 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { acquireProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 
 export type SavedPeerMachine = Readonly<{
@@ -52,14 +55,92 @@ export const PEER_TRANSPORT_FRAME_LIMIT_BYTES = 2 * 1024 * 1024;
 const OUTPUT_LIMIT = PEER_TRANSPORT_FRAME_LIMIT_BYTES;
 const OUTBOUND_RECORD_LIMIT_BYTES = 12 * 1024 * 1024;
 
+export function peerPayloadDigest(value: unknown): string {
+  const canonical = (item: unknown): string => {
+    if (item === null || typeof item !== "object") {
+      const scalar = JSON.stringify(item);
+      if (scalar === undefined) throw new Error("invalid peer digest payload");
+      return scalar;
+    }
+    if (Array.isArray(item)) return `[${item.map(canonical).join(",")}]`;
+    const object = item as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`)
+      .join(",")}}`;
+  };
+  return createHash("sha256").update(canonical(value), "utf8").digest("hex");
+}
+
 export type RemotePeerOutbound = Readonly<{
   id: string;
   machine: SavedPeerMachine;
   dataRoot: string;
   session: string;
   claimId: string;
+  recipientSession: string;
+  digest: string;
   envelope: string;
 }>;
+
+export function resolveRemotePeerOutboundRetry(
+  outbound: RemotePeerOutbound,
+  status: {
+    dataRoot?: unknown;
+    id?: unknown;
+    digest?: unknown;
+    status?: unknown;
+  },
+  snapshot: RemotePeerSnapshot,
+): { kind: "accepted" | "pending" } | { kind: "retry"; envelope: string } {
+  if (
+    status.dataRoot !== outbound.dataRoot ||
+    status.id !== outbound.id ||
+    status.digest !== outbound.digest ||
+    snapshot.dataRoot !== outbound.dataRoot
+  )
+    return { kind: "pending" };
+  if (status.status === "accepted") return { kind: "accepted" };
+  if (status.status !== "absent") return { kind: "pending" };
+  const recipient = snapshot.peers.find(
+    (peer) =>
+      peer.role === "manager" && peer.piSessionId === outbound.recipientSession,
+  );
+  if (!recipient) return { kind: "pending" };
+  const envelope = JSON.parse(outbound.envelope) as {
+    record?: { id?: unknown; fromSessionId?: unknown; toSessionId?: unknown };
+    recipientClaimId?: unknown;
+    correspondence?: {
+      originSession?: unknown;
+      recipientSession?: unknown;
+      recipientGeneration?: unknown;
+    };
+  };
+  if (
+    envelope.record?.id !== outbound.id ||
+    envelope.record.fromSessionId !== outbound.session ||
+    envelope.record.toSessionId !== outbound.recipientSession ||
+    envelope.correspondence?.originSession !== outbound.session ||
+    envelope.correspondence.recipientSession !== outbound.recipientSession
+  )
+    return { kind: "pending" };
+  const full = JSON.parse(outbound.envelope) as {
+    record: unknown;
+    attachments?: unknown;
+  };
+  if (
+    peerPayloadDigest({
+      record: full.record,
+      attachments: full.attachments,
+    }) !== outbound.digest
+  )
+    return { kind: "pending" };
+  if (envelope.recipientClaimId !== recipient.claim.id) {
+    envelope.recipientClaimId = recipient.claim.id;
+    envelope.correspondence.recipientGeneration = recipient.claim.id;
+  }
+  return { kind: "retry", envelope: JSON.stringify(envelope) };
+}
 
 function outboundDirectory(): string {
   const path = join(
@@ -71,6 +152,20 @@ function outboundDirectory(): string {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
   return path;
+}
+
+export function tryClaimRemotePeerOutbound(
+  id: string,
+): (() => void) | undefined {
+  try {
+    return acquireProcessLock(
+      join(outboundDirectory(), `${id}.delivery.lock`),
+      { name: "peer outbound delivery" },
+    ).release;
+  } catch (error) {
+    if (error instanceof ProcessLockOccupiedError) return undefined;
+    throw error;
+  }
 }
 
 export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
@@ -91,6 +186,50 @@ export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
     mode: 0o600,
     flush: true,
   });
+}
+
+export function retargetRemotePeerOutbound(
+  id: string,
+  digest: string,
+  recipientSession: string,
+  envelope: string,
+): RemotePeerOutbound {
+  const path = join(outboundDirectory(), `${id}.json`);
+  const lock = acquireProcessLock(`${path}.lock`, {
+    name: "peer outbound update",
+  });
+  try {
+    const current = listRemotePeerOutbounds().find((item) => item.id === id);
+    if (
+      !current ||
+      current.digest !== digest ||
+      current.recipientSession !== recipientSession
+    )
+      throw new Error("remote peer outbound identity changed");
+    const updated = { ...current, envelope };
+    if (
+      Buffer.byteLength(JSON.stringify(updated), "utf8") >
+        OUTBOUND_RECORD_LIMIT_BYTES ||
+      Buffer.byteLength(envelope, "utf8") > PEER_TRANSPORT_FRAME_LIMIT_BYTES
+    )
+      throw new Error("invalid remote peer outbound record");
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(updated)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+      flush: true,
+    });
+    try {
+      renameSync(temporary, path);
+    } catch (error) {
+      unlinkSync(temporary);
+      throw error;
+    }
+    return updated;
+  } finally {
+    lock.release();
+  }
 }
 
 export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
@@ -155,6 +294,8 @@ function run(
     let stdout = "";
     let stderr = "";
     let size = 0;
+    let settled = false;
+    let stdinError: Error | undefined;
     const timeout = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
     let abortKill: ReturnType<typeof setTimeout> | undefined;
     const cancel = () => {
@@ -162,6 +303,23 @@ function run(
       abortKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
     };
     signal?.addEventListener("abort", cancel, { once: true });
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (abortKill) clearTimeout(abortKill);
+      signal?.removeEventListener("abort", cancel);
+      child.stdin.removeListener("error", onStdinError);
+    };
+    const finish = (error?: Error, value?: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value ?? "");
+    };
+    const onStdinError = (error: Error) => {
+      stdinError ??= error;
+    };
+    child.stdin.on("error", onStdinError);
     const collect = (target: "stdout" | "stderr", chunk: Buffer) => {
       size += chunk.length;
       if (size > OUTPUT_LIMIT) {
@@ -174,18 +332,18 @@ function run(
     child.stdout.on("data", (chunk: Buffer) => collect("stdout", chunk));
     child.stderr.on("data", (chunk: Buffer) => collect("stderr", chunk));
     child.once("error", (error) => {
-      clearTimeout(timeout);
-      if (abortKill) clearTimeout(abortKill);
-      signal?.removeEventListener("abort", cancel);
-      reject(error);
+      finish(error);
     });
     child.once("close", (code) => {
-      clearTimeout(timeout);
-      if (abortKill) clearTimeout(abortKill);
-      signal?.removeEventListener("abort", cancel);
-      if (signal?.aborted) reject(new Error("Peer transport was cancelled"));
-      else if (code === 0) resolve(stdout);
-      else reject(new Error(stderr.trim() || `${command} exited ${code}`));
+      if (stdinError) finish(stdinError);
+      else if (signal?.aborted)
+        finish(new Error("Peer transport was cancelled"));
+      else if (code === 0) finish(undefined, stdout);
+      else {
+        const error = new Error(stderr.trim() || `${command} exited ${code}`);
+        Object.assign(error, { exitCode: code });
+        finish(error);
+      }
     });
     child.stdin.end(input);
   });
@@ -213,7 +371,7 @@ export async function listSavedPeerMachines(
       )
       .map((item) => [item.id, item.status]),
   );
-  return list.flatMap((item) => {
+  const machines = list.flatMap((item) => {
     if (
       !item ||
       typeof item !== "object" ||
@@ -232,6 +390,7 @@ export async function listSavedPeerMachines(
       },
     ];
   });
+  return machines;
 }
 
 export function parsePeerSshTarget(target: string): {
@@ -267,6 +426,7 @@ export async function runPeerEndpoint(
   action:
     | "probe"
     | "accept"
+    | "status"
     | "poll"
     | "ack"
     | "finalize"
@@ -276,23 +436,19 @@ export async function runPeerEndpoint(
   signal?: AbortSignal,
 ): Promise<string> {
   const target = parsePeerSshTarget(machine.target);
-  return run(
-    "ssh",
-    [
-      "-T",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "ConnectTimeout=10",
-      ...(target.port ? ["-p", target.port] : []),
-      target.host,
-      `pi-herdsman-peer ${action}`,
-    ],
-    input,
-    signal,
-  );
+  const args = [
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "-o",
+    "ConnectTimeout=10",
+    ...(target.port ? ["-p", target.port] : []),
+    target.host,
+    `pi-herdsman-peer ${action}`,
+  ];
+  return run("ssh", args, input, signal);
 }
 
 export async function tryPollPeerReplies(

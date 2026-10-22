@@ -143,6 +143,9 @@ import {
   persistRemotePeerOutbound,
   probePeerEndpoint,
   removeRemotePeerOutbound,
+  retargetRemotePeerOutbound,
+  resolveRemotePeerOutboundRetry,
+  tryClaimRemotePeerOutbound,
   runPeerEndpoint,
   tryPollPeerReplies,
   type SavedPeerMachine,
@@ -3604,8 +3607,8 @@ export function registerLeadRuntime(
           async (count) =>
             count + (await coordinationRuntime.drainProjectMessages(ctx)),
         ),
-    reconcileRemotePeers: (ctx: ExtensionContext, signal?: AbortSignal) =>
-      activeLeadRole(options.leadRuntime) === "manager"
+    reconcileRemotePeers: (ctx: ExtensionContext, signal?: AbortSignal) => {
+      return activeLeadRole(options.leadRuntime) === "manager"
         ? coordinationRuntime
             .peerMessage(
               "remote-reconciliation",
@@ -3618,7 +3621,8 @@ export function registerLeadRuntime(
               if (result.details?.unavailable_machines?.length)
                 throw new Error("remote Manager reconciliation incomplete");
             })
-        : Promise.resolve(),
+        : Promise.resolve();
+    },
   };
   inboxRuntime = createLeadInboxRuntime(inboxServices);
   let herdRunRuntime: ReturnType<typeof createLeadHerdRunRuntime> | undefined;
@@ -10639,12 +10643,64 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                   outbound.session !== self
                 )
                   continue;
-                await deliverRemoteOutbound(
-                  machine,
-                  outbound.id,
-                  outbound.envelope,
-                  signal,
-                );
+                if (snapshot.dataRoot !== outbound.dataRoot) {
+                  continue;
+                }
+                const releaseOutbound = tryClaimRemotePeerOutbound(outbound.id);
+                if (!releaseOutbound) {
+                  continue;
+                }
+                let envelope = outbound.envelope;
+                try {
+                  const status = JSON.parse(
+                    await runPeerEndpoint(
+                      machine,
+                      "status",
+                      JSON.stringify({
+                        id: outbound.id,
+                        originSession: outbound.session,
+                        recipientSession: outbound.recipientSession,
+                        digest: outbound.digest,
+                        expectedDataRoot: outbound.dataRoot,
+                      }),
+                      signal,
+                    ),
+                  ) as {
+                    dataRoot?: unknown;
+                    id?: unknown;
+                    digest?: unknown;
+                    status?: unknown;
+                  };
+                  const retry = resolveRemotePeerOutboundRetry(
+                    outbound,
+                    status,
+                    snapshot,
+                  );
+                  if (retry.kind === "accepted") {
+                    removeRemotePeerOutbound(outbound.id);
+                    continue;
+                  }
+                  if (retry.kind !== "retry") continue;
+                  if (retry.envelope !== envelope) {
+                    envelope = retry.envelope;
+                    retargetRemotePeerOutbound(
+                      outbound.id,
+                      outbound.digest,
+                      outbound.recipientSession,
+                      envelope,
+                    );
+                  }
+                  await deliverRemoteOutbound(
+                    machine,
+                    outbound.id,
+                    envelope,
+                    signal,
+                  );
+                } catch (error) {
+                  // Keep ambiguous acceptance durable; retry status on a later reconciliation.
+                } finally {
+                  releaseOutbound();
+                }
               }
               for (const correspondence of listPeerCorrespondences()) {
                 if (correspondence.originSession !== self) continue;
@@ -10759,7 +10815,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                         !reply.resultBindings.every(isResultBinding))) ||
                     peerPayloadDigest({
                       text: reply.text,
-                      ...(reply.attachments.length
+                      ...(reply.attachments?.length
                         ? { attachments: reply.attachments }
                         : {}),
                       ...(Array.isArray(reply.resultBindings)
@@ -11119,20 +11175,31 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         attachments,
         correspondence,
       });
+      const transferDigest = peerPayloadDigest({ record, attachments });
       persistRemotePeerOutbound({
         id: recordId,
         machine: remoteRoute.machine,
         dataRoot: remoteRoute.dataRoot,
         session: sender.piSessionId,
         claimId: sender.claim.id,
+        recipientSession: params.session,
+        digest: transferDigest,
         envelope,
       });
-      const accepted = await deliverRemoteOutbound(
-        remoteRoute.machine,
-        recordId,
-        envelope,
-        signal,
-      );
+      const releaseOutbound = tryClaimRemotePeerOutbound(recordId);
+      let accepted = false;
+      if (releaseOutbound) {
+        try {
+          accepted = await deliverRemoteOutbound(
+            remoteRoute.machine,
+            recordId,
+            envelope,
+            signal,
+          );
+        } finally {
+          releaseOutbound();
+        }
+      }
       return {
         content: [
           {
@@ -12445,15 +12512,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   ),
                 )
                 .then(() => {
-                  if (reconciliationGeneration === chiefInboxGeneration)
+                  if (reconciliationGeneration === chiefInboxGeneration) {
                     remoteReconciliationFailures = 0;
+                  }
                 })
-                .catch(() => {
-                  if (reconciliationGeneration === chiefInboxGeneration)
+                .catch((error: unknown) => {
+                  if (reconciliationGeneration === chiefInboxGeneration) {
                     remoteReconciliationFailures = Math.min(
                       remoteReconciliationFailures + 1,
                       4,
                     );
+                  }
                 })
                 .finally(() => {
                   remoteReconciliationInFlight = false;

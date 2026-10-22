@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "./peer-transport.ts";
+import { herdsmanDataRoot } from "./storage.ts";
 import {
   acknowledgePeerReply,
   assertPeerDataRoot,
@@ -193,6 +196,49 @@ test("same exact session may explicitly recover a changed generation, but mismat
     c.originGeneration,
     randomUUID(),
   );
+  assert.deepEqual(
+    updatePeerOriginGeneration(
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      recovered.originGeneration,
+    ),
+    recovered,
+  );
+  assert.deepEqual(
+    pollPeerReplies(
+      c.id,
+      c.capability,
+      c.originSession,
+      recovered.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    ),
+    [],
+  );
+  assert.throws(
+    () =>
+      updatePeerOriginGeneration(
+        c.id,
+        c.capability,
+        randomUUID(),
+        c.originGeneration,
+        recovered.originGeneration,
+      ),
+    /rejected/,
+  );
+  assert.throws(
+    () =>
+      updatePeerOriginGeneration(
+        c.id,
+        c.capability,
+        c.originSession,
+        randomUUID(),
+        randomUUID(),
+      ),
+    /rejected/,
+  );
   assert.throws(
     () =>
       pollPeerReplies(
@@ -206,6 +252,36 @@ test("same exact session may explicitly recover a changed generation, but mismat
     /authorization/,
   );
   assert.equal(recovered.originSession, c.originSession);
+  assert.throws(
+    () =>
+      updatePeerOriginGeneration(
+        c.id,
+        "0".repeat(64),
+        c.originSession,
+        recovered.originGeneration,
+        randomUUID(),
+      ),
+    /rejected/,
+  );
+  finalizePeerCorrespondence(
+    c.id,
+    c.capability,
+    c.originSession,
+    recovered.originGeneration,
+    c.recipientSession,
+    c.recipientGeneration,
+  );
+  assert.throws(
+    () =>
+      updatePeerOriginGeneration(
+        c.id,
+        c.capability,
+        c.originSession,
+        recovered.originGeneration,
+        randomUUID(),
+      ),
+    /rejected/,
+  );
   removePeerCorrespondence(c.id);
 });
 
@@ -223,4 +299,122 @@ test("peer payload digests canonicalize object key order", () => {
     peerPayloadDigest({ nested: { y: true, x: "v" }, a: 1 }),
   );
   assert.notEqual(peerPayloadDigest({ a: 1 }), peerPayloadDigest({ a: 2 }));
+});
+
+test("reply polling bounds full serialized envelopes and drains replies in order", () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  assert.throws(
+    () =>
+      queuePeerReply(
+        c,
+        randomUUID(),
+        "x".repeat(PEER_TRANSPORT_FRAME_LIMIT_BYTES - 100),
+      ),
+    /response limit/,
+  );
+  const ids = Array.from({ length: 20 }, () => randomUUID());
+  for (const id of ids) queuePeerReply(c, id, '"'.repeat(120 * 1024));
+  let drained: string[] = [];
+  while (drained.length < ids.length) {
+    const batch = pollPeerReplies(
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    );
+    assert.ok(
+      Buffer.byteLength(
+        JSON.stringify({
+          dataRoot: herdsmanDataRoot(),
+          replies: batch,
+          hasReplies: true,
+        }),
+      ) <=
+        2 * 1024 * 1024,
+    );
+    assert.ok(batch.length > 0);
+    for (const reply of batch) {
+      drained.push(reply.id);
+      acknowledgePeerReply(
+        c.id,
+        c.capability,
+        reply.id,
+        c.originSession,
+        c.originGeneration,
+        c.recipientSession,
+        c.recipientGeneration,
+      );
+    }
+  }
+  assert.deepEqual(drained, ids);
+  assert.deepEqual(
+    pollPeerReplies(
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    ),
+    [],
+  );
+  removePeerCorrespondence(c.id);
+});
+
+test("independent processes preserve concurrent reply acknowledgment and enqueue", async () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const acknowledgedId = randomUUID();
+  const queuedId = randomUUID();
+  queuePeerReply(c, acknowledgedId, "existing");
+  const args = JSON.stringify([
+    c.id,
+    c.capability,
+    c.originSession,
+    c.originGeneration,
+    c.recipientSession,
+    c.recipientGeneration,
+  ]);
+  const scripts = [
+    `const [{acknowledgePeerReply}, ...a] = [await import('./extension/peer-correspondence.ts')]; const [id,cap,os,og,rs,rg] = ${args}; acknowledgePeerReply(id,cap,${JSON.stringify(acknowledgedId)},os,og,rs,rg);`,
+    `const {queuePeerReply} = await import('./extension/peer-correspondence.ts'); const [id] = ${args}; queuePeerReply({id},${JSON.stringify(queuedId)},'concurrent');`,
+  ];
+  const run = (source: string) =>
+    new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        ["--experimental-strip-types", "--input-type=module", "-e", source],
+        { stdio: "ignore", env: process.env },
+      );
+      child.once("error", reject);
+      child.once("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`mutation worker exited ${code}`)),
+      );
+    });
+  await Promise.all(scripts.map(run));
+  const current = listPeerCorrespondences().find((item) => item.id === c.id)!;
+  assert.equal(
+    current.replies.find((reply) => reply.id === acknowledgedId)?.acknowledged,
+    true,
+  );
+  assert.equal(
+    current.replies.find((reply) => reply.id === queuedId)?.text,
+    "concurrent",
+  );
+  removePeerCorrespondence(c.id);
 });

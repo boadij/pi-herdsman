@@ -14,9 +14,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { acquireProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 import { isResultBinding, type ResultBinding } from "./storage.ts";
-import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "./peer-transport.ts";
+import {
+  PEER_TRANSPORT_FRAME_LIMIT_BYTES,
+  peerPayloadDigest,
+} from "./peer-transport.ts";
+export { peerPayloadDigest } from "./peer-transport.ts";
 
 export type PeerPortableAttachment = Readonly<{
   name: string;
@@ -72,22 +77,6 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 export function assertPeerDataRoot(actual: string, expected: string): void {
   if (!actual || !expected || actual !== expected)
     throw new Error("peer endpoint data root does not match the active route");
-}
-export function peerPayloadDigest(value: unknown): string {
-  const canonical = (item: unknown): string => {
-    if (item === null || typeof item !== "object") {
-      const scalar = JSON.stringify(item);
-      if (scalar === undefined) throw new Error("invalid peer digest payload");
-      return scalar;
-    }
-    if (Array.isArray(item)) return `[${item.map(canonical).join(",")}]`;
-    const object = item as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`)
-      .join(",")}}`;
-  };
-  return createHash("sha256").update(canonical(value), "utf8").digest("hex");
 }
 function directory(): string {
   const path = join(herdsmanDataRoot(), "runtime", "peer-correspondences");
@@ -146,6 +135,33 @@ function save(c: PeerCorrespondence): void {
   });
   renameSync(tmp, path);
 }
+function mutate<T>(id: string, action: (c: PeerCorrespondence) => T): T {
+  let lock: ReturnType<typeof acquireProcessLock> | undefined;
+  const deadline = Date.now() + 15_000;
+  while (!lock) {
+    try {
+      lock = acquireProcessLock(join(directory(), `${id}.lock`), {
+        name: "peer correspondence mutation",
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ProcessLockOccupiedError) ||
+        Date.now() >= deadline
+      )
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    const c = listPeerCorrespondences().find((item) => item.id === id);
+    if (!c) throw new Error("peer correspondence not found");
+    const result = action(c);
+    save(c);
+    return result;
+  } finally {
+    lock.release();
+  }
+}
 export function createPeerCorrespondence(
   input: Omit<PeerCorrespondence, "id" | "capability" | "replies">,
 ): PeerCorrespondence {
@@ -162,25 +178,24 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
   if (!valid(c)) throw new Error("invalid peer correspondence");
   const existing = listPeerCorrespondences().find((item) => item.id === c.id);
   if (existing) {
-    if (existing.finalized)
-      throw new Error("peer correspondence is already finalized");
-    if (
-      [
-        "capability",
-        "originSession",
-        "originGeneration",
-        "recipientSession",
-      ].some(
-        (key) =>
-          existing[key as keyof PeerCorrespondence] !==
-          c[key as keyof PeerCorrespondence],
+    mutate(c.id, (current) => {
+      if (current.finalized)
+        throw new Error("peer correspondence is already finalized");
+      if (
+        [
+          "capability",
+          "originSession",
+          "originGeneration",
+          "recipientSession",
+        ].some(
+          (key) =>
+            current[key as keyof PeerCorrespondence] !==
+            c[key as keyof PeerCorrespondence],
+        )
       )
-    )
-      throw new Error("conflicting peer correspondence");
-    if (existing.recipientGeneration !== c.recipientGeneration) {
-      existing.recipientGeneration = c.recipientGeneration;
-      save(existing);
-    }
+        throw new Error("conflicting peer correspondence");
+      current.recipientGeneration = c.recipientGeneration;
+    });
     return;
   }
   save(c);
@@ -192,19 +207,20 @@ export function updatePeerOriginGeneration(
   oldGeneration: string,
   newGeneration: string,
 ): PeerCorrespondence {
-  const c = listPeerCorrespondences().find((item) => item.id === id);
-  if (
-    !c ||
-    c.finalized ||
-    !matchesCapability(c.capability, capability) ||
-    c.originSession !== originSession ||
-    c.originGeneration !== oldGeneration ||
-    !newGeneration
-  )
-    throw new Error("peer correspondence recovery rejected");
-  c.originGeneration = newGeneration;
-  save(c);
-  return c;
+  if (!newGeneration) throw new Error("peer correspondence recovery rejected");
+  return mutate(id, (c) => {
+    if (
+      c.finalized ||
+      !matchesCapability(c.capability, capability) ||
+      c.originSession !== originSession
+    )
+      throw new Error("peer correspondence recovery rejected");
+    if (c.originGeneration === newGeneration) return c;
+    if (c.originGeneration !== oldGeneration)
+      throw new Error("peer correspondence recovery rejected");
+    c.originGeneration = newGeneration;
+    return c;
+  });
 }
 export function updatePeerRecipientGeneration(
   id: string,
@@ -213,21 +229,21 @@ export function updatePeerRecipientGeneration(
   oldGeneration: string,
   newGeneration: string,
 ): PeerCorrespondence {
-  const c = listPeerCorrespondences().find((item) => item.id === id);
-  if (
-    !c ||
-    c.finalized ||
-    !matchesCapability(c.capability, capability) ||
-    c.recipientSession !== recipientSession ||
-    !newGeneration
-  )
+  if (!newGeneration)
     throw new Error("peer correspondence recipient recovery rejected");
-  if (c.recipientGeneration === newGeneration) return c;
-  if (c.recipientGeneration !== oldGeneration)
-    throw new Error("peer correspondence recipient recovery rejected");
-  c.recipientGeneration = newGeneration;
-  save(c);
-  return c;
+  return mutate(id, (c) => {
+    if (
+      c.finalized ||
+      !matchesCapability(c.capability, capability) ||
+      c.recipientSession !== recipientSession
+    )
+      throw new Error("peer correspondence recipient recovery rejected");
+    if (c.recipientGeneration === newGeneration) return c;
+    if (c.recipientGeneration !== oldGeneration)
+      throw new Error("peer correspondence recipient recovery rejected");
+    c.recipientGeneration = newGeneration;
+    return c;
+  });
 }
 export function removePeerCorrespondence(id: string): void {
   if (!ID.test(id)) return;
@@ -271,7 +287,6 @@ export function queuePeerReply(
   text: string,
   evidence: PeerEvidence = { attachments: [] },
 ): "queued" | "duplicate" {
-  if (c.finalized) throw new Error("peer correspondence is finalized");
   const payload = {
     text,
     ...(evidence.attachments.length
@@ -289,25 +304,39 @@ export function queuePeerReply(
   )
     throw new Error("invalid peer reply");
   const digest = peerPayloadDigest(payload);
-  const prior = c.replies.find((r) => r.id === replyId);
-  if (prior) {
-    if (prior.digest !== digest)
-      throw new Error("conflicting peer reply identity");
-    return "duplicate";
-  }
-  c.replies.push({
-    id: replyId,
-    digest,
-    text,
-    attachments: [...evidence.attachments],
-    ...(evidence.resultBindings?.length
-      ? { resultBindings: [...evidence.resultBindings] }
-      : {}),
-    createdAt: Date.now(),
-    acknowledged: false,
+  return mutate(c.id, (current) => {
+    if (current.finalized) throw new Error("peer correspondence is finalized");
+    const prior = current.replies.find((r) => r.id === replyId);
+    if (prior) {
+      if (prior.digest !== digest)
+        throw new Error("conflicting peer reply identity");
+      return "duplicate";
+    }
+    const reply = {
+      id: replyId,
+      digest,
+      text,
+      ...(evidence.attachments.length
+        ? { attachments: [...evidence.attachments] }
+        : {}),
+      ...(evidence.resultBindings?.length
+        ? { resultBindings: [...evidence.resultBindings] }
+        : {}),
+      createdAt: Date.now(),
+      acknowledged: false,
+    };
+    const envelope = (replies: typeof current.replies) =>
+      JSON.stringify({
+        dataRoot: herdsmanDataRoot(),
+        replies,
+        hasReplies: true,
+      });
+    const single = Buffer.byteLength(envelope([reply]), "utf8") + 1;
+    if (single > PEER_TRANSPORT_FRAME_LIMIT_BYTES)
+      throw new Error("peer reply exceeds response limit");
+    current.replies.push(reply);
+    return "queued";
   });
-  save(c);
-  return "queued";
 }
 export function pollPeerReplies(
   id: string,
@@ -328,7 +357,25 @@ export function pollPeerReplies(
     c.recipientGeneration !== recipientGeneration
   )
     throw new Error("peer correspondence authorization failed");
-  return c.replies.filter((reply) => !reply.acknowledged);
+  const batch: PeerCorrespondence["replies"] = [];
+  for (const reply of c.replies.filter((item) => !item.acknowledged)) {
+    const candidate = [...batch, reply];
+    if (
+      Buffer.byteLength(
+        JSON.stringify({
+          dataRoot: herdsmanDataRoot(),
+          replies: candidate,
+          hasReplies: c.replies.length > 0,
+        }),
+        "utf8",
+      ) +
+        1 >
+      PEER_TRANSPORT_FRAME_LIMIT_BYTES
+    )
+      break;
+    batch.push(reply);
+  }
+  return batch;
 }
 export function acknowledgePeerReply(
   id: string,
@@ -339,7 +386,7 @@ export function acknowledgePeerReply(
   recipientSession: string,
   recipientGeneration: string,
 ): void {
-  const replies = pollPeerReplies(
+  pollPeerReplies(
     id,
     capability,
     originSession,
@@ -347,16 +394,20 @@ export function acknowledgePeerReply(
     recipientSession,
     recipientGeneration,
   );
-  const c = listPeerCorrespondences().find((item) => item.id === id)!;
-  const reply = c.replies.find((item) => item.id === replyId);
-  if (!reply) {
-    if (c.replies.some((item) => item.id === replyId && item.acknowledged))
-      return;
-    throw new Error("unknown peer reply");
-  }
-  if (!replies.some((item) => item.id === replyId)) return;
-  reply.acknowledged = true;
-  save(c);
+  mutate(id, (c) => {
+    if (
+      c.finalized ||
+      !matchesCapability(c.capability, capability) ||
+      c.originSession !== originSession ||
+      c.originGeneration !== originGeneration ||
+      c.recipientSession !== recipientSession ||
+      c.recipientGeneration !== recipientGeneration
+    )
+      throw new Error("peer correspondence authorization failed");
+    const reply = c.replies.find((item) => item.id === replyId);
+    if (!reply) throw new Error("unknown peer reply");
+    reply.acknowledged = true;
+  });
 }
 export function finalizePeerCorrespondence(
   id: string,
@@ -366,23 +417,24 @@ export function finalizePeerCorrespondence(
   recipientSession: string,
   recipientGeneration: string,
 ): void {
-  const c = listPeerCorrespondences().find((item) => item.id === id);
-  if (
-    !c ||
-    !matchesCapability(c.capability, capability) ||
-    c.originSession !== originSession ||
-    c.originGeneration !== originGeneration ||
-    c.recipientSession !== recipientSession ||
-    c.recipientGeneration !== recipientGeneration
-  )
-    throw new Error("peer correspondence authorization failed");
-  if (c.replies.some((reply) => !reply.acknowledged))
-    throw new Error("cannot finalize peer correspondence with pending replies");
-  if (c.finalized) return;
-  c.capability = createHash("sha256")
-    .update(Buffer.from(capability, "hex"))
-    .digest("hex");
-  c.replies = [];
-  c.finalized = true;
-  save(c);
+  mutate(id, (c) => {
+    if (
+      !matchesCapability(c.capability, capability) ||
+      c.originSession !== originSession ||
+      c.originGeneration !== originGeneration ||
+      c.recipientSession !== recipientSession ||
+      c.recipientGeneration !== recipientGeneration
+    )
+      throw new Error("peer correspondence authorization failed");
+    if (c.replies.some((reply) => !reply.acknowledged))
+      throw new Error(
+        "cannot finalize peer correspondence with pending replies",
+      );
+    if (c.finalized) return;
+    c.capability = createHash("sha256")
+      .update(Buffer.from(capability, "hex"))
+      .digest("hex");
+    c.replies = [];
+    c.finalized = true;
+  });
 }
