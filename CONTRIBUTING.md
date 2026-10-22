@@ -50,11 +50,17 @@ AI-assisted contributions are welcome, but contributors remain responsible for u
 ## Public disclosure safety
 
 Before publishing to GitHub or other public destinations, review the complete
-outgoing material, including changes and commit metadata, issue and pull
+outgoing material, including changes and commit messages, issue and pull
 request text, comments, validation output, logs, screenshots, and attachments.
 Remove secrets, personal information, confidential content, and private
 infrastructure details. Use synthetic or non-reconstructable placeholders where
 technical evidence is needed. Automated checks cannot replace this review.
+
+Preserve legitimate public Git author and committer identities,
+`Co-authored-by` trailers, and contributor or release credits. Do not
+anonymize or rewrite attribution merely because it identifies a person.
+If a commit identity exposes a private address, use the contributor's approved
+public or GitHub `noreply` address for future commits instead.
 
 If sensitive information is exposed, avoid reproducing it publicly, revoke or
 rotate compromised credentials promptly, and coordinate remediation privately.

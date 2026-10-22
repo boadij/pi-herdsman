@@ -1,6 +1,6 @@
 <!-- See CONTRIBUTING.md for PR title and contribution guidance. -->
 
-<!-- Before publishing, review the diff and commit metadata, this description,
+<!-- Before publishing, review the diff and commit messages, this description,
 validation output, and linked logs, screenshots, or artifacts for secrets,
 personal information, and other private or sensitive details. Sanitize the
 outgoing content first; see CONTRIBUTING.md. -->

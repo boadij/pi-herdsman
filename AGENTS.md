@@ -4,9 +4,17 @@
 
 Before publishing repository or task information to GitHub or another public
 destination, inspect the **exact material being published**. This includes
-commits (diffs, history, messages, and author metadata), issues, pull requests,
+commits (diffs, history, and messages), issues, pull requests,
 reviews, comments, discussions, releases, CI logs and artifacts, and package or
 container publications.
+
+Preserve intentionally public authorship and attribution, including Git author
+and committer identities, `Co-authored-by` trailers, contributor credits, and
+release acknowledgments. Identification alone is not grounds to remove them.
+Do not strip, anonymize, fabricate, or rewrite attribution as sanitization.
+If a commit identity would expose a genuinely private address, obtain the
+contributor's approved public or GitHub `noreply` identity before publishing
+new commits. Never silently change an identity or rewrite existing history.
 
 Publish only what is necessary. Remove credentials, tokens, private keys,
 personal or identifying information, confidential code or data, private
