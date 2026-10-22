@@ -10649,12 +10649,58 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             unavailableMachines.push(machine.label);
             continue;
           }
+          let identityEstablished = false;
           try {
             const snapshot = await probePeerEndpoint(machine, signal);
             if (signal?.aborted) break;
+            identityEstablished = true;
             for (const [session, route] of discoveredRemotePeerRoutes)
               if (route.machine.id === machine.id)
                 discoveredRemotePeerRoutes.delete(session);
+            for (const remote of snapshot.peers) {
+              if (
+                remote.role !== "manager" ||
+                remote.piSessionId === self ||
+                localPeerSessions.has(remote.piSessionId) ||
+                !remote.claim?.id ||
+                discoveredAmbiguousSessions.has(remote.piSessionId)
+              )
+                continue;
+              if (remote.build) {
+                try {
+                  requireCompatibleBuild(
+                    HERDSMAN_BUILD,
+                    remote.build as RuntimeBuild,
+                    "peer_message",
+                    `remote Manager ${remote.piSessionId}`,
+                  );
+                } catch {
+                  continue;
+                }
+              }
+              const route = discoveredRemotePeerRoutes.get(remote.piSessionId);
+              if (route) {
+                discoveredAmbiguousSessions.add(remote.piSessionId);
+                discoveredRemotePeerRoutes.delete(remote.piSessionId);
+                continue;
+              }
+              discoveredRemotePeerRoutes.set(remote.piSessionId, {
+                machine,
+                dataRoot: snapshot.dataRoot,
+                claimId: remote.claim.id,
+                build: remote.build,
+              });
+              peers.push({
+                session: remote.piSessionId,
+                name:
+                  remote.name ?? `manager-${remote.piSessionId.slice(0, 8)}`,
+                machine: machine.label,
+                cwd: remote.cwd ?? "",
+                repo: remote.repo ?? "",
+                branch: remote.branch ?? "",
+                workspace_label: remote.workspaceLabel ?? "",
+              });
+            }
             if (activeRole() === "manager") {
               for (const outbound of listRemotePeerOutbounds()) {
                 if (
@@ -10947,63 +10993,23 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 // Manager-pair correspondence until explicit retirement.
               }
             }
-            for (const remote of snapshot.peers) {
-              if (
-                remote.role !== "manager" ||
-                remote.piSessionId === self ||
-                localPeerSessions.has(remote.piSessionId) ||
-                !remote.claim?.id ||
-                discoveredAmbiguousSessions.has(remote.piSessionId)
-              )
-                continue;
-              if (remote.build) {
-                try {
-                  requireCompatibleBuild(
-                    HERDSMAN_BUILD,
-                    remote.build as RuntimeBuild,
-                    "peer_message",
-                    `remote Manager ${remote.piSessionId}`,
-                  );
-                } catch {
-                  continue;
+          } catch (error) {
+            if (identityEstablished) {
+              appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+            } else {
+              unavailableMachines.push(machine.label);
+              for (const [session, route] of discoveredRemotePeerRoutes)
+                if (route.machine.id === machine.id)
+                  discoveredRemotePeerRoutes.delete(session);
+              for (const [session, route] of remotePeerRoutes) {
+                if (route.machine.id !== machine.id) continue;
+                const current = discoveredRemotePeerRoutes.get(session);
+                if (current) {
+                  discoveredAmbiguousSessions.add(session);
+                  discoveredRemotePeerRoutes.delete(session);
+                } else {
+                  discoveredRemotePeerRoutes.set(session, route);
                 }
-              }
-              const route = discoveredRemotePeerRoutes.get(remote.piSessionId);
-              if (route) {
-                discoveredAmbiguousSessions.add(remote.piSessionId);
-                discoveredRemotePeerRoutes.delete(remote.piSessionId);
-                continue;
-              }
-              discoveredRemotePeerRoutes.set(remote.piSessionId, {
-                machine,
-                dataRoot: snapshot.dataRoot,
-                claimId: remote.claim.id,
-                build: remote.build,
-              });
-              peers.push({
-                session: remote.piSessionId,
-                name:
-                  remote.name ?? `manager-${remote.piSessionId.slice(0, 8)}`,
-                machine: machine.label,
-                cwd: remote.cwd ?? "",
-                repo: remote.repo ?? "",
-                branch: remote.branch ?? "",
-                workspace_label: remote.workspaceLabel ?? "",
-              });
-            }
-          } catch {
-            unavailableMachines.push(machine.label);
-            for (const [session, route] of discoveredRemotePeerRoutes)
-              if (route.machine.id === machine.id)
-                discoveredRemotePeerRoutes.delete(session);
-            for (const [session, route] of remotePeerRoutes) {
-              if (route.machine.id !== machine.id) continue;
-              const current = discoveredRemotePeerRoutes.get(session);
-              if (current) {
-                discoveredAmbiguousSessions.add(session);
-                discoveredRemotePeerRoutes.delete(session);
-              } else {
-                discoveredRemotePeerRoutes.set(session, route);
               }
             }
           }

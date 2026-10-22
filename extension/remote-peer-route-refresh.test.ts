@@ -5,10 +5,14 @@ import { join } from "node:path";
 import { mock, test } from "node:test";
 
 const realTransport = await import("./peer-transport.ts");
+const realCorrespondence = await import("./peer-correspondence.ts");
 type Machine = realTransport.SavedPeerMachine;
 type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
+const correspondences: any[] = [];
+const diagnostics: unknown[] = [];
 let nextSnapshots: Snapshot[] = [];
+let failRecipientRecovery = false;
 let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   const snapshot = nextSnapshots.shift();
   if (!snapshot) throw new Error("missing test snapshot");
@@ -22,9 +26,11 @@ mock.module("./peer-transport.ts", {
     probePeerEndpoint: (machine: Machine) => probeImpl(machine),
     runPeerEndpoint: async (
       _machine: Machine,
-      _action: string,
+      action: string,
       input?: string,
     ) => {
+      if (action === "recover-recipient" && failRecipientRecovery)
+        throw new Error("injected recipient recovery failure");
       const envelope = JSON.parse(input ?? "{}") as {
         record?: { id?: string };
       };
@@ -32,6 +38,27 @@ mock.module("./peer-transport.ts", {
       deliveries.push(id ?? "");
       return JSON.stringify({ accepted: true, id });
     },
+  },
+});
+mock.module("./peer-correspondence.ts", {
+  namedExports: {
+    ...realCorrespondence,
+    listPeerCorrespondences: () => correspondences,
+    updatePeerRecipientGeneration: (
+      _id: string,
+      _capability: string,
+      _recipient: string,
+      _previous: string,
+      next: string,
+    ) => {
+      const current = correspondences[0];
+      if (current) current.recipientGeneration = next;
+    },
+    updatePeerOriginGeneration: () => {},
+    storePeerCorrespondence: (item: unknown) => {
+      correspondences[0] = item;
+    },
+    createPeerCorrespondence: (item: unknown) => item,
   },
 });
 
@@ -74,6 +101,9 @@ function fixture() {
   process.env.PI_CODING_AGENT_DIR = root;
   support.setLeadEnvironment();
   machines.length = 0;
+  correspondences.length = 0;
+  diagnostics.length = 0;
+  failRecipientRecovery = false;
   nextSnapshots = [];
   deliveries.length = 0;
   probeImpl = async () => {
@@ -115,6 +145,12 @@ function fixture() {
       id === self ? sender : undefined,
     listPeerLeadRecords: () => [],
     currentManager: async () => manager,
+    appendDurableError: (
+      _pi: unknown,
+      _ctx: unknown,
+      _type: string,
+      error: unknown,
+    ) => diagnostics.push(error),
     messageLimits: async () => ({
       inline: { bytes: 10000 },
       mailbox: { bytes: 10000 },
@@ -168,15 +204,18 @@ test("published route remains sendable during refresh and a stale discovery cann
   await list(f.runtime, f.context);
 
   const held = gate<Snapshot>();
+  const probeEntered = gate<void>();
   let refreshProbe = true;
   probeImpl = async () => {
     if (refreshProbe) {
       refreshProbe = false;
+      probeEntered.resolve();
       return held.promise;
     }
     return snapshot([remote("peer-old")]);
   };
   const refreshing = list(f.runtime, f.context);
+  await probeEntered.promise;
   const sent = await send(f.runtime, f.context, "peer-old");
   assert.equal(sent.details?.accepted, true);
   held.resolve(snapshot([remote("peer-old")]));
@@ -200,6 +239,46 @@ test("published route remains sendable during refresh and a stale discovery cann
     send(f.runtime, f.context, "peer-stale"),
     /not found|unavailable/,
   );
+});
+
+test("successful probe refresh survives later recipient recovery failure", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-B", "generation-1")])];
+  await list(f.runtime, f.context);
+
+  correspondences.push({
+    id: "correspondence-B",
+    capability: "capability-B",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-B",
+    recipientGeneration: "generation-1",
+    finalized: false,
+  });
+  failRecipientRecovery = true;
+  probeImpl = async () => snapshot([remote("peer-B", "generation-2")]);
+  const refreshed = await list(f.runtime, f.context);
+  assert.equal(refreshed.details?.unavailable_machines, undefined);
+  assert.equal(diagnostics.length, 1);
+  assert.match(String(diagnostics[0]), /injected recipient recovery failure/);
+
+  failRecipientRecovery = false;
+  const sent = await send(f.runtime, f.context, "peer-B");
+  assert.equal(sent.details?.accepted, true);
+});
+
+test("genuine remote probe failure remains listed as unavailable", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("unreachable"));
+  probeImpl = async () => {
+    throw new Error("injected probe failure");
+  };
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(result.details?.unavailable_machines, ["unreachable"]);
+  assert.deepEqual(diagnostics, []);
 });
 
 test("partial discovery refreshes healthy routes, retains unavailable routes, and fails closed on conflicts", async (t) => {
