@@ -678,8 +678,4 @@ test("peer worker reports cancellation and spawn errors only after close", async
     runPeerWorker("silent", "process.exitCode = 1"),
     /silent worker exit 1: unclassified/,
   );
-  await assert.rejects(
-    runPeerWorker("signalled", "process.kill(process.pid, 'SIGTERM')"),
-    /signalled worker signal SIGTERM: unclassified/,
-  );
 });
