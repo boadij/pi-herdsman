@@ -21,16 +21,26 @@ import {
   pollPeerReplies,
   storePeerCorrespondence,
   updatePeerOriginGeneration,
+  updatePeerRecipientGeneration,
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
+import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "../extension/peer-transport.ts";
 
 const action = process.argv[2];
 if (
-  !["probe", "accept", "poll", "ack", "finalize", "recover"].includes(action) ||
+  ![
+    "probe",
+    "accept",
+    "poll",
+    "ack",
+    "finalize",
+    "recover",
+    "recover-recipient",
+  ].includes(action) ||
   process.argv.length !== 3
 ) {
   console.error(
-    "usage: pi-herdsman-peer probe|accept|poll|ack|finalize|recover",
+    "usage: pi-herdsman-peer probe|accept|poll|ack|finalize|recover|recover-recipient",
   );
   process.exit(2);
 }
@@ -57,7 +67,7 @@ if (action === "probe") {
   for await (const chunk of process.stdin) {
     const buffer = Buffer.from(chunk);
     bytes += buffer.length;
-    if (bytes > 64 * 1024)
+    if (bytes > PEER_TRANSPORT_FRAME_LIMIT_BYTES)
       throw new Error("peer transfer exceeds the size limit");
     chunks.push(buffer);
   }
@@ -67,6 +77,7 @@ if (action === "probe") {
     attachments?: Array<{
       name?: unknown;
       ref?: unknown;
+      marker?: unknown;
       text?: unknown;
       sha256?: unknown;
     }>;
@@ -79,6 +90,7 @@ if (action === "probe") {
     recipientSession?: string;
     recipientGeneration?: string;
     previousOriginGeneration?: string;
+    newRecipientGeneration?: string;
     replyId?: string;
   };
   if (action !== "accept") {
@@ -101,12 +113,16 @@ if (action === "probe") {
     )
       throw new Error("invalid peer correspondence request");
     assertPeerDataRoot(herdsmanDataRoot(), envelope.expectedDataRoot ?? "");
+    const liveRecipientGeneration =
+      action === "recover-recipient"
+        ? envelope.newRecipientGeneration
+        : recipientGeneration;
     if (
       !listPeerLeadRecords(runtime).some(
         (peer) =>
           peer.role === "manager" &&
           peer.piSessionId === recipientSession &&
-          peer.claim.id === recipientGeneration,
+          peer.claim.id === liveRecipientGeneration,
       )
     )
       throw new Error("exact destination Manager is not live");
@@ -119,6 +135,17 @@ if (action === "probe") {
         originSession,
         previousOriginGeneration,
         originGeneration,
+      );
+      console.log(JSON.stringify({ recovered: true, id }));
+    } else if (action === "recover-recipient") {
+      if (typeof envelope.newRecipientGeneration !== "string")
+        throw new Error("invalid peer recipient recovery");
+      updatePeerRecipientGeneration(
+        id,
+        capability,
+        recipientSession,
+        recipientGeneration,
+        envelope.newRecipientGeneration,
       );
       console.log(JSON.stringify({ recovered: true, id }));
     } else if (action === "poll") {
@@ -197,8 +224,7 @@ if (action === "probe") {
     envelope.correspondence.recipientSession !== record.toSessionId ||
     envelope.correspondence.recipientGeneration !== envelope.recipientClaimId ||
     envelope.correspondence.originSession !== record.fromSessionId ||
-    envelope.correspondence.originGeneration !== record.leaseId ||
-    envelope.correspondence.acceptanceId !== record.id
+    envelope.correspondence.originGeneration !== record.leaseId
   )
     throw new Error("peer correspondence does not match message route");
   const digest = peerPayloadDigest(envelope);
@@ -233,9 +259,11 @@ if (action === "probe") {
     );
   }
   const receivedRefs: string[] = [];
+  let receivedText = record.text as string;
   for (const attachment of envelope.attachments) {
     if (
       typeof attachment.name !== "string" ||
+      typeof attachment.marker !== "string" ||
       typeof attachment.text !== "string" ||
       typeof attachment.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/u.test(attachment.sha256)
@@ -246,21 +274,33 @@ if (action === "probe") {
       .digest("hex");
     if (contentDigest !== attachment.sha256)
       throw new Error("peer attachment integrity check failed");
+    const markerIndex = receivedText.indexOf(attachment.marker);
+    if (
+      markerIndex < 0 ||
+      receivedText.indexOf(attachment.marker, markerIndex + 1) !== -1
+    )
+      throw new Error("peer attachment marker is missing or ambiguous");
+    receivedText =
+      receivedText.slice(0, markerIndex) +
+      attachment.text +
+      receivedText.slice(markerIndex + attachment.marker.length);
     const binding = record.resultBindings?.find(
       (item: { ref?: unknown }) => item.ref === attachment.ref,
     );
     const path = binding
       ? persistPeerResultArtifact(binding.canonicalRef, attachment.text)
       : persistPeerAttachment(attachment.name, attachment.text);
-    receivedRefs.push(`${attachment.name}: ${binding ? binding.ref : path}`);
+    receivedRefs.push(
+      `${attachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : path}`,
+    );
   }
   const acceptedRecord = {
     ...record,
     ...(receivedRefs.length
       ? {
-          text: `${record.text}\n\nForwardable received files:\n${receivedRefs.join("\n")}`,
+          text: `${receivedText}\n\nForwardable received files:\n${receivedRefs.join("\n")}`,
         }
-      : {}),
+      : { text: receivedText }),
   };
   storePeerCorrespondence(envelope.correspondence);
   writeCoordinationMessage(acceptedRecord as never, runtime);

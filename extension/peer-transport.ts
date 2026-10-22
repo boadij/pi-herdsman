@@ -48,8 +48,9 @@ export function peerRecoveryRequest(
 }
 
 const COMMAND_TIMEOUT_MS = 15_000;
-const OUTPUT_LIMIT = 1024 * 1024;
-const OUTBOUND_LIMIT = 64 * 1024;
+export const PEER_TRANSPORT_FRAME_LIMIT_BYTES = 2 * 1024 * 1024;
+const OUTPUT_LIMIT = PEER_TRANSPORT_FRAME_LIMIT_BYTES;
+const OUTBOUND_RECORD_LIMIT_BYTES = 12 * 1024 * 1024;
 
 export type RemotePeerOutbound = Readonly<{
   id: string;
@@ -73,11 +74,14 @@ function outboundDirectory(): string {
 }
 
 export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
+  const frameBytes = Buffer.byteLength(outbound.envelope, "utf8");
+  const recordBytes = Buffer.byteLength(JSON.stringify(outbound), "utf8");
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
       outbound.id,
     ) ||
-    Buffer.byteLength(JSON.stringify(outbound), "utf8") > OUTBOUND_LIMIT
+    frameBytes > PEER_TRANSPORT_FRAME_LIMIT_BYTES ||
+    recordBytes > OUTBOUND_RECORD_LIMIT_BYTES
   )
     throw new Error("invalid remote peer outbound record");
   const path = join(outboundDirectory(), `${outbound.id}.json`);
@@ -104,7 +108,7 @@ export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
         if (
           !stat.isFile() ||
           stat.isSymbolicLink() ||
-          stat.size > OUTBOUND_LIMIT
+          stat.size > OUTBOUND_RECORD_LIMIT_BYTES
         )
           return [];
         const value: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -138,8 +142,13 @@ function run(
   command: string,
   args: readonly string[],
   input?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Peer transport was cancelled"));
+      return;
+    }
     const child = spawn(command, [...args], {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -147,6 +156,12 @@ function run(
     let stderr = "";
     let size = 0;
     const timeout = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
+    let abortKill: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      child.kill("SIGTERM");
+      abortKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     const collect = (target: "stdout" | "stderr", chunk: Buffer) => {
       size += chunk.length;
       if (size > OUTPUT_LIMIT) {
@@ -160,21 +175,28 @@ function run(
     child.stderr.on("data", (chunk: Buffer) => collect("stderr", chunk));
     child.once("error", (error) => {
       clearTimeout(timeout);
+      if (abortKill) clearTimeout(abortKill);
+      signal?.removeEventListener("abort", cancel);
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(timeout);
-      if (code === 0) resolve(stdout);
+      if (abortKill) clearTimeout(abortKill);
+      signal?.removeEventListener("abort", cancel);
+      if (signal?.aborted) reject(new Error("Peer transport was cancelled"));
+      else if (code === 0) resolve(stdout);
       else reject(new Error(stderr.trim() || `${command} exited ${code}`));
     });
     child.stdin.end(input);
   });
 }
 
-export async function listSavedPeerMachines(): Promise<SavedPeerMachine[]> {
+export async function listSavedPeerMachines(
+  signal?: AbortSignal,
+): Promise<SavedPeerMachine[]> {
   const [listText, statusText] = await Promise.all([
-    run("herdr", ["machine", "list", "--json"]),
-    run("herdr", ["machine", "status", "--json"]),
+    run("herdr", ["machine", "list", "--json"], undefined, signal),
+    run("herdr", ["machine", "status", "--json"], undefined, signal),
   ]);
   const list: unknown = JSON.parse(listText);
   const statuses: unknown = JSON.parse(statusText);
@@ -227,10 +249,11 @@ export function parsePeerSshTarget(target: string): {
     )
       throw new Error("Unsupported saved SSH target");
     const username = url.username ? `${decodeURIComponent(url.username)}@` : "";
-    if (/[\s\0]/u.test(username))
+    const host = `${username}${url.hostname}`;
+    if (/^[\s-]|[\s\0]/u.test(host))
       throw new Error("Unsupported saved SSH target");
     return {
-      host: `${username}${url.hostname}`,
+      host,
       ...(url.port ? { port: url.port } : {}),
     };
   }
@@ -241,8 +264,16 @@ export function parsePeerSshTarget(target: string): {
 
 export async function runPeerEndpoint(
   machine: SavedPeerMachine,
-  action: "probe" | "accept" | "poll" | "ack" | "finalize" | "recover",
+  action:
+    | "probe"
+    | "accept"
+    | "poll"
+    | "ack"
+    | "finalize"
+    | "recover"
+    | "recover-recipient",
   input?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const target = parsePeerSshTarget(machine.target);
   return run(
@@ -260,6 +291,7 @@ export async function runPeerEndpoint(
       `pi-herdsman-peer ${action}`,
     ],
     input,
+    signal,
   );
 }
 
@@ -275,8 +307,9 @@ export async function tryPollPeerReplies(
 
 export async function probePeerEndpoint(
   machine: SavedPeerMachine,
+  signal?: AbortSignal,
 ): Promise<RemotePeerSnapshot> {
-  const output = await runPeerEndpoint(machine, "probe");
+  const output = await runPeerEndpoint(machine, "probe", undefined, signal);
   const probe: unknown = JSON.parse(output);
   if (
     !probe ||

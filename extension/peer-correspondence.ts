@@ -15,6 +15,38 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { herdsmanDataRoot } from "./storage.ts";
+import { isResultBinding, type ResultBinding } from "./storage.ts";
+import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "./peer-transport.ts";
+
+export type PeerPortableAttachment = Readonly<{
+  name: string;
+  ref?: string;
+  marker: string;
+  text: string;
+  sha256: string;
+}>;
+export type PeerEvidence = Readonly<{
+  attachments: PeerPortableAttachment[];
+  resultBindings?: ResultBinding[];
+}>;
+
+export function resolvePeerResultBindings(
+  bindings: readonly ResultBinding[],
+  existingRefs: (semanticRef: string) => ReadonlySet<string>,
+): { bindings: ResultBinding[]; conflicts: ResultBinding[] } {
+  const accepted: ResultBinding[] = [];
+  const conflicts: ResultBinding[] = [];
+  for (const binding of bindings) {
+    const existing = existingRefs(binding.ref);
+    if (
+      existing.size > 1 ||
+      (existing.size === 1 && !existing.has(binding.canonicalRef))
+    )
+      conflicts.push(binding);
+    else accepted.push(binding);
+  }
+  return { bindings: accepted, conflicts };
+}
 
 export type PeerCorrespondence = {
   id: string;
@@ -29,6 +61,8 @@ export type PeerCorrespondence = {
     id: string;
     digest: string;
     text: string;
+    attachments?: PeerPortableAttachment[];
+    resultBindings?: ResultBinding[];
     createdAt: number;
     acknowledged: boolean;
   }>;
@@ -82,6 +116,21 @@ function valid(value: unknown): value is PeerCorrespondence {
         ID.test(reply.id) &&
         /^[0-9a-f]{64}$/u.test(reply.digest) &&
         typeof reply.text === "string" &&
+        (reply.attachments === undefined ||
+          (Array.isArray(reply.attachments) &&
+            reply.attachments.every(
+              (attachment) =>
+                typeof attachment.name === "string" &&
+                typeof attachment.marker === "string" &&
+                typeof attachment.text === "string" &&
+                /^[0-9a-f]{64}$/u.test(attachment.sha256) &&
+                createHash("sha256")
+                  .update(attachment.text, "utf8")
+                  .digest("hex") === attachment.sha256,
+            ))) &&
+        (reply.resultBindings === undefined ||
+          (Array.isArray(reply.resultBindings) &&
+            reply.resultBindings.every(isResultBinding))) &&
         Number.isFinite(reply.createdAt) &&
         typeof reply.acknowledged === "boolean",
     )
@@ -121,8 +170,6 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
         "originSession",
         "originGeneration",
         "recipientSession",
-        "recipientGeneration",
-        "acceptanceId",
       ].some(
         (key) =>
           existing[key as keyof PeerCorrespondence] !==
@@ -130,6 +177,10 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
       )
     )
       throw new Error("conflicting peer correspondence");
+    if (existing.recipientGeneration !== c.recipientGeneration) {
+      existing.recipientGeneration = c.recipientGeneration;
+      save(existing);
+    }
     return;
   }
   save(c);
@@ -152,6 +203,29 @@ export function updatePeerOriginGeneration(
   )
     throw new Error("peer correspondence recovery rejected");
   c.originGeneration = newGeneration;
+  save(c);
+  return c;
+}
+export function updatePeerRecipientGeneration(
+  id: string,
+  capability: string,
+  recipientSession: string,
+  oldGeneration: string,
+  newGeneration: string,
+): PeerCorrespondence {
+  const c = listPeerCorrespondences().find((item) => item.id === id);
+  if (
+    !c ||
+    c.finalized ||
+    !matchesCapability(c.capability, capability) ||
+    c.recipientSession !== recipientSession ||
+    !newGeneration
+  )
+    throw new Error("peer correspondence recipient recovery rejected");
+  if (c.recipientGeneration === newGeneration) return c;
+  if (c.recipientGeneration !== oldGeneration)
+    throw new Error("peer correspondence recipient recovery rejected");
+  c.recipientGeneration = newGeneration;
   save(c);
   return c;
 }
@@ -195,11 +269,26 @@ export function queuePeerReply(
   c: PeerCorrespondence,
   replyId: string,
   text: string,
+  evidence: PeerEvidence = { attachments: [] },
 ): "queued" | "duplicate" {
   if (c.finalized) throw new Error("peer correspondence is finalized");
-  if (!ID.test(replyId) || !text || Buffer.byteLength(text) > 64 * 1024)
+  const payload = {
+    text,
+    ...(evidence.attachments.length
+      ? { attachments: evidence.attachments }
+      : {}),
+    ...(evidence.resultBindings?.length
+      ? { resultBindings: evidence.resultBindings }
+      : {}),
+  };
+  if (
+    !ID.test(replyId) ||
+    !text ||
+    Buffer.byteLength(JSON.stringify(payload), "utf8") >
+      PEER_TRANSPORT_FRAME_LIMIT_BYTES
+  )
     throw new Error("invalid peer reply");
-  const digest = peerPayloadDigest({ text });
+  const digest = peerPayloadDigest(payload);
   const prior = c.replies.find((r) => r.id === replyId);
   if (prior) {
     if (prior.digest !== digest)
@@ -210,6 +299,10 @@ export function queuePeerReply(
     id: replyId,
     digest,
     text,
+    attachments: [...evidence.attachments],
+    ...(evidence.resultBindings?.length
+      ? { resultBindings: [...evidence.resultBindings] }
+      : {}),
     createdAt: Date.now(),
     acknowledged: false,
   });

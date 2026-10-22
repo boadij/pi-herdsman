@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { basename, resolve } from "node:path";
 import { TextDecoder } from "node:util";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RequiredEvidence, ResultBinding } from "./storage.ts";
 import {
   persistRequiredEvidenceSnapshot,
@@ -278,6 +278,7 @@ export type PreparedAttachment = {
   inline: boolean;
   ref?: string;
   text?: string;
+  marker?: string;
 };
 
 export type PreparedMessageInput = {
@@ -285,6 +286,7 @@ export type PreparedMessageInput = {
   canonicalPaths: string[];
   resultBindings: ResultBinding[];
   attachments: PreparedAttachment[];
+  transportText?: string;
 };
 
 export type MessagePreparationOptions = {
@@ -358,6 +360,8 @@ export function prepareMessageInput(
     file.binding ? [file.binding] : [],
   );
   const sections = regular.map((file) => renderMessageFile(file));
+  const transportSections = [...sections];
+  const markers = regular.map(() => `pi-herdsman-peer-${randomUUID()}`);
   const attachmentTexts: (string | undefined)[] = regular.map(() => undefined);
   const rendered = () =>
     (options.fileOrder === "textFirst"
@@ -559,6 +563,7 @@ export function prepareMessageInput(
       continue;
     }
     sections[index] = renderMessageFile(file, content);
+    transportSections[index] = renderMessageFile(file, markers[index]!);
     attachmentTexts[index] = content;
     if (!fits(rendered(), resultBindings)) {
       sections[index] = prior;
@@ -573,6 +578,10 @@ export function prepareMessageInput(
   }
   return {
     text: rendered(),
+    transportText: (options.fileOrder === "textFirst"
+      ? [`${heading}:\n${text}`, ...transportSections]
+      : [...transportSections, `${heading}:\n${text}`]
+    ).join("\n\n"),
     canonicalPaths: regular.map((file) => file.canonicalPath),
     resultBindings,
     attachments: regular.map((file, index) => ({
@@ -584,6 +593,9 @@ export function prepareMessageInput(
       ...(file.retainedEvidence || file.binding ? { ref: file.input } : {}),
       ...(attachmentTexts[index] !== undefined
         ? { text: attachmentTexts[index] }
+        : {}),
+      ...(attachmentTexts[index] !== undefined
+        ? { marker: markers[index] }
         : {}),
     })),
   };

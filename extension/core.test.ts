@@ -1139,6 +1139,50 @@ test("message preparation keeps no-file messages unchanged", () => {
   });
 });
 
+test("prepared peer evidence sends attachment bytes once and preserves escaped UTF-8 content", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-peer-frame-"));
+  const source = `${"é".repeat(42_000)}${'\u0001\\"\n'.repeat(4_000)}`;
+  const path = join(cwd, "near-limit.txt");
+  writeFileSync(path, source);
+  try {
+    const prepared = prepareMessageInput(
+      "forward this evidence",
+      [path],
+      cwd,
+      "peer.message",
+      "Message",
+      {
+        requireInline: true,
+        inlineLimitBytes: 128 * 1024,
+        mailboxLimitBytes: 128 * 1024,
+      },
+    );
+    const attachment = prepared.attachments[0]!;
+    assert.equal(attachment.text, source);
+    assert.ok(attachment.marker);
+    assert.equal(
+      prepared.transportText!.replace(attachment.marker!, source),
+      prepared.text,
+    );
+    const compactFrame = Buffer.byteLength(
+      JSON.stringify({
+        text: prepared.transportText,
+        attachments: [{ text: attachment.text }],
+      }),
+    );
+    const duplicateFrame = Buffer.byteLength(
+      JSON.stringify({
+        text: prepared.text,
+        attachments: [{ text: attachment.text }],
+      }),
+    );
+    assert.ok(compactFrame < duplicateFrame);
+    assert.ok(compactFrame < 2 * 1024 * 1024);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("message preparation rejects whitespace semantic messages before headings", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-empty-"));
   writeFileSync(join(cwd, "evidence"), "evidence");

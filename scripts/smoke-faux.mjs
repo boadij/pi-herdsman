@@ -5,6 +5,7 @@ import {
   realpathSync,
   watch,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -36,6 +37,8 @@ const modelIds = [
   "federated-peer-a",
   "federated-peer-b",
   "federated-peer-lead",
+  "federated-peer-researcher",
+  "federated-peer-source",
 ];
 
 function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
@@ -101,6 +104,28 @@ function successfulResult(messages, name) {
   const matched = correlatedCall(messages, name);
   if (!matched) throw new Error(`Missing successful correlated ${name} result`);
   return matched;
+}
+
+function successfulCallCount(messages, name) {
+  return messages.filter(
+    (message) =>
+      message.role === "toolResult" &&
+      message.toolName === name &&
+      !message.isError,
+  ).length;
+}
+
+function forwardableRefs(message) {
+  const block = text(message).split("Forwardable received files:\n")[1] ?? "";
+  return block
+    .split("\n")
+    .flatMap((line) => {
+      const canonical = line.match(/\(canonical (result:[0-9a-f-]{36})\)/u);
+      if (canonical) return [canonical[1]];
+      const separator = line.indexOf(": ");
+      return separator < 0 ? [] : [line.slice(separator + 2).trim()];
+    })
+    .filter(Boolean);
 }
 
 function packageDetails(value) {
@@ -580,53 +605,139 @@ export function decide(model, context) {
     );
   }
   if (model === "federated-peer-a") {
-    if (
-      messages.some(
-        (message) =>
-          message.role === "user" &&
-          text(message).includes("PEER_E2E_REPLY_OK"),
-      )
-    )
-      return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
+    if (prompt.includes("PEER_E2E_A_SINGLE_SEND")) {
+      const listed = correlatedCall(messages, "list_peers");
+      if (!listed) return call("list_peers", {});
+      const peers = JSON.parse(text(listed.result));
+      const peer = peers.peers?.find((candidate) => candidate.machine);
+      if (!peer)
+        throw new Error("single-message fixture found no remote Manager");
+      if (successfulCallCount(messages, "message_peer") === 0)
+        return call("message_peer", {
+          session: peer.session,
+          message:
+            "PEER_E2E_SINGLE_REQUEST: verify receiving Manager delivery.",
+        });
+      return fauxAssistantMessage("PEER_E2E_A_SINGLE_SENT");
+    }
+    if (prompt.includes("PEER_E2E_A_DISCOVER")) {
+      const listed = correlatedCall(messages, "list_peers");
+      if (!listed) return call("list_peers", {});
+      const result = JSON.parse(text(listed.result));
+      if (!result.peers?.some((peer) => peer.machine))
+        throw new Error("federation discovery found no remote Manager");
+      return fauxAssistantMessage("PEER_E2E_A_DISCOVERED");
+    }
     const send = prompt.includes("PEER_E2E_A_SEND");
     const list = correlatedCall(messages, "list_peers");
     if (send && !list) return call("list_peers", {});
-    if (send && list && !correlatedCall(messages, "message_peer")) {
+    if (send && list && successfulCallCount(messages, "message_peer") === 0) {
       const peers = JSON.parse(text(list.result));
       const peer = peers.peers?.find((candidate) => candidate.machine);
       if (!peer) throw new Error("federation smoke found no remote Manager");
-      const result = prompt.match(/result:([0-9a-f-]{36})/)?.[0];
-      if (!result) throw new Error("federation smoke omitted result evidence");
+      const semantic = prompt.match(/\bresult:[A-Za-z0-9_-]+#\d+\b/)?.[0];
+      if (!semantic)
+        throw new Error("federation smoke omitted semantic result evidence");
       return call("message_peer", {
         session: peer.session,
         message:
           "PEER_E2E_REQUEST: delegate the attached spec and report the result.",
-        files: ["spec.md", result],
+        files: ["spec.md", "escaped.txt", semantic],
       });
     }
-    if (send && correlatedCall(messages, "message_peer"))
+    if (send && successfulCallCount(messages, "message_peer") === 1) {
+      const peers = JSON.parse(text(list.result));
+      const peer = peers.peers?.find((candidate) => candidate.machine);
+      return call("message_peer", {
+        session: peer.session,
+        message: "PEER_E2E_REQUEST_SECOND: same verified Manager pair.",
+      });
+    }
+    if (send && successfulCallCount(messages, "message_peer") >= 2)
       return fauxAssistantMessage("PEER_E2E_A_SENT");
-    if (prompt.includes("PEER_E2E_A_POLL")) {
-      const promptIndex = messages.lastIndexOf(lastUser(messages));
-      if (!correlatedCall(messages.slice(promptIndex), "list_peers"))
-        return call("list_peers", {});
-      if (
-        messages.some(
+    if (
+      messages.some(
+        (message) =>
+          (message.role === "user" || message.type === "custom_message") &&
+          text(message).includes("PEER_E2E_REPLY_FINAL"),
+      )
+    ) {
+      const forwarding = messages.some(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("PEER_E2E_A_FORWARD_REPLY"),
+      );
+      if (forwarding) {
+        const forwarded = messages.some(
           (message) =>
             message.role === "user" &&
-            text(message).includes("PEER_E2E_REPLY_OK"),
-        )
-      )
-        return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
-      return waitForResult("Waiting for the originating Manager reply.");
+            text(message).includes("PEER_E2E_A_FORWARDED"),
+        );
+        if (forwarded)
+          return fauxAssistantMessage("PEER_E2E_A_REPLY_FORWARDED");
+        const reply = [...messages]
+          .reverse()
+          .find(
+            (message) =>
+              (message.role === "user" || message.type === "custom_message") &&
+              text(message).includes("PEER_E2E_REPLY_FINAL"),
+          );
+        const files = forwardableRefs(reply);
+        if (files.length < 2)
+          throw new Error("reply evidence was not forwardable through files");
+        const assignment = correlatedCall(messages, "delegate_project");
+        if (!assignment)
+          return call("delegate_project", {
+            branch: `herdsman/peer-reply-${randomUUID().slice(0, 8)}`,
+            task: "PEER_E2E_A_FORWARD_TASK: read the returned file and semantic result fallback, then report PEER_E2E_A_FORWARDED.",
+            files,
+          });
+        const done = messages.some(
+          (message, index) =>
+            index > assignment.resultIndex &&
+            (message.role === "user" || message.type === "custom_message") &&
+            text(message).includes("PEER_E2E_A_FORWARDED"),
+        );
+        return done
+          ? fauxAssistantMessage("PEER_E2E_A_REPLY_FORWARDED")
+          : waitForResult("Waiting for A's local evidence forwarding Lead.");
+      }
+      return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
     }
+    if (
+      messages.some(
+        (message) =>
+          message.type === "custom_message" &&
+          message.customType === "pi-herdsman-peer_message" &&
+          text(message).includes("PEER_E2E_REPLY_PROGRESS"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_A_PROGRESS_RECEIVED");
     throw new Error("Unexpected federated-peer A transcript");
   }
   if (model === "federated-peer-b") {
-    const inbound = messages.find(
+    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION"))
+      return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
+    if (
+      messages.some(
+        (message) =>
+          message.role === "user" &&
+          text(message).includes("PEER_E2E_SINGLE_REQUEST"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_B_SINGLE_RECEIVED");
+    const inbounds = messages.filter(
       (message) =>
-        message.role === "user" && text(message).includes("PEER_E2E_REQUEST"),
+        (message.role === "user" || message.type === "custom_message") &&
+        text(message).includes("PEER_E2E_REQUEST"),
     );
+    const inbound = inbounds[0];
+    if (
+      inbounds.some((message) =>
+        text(message).includes("PEER_E2E_SINGLE_REQUEST"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_B_SINGLE_RECEIVED");
     const origin = text(inbound).match(
       /Peer message from ([0-9a-f-]{36}):/,
     )?.[1];
@@ -634,21 +745,23 @@ export function decide(model, context) {
       throw new Error(
         "federation smoke could not identify the exact origin session",
       );
-    if (!inbound) return waitForResult("Waiting for a remote Manager request.");
+    const semantic = text(inbound).match(/\bresult:[A-Za-z0-9_-]+#\d+\b/)?.[0];
+    if (inbounds.length < 2)
+      return waitForResult(
+        "Waiting for both requests on the Manager pair route.",
+      );
     const assignment = correlatedCall(messages, "delegate_project");
     if (!assignment) {
       const forwardable =
         text(inbound).split("Forwardable received files:\n")[1] ?? "";
-      const refs = [
-        ...forwardable.matchAll(/^(?:spec\.md|[0-9a-f-]{36}): ([^\n]+)/gmu),
-      ].map((match) => match[1].trim());
-      if (refs.length < 2)
+      const refs = forwardableRefs(inbound);
+      if (refs.length < 3)
         throw new Error(
           "federation smoke did not receive forwardable evidence",
         );
       return call("delegate_project", {
         branch: `herdsman/federation-smoke-${origin.slice(0, 8)}`,
-        task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifact, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
+        task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
         files: refs,
       });
     }
@@ -656,27 +769,35 @@ export function decide(model, context) {
       !messages.some(
         (message, index) =>
           index > assignment.resultIndex &&
-          message.role === "user" &&
+          (message.role === "user" || message.type === "custom_message") &&
           text(message).includes("PEER_E2E_LOCAL_RESULT"),
       )
     )
       return waitForResult("Waiting for the local Lead result.");
-    if (correlatedCall(messages, "message_peer"))
-      return fauxAssistantMessage("PEER_E2E_B_REPLIED");
-    return call("message_peer", {
-      session: origin,
-      message:
-        "PEER_E2E_REPLY_OK: local delegation inspected the forwarded evidence.",
-    });
+    const replies = successfulCallCount(messages, "message_peer");
+    if (replies >= 2) return fauxAssistantMessage("PEER_E2E_B_REPLIED");
+    return replies === 0
+      ? call("message_peer", {
+          session: origin,
+          message: "PEER_E2E_REPLY_PROGRESS: delegation is complete.",
+        })
+      : call("message_peer", {
+          session: origin,
+          message:
+            "PEER_E2E_REPLY_FINAL: local delegation inspected the forwarded evidence.",
+          files: ["reply.txt", semantic],
+        });
   }
   if (model === "federated-peer-lead") {
     const promptMessage = text(lastUser(messages));
-    if (!promptMessage.includes("PEER_E2E_LOCAL_TASK"))
+    const isBTask = promptMessage.includes("PEER_E2E_LOCAL_TASK");
+    const isATask = promptMessage.includes("PEER_E2E_A_FORWARD_TASK");
+    if (!isBTask && !isATask)
       throw new Error("Unexpected federation Lead task");
     const paths = [
       ...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu),
     ].map((match) => match[1]);
-    if (paths.length < 2)
+    if (paths.length < (isBTask ? 3 : 2))
       throw new Error("federation Lead did not receive both evidence refs");
     const successfulReads = messages
       .filter((message) => message.role === "assistant")
@@ -697,12 +818,33 @@ export function decide(model, context) {
       const path = paths[successfulReads.length];
       return call("read", { path });
     }
+    const resultMarker = isBTask
+      ? "PEER_E2E_LOCAL_RESULT"
+      : "PEER_E2E_A_FORWARDED";
     if (correlatedCall(messages, "message_supervisor"))
-      return fauxAssistantMessage("PEER_E2E_LOCAL_RESULT");
+      return fauxAssistantMessage(resultMarker);
     return call("message_supervisor", {
-      message:
-        "PEER_E2E_LOCAL_RESULT: inspected forwarded spec and result evidence.",
+      message: `${resultMarker}: inspected forwarded files and result evidence.`,
     });
+  }
+  if (model === "federated-peer-researcher")
+    return fauxAssistantMessage(
+      `PEER_E2E_SEED_RESULT_COMPLETE: completed local result artifact for ${text(lastUser(messages))}.`,
+    );
+  if (model === "federated-peer-source") {
+    const side = prompt.match(/PEER_E2E_SOURCE_RESULT ([ab])/u)?.[1];
+    if (!side) throw new Error("source-result prompt omitted fixture machine");
+    const assignment = correlatedCall(messages, "delegate_agent");
+    if (!assignment)
+      return call("delegate_agent", {
+        definition: "researcher",
+        task: `Create a concise completed test-owned result artifact for federation evidence seeding on machine ${side}; include that machine identity in the result.`,
+      });
+    return assignment.result && !assignment.result.isError
+      ? fauxAssistantMessage("PEER_E2E_SOURCE_RESULT_COMPLETE")
+      : waitForResult(
+          "Waiting for the exact researcher terminal result handoff.",
+        );
   }
   if (model === "agent-terminal-failure") {
     const matched = correlatedCall(messages, "delegate_agent");

@@ -8,15 +8,18 @@ import {
   removeRemotePeerOutbound,
   tryPollPeerReplies,
 } from "./peer-transport.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   acknowledgePeerReply,
   assertPeerDataRoot,
   createPeerCorrespondence,
   listPeerCorrespondences,
   pollPeerReplies,
+  peerPayloadDigest,
   queuePeerReply,
+  resolvePeerResultBindings,
   removePeerCorrespondence,
+  updatePeerRecipientGeneration,
 } from "./peer-correspondence.ts";
 
 test("saved SSH targets preserve URI ports and SSH config aliases", () => {
@@ -67,6 +70,8 @@ test("saved SSH targets reject URI paths and option-shaped aliases", () => {
     "ssh://buildbox?option=value",
     "ssh://buildbox#fragment",
     "ssh://user%20name@buildbox",
+    "ssh://-oProxyCommand=evil@buildbox",
+    "ssh://%2DoProxyCommand%3Devil@buildbox",
     "-oProxyCommand=evil",
     "buildbox with args",
   ])
@@ -166,4 +171,153 @@ test("failed reply polls retain correspondence for a later exactly-once reply", 
   );
   assert.deepEqual(actions, ["poll", "poll", "ack"]);
   removePeerCorrespondence(c.id);
+});
+
+test("one Manager-pair route supports multiple requests and progress/final replies", () => {
+  const originSession = randomUUID();
+  const recipientSession = randomUUID();
+  const c = createPeerCorrespondence({
+    originSession,
+    originGeneration: randomUUID(),
+    recipientSession,
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const secondRequestId = randomUUID();
+  assert.notEqual(c.acceptanceId, secondRequestId);
+  const progressId = randomUUID();
+  const completionId = randomUUID();
+  assert.equal(queuePeerReply(c, progressId, "progress"), "queued");
+  acknowledgePeerReply(
+    c.id,
+    c.capability,
+    progressId,
+    c.originSession,
+    c.originGeneration,
+    c.recipientSession,
+    c.recipientGeneration,
+  );
+  assert.equal(
+    queuePeerReply(
+      listPeerCorrespondences().find((item) => item.id === c.id)!,
+      completionId,
+      "complete",
+    ),
+    "queued",
+  );
+  assert.deepEqual(
+    pollPeerReplies(
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    ).map((reply) => reply.id),
+    [completionId],
+  );
+  assert.equal(
+    listPeerCorrespondences().find((item) => item.id === c.id)?.finalized,
+    undefined,
+  );
+  removePeerCorrespondence(c.id);
+});
+
+test("replies retain portable attachments and semantic result bindings", () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const text = "reply body with a marker";
+  const fileText = "portable reply artifact";
+  const evidence = {
+    attachments: [
+      {
+        name: "result:researcher#1",
+        ref: "result:researcher#1",
+        marker: "pi-herdsman-peer-test-marker",
+        text: fileText,
+        sha256: createHash("sha256").update(fileText).digest("hex"),
+      },
+    ],
+    resultBindings: [
+      {
+        ref: "result:researcher#1",
+        canonicalRef: `result:${randomUUID()}`,
+      },
+    ],
+  };
+  const replyId = randomUUID();
+  assert.equal(queuePeerReply(c, replyId, text, evidence), "queued");
+  const [reply] = pollPeerReplies(
+    c.id,
+    c.capability,
+    c.originSession,
+    c.originGeneration,
+    c.recipientSession,
+    c.recipientGeneration,
+  );
+  assert.equal(reply?.text, text);
+  assert.deepEqual(reply?.attachments, evidence.attachments);
+  assert.deepEqual(reply?.resultBindings, evidence.resultBindings);
+  assert.equal(reply?.digest, peerPayloadDigest({ text, ...evidence }));
+  removePeerCorrespondence(c.id);
+});
+
+test("recipient generation recovers only for the exact same session and route", () => {
+  const recipientSession = randomUUID();
+  const oldGeneration = randomUUID();
+  const nextGeneration = randomUUID();
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession,
+    recipientGeneration: oldGeneration,
+    acceptanceId: randomUUID(),
+  });
+  updatePeerRecipientGeneration(
+    c.id,
+    c.capability,
+    recipientSession,
+    oldGeneration,
+    nextGeneration,
+  );
+  assert.equal(
+    listPeerCorrespondences().find((item) => item.id === c.id)
+      ?.recipientGeneration,
+    nextGeneration,
+  );
+  assert.throws(
+    () =>
+      updatePeerRecipientGeneration(
+        c.id,
+        c.capability,
+        randomUUID(),
+        nextGeneration,
+        randomUUID(),
+      ),
+    /recipient recovery rejected/,
+  );
+  removePeerCorrespondence(c.id);
+});
+
+test("semantic collisions retain a canonical fallback instead of importing a misbinding", () => {
+  const conflicting = {
+    ref: "result:researcher#1",
+    canonicalRef: `result:${randomUUID()}`,
+  };
+  const unambiguous = {
+    ref: "result:researcher#2",
+    canonicalRef: `result:${randomUUID()}`,
+  };
+  const resolution = resolvePeerResultBindings(
+    [conflicting, unambiguous],
+    (ref) => new Set(ref === conflicting.ref ? [`result:${randomUUID()}`] : []),
+  );
+  assert.deepEqual(resolution.bindings, [unambiguous]);
+  assert.deepEqual(resolution.conflicts, [conflicting]);
+  assert.match(conflicting.canonicalRef, /^result:[0-9a-f-]{36}$/u);
 });
