@@ -4446,44 +4446,48 @@ export function createAgentController(
       return requestId;
     } finally {
       if (acknowledgementObserved) {
-        const cleanupRelease = claimAssignmentLock(
-          runtime.mailboxPath,
-          operation,
-          { label: runtime.label, paneId: runtime.paneId },
-        );
         try {
-          const current = readAgentState(runtime.mailboxPath);
-          if (
-            current &&
-            sameIdentity(current, {
-              version: current.version,
-              build: options.build,
-              runId: runtime.runId,
-              ownerSessionId: runtime.ownerSessionId,
-              workspaceId: runtime.workspaceId,
-              agentLabel: runtime.label,
-              paneId: runtime.paneId,
-              piSessionId: runtime.piSessionId ?? "",
-              piSessionFile: runtime.piSessionFile,
-              cwd: runtime.cwd,
-              updatedAt: current.updatedAt,
-            }) &&
-            current.lastAck?.requestId === requestId
-          ) {
-            removeRequest(runtime.mailboxPath, requestId);
-            if (
-              runtime.cleanupError?.startsWith(
-                "Acknowledged request could not be removed:",
-              )
-            )
-              runtime.cleanupError = undefined;
+          const cleanupRelease = tryClaimAssignmentLock(runtime.mailboxPath);
+          if (cleanupRelease) {
+            try {
+              const current = readAgentState(runtime.mailboxPath);
+              if (
+                current &&
+                sameIdentity(current, {
+                  version: current.version,
+                  build: options.build,
+                  runId: runtime.runId,
+                  ownerSessionId: runtime.ownerSessionId,
+                  workspaceId: runtime.workspaceId,
+                  agentLabel: runtime.label,
+                  paneId: runtime.paneId,
+                  piSessionId: runtime.piSessionId ?? "",
+                  piSessionFile: runtime.piSessionFile,
+                  cwd: runtime.cwd,
+                  updatedAt: current.updatedAt,
+                }) &&
+                current.lastAck?.requestId === requestId
+              ) {
+                removeRequest(runtime.mailboxPath, requestId);
+                if (
+                  runtime.cleanupError?.startsWith(
+                    "Acknowledged request could not be removed:",
+                  )
+                )
+                  runtime.cleanupError = undefined;
+              }
+            } finally {
+              cleanupRelease();
+            }
           }
         } catch (error) {
           const message = `Acknowledged request could not be removed: ${String(error)}`;
           runtime.cleanupError = message;
-          options.appendError(context, "pi_herdsman_cleanup_error", error);
-        } finally {
-          cleanupRelease();
+          try {
+            options.appendError(context, "pi_herdsman_cleanup_error", error);
+          } catch {
+            // Cleanup reporting must not override the acknowledged outcome.
+          }
         }
       }
     }
