@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.32.0](https://github.com/boadij/pi-herdsman/compare/v0.31.1...v0.32.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lead:** use dedicated Managed Lead sessions ([#477](https://github.com/boadij/pi-herdsman/issues/477))
+
+### Features
+
+* **evidence:** deliver historical requirements through semantic refs ([#493](https://github.com/boadij/pi-herdsman/issues/493)) ([50e9f81](https://github.com/boadij/pi-herdsman/commit/50e9f815f22fa9b435917ba0459c8666d2e9abc4))
+* **evidence:** preserve current batches and report handoff receipts ([#502](https://github.com/boadij/pi-herdsman/issues/502)) ([7064231](https://github.com/boadij/pi-herdsman/commit/7064231fe441d41f4c417c9d95dcc4c075aeb0b5))
+* **lead:** use dedicated Managed Lead sessions ([#477](https://github.com/boadij/pi-herdsman/issues/477)) ([ffb8533](https://github.com/boadij/pi-herdsman/commit/ffb8533f1a7d7e557026467eff4003c200fc9fcc))
+
+
+### Fixes
+
+* **agent:** prevent transient managed authority loss during verification ([#516](https://github.com/boadij/pi-herdsman/issues/516)) ([a29ffd6](https://github.com/boadij/pi-herdsman/commit/a29ffd6d37ec22c064253bd87e2ab3f78cdb8980))
+* **agent:** recover interrupted execution and historical continuation ([#501](https://github.com/boadij/pi-herdsman/issues/501)) ([dc6ecf3](https://github.com/boadij/pi-herdsman/commit/dc6ecf3fcb491d4ea7685a9ad73e1fa673e4cc10))
+* **manager:** handle delayed worktree removal completion ([#507](https://github.com/boadij/pi-herdsman/issues/507)) ([18fc48d](https://github.com/boadij/pi-herdsman/commit/18fc48df319790b7283c1bda7251295996cacc4a))
+* **manager:** make removal approvals durable and accessible ([#520](https://github.com/boadij/pi-herdsman/issues/520)) ([9bd746a](https://github.com/boadij/pi-herdsman/commit/9bd746af4f219ad749563cf6fd9af5b622096c21))
+* **manager:** restore actionable removal with project-scoped approval ([#513](https://github.com/boadij/pi-herdsman/issues/513)) ([39ecb1e](https://github.com/boadij/pi-herdsman/commit/39ecb1e32407f37014923d60c4728c221cb24661))
+* **manager:** serialize project-assignment lock acquisition ([#491](https://github.com/boadij/pi-herdsman/issues/491)) ([5d5cb0b](https://github.com/boadij/pi-herdsman/commit/5d5cb0b38c2a9b7bcde8623811c8d8a672d0a08f))
+* **smoke:** diagnose accepted nested delegation stalls ([#505](https://github.com/boadij/pi-herdsman/issues/505)) ([fbfdd00](https://github.com/boadij/pi-herdsman/commit/fbfdd006e38f8e768b0cfee63e6ef8de63c49176))
+* **ui:** restore static indicators and lowercase lead modes ([#514](https://github.com/boadij/pi-herdsman/issues/514)) ([6048398](https://github.com/boadij/pi-herdsman/commit/60483987b9d7611c02fb50488b754a6d277d6322))
+
+
+### Refactoring
+
+* **prompts:** clarify Manager and managed Lead ownership ([#492](https://github.com/boadij/pi-herdsman/issues/492)) ([7c00506](https://github.com/boadij/pi-herdsman/commit/7c005066b25d2a3a1866e018b92ca8f74163dac7))
+
+
+### Documentation
+
+* add pull request template ([#521](https://github.com/boadij/pi-herdsman/issues/521)) ([9c669fd](https://github.com/boadij/pi-herdsman/commit/9c669fd57531af7395ada8d032f7b089e11c08db))
+* establish positional salience principle for model-facing context ([#494](https://github.com/boadij/pi-herdsman/issues/494)) ([757901d](https://github.com/boadij/pi-herdsman/commit/757901d05ceb96b485f1fd68326ae9e626551688))
+* **principles:** minimize model-facing reference burden ([#488](https://github.com/boadij/pi-herdsman/issues/488)) ([3f45b4b](https://github.com/boadij/pi-herdsman/commit/3f45b4b2efe739ad921cbf95ccc1108a1b01e22a))
+
+
+### Tests
+
+* **ci:** restore Windows suite headroom ([#498](https://github.com/boadij/pi-herdsman/issues/498)) ([a86f21a](https://github.com/boadij/pi-herdsman/commit/a86f21a4ef6d3ff105898b03bd49c8e76ea7bc02)), closes [#497](https://github.com/boadij/pi-herdsman/issues/497)
+
+
+### Other Changes
+
+* **runtime:** adopt Pi 1.4.0 ([#519](https://github.com/boadij/pi-herdsman/issues/519)) ([cffa319](https://github.com/boadij/pi-herdsman/commit/cffa319d2690b90c13d816d51d2fac1e5c7c930f))
+
 ## [0.31.1](https://github.com/boadij/pi-herdsman/compare/v0.31.0...v0.31.1) (2026-10-20)
 
 
