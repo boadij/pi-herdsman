@@ -3611,18 +3611,13 @@ export function registerLeadRuntime(
         ),
     reconcileRemotePeers: (ctx: ExtensionContext, signal?: AbortSignal) => {
       return activeLeadRole(options.leadRuntime) === "manager"
-        ? coordinationRuntime
-            .peerMessage(
-              "remote-reconciliation",
-              { action: "list" },
-              signal,
-              undefined,
-              ctx,
-            )
-            .then((result: any) => {
-              if (result.details?.unavailable_machines?.length)
-                throw new Error("remote Manager reconciliation incomplete");
-            })
+        ? coordinationRuntime.peerMessage(
+            "remote-reconciliation",
+            { action: "list" },
+            signal,
+            undefined,
+            ctx,
+          )
         : Promise.resolve();
     },
   };
@@ -11562,8 +11557,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
   let chiefInboxAbortController: AbortController | undefined;
+  const REMOTE_POLL_MS = 10_000;
   let nextRemoteReconciliation = 0;
-  let remoteReconciliationFailures = 0;
   let remoteReconciliationInFlight = false;
   let currentSubmittedAt: Map<string, number> | undefined;
   let settledSubmissions = new Set<string>();
@@ -12494,34 +12489,28 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               !remoteReconciliationInFlight
             ) {
               remoteReconciliationInFlight = true;
-              nextRemoteReconciliation =
-                Date.now() +
-                Math.min(
-                  5 * 60_000,
-                  30_000 * 2 ** remoteReconciliationFailures,
-                );
               const reconciliationGeneration = generation;
+              const reconciliationAbortController = chiefInboxAbortController;
               void Promise.resolve()
                 .then(() =>
                   host.reconcileRemotePeers?.(
                     ctx,
-                    chiefInboxAbortController?.signal,
+                    reconciliationAbortController?.signal,
                   ),
                 )
-                .then(() => {
-                  if (reconciliationGeneration === chiefInboxGeneration) {
-                    remoteReconciliationFailures = 0;
-                  }
-                })
-                .catch((error: unknown) => {
-                  if (reconciliationGeneration === chiefInboxGeneration) {
-                    remoteReconciliationFailures = Math.min(
-                      remoteReconciliationFailures + 1,
-                      4,
-                    );
-                  }
+                .catch(() => {
+                  managerDiagnostic("inbox_catch", {
+                    category: "remote_reconciliation",
+                  });
                 })
                 .finally(() => {
+                  if (
+                    reconciliationGeneration === chiefInboxGeneration &&
+                    reconciliationAbortController ===
+                      chiefInboxAbortController &&
+                    !chiefInboxAbortController?.signal.aborted
+                  )
+                    nextRemoteReconciliation = Date.now() + REMOTE_POLL_MS;
                   remoteReconciliationInFlight = false;
                 });
             }
@@ -12565,6 +12554,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       settledSubmissions.clear();
       chiefInboxAbortController?.abort();
       chiefInboxAbortController = new AbortController();
+      nextRemoteReconciliation = 0;
     },
     agentSettled: () => {
       for (const id of currentSubmittedAt?.keys() ?? [])
