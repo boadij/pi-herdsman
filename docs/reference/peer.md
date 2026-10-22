@@ -122,11 +122,13 @@ durable acceptance; failed sends remain queued and are retried when the Manager
 lists peers again. Acceptance is not delivery to Pi or completion of the
 requested work. An accepted request also establishes a capability-scoped,
 durable return correspondence. The recipient Manager can reply to the exact
-originating session with `message_peer`; the reply is queued at the recipient
-and retrieved over the original SSH route when the originating Manager lists
-peers. Replies remain queued until acknowledged, so a disconnect and later
-reconnection does not require reverse SSH. Recovery is allowed only for the
-same exact Pi session after it has re-established live Manager authority; a
+originating session with `message_peer`; the reply is queued at the recipient.
+Remote Manager replies are retrieved automatically while the originating
+Manager's inbox runtime is active. Calling `list_peers` also triggers
+reconciliation immediately. Replies remain queued until acknowledged,
+including across temporary disconnections; reverse SSH is not required.
+Recovery is allowed only for the same exact Pi session after it has
+re-established live Manager authority; a
 replacement session is not substituted. Requests also verify the endpoint's
 effective Herdsman data root against the discovered route before recovery or
 reply transfer. Delivery to Pi and completion of the requested work remain
