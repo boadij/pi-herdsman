@@ -35,7 +35,7 @@ const modelIds = [
   "agent-crash-child",
 ];
 
-export function resolvePiPackageMetadata(entryPoint = process.argv[1]) {
+function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
   let directory = dirname(realpathSync(entryPoint));
   while (true) {
     try {
@@ -751,14 +751,7 @@ export default function install(pi) {
     if (!recordedSessions.has(currentSessionId)) {
       let piPackage;
       try {
-        piPackage = process.env.PI_PACKAGE_DIR
-          ? JSON.parse(
-              readFileSync(
-                join(process.env.PI_PACKAGE_DIR, "package.json"),
-                "utf8",
-              ),
-            )
-          : resolvePiPackageMetadata();
+        piPackage = piPackageFromExecutingCli();
       } catch {
         throw new Error("Could not resolve Pi package metadata");
       }

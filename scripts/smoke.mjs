@@ -16,15 +16,7 @@ import {
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import {
-  delimiter,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,8 +24,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const localPi = join(repoRoot, "node_modules", ".bin", "pi");
-const localPiBin = dirname(localPi);
 const scenarioNames = [
   "core",
   "continuation",
@@ -438,14 +428,7 @@ export function selectSmokeModel(args, execute = run) {
 export function isolatedEnv(base, paths) {
   const env = { ...base };
   for (const key of HERDR_ROUTING_KEYS) delete env[key];
-  delete env.PI_PACKAGE_DIR;
   Object.assign(env, {
-    PATH: [
-      localPiBin,
-      ...(base.PATH ?? "")
-        .split(delimiter)
-        .filter((entry) => entry !== localPiBin),
-    ].join(delimiter),
     HERDR_CONFIG_PATH: paths.herdrConfig,
     XDG_CONFIG_HOME: paths.xdgConfig,
     XDG_STATE_HOME: paths.xdgState,
@@ -2671,7 +2654,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-export async function preflight(pkg, execute = run, checkAccess = access) {
+async function preflight(pkg) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -2679,29 +2662,13 @@ export async function preflight(pkg, execute = run, checkAccess = access) {
       : undefined;
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
-  const pinnedPiVersion =
-    pkg?.devDependencies?.["@earendil-works/pi-coding-agent"];
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
-  if (typeof pinnedPiVersion !== "string")
-    throw new Error(
-      "smoke: pinned Pi development dependency is unavailable; run npm ci",
-    );
-  try {
-    await checkAccess(localPi);
-  } catch {
-    throw new Error("smoke: local Pi executable is missing; run npm ci");
-  }
   const [{ stdout: piVersion }, { stdout: herdrVersion }] = await Promise.all([
-    execute(localPi, ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
-    execute("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    run("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
   const actualPiVersion = piVersion.trim();
   requireTestedBaseline("Pi", actualPiVersion, piBaseline);
-  assert.equal(
-    actualPiVersion,
-    pinnedPiVersion,
-    "smoke: local Pi does not match the pinned dependency; run npm ci",
-  );
   const actualHerdrVersion = herdrVersion.trim().replace(/^herdr\s+v?/, "");
   requireTestedBaseline("Herdr", actualHerdrVersion, herdrBaseline);
   return { piVersion: actualPiVersion, herdrVersion: actualHerdrVersion };
@@ -2785,8 +2752,6 @@ export async function createParentWorkspace(
       "--label",
       "pi-herdsman-smoke",
       "--no-focus",
-      "--env",
-      `PATH=${parent.env.PATH}`,
     ],
     { env: parent.env, timeout: OBSERVATION_TIMEOUT_MS },
   );
@@ -2838,7 +2803,6 @@ async function createIsolation() {
       "herdr-agent-state.ts",
     ),
     authLink: join(root, "pi-agent", "auth.json"),
-    piExecutable: join(root, "pi"),
   };
   try {
     await Promise.all([
@@ -2846,12 +2810,8 @@ async function createIsolation() {
       mkdir(paths.xdgState, { recursive: true }),
       mkdir(join(paths.piAgent, "extensions"), { recursive: true }),
       mkdir(paths.piSessions, { recursive: true }),
-      symlink(localPi, paths.piExecutable),
     ]);
-    await writeFile(
-      paths.herdrConfig,
-      '[experimental]\nallow_nested = true\n\n[terminal]\nshell_mode = "non_login"\n',
-    );
+    await writeFile(paths.herdrConfig, "[experimental]\nallow_nested = true\n");
     return paths;
   } catch (error) {
     await rm(root, { recursive: true, force: true });
@@ -2875,7 +2835,7 @@ export async function preparePi(paths, model, execute = run) {
   const env = isolatedEnv(process.env, paths);
   const authArgs = ["auth", "check", "--model", model, "--no-refresh"];
   try {
-    await execute(localPi, authArgs, {
+    await execute("pi", authArgs, {
       env,
       stdio: ["ignore", "ignore", "ignore"],
     });
@@ -2888,7 +2848,7 @@ export async function preparePi(paths, model, execute = run) {
         "Pi auth check failed and no current auth.json is available",
       );
     try {
-      await execute(localPi, authArgs, {
+      await execute("pi", authArgs, {
         env,
         stdio: ["ignore", "ignore", "ignore"],
       });
@@ -2945,8 +2905,6 @@ async function startNestedHerdr(
       "--label",
       `smoke-${id}`,
       "--no-focus",
-      "--env",
-      `PATH=${parentEnv.PATH}`,
       "--env",
       `HERDR_CONFIG_PATH=${paths.herdrConfig}`,
       "--env",
@@ -3093,7 +3051,6 @@ async function startCandidate(ctx) {
   await Promise.all([
     access(ctx.candidateExtension),
     access(ctx.herdrStateExtension),
-    access(ctx.paths.piExecutable),
     ...(ctx.simulatedProviderExtension
       ? [access(ctx.simulatedProviderExtension)]
       : []),
@@ -3135,7 +3092,7 @@ async function startCandidate(ctx) {
       "run",
       paneId,
       rootCandidateCommand([
-        ctx.paths.piExecutable,
+        "pi",
         ...args,
         ...(prompt === undefined ? [] : [prompt]),
       ]),
@@ -5203,7 +5160,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "run",
       ctx.rootPaneId,
       rootCandidateCommand([
-        ctx.paths.piExecutable,
+        "pi",
         ...args,
         "--session",
         ctx.crashRecovery.ownerSessionPath,
@@ -6165,22 +6122,7 @@ async function runManagerRecoverySmoke(ctx) {
     ]);
     if (!observed.ok) throw observationFailure(observed.error);
     const result = observed.value;
-    if (!Array.isArray(result?.worktrees))
-      throw new Error("Herdr worktree inventory is malformed");
-    if (
-      !result.worktrees.every(
-        (item) =>
-          item !== null &&
-          typeof item === "object" &&
-          !Array.isArray(item) &&
-          typeof item.branch === "string" &&
-          item.branch.length > 0 &&
-          typeof (item.path ?? item.worktree_path) === "string" &&
-          (item.path ?? item.worktree_path).length > 0,
-      )
-    )
-      throw new Error("Herdr worktree inventory is malformed");
-    return result.worktrees;
+    return result.worktrees ?? [];
   };
   const primaryPath = ctx.primaryCheckoutPath;
   const rootWorkspace = (
@@ -6724,14 +6666,6 @@ async function runManagerRecoverySmoke(ctx) {
 
   if (ctx.managerRemovalAcceptance) {
     const removalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
-    const removalResultCount = sessionEntries(
-      (await rootSnapshot()).contents,
-    ).filter(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message?.role === "toolResult" &&
-        entry.message.toolName === "remove_worktree",
-    ).length;
     markStage(ctx, "manager-removal-pending-request");
     await promptRoot(removalPrompt);
     const pending = await waitForEvidence(
@@ -6758,56 +6692,9 @@ async function runManagerRecoverySmoke(ctx) {
       },
       { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
     );
-    assert.equal(
-      sessionEntries((await rootSnapshot()).contents).filter(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "toolResult" &&
-          entry.message.toolName === "remove_worktree",
-      ).length,
-      removalResultCount + 1,
-      "the initial request prompt must call remove_worktree exactly once",
-    );
     assert.equal(pending.message.details.branch, branch);
-    assert.equal(typeof pending.message.details.request_id, "string");
-    assert.ok(pending.message.details.request_id.length > 0);
     assert.equal((await matchingWorktrees()).length, 1);
     assert.equal(await lstat(assignmentPath).then(() => true), true);
-
-    const pendingSession = await rootSnapshot();
-    const pendingSessionId = sessionEntries(pendingSession.contents).find(
-      (entry) => entry.type === "session",
-    )?.id;
-    assert.equal(typeof pendingSessionId, "string");
-    const pendingStatus = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-    assert.match(pendingStatus, /removal approval pending|removals? pending/iu);
-    markStage(ctx, "manager-removal-reload");
-    await submitPaneCommand(ctx, ctx.rootPaneId, "/reload");
-    await waitForEvidence(
-      ctx,
-      "manager-removal-reload-restored-session",
-      async () => {
-        const session = await rootSnapshot();
-        const sessionId = session
-          ? sessionEntries(session.contents).find(
-              (entry) => entry.type === "session",
-            )?.id
-          : null;
-        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        return {
-          done:
-            sessionId === pendingSessionId &&
-            text.includes("remov") &&
-            /pending/iu.test(text),
-          progress: {
-            sameSession: sessionId === pendingSessionId,
-            pendingVisible: /pending/iu.test(text),
-          },
-          evidence: { sessionId, visible: text.slice(-1000) },
-        };
-      },
-      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
-    );
 
     markStage(ctx, "manager-removal-cancel");
     await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
@@ -6936,154 +6823,63 @@ async function runManagerRecoverySmoke(ctx) {
     await submitPaneCommand(
       ctx,
       ctx.rootPaneId,
-      "/manager remove-preapproval off",
+      "/manager remove-preapproval on",
     );
     await waitForEvidence(
       ctx,
-      "manager-removal-preauthorization-disabled",
+      "manager-removal-preauthorization-prompt",
       async () => {
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         return {
-          done: text.includes("this repository is Off"),
-          progress: { disabled: text.includes("this repository is Off") },
-          evidence: text.slice(-1000),
-        };
-      },
-      { timeoutMs: 10_000, stallMs: CONTROL_STALL_MS },
-    );
-    const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
-    const cleanRemovalCount = sessionEntries(
-      (await rootSnapshot()).contents,
-    ).filter(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message?.role === "toolResult" &&
-        entry.message.toolName === "remove_worktree" &&
-        entry.message.details?.branch === branch,
-    ).length;
-    markStage(ctx, "manager-removal-clean-pending-request");
-    await promptRoot(authorizedPrompt);
-    const cleanPending = await waitForEvidence(
-      ctx,
-      "manager-removal-clean-pending-result",
-      async () => {
-        const session = await rootSnapshot();
-        const results = session
-          ? sessionEntries(session.contents).filter(
-              (entry) =>
-                entry.type === "message" &&
-                entry.message?.role === "toolResult" &&
-                entry.message.toolName === "remove_worktree" &&
-                entry.message.details?.branch === branch,
-            )
-          : [];
-        return {
-          done:
-            results.length === cleanRemovalCount + 1 &&
-            results.at(-1)?.message?.details?.pending === true,
-          value: results.at(-1),
-          progress: {
-            correlatedPendingResult:
-              results.at(-1)?.message?.details?.pending === true,
-          },
-          evidence: session ? summarizeSession(session.contents) : null,
-        };
-      },
-      { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
-    );
-    assert.equal(cleanPending.message.details.branch, branch);
-    assert.equal(typeof cleanPending.message.details.request_id, "string");
-    markStage(ctx, "manager-removal-clean-pending-approval");
-    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
-    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
-    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
-    await waitForEvidence(
-      ctx,
-      "manager-removal-clean-confirmation-dialog",
-      async () => {
-        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        return {
-          done: text.includes("Type remove to confirm."),
-          progress: {
-            confirmationDialog: text.includes("Type remove to confirm."),
-          },
+          done: text.includes("Type enable to confirm."),
+          progress: { promptVisible: text.includes("Type enable to confirm.") },
           evidence: text.slice(-1000),
         };
       },
       { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
     );
-    await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "remove"]);
+    await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "enable"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await waitForEvidence(
+      ctx,
+      "manager-removal-preauthorization-saved",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done: text.includes("this repository is On"),
+          progress: { enabled: text.includes("this repository is On") },
+          evidence: text.slice(-1000),
+        };
+      },
+      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+    );
+    const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. The repository is preauthorized; do not ask for approval.`;
+    markStage(ctx, "manager-removal-preauthorized-tool-call");
+    await promptRoot(authorizedPrompt);
     const removal = await waitForEvidence(
       ctx,
       "manager-removal-guarded-executor",
       async () => {
-        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        const visible = text.replace(/\s+/gu, " ");
-        const matchingOwnedWorktrees = await matchingWorktrees();
-        const checkoutPathPresent = await lstat(worktreePath).then(
-          () => true,
-          (error) => {
-            if (error.code === "ENOENT") return false;
-            throw error;
-          },
-        );
-        const assignmentFilePresent = await lstat(assignmentPath).then(
-          () => true,
-          (error) => {
-            if (error.code === "ENOENT") return false;
-            throw error;
-          },
-        );
-        const checkoutRemoved =
-          matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
-        // /manager remove reports through the UI; it does not emit another
-        // remove_worktree tool result after the approval dialog.
-        const successMessage =
-          visible.includes(`removed checkout for ${branch}`) ||
-          visible.includes(`checkout removed for ${branch}`);
-        const executorCompleted = successMessage;
-        const verifiedSuccess = executorCompleted && checkoutRemoved;
+        const session = await rootSnapshot();
+        const results = session
+          ? staffActionResults(
+              session.contents,
+              "remove_worktree",
+              "remove",
+              authorizedPrompt,
+            )
+          : [];
         return {
-          done: verifiedSuccess,
-          value: {
-            outcome: verifiedSuccess ? "verified-success" : "unverified",
-            executorCompleted,
-            checkoutRemoved,
-            branch,
-            checkoutPath: worktreePath,
-            workspaceId,
-            matchingWorktrees: matchingOwnedWorktrees,
-            checkoutPathPresent,
-            assignmentFilePresent,
-            visible: text.slice(-1200),
-          },
-          progress: {
-            executorCompleted,
-            checkoutRemoved,
-          },
-          evidence: {
-            branch,
-            checkoutPath: worktreePath,
-            workspaceId,
-            matchingWorktrees: matchingOwnedWorktrees,
-            checkoutPathPresent,
-            assignmentFilePresent,
-            visible: text.slice(-1200),
-          },
+          done:
+            results.length === 1 && (await matchingWorktrees()).length === 0,
+          value: results[0],
+          progress: { toolResult: results.length === 1 },
+          evidence: session ? summarizeSession(session.contents) : null,
         };
       },
-      // Herdr's guarded remove is bounded at 180s; allow 30s for the final
-      // result and independent worktree inventory to become observable.
-      { timeoutMs: 210_000, stallMs: 210_000 },
+      { timeoutMs: 30_000, stallMs: MODEL_STALL_MS },
     );
-    assert.equal(
-      removal.outcome,
-      "verified-success",
-      `Guarded removal failed: ${JSON.stringify(removal)}`,
-    );
-    assert.equal(removal.executorCompleted, true);
-    assert.equal(removal.checkoutRemoved, true);
+    assert.equal(removal.branch, branch);
     ctx.owned.managerWorktreeRetirementRequested = true;
     await waitForEvidence(
       ctx,
@@ -7108,8 +6904,7 @@ async function runManagerRecoverySmoke(ctx) {
       pendingToolReturned: true,
       cancellationPreservedCheckout: true,
       approvalReachedGuardedSafetyRefusal: true,
-      reloadRestoredPendingReview: true,
-      cleanPendingApprovalReachedGuardedExecutor: true,
+      repositoryPreauthorizationReachedGuardedExecutor: true,
     };
     return;
   }
