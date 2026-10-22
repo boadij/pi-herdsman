@@ -49,16 +49,17 @@ AI-assisted contributions are welcome, but contributors remain responsible for u
 
 ## Public disclosure safety
 
-Before publishing to GitHub or other public destinations, review the complete
-outgoing material, including changes and commit metadata, issue and pull
-request text, comments, validation output, logs, screenshots, and attachments.
-Remove secrets, personal information, confidential content, and private
-infrastructure details. Use synthetic or non-reconstructable placeholders where
-technical evidence is needed. Automated checks cannot replace this review.
+Before publishing, review the actual outgoing changes, commit metadata, issue
+and pull request text, logs, screenshots, and attachments. Omit secrets,
+confidential content, and unnecessary private personal or infrastructure
+information while preserving legitimate attribution and technical evidence.
+Do not silently anonymize contributors, change Git identities, or rewrite
+history merely because a person's identity is visible.
 
-If sensitive information is exposed, avoid reproducing it publicly, revoke or
-rotate compromised credentials promptly, and coordinate remediation privately.
-For security vulnerabilities, use the private reporting guidance below.
+If a private detail cannot be omitted without altering an authoritative record,
+withhold publication and resolve it privately. For accidental disclosures,
+avoid repeating the material publicly and promptly revoke exposed credentials.
+Agents follow the corresponding policy in `AGENTS.md`.
 
 ## Security issues
 
