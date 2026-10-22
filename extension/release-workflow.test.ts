@@ -9,7 +9,7 @@ const previewWorkflow = readFileSync(
   "utf8",
 ).replaceAll("\r\n", "\n");
 
-test("release publication is recoverable and preserves release identity", () => {
+test("release publication recovers with exact identity", () => {
   assert.match(workflow, /queue: max/);
   assert.match(workflow, /googleapis\/release-please-action@v5/);
   assert.match(
@@ -57,7 +57,10 @@ test("release publication is recoverable and preserves release identity", () => 
     workflow,
     /- name: Publish container\n\s+if: \$\{\{ !cancelled\(\) && steps\.login\.outcome == 'success' \}\}/,
   );
-  assert.match(workflow, /tags: \$\{\{ steps\.target\.outputs\.docker_tags \}\}/);
+  assert.match(
+    workflow,
+    /tags: \$\{\{ steps\.target\.outputs\.docker_tags \}\}/,
+  );
   assert.doesNotMatch(workflow, /steps\.package\./);
 });
 
