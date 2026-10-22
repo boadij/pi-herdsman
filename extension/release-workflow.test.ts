@@ -30,7 +30,7 @@ test("release publication uses explicit release identity", () => {
   );
   assert.match(
     workflow,
-    /- uses: actions\/setup-node@v6[\s\S]*if:\s*\$\{\{\s*steps\.target\.outputs\.publish\s*==\s*'true'\s*\}\}/,
+    /- uses: actions\/setup-node@v\d+\s+if:\s*\$\{\{\s*steps\.target\.outputs\.publish\s*==\s*'true'\s*\}\}/,
   );
   assert.match(
     workflow,
