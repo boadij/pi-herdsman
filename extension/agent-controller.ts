@@ -6259,7 +6259,7 @@ export function createAgentController(
         const sessionRetired = options.sessionRetired(context, runtime);
         const retirement =
           sessionRetired === true
-            ? "Continuation unavailable: session retired after context pressure. If follow-up work remains, use delegate_agent with this handoff and relevant files."
+            ? "Continuation unavailable: session retired after context pressure. If follow-up work remains, use delegate_agent with this result and relevant files."
             : sessionRetired === undefined
               ? "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent."
               : undefined;

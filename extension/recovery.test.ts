@@ -3292,6 +3292,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     enabled: boolean,
     targetCwd = "/tmp",
     hasSessionFile = true,
+    resultStatus: "completed" | "failed" = "completed",
   ): Promise<any> => {
     const identity = recoveryIdentity(label);
     const child = {
@@ -3310,8 +3311,10 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       workspaceId: child.workspaceId,
       agentLabel: child.agentLabel,
       paneId: child.paneId,
-      status: "completed",
-      text: "completed child work",
+      status: resultStatus,
+      ...(resultStatus === "completed"
+        ? { text: "completed child work" }
+        : { error: { code: "execution_error", message: "child failed" } }),
       completedAt: Date.now(),
     });
     if (hasSessionFile)
@@ -3375,6 +3378,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     assert.doesNotMatch(retiredHeader, /\bsession=/);
     assert.match(retired.content, /Continuation unavailable/);
     assert.match(retired.content, /delegate_agent/);
+    assert.match(retired.content, /with this result and relevant files/);
     assert.ok(
       retired.content.indexOf("Continuation unavailable") <
         retired.content.indexOf("completed child work"),
@@ -3384,6 +3388,22 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       retired.details.piSessionId,
       recoveryIdentity("retired-delivery-agent").piSessionId,
     );
+
+    const failedRetired = await deliver(
+      "failed-retired-delivery-agent",
+      true,
+      true,
+      "/tmp",
+      true,
+      "failed",
+    );
+    assert.match(failedRetired.content.split("\n\n")[0], /status=failed/);
+    assert.match(failedRetired.content, /child failed/);
+    assert.match(
+      failedRetired.content,
+      /delegate_agent with this result and relevant files/,
+    );
+    assert.doesNotMatch(failedRetired.content, /completed child work/);
 
     const uncertain = await deliver(
       "uncertain-delivery-agent",
