@@ -7490,19 +7490,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         let retirementError: string | undefined;
         const checkoutState = gitPathStatus(candidate.checkoutPath);
         const checkoutRemoved = checkoutState === "absent";
-        const currentPending = pendingRemovals(ctx).get(branch);
-        if (
-          checkoutRemoved &&
-          pendingAtStart &&
-          pendingAtStart.repoKey === candidate.manager.repoKey &&
-          pendingAtStart.assignmentId === candidate.assignment.id &&
-          pendingAtStart.checkoutPath === candidate.checkoutPath &&
-          currentPending?.id === pendingAtStart.id &&
-          currentPending.repoKey === pendingAtStart.repoKey &&
-          currentPending.assignmentId === pendingAtStart.assignmentId &&
-          currentPending.checkoutPath === pendingAtStart.checkoutPath
-        )
-          resolvePendingRemoval(pendingAtStart, ctx);
         try {
           await host.reconcileProjectAssignments(
             ctx,
@@ -7526,6 +7513,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           retirementError =
             error instanceof Error ? error.message : String(error);
         }
+        let pendingResolutionError: string | undefined;
+        const currentPending = pendingRemovals(ctx).get(branch);
+        if (
+          checkoutRemoved &&
+          pendingAtStart &&
+          pendingAtStart.repoKey === candidate.manager.repoKey &&
+          pendingAtStart.assignmentId === candidate.assignment.id &&
+          pendingAtStart.checkoutPath === candidate.checkoutPath &&
+          currentPending?.id === pendingAtStart.id &&
+          currentPending.repoKey === pendingAtStart.repoKey &&
+          currentPending.assignmentId === pendingAtStart.assignmentId &&
+          currentPending.checkoutPath === pendingAtStart.checkoutPath
+        ) {
+          try {
+            resolvePendingRemoval(pendingAtStart, ctx);
+          } catch (error) {
+            pendingResolutionError =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
         const mayFinishLater =
           "error" in removed && removed.commandInterrupted
             ? " Herdr may still complete removal after the CLI stopped."
@@ -7536,8 +7543,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               type: "text" as const,
               text: checkoutRemoved
                 ? assignmentRetired
-                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.`
-                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}`
+                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
+                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
                 : checkoutState === "present"
                   ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal is unconfirmed for ${branch}; checkout was present at the last check; assignment ${assignmentRetired ? "was retired" : "remains recorded"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`
                   : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`,
@@ -7560,6 +7567,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ? { workspace_reopened: true }
               : {}),
             ...(retirementError ? { retirement_error: retirementError } : {}),
+            ...(pendingResolutionError ? { pendingResolutionError } : {}),
           },
         };
       },

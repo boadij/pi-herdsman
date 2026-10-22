@@ -5109,6 +5109,7 @@ async function managerRemovalFixture(
     interruptedRemove?: boolean;
     replacePendingOnRemoval?: boolean;
     replacementRequestId?: string;
+    failPendingResolution?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -5177,8 +5178,15 @@ async function managerRemovalFixture(
   };
   const runtime = createLeadProjectRuntime({
     pi: {
-      appendEntry: (customType: string, data: unknown) =>
-        sessionEntries.push({ type: "custom", customType, data }),
+      appendEntry: (customType: string, data: unknown) => {
+        if (
+          options.failPendingResolution &&
+          customType === "pi-herdsman-pending-removal" &&
+          (data as { action?: string }).action === "resolve"
+        )
+          throw new Error("session append failed during resolution");
+        sessionEntries.push({ type: "custom", customType, data });
+      },
       exec: async (command: string, args: string[], runOptions: any) => {
         assert.equal(command, "git");
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
@@ -5489,6 +5497,37 @@ test("successful direct Manager removal preserves a newer pending replacement", 
   assert.match(
     String(fixture.statusUpdates.at(-1)?.[1]),
     /1 worktree removal approval pending/,
+  );
+});
+
+test("Manager removal retires assignment when pending approval resolution persistence fails", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    failPendingResolution: true,
+  });
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.assignment_retired, true);
+  assert.equal(fixture.assignment(), undefined);
+  assert.equal(existsSync(fixture.checkoutPath), false);
+  assert.match(
+    result.details.pendingResolutionError,
+    /session append failed during resolution/,
+  );
+  assert.match(
+    result.content[0].text,
+    /Warning: pending removal approval could not be resolved: session append failed during resolution/,
   );
 });
 

@@ -6118,7 +6118,9 @@ async function runManagerRecoverySmoke(ctx) {
     ]);
     if (!observed.ok) throw observationFailure(observed.error);
     const result = observed.value;
-    return result.worktrees ?? [];
+    if (!Array.isArray(result?.worktrees))
+      throw new Error("Herdr worktree inventory is malformed");
+    return result.worktrees;
   };
   const primaryPath = ctx.primaryCheckoutPath;
   const rootWorkspace = (
@@ -6964,10 +6966,23 @@ async function runManagerRecoverySmoke(ctx) {
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         const visible = text.replace(/\s+/gu, " ");
         const visibleBefore = approvalUiBefore.replace(/\s+/gu, " ");
-        const matchingOwnedWorktrees = (await matchingWorktrees()).filter(
-          (item) => (item.path ?? item.worktree_path) === worktreePath,
+        const matchingOwnedWorktrees = await matchingWorktrees();
+        const checkoutPathPresent = await lstat(worktreePath).then(
+          () => true,
+          (error) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
         );
-        const checkoutRemoved = matchingOwnedWorktrees.length === 0;
+        const assignmentFilePresent = await lstat(assignmentPath).then(
+          () => true,
+          (error) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
+        );
+        const checkoutRemoved =
+          matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
         // /manager remove reports through the UI; it does not emit another
         // remove_worktree tool result after the approval dialog.
         const executorCompleted =
@@ -6996,6 +7011,12 @@ async function runManagerRecoverySmoke(ctx) {
                   : "interrupted-or-uncertain",
             executorCompleted,
             checkoutRemoved,
+            branch,
+            checkoutPath: worktreePath,
+            workspaceId,
+            matchingWorktrees: matchingOwnedWorktrees,
+            assignmentFilePresent,
+            refusalText: text.slice(-1200),
           },
           progress: {
             executorCompleted,
@@ -7004,8 +7025,12 @@ async function runManagerRecoverySmoke(ctx) {
             uncertain,
           },
           evidence: {
-            visible: text.slice(-1200),
+            branch,
+            checkoutPath: worktreePath,
+            workspaceId,
             matchingWorktrees: matchingOwnedWorktrees,
+            assignmentFilePresent,
+            refusalText: text.slice(-1200),
           },
         };
       },
@@ -7013,7 +7038,11 @@ async function runManagerRecoverySmoke(ctx) {
       // result and independent worktree inventory to become observable.
       { timeoutMs: 210_000, stallMs: 210_000 },
     );
-    assert.equal(removal.outcome, "verified-success");
+    assert.equal(
+      removal.outcome,
+      "verified-success",
+      `Guarded removal failed: ${JSON.stringify(removal)}`,
+    );
     assert.equal(removal.executorCompleted, true);
     assert.equal(removal.checkoutRemoved, true);
     ctx.owned.managerWorktreeRetirementRequested = true;
