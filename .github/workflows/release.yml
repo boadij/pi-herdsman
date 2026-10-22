@@ -20,11 +20,18 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - id: source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - id: release
         if: ${{ github.event_name == 'push' }}
         uses: googleapis/release-please-action@v5
@@ -34,80 +41,107 @@ jobs:
           manifest-file: .release-please-manifest.json
 
       - id: target
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          RECOVERY_TAG: ${{ inputs.tag }}
           RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
           RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
-          RECOVERY_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
             TAG="$RECOVERY_TAG"
-          elif [ "$RELEASE_CREATED" = "true" ]; then
-            TAG="$RELEASE_TAG"
           else
+            TAG="v$(jq -er '.version | select(type == "string")' package.json)"
+          fi
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$RELEASE_CREATED" = true ] && [ "$RELEASE_TAG" != "$TAG" ]; then
+            echo "Release Please tag does not match the triggering commit" >&2
+            exit 1
+          fi
+
+          if RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>"$RUNNER_TEMP/release-lookup.err"); then
+            :
+          elif [ "$EVENT_NAME" = push ] && [ "$RELEASE_CREATED" != true ] && grep -Fq '(HTTP 404)' "$RUNNER_TEMP/release-lookup.err"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            cat "$RUNNER_TEMP/release-lookup.err" >&2
+            exit 1
+          fi
+          jq -e --arg tag "$TAG" '.tag_name == $tag and .draft == false and .prerelease == false and .published_at != null' <<<"$RELEASE" >/dev/null
+
+          git fetch --no-tags --depth=1 origin "refs/tags/$TAG"
+          TAG_SHA=$(git rev-parse 'FETCH_HEAD^{commit}')
+          if [ "$EVENT_NAME" = push ] && [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+            if [ "$RELEASE_CREATED" = true ]; then
+              echo "New release tag does not match the triggering commit" >&2
+              exit 1
+            fi
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          git checkout --detach "$TAG_SHA"
+          VERSION=$(jq -er '.version' package.json)
+          test "$(jq -er '.name' package.json)" = pi-herdsman
+          test "v$VERSION" = "$TAG"
 
-          test -n "$TAG"
+          LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')
+          [[ "$LATEST" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          DIST_TAG=backfill
+          if [ "$LATEST" = "$TAG" ]; then
+            DIST_TAG=latest
+          fi
+          {
+            echo "publish=true"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "npm_tag=$DIST_TAG"
+            echo 'docker_tags<<EOF'
+            echo "ghcr.io/$GITHUB_REPOSITORY:$VERSION"
+            if [ "$DIST_TAG" = latest ]; then
+              echo "ghcr.io/$GITHUB_REPOSITORY:latest"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
-          case "$TAG" in
-            *$'\n'*|*$'\r'*)
-              echo "release tag must be a single line" >&2
-              exit 1
-              ;;
-          esac
-
-          echo "publish=true" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v7
-        if: ${{ steps.target.outputs.publish == 'true' }}
-        with:
-          ref: refs/tags/${{ steps.target.outputs.tag }}
-
-      - uses: actions/setup-node@v7
-        if: ${{ steps.target.outputs.publish == 'true' }}
+      - id: node
+        if: ${{ !cancelled() && steps.target.outputs.publish == 'true' }}
+        uses: actions/setup-node@v7
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Publish released npm version
-        if: ${{ steps.target.outputs.publish == 'true' }}
-        id: package
+        if: ${{ !cancelled() && steps.node.outcome == 'success' && steps.target.outputs.publish == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.target.outputs.tag }}
+          PACKAGE: pi-herdsman
+          VERSION: ${{ steps.target.outputs.version }}
+          DIST_TAG: ${{ steps.target.outputs.npm_tag }}
         run: |
           set -euo pipefail
-
-          PACKAGE=$(node -p "require('./package.json').name")
-          VERSION=$(node -p "require('./package.json').version")
-          test "v$VERSION" = "$RELEASE_TAG"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-
-          npm ci
-          npm run release:check
-          if npm view "$PACKAGE@$VERSION" version >/dev/null; then
+          VERSIONS=$(npm view "$PACKAGE" versions --json)
+          if jq -e --arg v "$VERSION" 'if type == "array" then index($v) != null else . == $v end' <<<"$VERSIONS" >/dev/null; then
             echo "$PACKAGE@$VERSION is already published; skipping npm publish"
           else
-            npm publish
+            npm ci
+            npm run release:check -- --tag "$DIST_TAG"
+            npm publish --tag "$DIST_TAG"
           fi
 
-      - name: Set up QEMU
-        if: ${{ steps.target.outputs.publish == 'true' }}
+      - id: qemu
+        if: ${{ !cancelled() && steps.target.outputs.publish == 'true' }}
         uses: docker/setup-qemu-action@v4
 
-      - name: Set up Docker Buildx
-        if: ${{ steps.target.outputs.publish == 'true' }}
+      - id: buildx
+        if: ${{ !cancelled() && steps.qemu.outcome == 'success' }}
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to GHCR
-        if: ${{ steps.target.outputs.publish == 'true' }}
+      - id: login
+        if: ${{ !cancelled() && steps.buildx.outcome == 'success' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -115,12 +149,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish container
-        if: ${{ steps.target.outputs.publish == 'true' }}
+        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.package.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.target.outputs.docker_tags }}
