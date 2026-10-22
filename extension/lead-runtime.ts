@@ -10280,6 +10280,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     }
   >();
   const ambiguousRemoteSessions = new Set<string>();
+  let latestPeerDiscovery = 0;
   const deliverRemoteOutbound = async (
     machine: SavedPeerMachine,
     id: string,
@@ -10540,6 +10541,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error("Manager lease is no longer active");
     const params = raw as PeerOperation;
     if (params.action === "list") {
+      const discovery = ++latestPeerDiscovery;
       const self = ctx.sessionManager.getSessionId();
       const assignmentSnapshot =
         activeRole() === "manager"
@@ -10613,17 +10615,34 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       }
       const unavailableMachines: string[] = [];
       const localPeerSessions = new Set(peers.map((peer) => peer.session));
-      remotePeerRoutes.clear();
-      ambiguousRemoteSessions.clear();
+      const discoveredRemotePeerRoutes = new Map(remotePeerRoutes);
+      const previousAmbiguousSessions = new Set(ambiguousRemoteSessions);
+      const discoveredAmbiguousSessions = new Set<string>();
       if (activeRole() === "manager") {
         let machines: SavedPeerMachine[];
+        let machineListingSucceeded = false;
         try {
           machines = await listSavedPeerMachines(signal);
+          machineListingSucceeded = true;
         } catch {
           machines = [];
           unavailableMachines.push("saved machines");
         }
-        const seen = new Set<string>();
+        if (machineListingSucceeded) {
+          const listedMachines = new Map(
+            machines.map((machine) => [machine.id, machine]),
+          );
+          for (const [session, route] of discoveredRemotePeerRoutes) {
+            const listed = listedMachines.get(route.machine.id);
+            if (!listed || listed.reachable)
+              discoveredRemotePeerRoutes.delete(session);
+          }
+          for (const [session, route] of remotePeerRoutes) {
+            const listed = listedMachines.get(route.machine.id);
+            if (listed && !listed.reachable)
+              discoveredRemotePeerRoutes.set(session, route);
+          }
+        }
         for (const machine of machines) {
           if (signal?.aborted) break;
           if (!machine.reachable) {
@@ -10633,6 +10652,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           try {
             const snapshot = await probePeerEndpoint(machine, signal);
             if (signal?.aborted) break;
+            for (const [session, route] of discoveredRemotePeerRoutes)
+              if (route.machine.id === machine.id)
+                discoveredRemotePeerRoutes.delete(session);
             if (activeRole() === "manager") {
               for (const outbound of listRemotePeerOutbounds()) {
                 if (
@@ -10931,9 +10953,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 remote.piSessionId === self ||
                 localPeerSessions.has(remote.piSessionId) ||
                 !remote.claim?.id ||
-                seen.has(
-                  `${snapshot.dataRoot}\0${remote.piSessionId}\0${remote.claim.id}`,
-                )
+                discoveredAmbiguousSessions.has(remote.piSessionId)
               )
                 continue;
               if (remote.build) {
@@ -10948,16 +10968,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                   continue;
                 }
               }
-              seen.add(
-                `${snapshot.dataRoot}\0${remote.piSessionId}\0${remote.claim.id}`,
-              );
-              const route = remotePeerRoutes.get(remote.piSessionId);
+              const route = discoveredRemotePeerRoutes.get(remote.piSessionId);
               if (route) {
-                ambiguousRemoteSessions.add(remote.piSessionId);
-                remotePeerRoutes.delete(remote.piSessionId);
+                discoveredAmbiguousSessions.add(remote.piSessionId);
+                discoveredRemotePeerRoutes.delete(remote.piSessionId);
                 continue;
               }
-              remotePeerRoutes.set(remote.piSessionId, {
+              discoveredRemotePeerRoutes.set(remote.piSessionId, {
                 machine,
                 dataRoot: snapshot.dataRoot,
                 claimId: remote.claim.id,
@@ -10976,15 +10993,46 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             }
           } catch {
             unavailableMachines.push(machine.label);
+            for (const [session, route] of discoveredRemotePeerRoutes)
+              if (route.machine.id === machine.id)
+                discoveredRemotePeerRoutes.delete(session);
+            for (const [session, route] of remotePeerRoutes) {
+              if (route.machine.id !== machine.id) continue;
+              const current = discoveredRemotePeerRoutes.get(session);
+              if (current) {
+                discoveredAmbiguousSessions.add(session);
+                discoveredRemotePeerRoutes.delete(session);
+              } else {
+                discoveredRemotePeerRoutes.set(session, route);
+              }
+            }
           }
         }
-        for (const session of ambiguousRemoteSessions) {
-          remotePeerRoutes.delete(session);
+        if (unavailableMachines.length > 0) {
+          for (const session of previousAmbiguousSessions)
+            discoveredAmbiguousSessions.add(session);
+        }
+        for (const session of discoveredAmbiguousSessions)
+          discoveredRemotePeerRoutes.delete(session);
+        for (const session of discoveredAmbiguousSessions) {
           const index = peers.findIndex(
             (peer) => peer.session === session && "machine" in peer,
           );
           if (index >= 0) peers.splice(index, 1);
         }
+      }
+      if (
+        activeRole() === "manager" &&
+        discovery === latestPeerDiscovery &&
+        !signal?.aborted &&
+        !unavailableMachines.includes("saved machines")
+      ) {
+        remotePeerRoutes.clear();
+        for (const [session, route] of discoveredRemotePeerRoutes)
+          remotePeerRoutes.set(session, route);
+        ambiguousRemoteSessions.clear();
+        for (const session of discoveredAmbiguousSessions)
+          ambiguousRemoteSessions.add(session);
       }
       return {
         content: [
@@ -11116,6 +11164,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       );
       if (!currentTarget || current.dataRoot !== remoteRoute.dataRoot)
         throw new Error("Remote Manager changed; run `list_peers` again.");
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        currentTarget.build as RuntimeBuild,
+        "peer_message",
+        `remote Manager ${params.session}`,
+      );
       const record: ChiefMessageRecord = {
         version: 2,
         build: HERDSMAN_BUILD,

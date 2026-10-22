@@ -23,6 +23,9 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
   process.env.HERDR_SOCKET_PATH = "/unused-scheduler-test-socket";
 
   let attempts = 0;
+  let activeReconciliations = 0;
+  let maxActiveReconciliations = 0;
+  let abortedReconciliations = 0;
   const diagnostics: unknown[] = [];
   const pending: ReturnType<typeof deferred<unknown>>[] = [];
   const context = fakeContext();
@@ -43,7 +46,7 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
     drainCoordinationInbox: async () => 0,
     currentPeerPresenceValid: async () => false,
     drainProjectMessages: async () => 0,
-    reconcileRemotePeers: () => {
+    reconcileRemotePeers: (_ctx: unknown, signal?: AbortSignal) => {
       attempts++;
       if (attempts === 1)
         return Promise.resolve({
@@ -51,7 +54,30 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
         });
       const request = deferred<unknown>();
       pending.push(request);
-      return request.promise;
+      activeReconciliations++;
+      maxActiveReconciliations = Math.max(
+        maxActiveReconciliations,
+        activeReconciliations,
+      );
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (complete: () => void) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", abort);
+          activeReconciliations--;
+          complete();
+        };
+        const abort = () => {
+          abortedReconciliations++;
+          finish(() => reject(signal?.reason ?? new Error("aborted")));
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        request.promise.then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
+      });
     },
   } as any);
 
@@ -143,14 +169,24 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
     await tick(500);
     assert.equal(attempts, 5, "a new session ignores the old future deadline");
 
-    // Also settle an in-flight request after beginSession but before the new
-    // inbox generation starts; stale completion must not restore its deadline.
+    // A replacement session aborts the old operation. It must settle before
+    // the replacement's first timer tick can start another reconciliation.
     runtime.beginSession();
-    pending[3]!.resolve({});
     await flush();
+    assert.equal(
+      abortedReconciliations,
+      1,
+      "old reconciliation observes abort",
+    );
+    assert.equal(activeReconciliations, 0, "aborted operation has settled");
     await start();
     await tick(500);
-    assert.equal(attempts, 6, "stale completion cannot delay the new session");
+    assert.equal(attempts, 6, "replacement reconciles on its first timer tick");
+    assert.equal(
+      maxActiveReconciliations,
+      1,
+      "external reconciliation stays single-flight",
+    );
   } finally {
     runtime.beginShutdown();
     runtime.shutdown();
