@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
-const workflow = readFileSync(resolve(".github/workflows/release.yml"), "utf8");
+const workflow = readFileSync(
+  resolve(".github/workflows/release.yml"),
+  "utf8",
+).replaceAll("\r\n", "\n");
 const previewWorkflow = readFileSync(
   resolve(".github/workflows/preview.yml"),
   "utf8",
