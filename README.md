@@ -28,6 +28,7 @@ _Advanced orchestration: a live Manager → Lead → Agent workflow._
 - **Parallel and nested delegation.** Run independent work concurrently and let explicitly enabled Agents delegate their own bounded subtasks.
 - **Project orchestration.** A Manager coordinates durable branch-based work across independent Leads and their Agent trees.
 - **Direct supervision.** Chief, Manager, Lead, and Agent responsibilities stay explicit instead of collapsing into one global controller.
+- **Peer communication.** Independent Pi sessions can exchange messages, findings, and supported text evidence with same-role peers. Leads communicate on the same machine; Managers can also coordinate across connected machines.
 - **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session and its transitively owned managed Agents. An active Manager also sees the Leads in its current durable project assignments and their owned Agent trees.
 - **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 
@@ -117,12 +118,30 @@ See [Coordination](docs/concepts/coordination.md) for the mental model and
 [Project orchestration](docs/guides/project-orchestration.md) for the Manager
 workflow.
 
+## Coordinate across machines
+
+Managers running on connected Herdr machines can exchange
+requests, plans, findings, and progress updates.
+
+For example, ask your Manager:
+
+> Ask the Manager on my other connected machine to review this
+> plan and send back their findings.
+
+Each Manager remains responsible for its own projects and
+Agents. Peer messaging does not give one Manager control over
+another machine's work.
+
+See [Peer communication](docs/reference/peer.md) for
+requirements and limitations.
+
 ## Choose your next step
 
 | Goal                                       | Start here                                                    |
 | ------------------------------------------ | ------------------------------------------------------------- |
 | Install and delegate your first task       | [Getting started](docs/getting-started.md)                    |
 | Run independent branch-based project work  | [Project orchestration](docs/guides/project-orchestration.md) |
+| Communicate with other Pi sessions         | [Peer communication](docs/reference/peer.md)                  |
 | Understand roles, ownership, and authority | [Coordination](docs/concepts/coordination.md)                 |
 | Customize Agents                           | [Agent definitions](docs/guides/agent-definitions.md)         |
 | Build against the model-facing tools       | [Coordination API](docs/coordination-api.md)                  |
