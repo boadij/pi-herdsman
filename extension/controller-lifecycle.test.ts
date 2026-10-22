@@ -2864,7 +2864,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   });
   const startedAt = Date.now();
   const runReportId = randomUUID();
-  const reportId = randomUUID();
+  const reportId = runReportId;
   const entries: unknown[] = [
     {
       type: "custom",
@@ -2875,29 +2875,6 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
         kind: "managed",
         repoKey: "repo-key",
         branch,
-      },
-    },
-    {
-      type: "custom",
-      customType: "pi-herdsman-herd-run",
-      data: {
-        phase: "started",
-        sessionId: LEAD_SESSION_ID,
-        startedAt,
-        reportId: runReportId,
-      },
-    },
-    {
-      type: "custom",
-      customType: "pi-herdsman-herd-run",
-      data: {
-        phase: "report_pending",
-        sessionId: LEAD_SESSION_ID,
-        startedAt,
-        reportId,
-        runReportId,
-        message: "Existing assigned handoff",
-        target: "project",
       },
     },
   ];
@@ -2912,7 +2889,11 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     entries,
     allTools: [{ name: "read_evidence" }, { name: "message_supervisor" }],
     exec: async (command, args) => {
-      if (command === "herdr" && isApiSnapshot(args))
+      if (
+        command === "herdr" &&
+        isApiSnapshot(args) &&
+        !readAgentState(startup.mailbox)
+      )
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -2964,6 +2945,8 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   t.after(async () => {
     for (const handler of pi.events.get("session_shutdown") ?? [])
       await handler(undefined, context);
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
     delete process.env.HERDR_SOCKET_PATH;
   });
@@ -2988,6 +2971,90 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("message_supervisor"));
+
+  entries.push(
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId: runReportId,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "report_pending",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId,
+        runReportId,
+        message: "Existing assigned handoff",
+        target: "project",
+      },
+    },
+  );
+  scopePlans.push({});
+  await pi.events.get("session_start")![0](undefined, context);
+  scopeUnavailable = true;
+  const priorDiagnosticCount = entries.filter(
+    (entry: any) => entry.customType === "pi_herdsman_state_error",
+  ).length;
+  for (const handler of pi.events.get("agent_settled") ?? [])
+    await handler({ aborted: false }, context);
+  assert.ok(
+    entries
+      .filter((entry: any) => entry.customType === "pi_herdsman_state_error")
+      .slice(priorDiagnosticCount)
+      .some((entry: any) =>
+        /Cannot verify (?:the original managed project scope|the current project assignment)/.test(
+          entry.data.error,
+        ),
+      ),
+    `production runtime records the fail-closed assignment diagnostic: ${JSON.stringify(
+      entries
+        .filter((entry: any) => entry.customType === "pi_herdsman_state_error")
+        .slice(priorDiagnosticCount),
+    )}`,
+  );
+  assert.equal(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "finished" &&
+        entry.data?.startedAt === startedAt,
+    ),
+    false,
+    "a managed Lead must not finish when assignment scope cannot be verified",
+  );
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === runReportId,
+    ),
+    "the pending handoff remains durable",
+  );
+  scopeUnavailable = false;
+
+  const rpcRunningStatus = async () => {
+    context.mode = "rpc";
+    const selections = ["Agents", "Running"];
+    context.ui.select = async (_title, options) => {
+      const selection = selections.shift();
+      return selection && options.includes(selection) ? selection : undefined;
+    };
+    await pi.commandOptions.get("herdsman")!.handler("", context);
+    context.mode = "tui";
+  };
+
+  scopePlans.push({});
+  await rpcRunningStatus();
+
   let releaseRefresh!: () => void;
   let refreshStarted!: () => void;
   const refreshGate = new Promise<void>((resolve) => {
@@ -3007,8 +3074,25 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     pi.pi.getActiveTools().includes("read_evidence"),
     "reader before refresh",
   );
-  releaseRefresh();
-  await refreshing;
+  try {
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "pending-verification",
+      {
+        definition: "agent",
+        label: "agent",
+        task: "verify delegation during pending scope check",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    releaseRefresh();
+    await refreshing;
+  } finally {
+    releaseRefresh();
+    await Promise.allSettled([refreshing]);
+  }
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
     "successful exact scope verification restores Managed Lead tools",
@@ -3018,23 +3102,14 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     "successful exact scope verification restores supervisor tools",
   );
 
-  const rpcRunningStatus = async () => {
-    context.mode = "rpc";
-    const selections = ["Agents", "Running"];
-    context.ui.select = async (_title, options) => {
-      const selection = selections.shift();
-      return selection && options.includes(selection) ? selection : undefined;
-    };
-    await pi.commandOptions.get("herdsman")!.handler("", context);
-    context.mode = "tui";
-  };
-
+  scopeUnavailable = true;
   scopePlans.push({ unavailable: true });
   await rpcRunningStatus();
   assert.ok(
     !pi.pi.getActiveTools().includes("read_evidence"),
     "completed unavailable verification revokes Lead tools before overlapping checks",
   );
+  scopeUnavailable = false;
 
   let releaseOlder!: () => void;
   let olderStarted!: () => void;
@@ -3097,13 +3172,13 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     if (sessionStatus) await Promise.allSettled([sessionStatus]);
   }
 
+  scopeUnavailable = true;
   scopePlans.push({ unavailable: true });
   await pi.events.get("session_start")![0](undefined, context);
   assert.ok(
     !pi.pi.getActiveTools().includes("read_evidence"),
     "unavailable verification revokes Lead tools",
   );
-
   const denied = await registeredAgentTool(pi, "delegate").execute(
     "unavailable-scope-delegate",
     {
@@ -3129,6 +3204,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     ),
     "the pending handoff remains durable",
   );
+  scopeUnavailable = false;
 });
 
 test("unassigned Lead does not activate read_evidence", async (t) => {
