@@ -88,6 +88,7 @@ import {
   managerHandoffDeliveredEntry,
   managerHandoffCanReenter,
   managerHandoffLeadPidContinues,
+  managerHandoffAssignmentReady,
   managerCleanupTarget,
   removeManagerRecoveryWorktree,
   collectDiagnostics,
@@ -100,6 +101,7 @@ import {
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   matchPiProvenance,
+  managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -2720,6 +2722,74 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
         branch,
       ),
     /one worktree/u,
+  );
+});
+
+test("Manager handoff readiness waits for verified Lead process provenance", async () => {
+  let observations = 0;
+  let provenanceContents = '{"sessionId":"other-session"}\n';
+  const foregroundProcesses = [{ pid: 42 }];
+  const pid = await waitForEvidence(
+    {},
+    "manager-handoff-assignment",
+    async () => {
+      if (++observations === 2)
+        provenanceContents =
+          '{"sessionId":"lead-session","packageName":"@earendil-works/pi-coding-agent","piVersion":"1.2.3","model":"manager-handoff-lead","hasAgentDefinitions":true,"pid":42}\n';
+      const proof = managerHandoffLeadProcessProof(
+        provenanceContents,
+        "lead-session",
+        "pane-1",
+        foregroundProcesses,
+        "1.2.3",
+      );
+      return {
+        done: managerHandoffAssignmentReady(true, true, proof),
+        value: proof?.pid,
+      };
+    },
+    { timeoutMs: 200, stallMs: 100, pollMs: 1 },
+  );
+  assert.equal(observations, 2);
+  assert.equal(pid, 42);
+
+  const validRow =
+    '{"sessionId":"lead-session","packageName":"@earendil-works/pi-coding-agent","piVersion":"1.2.3","model":"manager-handoff-lead","hasAgentDefinitions":true,"pid":42}';
+  for (const contents of [
+    validRow.replace('"model":"manager-handoff-lead"', '"model":"wrong-model"'),
+    `${validRow}\n${validRow}\n`,
+  ])
+    assert.throws(
+      () =>
+        managerHandoffLeadProcessProof(
+          contents,
+          "lead-session",
+          "pane-1",
+          foregroundProcesses,
+          "1.2.3",
+        ),
+      { code: "SMOKE_EVIDENCE" },
+    );
+
+  observations = 0;
+  await assert.rejects(
+    waitForEvidence(
+      {},
+      "manager-handoff-assignment",
+      async () => {
+        observations++;
+        return {
+          done: managerHandoffAssignmentReady(true, true, null),
+        };
+      },
+      { timeoutMs: 200, stallMs: 20, pollMs: 1 },
+    ),
+    (error) => {
+      assert.equal(error.code, "SMOKE_STALLED");
+      assert.equal(error.smoke.stage, "manager-handoff-assignment");
+      assert.ok(observations > 1);
+      return true;
+    },
   );
 });
 
