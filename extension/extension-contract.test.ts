@@ -4051,10 +4051,6 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /For assigned project work, use message_supervisor for timely\s+coordination or explicit evidence transfer, not for a separate\s+completion announcement\./,
   );
   assert.match(
