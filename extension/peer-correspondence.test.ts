@@ -17,6 +17,84 @@ import {
   updatePeerOriginGeneration,
 } from "./peer-correspondence.ts";
 
+const WORKER_DIAGNOSTIC = "HERDSMAN_WORKER:";
+
+function runPeerWorker(
+  name: string,
+  source: string,
+  executable = process.execPath,
+  timeout = 8_000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    let spawnError = false;
+    const abortSignal = AbortSignal.timeout(timeout);
+    const child = spawn(
+      executable,
+      ["--experimental-strip-types", "--input-type=module", "-e", source],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        env: process.env,
+        signal: abortSignal,
+      },
+    );
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr = (stderr + chunk).slice(-4096);
+    });
+    child.once("error", (error) => {
+      spawnError = !(abortSignal.aborted && error.name === "AbortError");
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0 && !spawnError) return resolve();
+      let kind = "unclassified";
+      const marker = stderr
+        .split(/\r?\n/)
+        .find((line) => line.startsWith(WORKER_DIAGNOSTIC));
+      if (marker) {
+        try {
+          const diagnostic: unknown = JSON.parse(
+            marker.slice(WORKER_DIAGNOSTIC.length),
+          );
+          if (
+            diagnostic &&
+            typeof diagnostic === "object" &&
+            "kind" in diagnostic &&
+            [
+              "authorization",
+              "lock_verification",
+              "filesystem",
+              "other",
+            ].includes(String(diagnostic.kind))
+          )
+            kind = String(diagnostic.kind);
+        } catch {
+          // Malformed child output is never forwarded.
+        }
+      }
+      const ending = spawnError
+        ? "spawn_error"
+        : abortSignal.aborted
+          ? "aborted"
+          : signal
+            ? `signal ${signal}`
+            : `exit ${code}`;
+      reject(new Error(`${name} worker ${ending}: ${kind}`));
+    });
+  });
+}
+
+function workerErrorBoundary(operation: string): string {
+  return `try { ${operation} } catch (error) {
+    const code = ["ENOENT", "EPERM", "EACCES"].includes(error?.code) ? error.code : undefined;
+    const kind = error?.message === "peer correspondence authorization failed" ? "authorization" :
+      error?.message?.startsWith("Unable to verify peer correspondence mutation") ? "lock_verification" :
+      code ? "filesystem" : "other";
+    console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + JSON.stringify({kind, code}));
+    process.exitCode = 1;
+  }`;
+}
+
 test("peer correspondence isolates capability, exact sessions and generations, and finalizes only acknowledged replies", () => {
   const c = createPeerCorrespondence({
     originSession: randomUUID(),
@@ -466,42 +544,87 @@ test("independent processes preserve concurrent reply acknowledgment and enqueue
   });
   const acknowledgedId = randomUUID();
   const queuedId = randomUUID();
-  queuePeerReply(c, acknowledgedId, "existing");
-  const args = JSON.stringify([
-    c.id,
-    c.capability,
-    c.originSession,
-    c.originGeneration,
-    c.recipientSession,
-    c.recipientGeneration,
-  ]);
-  const scripts = [
-    `const [{acknowledgePeerReply}, ...a] = [await import('./extension/peer-correspondence.ts')]; const [id,cap,os,og,rs,rg] = ${args}; acknowledgePeerReply(id,cap,${JSON.stringify(acknowledgedId)},os,og,rs,rg);`,
-    `const {queuePeerReply} = await import('./extension/peer-correspondence.ts'); const [id] = ${args}; queuePeerReply({id},${JSON.stringify(queuedId)},'concurrent');`,
-  ];
-  const run = (source: string) =>
-    new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        ["--experimental-strip-types", "--input-type=module", "-e", source],
-        { stdio: "ignore", env: process.env },
-      );
-      child.once("error", reject);
-      child.once("close", (code) =>
-        code === 0
-          ? resolve()
-          : reject(new Error(`mutation worker exited ${code}`)),
-      );
-    });
-  await Promise.all(scripts.map(run));
-  const current = listPeerCorrespondences().find((item) => item.id === c.id)!;
+  try {
+    queuePeerReply(c, acknowledgedId, "existing");
+    const args = JSON.stringify([
+      c.id,
+      c.capability,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    ]);
+    const scripts = [
+      workerErrorBoundary(
+        `const {acknowledgePeerReply} = await import('./extension/peer-correspondence.ts'); const [id,cap,os,og,rs,rg] = ${args}; acknowledgePeerReply(id,cap,${JSON.stringify(acknowledgedId)},os,og,rs,rg);`,
+      ),
+      workerErrorBoundary(
+        `const {queuePeerReply} = await import('./extension/peer-correspondence.ts'); const [id] = ${args}; queuePeerReply({id},${JSON.stringify(queuedId)},'concurrent');`,
+      ),
+    ];
+    const results = await Promise.allSettled([
+      runPeerWorker("acknowledge", scripts[0]!),
+      runPeerWorker("enqueue", scripts[1]!),
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    const current = listPeerCorrespondences().find((item) => item.id === c.id)!;
+    assert.equal(
+      current.replies.find((reply) => reply.id === acknowledgedId)
+        ?.acknowledged,
+      true,
+    );
+    assert.equal(
+      current.replies.find((reply) => reply.id === queuedId)?.text,
+      "concurrent",
+    );
+  } finally {
+    removePeerCorrespondence(c.id);
+  }
+});
+
+test("peer worker failures are classified without exposing stderr and cleanup still runs", async () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  try {
+    const outcomes = await Promise.allSettled([
+      runPeerWorker(
+        "broken",
+        `console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + '{bad'); console.error('/private/path secret-capability'); process.exitCode = 1;`,
+      ),
+      runPeerWorker("sibling", ""),
+    ]);
+    assert.match(
+      String(outcomes[0]?.status === "rejected" && outcomes[0].reason),
+      /broken worker exit 1: unclassified/,
+    );
+    assert.equal(outcomes[1]?.status, "fulfilled");
+  } finally {
+    removePeerCorrespondence(c.id);
+  }
   assert.equal(
-    current.replies.find((reply) => reply.id === acknowledgedId)?.acknowledged,
-    true,
+    listPeerCorrespondences().some((item) => item.id === c.id),
+    false,
   );
-  assert.equal(
-    current.replies.find((reply) => reply.id === queuedId)?.text,
-    "concurrent",
+});
+
+test("peer worker reports cancellation and spawn errors only after close", async () => {
+  await assert.rejects(
+    runPeerWorker(
+      "cancelled",
+      "setInterval(() => {}, 1000)",
+      process.execPath,
+      100,
+    ),
+    /cancelled worker aborted/,
   );
-  removePeerCorrespondence(c.id);
+  await assert.rejects(
+    runPeerWorker("missing", "", "herdsman-no-such-worker"),
+    /missing worker spawn_error: unclassified/,
+  );
 });
