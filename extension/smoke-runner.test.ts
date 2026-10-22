@@ -88,6 +88,7 @@ import {
   managerHandoffDeliveredEntry,
   managerHandoffCanReenter,
   managerHandoffLeadPidContinues,
+  managerHandoffAssignmentReady,
   managerCleanupTarget,
   removeManagerRecoveryWorktree,
   collectDiagnostics,
@@ -2720,6 +2721,45 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
         branch,
       ),
     /one worktree/u,
+  );
+});
+
+test("Manager handoff readiness waits for verified Lead process provenance", async () => {
+  let observations = 0;
+  const pid = await waitForEvidence(
+    {},
+    "manager-handoff-assignment",
+    async () => {
+      const proof = ++observations === 1 ? null : { pid: 42 };
+      return {
+        done: managerHandoffAssignmentReady(true, true, proof),
+        value: proof?.pid,
+      };
+    },
+    { timeoutMs: 200, stallMs: 100, pollMs: 1 },
+  );
+  assert.equal(observations, 2);
+  assert.equal(pid, 42);
+
+  observations = 0;
+  await assert.rejects(
+    waitForEvidence(
+      {},
+      "manager-handoff-assignment",
+      async () => {
+        observations++;
+        return {
+          done: managerHandoffAssignmentReady(true, true, null),
+        };
+      },
+      { timeoutMs: 200, stallMs: 20, pollMs: 1 },
+    ),
+    (error) => {
+      assert.equal(error.code, "SMOKE_STALLED");
+      assert.equal(error.smoke.stage, "manager-handoff-assignment");
+      assert.ok(observations > 1);
+      return true;
+    },
   );
 });
 

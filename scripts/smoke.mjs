@@ -2093,6 +2093,10 @@ export function managerHandoffLeadPidContinues(initialPid, currentPid) {
   return initialPid === currentPid;
 }
 
+export function managerHandoffAssignmentReady(ready, readyEntry, processProof) {
+  return !!(ready && readyEntry && processProof);
+}
+
 function assistantResultsForPrompt(contents, prompt, marker, matchesMarker) {
   const entries = sessionEntries(contents);
   const promptEntry = entries.find(
@@ -4079,6 +4083,7 @@ async function runManagerHandoffSmoke(ctx) {
       let processCount = "not_observed";
       let provenanceMatch = "not_evaluated";
       let errorCategory = "none";
+      let processProof = null;
       try {
         const info = await nestedCommand(ctx, [
           "pane",
@@ -4092,27 +4097,39 @@ async function runManagerHandoffSmoke(ctx) {
           ctx.herdrStateExtension,
         );
         processCount = processes.length;
-        const provenancePath = join(
-          ctx.paths.piAgent,
-          "pi-herdsman",
-          "runtime",
-          "smoke-faux-provenance.jsonl",
-        );
-        const records = (await readFile(provenancePath, "utf8"))
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .map((line) => JSON.parse(line));
-        matchPiProvenance(
-          records,
-          row.session,
-          lead.pane_id,
-          processes,
-          "manager-handoff-lead",
-          true,
-          ctx.expectedPiVersion,
-        );
-        provenanceMatch = "true";
-      } catch {
+        if (processes.length) {
+          const provenancePath = join(
+            ctx.paths.piAgent,
+            "pi-herdsman",
+            "runtime",
+            "smoke-faux-provenance.jsonl",
+          );
+          let provenanceContents;
+          try {
+            provenanceContents = await readFile(provenancePath, "utf8");
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+            throw observationFailure("Lead Pi provenance is not available yet");
+          }
+          const records = provenanceContents
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+          processProof = matchPiProvenance(
+            records,
+            row.session,
+            lead.pane_id,
+            processes,
+            "manager-handoff-lead",
+            true,
+            ctx.expectedPiVersion,
+          );
+          provenanceMatch = "true";
+        } else {
+          provenanceMatch = "false";
+        }
+      } catch (error) {
+        if (error?.code !== "SMOKE_OBSERVATION") throw error;
         provenanceMatch = "false";
         errorCategory = "provenance_observation_failed";
       }
@@ -4134,7 +4151,7 @@ async function runManagerHandoffSmoke(ctx) {
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
       const supervisorResult = supervisor.supervisorResultState;
-      if (!ready || !readyEntry)
+      if (!managerHandoffAssignmentReady(ready, readyEntry, processProof))
         return {
           done: false,
           progress: diagnostics({
@@ -4163,7 +4180,13 @@ async function runManagerHandoffSmoke(ctx) {
           readiness: "true",
           readinessDeliveryObserved: true,
         }),
-        value: { row, lead, leadSession, owner: session },
+        value: {
+          row,
+          lead,
+          leadSession,
+          owner: session,
+          initialLeadPid: processProof.pid,
+        },
       };
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
@@ -4251,7 +4274,7 @@ async function runManagerHandoffSmoke(ctx) {
     );
     return proof.pid;
   };
-  const initialLeadPid = await leadProcessPid();
+  const initialLeadPid = assignment.initialLeadPid;
   const initialBytes = await readFile(assignmentPath, "utf8");
   const previousLease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
