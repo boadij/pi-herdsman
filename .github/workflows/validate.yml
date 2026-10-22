@@ -148,7 +148,6 @@ jobs:
         id: acceptance
         shell: bash
         env:
-          PI_PACKAGE_DIR: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent
           TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
