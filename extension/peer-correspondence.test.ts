@@ -26,6 +26,7 @@ function runPeerWorker(
   timeout = 8_000,
   onStart?: (terminate: () => void) => void,
   onStderr?: (chunk: string) => void,
+  onClose?: () => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = "";
@@ -50,6 +51,7 @@ function runPeerWorker(
       spawnError = !(abortSignal.aborted && error.name === "AbortError");
     });
     child.once("close", (code, signal) => {
+      onClose?.();
       if (code === 0 && !spawnError) return resolve();
       let kind = "unclassified";
       const marker = stderr
@@ -595,50 +597,61 @@ test("peer worker failures wait for running siblings and clean up after propagat
     recipientGeneration: randomUUID(),
     acceptanceId: randomUUID(),
   });
+  let terminateSibling: (() => void) | undefined;
+  const workers: Promise<void>[] = [];
   let markSiblingReady!: () => void;
-  const siblingReady = new Promise<void>((resolve) => {
-    markSiblingReady = resolve;
-  });
+  let markSiblingClosed!: () => void;
+  const siblingReady = new Promise<void>(
+    (resolve) => (markSiblingReady = resolve),
+  );
+  const siblingClosed = new Promise<void>(
+    (resolve) => (markSiblingClosed = resolve),
+  );
+  let readinessOutput = "";
   try {
-    await assert.rejects(
-      async () => {
-        let terminateSibling!: () => void;
-        const sibling = runPeerWorker(
-          "sibling",
-          `console.error('SIBLING_READY'); setInterval(() => {}, 1000);`,
-          process.execPath,
-          8_000,
-          (terminate) => {
-            terminateSibling = terminate;
-          },
-          (chunk) => {
-            if (chunk.includes("SIBLING_READY")) markSiblingReady();
-          },
-        );
-        await siblingReady;
-        const failure = runPeerWorker(
-          "broken",
-          `console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + '{bad'); console.error('/private/path secret-capability'); process.exit(1);`,
-        );
-        const outcomesPromise = Promise.allSettled([failure, sibling]);
-        await assert.rejects(failure, /broken worker exit 1: unclassified/);
-        terminateSibling();
-        const outcomes = await outcomesPromise;
-        assert.equal(outcomes[1]?.status, "rejected");
-        assert.match(
-          String(outcomes[1]?.status === "rejected" && outcomes[1].reason),
-          /sibling worker signal SIGTERM: unclassified/,
-        );
-        if (outcomes[0]?.status === "rejected") throw outcomes[0].reason;
+    const sibling = runPeerWorker(
+      "sibling",
+      `console.error('SIBLING_READY'); setInterval(() => {}, 1000);`,
+      process.execPath,
+      8_000,
+      (terminate) => {
+        terminateSibling = terminate;
       },
-      (error: unknown) => {
-        const message = String(error);
-        assert.match(message, /broken worker exit 1: unclassified/);
-        assert.doesNotMatch(message, /\/private\/path|secret-capability/);
-        return true;
+      (chunk) => {
+        readinessOutput = (readinessOutput + chunk).slice(-256);
+        if (readinessOutput.includes("SIBLING_READY")) markSiblingReady();
       },
+      markSiblingClosed,
+    );
+    workers.push(sibling);
+    await Promise.race([
+      siblingReady,
+      siblingClosed.then(async () => {
+        await sibling;
+        throw new Error("sibling closed before readiness");
+      }),
+    ]);
+    const failure = runPeerWorker(
+      "broken",
+      `console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + '{bad'); console.error('/private/path secret-capability'); process.exit(1);`,
+    );
+    workers.push(failure);
+    await assert.rejects(failure, (error: unknown) => {
+      const message = String(error);
+      assert.match(message, /broken worker exit 1: unclassified/);
+      assert.doesNotMatch(message, /\/private\/path|secret-capability/);
+      return true;
+    });
+    terminateSibling();
+    const outcomes = await Promise.allSettled(workers);
+    assert.equal(outcomes[1]?.status, "rejected");
+    assert.match(
+      String(outcomes[0]?.status === "rejected" && outcomes[0].reason),
+      /sibling worker signal SIGTERM: unclassified/,
     );
   } finally {
+    terminateSibling?.();
+    await Promise.allSettled(workers);
     removePeerCorrespondence(c.id);
   }
   assert.equal(
