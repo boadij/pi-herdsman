@@ -16,7 +16,15 @@ import {
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -24,6 +32,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const localPi = join(repoRoot, "node_modules", ".bin", "pi");
+const localPiBin = dirname(localPi);
 const scenarioNames = [
   "core",
   "continuation",
@@ -428,7 +438,14 @@ export function selectSmokeModel(args, execute = run) {
 export function isolatedEnv(base, paths) {
   const env = { ...base };
   for (const key of HERDR_ROUTING_KEYS) delete env[key];
+  delete env.PI_PACKAGE_DIR;
   Object.assign(env, {
+    PATH: [
+      localPiBin,
+      ...(base.PATH ?? "")
+        .split(delimiter)
+        .filter((entry) => entry !== localPiBin),
+    ].join(delimiter),
     HERDR_CONFIG_PATH: paths.herdrConfig,
     XDG_CONFIG_HOME: paths.xdgConfig,
     XDG_STATE_HOME: paths.xdgState,
@@ -2654,7 +2671,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-async function preflight(pkg) {
+export async function preflight(pkg, execute = run, checkAccess = access) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -2662,13 +2679,29 @@ async function preflight(pkg) {
       : undefined;
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
+  const pinnedPiVersion =
+    pkg?.devDependencies?.["@earendil-works/pi-coding-agent"];
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
+  if (typeof pinnedPiVersion !== "string")
+    throw new Error(
+      "smoke: pinned Pi development dependency is unavailable; run npm ci",
+    );
+  try {
+    await checkAccess(localPi);
+  } catch {
+    throw new Error("smoke: local Pi executable is missing; run npm ci");
+  }
   const [{ stdout: piVersion }, { stdout: herdrVersion }] = await Promise.all([
-    run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
-    run("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    execute(localPi, ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    execute("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
   const actualPiVersion = piVersion.trim();
   requireTestedBaseline("Pi", actualPiVersion, piBaseline);
+  assert.equal(
+    actualPiVersion,
+    pinnedPiVersion,
+    "smoke: local Pi does not match the pinned dependency; run npm ci",
+  );
   const actualHerdrVersion = herdrVersion.trim().replace(/^herdr\s+v?/, "");
   requireTestedBaseline("Herdr", actualHerdrVersion, herdrBaseline);
   return { piVersion: actualPiVersion, herdrVersion: actualHerdrVersion };
@@ -2752,6 +2785,8 @@ export async function createParentWorkspace(
       "--label",
       "pi-herdsman-smoke",
       "--no-focus",
+      "--env",
+      `PATH=${parent.env.PATH}`,
     ],
     { env: parent.env, timeout: OBSERVATION_TIMEOUT_MS },
   );
@@ -2803,6 +2838,7 @@ async function createIsolation() {
       "herdr-agent-state.ts",
     ),
     authLink: join(root, "pi-agent", "auth.json"),
+    piExecutable: join(root, "pi"),
   };
   try {
     await Promise.all([
@@ -2810,8 +2846,12 @@ async function createIsolation() {
       mkdir(paths.xdgState, { recursive: true }),
       mkdir(join(paths.piAgent, "extensions"), { recursive: true }),
       mkdir(paths.piSessions, { recursive: true }),
+      symlink(localPi, paths.piExecutable),
     ]);
-    await writeFile(paths.herdrConfig, "[experimental]\nallow_nested = true\n");
+    await writeFile(
+      paths.herdrConfig,
+      '[experimental]\nallow_nested = true\n\n[terminal]\nshell_mode = "non_login"\n',
+    );
     return paths;
   } catch (error) {
     await rm(root, { recursive: true, force: true });
@@ -2835,7 +2875,7 @@ export async function preparePi(paths, model, execute = run) {
   const env = isolatedEnv(process.env, paths);
   const authArgs = ["auth", "check", "--model", model, "--no-refresh"];
   try {
-    await execute("pi", authArgs, {
+    await execute(localPi, authArgs, {
       env,
       stdio: ["ignore", "ignore", "ignore"],
     });
@@ -2848,7 +2888,7 @@ export async function preparePi(paths, model, execute = run) {
         "Pi auth check failed and no current auth.json is available",
       );
     try {
-      await execute("pi", authArgs, {
+      await execute(localPi, authArgs, {
         env,
         stdio: ["ignore", "ignore", "ignore"],
       });
@@ -2905,6 +2945,8 @@ async function startNestedHerdr(
       "--label",
       `smoke-${id}`,
       "--no-focus",
+      "--env",
+      `PATH=${parentEnv.PATH}`,
       "--env",
       `HERDR_CONFIG_PATH=${paths.herdrConfig}`,
       "--env",
@@ -3051,6 +3093,7 @@ async function startCandidate(ctx) {
   await Promise.all([
     access(ctx.candidateExtension),
     access(ctx.herdrStateExtension),
+    access(ctx.paths.piExecutable),
     ...(ctx.simulatedProviderExtension
       ? [access(ctx.simulatedProviderExtension)]
       : []),
@@ -3092,7 +3135,7 @@ async function startCandidate(ctx) {
       "run",
       paneId,
       rootCandidateCommand([
-        "pi",
+        ctx.paths.piExecutable,
         ...args,
         ...(prompt === undefined ? [] : [prompt]),
       ]),
@@ -3195,7 +3238,11 @@ export function matchPiProvenance(
     );
     const [record] = matches;
     assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
-    requireTestedBaseline("Pi", record.piVersion, expectedPiVersion);
+    assert.equal(
+      record.piVersion,
+      expectedPiVersion,
+      `smoke: executing Pi ${record.piVersion} differs from pinned Pi ${expectedPiVersion}`,
+    );
     assert.equal(record.model, expectedModel);
     assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
     const processes = foregroundProcesses.filter(
@@ -5156,7 +5203,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "run",
       ctx.rootPaneId,
       rootCandidateCommand([
-        "pi",
+        ctx.paths.piExecutable,
         ...args,
         "--session",
         ctx.crashRecovery.ownerSessionPath,

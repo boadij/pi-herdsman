@@ -5,6 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
+  resolvePiPackageMetadata,
 } from "../scripts/smoke-faux.mjs";
 import {
   mkdir,
@@ -16,7 +17,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
@@ -112,6 +113,8 @@ import {
   agentsForPiSession,
   isolatedSessionDetails,
   preparePi,
+  localPi,
+  preflight,
   prepareContinuationFaux,
   requireTestedBaseline,
   requireNestedHerdrServer,
@@ -140,6 +143,12 @@ test("package read identity accepts equivalent paths and rejects other files", (
   assert.equal(isPackageReadPath("package.json", undefined), false);
 });
 
+test("smoke provenance resolves Pi metadata from the executing CLI path", () => {
+  const metadata = resolvePiPackageMetadata(localPi);
+  assert.equal(metadata.name, "@earendil-works/pi-coding-agent");
+  assert.equal(metadata.version, "1.4.0");
+});
+
 test("parent Herdr environment retains nesting context and clears caller routing", () => {
   const base = {
     HERDR_ENV: "1",
@@ -162,6 +171,8 @@ test("parent Herdr environment retains nesting context and clears caller routing
     PI_SUBAGENT_PARENT_SESSION: "wrong-parent",
     PI_SUBAGENT_CHILD: "wrong-child",
     XDG_CONFIG_HOME: "/tmp/smoke-parent",
+    PATH: "/usr/bin:/bin",
+    PI_PACKAGE_DIR: "/wrong/package",
   };
   const paths = {
     herdrConfig: "/tmp/isolated/herdr.toml",
@@ -190,6 +201,11 @@ test("parent Herdr environment retains nesting context and clears caller routing
   assert.equal(env.PI_SUBAGENT_PARENT_SESSION, undefined);
   assert.equal(env.PI_SUBAGENT_CHILD, undefined);
   assert.equal(env.HERDR_CONFIG_PATH, paths.herdrConfig);
+  assert.equal(env.PI_PACKAGE_DIR, undefined);
+  assert.equal(
+    env.PATH,
+    [dirname(localPi), "/usr/bin", "/bin"].join(delimiter),
+  );
   assert.equal(env.XDG_CONFIG_HOME, paths.xdgConfig);
   assert.equal(base.HERDR_SOCKET_PATH, "/wrong/server.sock");
 });
@@ -1452,6 +1468,7 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     XDG_STATE_HOME: "/parent/xdg-state",
     PI_CODING_AGENT_DIR: "/parent/pi-agent",
     PI_CODING_AGENT_SESSION_DIR: "/parent/pi-sessions",
+    PATH: "/usr/bin:/bin",
     KEEP_ME: "yes",
   };
   const paths = {
@@ -1463,6 +1480,7 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
   };
   const expected = {
     HERDR_ENV: "1",
+    PATH: [dirname(localPi), "/usr/bin", "/bin"].join(delimiter),
     HERDR_CONFIG_PATH: paths.herdrConfig,
     XDG_CONFIG_HOME: paths.xdgConfig,
     XDG_STATE_HOME: paths.xdgState,
@@ -1499,7 +1517,7 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     PI_SUBAGENT_CHILD: "1",
   };
   const args = [
-    "pi",
+    localPi,
     ...candidateArgs({
       candidateExtension: "/smoke/dist/index.js",
       herdrStateExtension: "/smoke/herdr-agent-state.ts",
@@ -1517,7 +1535,7 @@ test("root pane command removes inherited managed identity before Pi only", asyn
   const command = rootCandidateCommand(args);
   assert.equal(command, expectedCommand);
   assert.ok(
-    command.indexOf("'-u' 'PI_SUBAGENT_CHILD'") < command.indexOf("'pi'"),
+    command.indexOf("'-u' 'PI_SUBAGENT_CHILD'") < command.indexOf(localPi),
   );
   assert.match(
     command,
@@ -1542,7 +1560,12 @@ test("root pane command removes inherited managed identity before Pi only", asyn
   );
   assert.deepEqual(paneArgs, ["pane", "run", "w1:p1", expectedCommand]);
 
-  const base = { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" };
+  const base = {
+    ...identity,
+    HERDR_ENV: "1",
+    KEEP_ME: "yes",
+    PATH: "/usr/bin:/bin",
+  };
   const descendantEnv = nestedControlEnv(base, paths, "smoke-child");
   assert.deepEqual(descendantEnv, {
     ...identity,
@@ -1552,15 +1575,22 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     XDG_STATE_HOME: "/smoke/xdg-state",
     PI_CODING_AGENT_DIR: "/smoke/pi-agent",
     PI_CODING_AGENT_SESSION_DIR: "/smoke/pi-sessions",
+    PATH: [dirname(localPi), "/usr/bin", "/bin"].join(delimiter),
     KEEP_ME: "yes",
     HERDR_SESSION: "smoke-child",
   });
   assert.equal(paneOptions.env.HERDR_CONFIG_PATH, paths.herdrConfig);
   assert.equal(paneOptions.env.PI_CODING_AGENT_DIR, paths.piAgent);
   assert.equal(paneOptions.env.PI_CODING_AGENT_SESSION_DIR, paths.piSessions);
+  assert.equal(paneOptions.env.PATH.split(delimiter)[0], dirname(localPi));
   for (const [key, value] of Object.entries(identity))
     assert.equal(descendantEnv[key], value);
-  assert.deepEqual(base, { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" });
+  assert.deepEqual(base, {
+    ...identity,
+    HERDR_ENV: "1",
+    KEEP_ME: "yes",
+    PATH: "/usr/bin:/bin",
+  });
 });
 
 test("nested Herdr hashes the API socket while checking both socket limits", () => {
@@ -3887,7 +3917,10 @@ test("smoke auth resolves credentials from the configured model", async () => {
   );
   assert.equal(mechanism, "ambient");
   assert.deepEqual(calls, [
-    ["pi", ["auth", "check", "--model", "provider/model:high", "--no-refresh"]],
+    [
+      localPi,
+      ["auth", "check", "--model", "provider/model:high", "--no-refresh"],
+    ],
   ]);
 });
 
@@ -3996,8 +4029,8 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
   for (const [observedVersion, accepted] of [
     ["1.3.9", false],
     ["1.4.0", true],
-    ["1.4.1", true],
-    ["1.5.0", true],
+    ["1.4.1", false],
+    ["1.5.0", false],
   ] as const) {
     const attempt = () =>
       matchPiProvenance(
@@ -4009,7 +4042,7 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
         true,
         "1.4.0",
       );
-    if (!accepted) assert.throws(attempt, /1\.4\.0/);
+    if (!accepted) assert.throws(attempt, /differs from pinned Pi 1\.4\.0/);
     else assert.equal(attempt().piVersion, observedVersion);
   }
   assert.throws(
@@ -4025,6 +4058,44 @@ test("Pi provenance enforces the supported baseline and reports the observed ver
       ),
     /expected one provenance row/,
   );
+});
+
+test("smoke preflight selects only the lockfile-installed Pi executable", async () => {
+  const pkg = {
+    engines: { node: ">=22.19.0" },
+    piHerdsman: { runtime: { pi: "1.4.0", herdr: { version: "0.9.5" } } },
+    devDependencies: { "@earendil-works/pi-coding-agent": "1.4.0" },
+  };
+  const calls: string[] = [];
+  const execute = async (command: string) => {
+    calls.push(command);
+    return {
+      stdout: command === localPi ? "1.4.0\n" : "herdr 0.9.5\n",
+    };
+  };
+  await preflight(pkg, execute as never, async () => {});
+  assert.deepEqual(calls, [localPi, "herdr"]);
+
+  await assert.rejects(
+    preflight(
+      pkg,
+      async (command: string) =>
+        ({
+          stdout: command === localPi ? "1.5.0\n" : "herdr 0.9.5\n",
+        }) as never,
+      async () => {},
+    ),
+    /does not match the pinned dependency; run npm ci/,
+  );
+
+  calls.length = 0;
+  await assert.rejects(
+    preflight(pkg, execute as never, async () => {
+      throw new Error("missing");
+    }),
+    /local Pi executable is missing; run npm ci/,
+  );
+  assert.deepEqual(calls, []);
 });
 
 test("missing provenance row is classified as evidence failure", () => {
@@ -4536,6 +4607,11 @@ test("owned parent setup verifies readiness and workspace identity", async () =>
   assert.deepEqual(
     calls.map((args) => args[1]),
     ["create", "get"],
+  );
+  const pathEnvIndex = (calls[0] as string[]).indexOf("--env");
+  assert.equal(
+    (calls[0] as string[])[pathEnvIndex + 1],
+    `PATH=${parent.env.PATH}`,
   );
   await assert.rejects(
     createParentWorkspace(paths, parent, owned, "/repo", async () => ({

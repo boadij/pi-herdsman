@@ -1,4 +1,10 @@
-import { appendFileSync, existsSync, readFileSync, watch } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  watch,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -28,6 +34,24 @@ const modelIds = [
   "agent-crash-parent",
   "agent-crash-child",
 ];
+
+export function resolvePiPackageMetadata(entryPoint = process.argv[1]) {
+  let directory = dirname(realpathSync(entryPoint));
+  while (true) {
+    try {
+      const metadata = JSON.parse(
+        readFileSync(join(directory, "package.json"), "utf8"),
+      );
+      if (metadata.name === "@earendil-works/pi-coding-agent") return metadata;
+    } catch {}
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  throw new Error(
+    "Could not resolve Pi package metadata from executing entry point",
+  );
+}
 
 function text(message) {
   return typeof message?.content === "string"
@@ -725,13 +749,16 @@ export default function install(pi) {
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
     if (!recordedSessions.has(currentSessionId)) {
-      const packageDir =
-        process.env.PI_PACKAGE_DIR ?? dirname(process.execPath);
       let piPackage;
       try {
-        piPackage = JSON.parse(
-          readFileSync(join(packageDir, "package.json"), "utf8"),
-        );
+        piPackage = process.env.PI_PACKAGE_DIR
+          ? JSON.parse(
+              readFileSync(
+                join(process.env.PI_PACKAGE_DIR, "package.json"),
+                "utf8",
+              ),
+            )
+          : resolvePiPackageMetadata();
       } catch {
         throw new Error("Could not resolve Pi package metadata");
       }

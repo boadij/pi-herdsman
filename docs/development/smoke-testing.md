@@ -183,11 +183,24 @@ verified; `npm run smoke` defaults to `core`.
 
 ## Runtime preflight
 
-Before allocating the Herdr environment, the harness validates installed Node,
-Pi, and Herdr versions against the repository's `package.json` runtime
-baselines. The owned server's readiness and client/server compatibility are
-then checked before creating the parent workspace. A pre-existing Herdr server
-or session is not required.
+Before allocating the Herdr environment, the harness requires the local
+`node_modules/.bin/pi` executable and checks its exact version against the
+locked `@earendil-works/pi-coding-agent` development dependency. It does not
+fall back to the host `pi`. Direct candidate and exact-session-reopen launches
+use an absolute symlink to that local executable inside the disposable smoke
+directory. For Herdr-managed Pi children, the harness prepends the local binary
+directory to the isolated environment and explicitly forwards that `PATH` to
+the owned workspace and nested-host tab. This uses Herdr's supported
+`workspace create --env` and `tab create --env` controls. The private smoke-only
+Herdr config selects `shell_mode = "non_login"`; the harness validates that
+config before starting the isolated server. Scenarios that collect Pi
+provenance require the executing process's version to equal the pinned package
+version, not merely meet the repository minimum.
+
+The host `pi --version` may differ and is not used to select the smoke runtime.
+Node and Herdr minimum-version checks are unchanged. The owned server's
+readiness and client/server compatibility are checked before creating the
+parent workspace. A pre-existing Herdr server or session is not required.
 
 On failure, the runner reports whether setup, scenario behavior, required
 evidence, or cleanup failed. It preserves one bounded, allowlisted JSON result
@@ -200,6 +213,7 @@ For troubleshooting, inspect the host runtime and integration status:
 
 ```sh
 node --version
+node_modules/.bin/pi --version
 pi --version
 herdr status --json
 herdr integration status
