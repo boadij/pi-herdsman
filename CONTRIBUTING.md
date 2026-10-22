@@ -47,6 +47,19 @@ Individual commits should follow the same convention, although the pull request 
 
 AI-assisted contributions are welcome, but contributors remain responsible for understanding, reviewing, and testing the code they submit.
 
+## Public disclosure safety
+
+Before publishing to GitHub or other public destinations, review the complete
+outgoing material, including changes and commit metadata, issue and pull
+request text, comments, validation output, logs, screenshots, and attachments.
+Remove secrets, personal information, confidential content, and private
+infrastructure details. Use synthetic or non-reconstructable placeholders where
+technical evidence is needed. Automated checks cannot replace this review.
+
+If sensitive information is exposed, avoid reproducing it publicly, revoke or
+rotate compromised credentials promptly, and coordinate remediation privately.
+For security vulnerabilities, use the private reporting guidance below.
+
 ## Security issues
 
 Please do not report security vulnerabilities in public issues.
