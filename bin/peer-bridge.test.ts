@@ -1,9 +1,15 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { acquireProcessLock } from "../extension/lock.ts";
 import { herdsmanDataRoot } from "../extension/storage.ts";
@@ -124,8 +130,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           encoding: "utf8",
         },
       );
-      assert.equal(acceptCrash.status, null, acceptCrash.stderr);
-      assert.equal(acceptCrash.signal, "SIGKILL", cut);
+      assert.equal(acceptCrash.error, undefined, acceptCrash.stderr);
       assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
       if (cut === "pending-marker-durable")
         assert.throws(
@@ -135,6 +140,20 @@ test("bridge recovers after process death at both durable acceptance cut points"
             ),
           /Unable to read Chief message/,
         );
+      else
+        assert.deepEqual(
+          readCoordinationMessage(
+            chiefMessagePath(runtime, sessionId, messageId),
+          ),
+          record,
+          "inbox publication must be durable before process termination",
+        );
+      if (process.platform === "win32") {
+        assert.notEqual(acceptCrash.status, 0, acceptCrash.stderr);
+      } else {
+        assert.equal(acceptCrash.status, null, acceptCrash.stderr);
+        assert.equal(acceptCrash.signal, "SIGKILL", cut);
+      }
 
       if (cut === "inbox-publication-durable" && consumed) {
         assert.deepEqual(
@@ -241,6 +260,257 @@ test("bridge recovers after process death at both durable acceptance cut points"
         );
       }
     }
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("partial pending-marker write leaves no final marker and identical retry succeeds", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-partial-marker-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const sessionId = id();
+  const originSession = id();
+  const leaseId = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
+    name: "test Manager peer presence",
+  });
+  try {
+    const runtime = peerRuntime();
+    const manager = {
+      version: 2 as const,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "manager" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: sessionId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, manager);
+    const record = {
+      version: 2 as const,
+      build: manager.build,
+      id: id(),
+      leaseId,
+      kind: "peer_message" as const,
+      fromSessionId: originSession,
+      toSessionId: sessionId,
+      leadSessionId: sessionId,
+      text: "retry after partial marker write",
+      peerSource: { role: "manager" as const },
+      createdAt: Date.now(),
+    };
+    const transfer = {
+      record,
+      attachments: [],
+      correspondence: {
+        id: id(),
+        capability: "c".repeat(64),
+        originSession,
+        originGeneration: leaseId,
+        recipientSession: sessionId,
+        recipientGeneration: manager.claim.id,
+        acceptanceId: record.id,
+        replies: [],
+      },
+      recipientClaimId: manager.claim.id,
+      expectedDataRoot: herdsmanDataRoot(),
+    };
+    const marker = join(
+      runtime.root,
+      "peer-acceptances",
+      `${createHash("sha256").update(`${originSession}\0${record.id}`).digest("hex")}.json`,
+    );
+    const run = (fail: boolean, payload = transfer) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          ...(fail
+            ? ["--import=./bin/peer-bridge-write-failure.test-support.mjs"]
+            : []),
+          "bin/peer-bridge.ts",
+          "accept",
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify(payload)}\n`,
+          encoding: "utf8",
+        },
+      );
+    const failed = run(true);
+    assert.notEqual(failed.status, 0, failed.stderr);
+    assert.match(failed.stderr, /injected pending marker temp write failure/);
+    assert.equal(existsSync(marker), false);
+    const retried = run(false);
+    assert.equal(retried.status, 0, retried.stderr);
+    assert.deepEqual(
+      readCoordinationMessage(chiefMessagePath(runtime, sessionId, record.id)),
+      record,
+    );
+    assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "accepted");
+    const conflicting = run(false, {
+      ...transfer,
+      record: { ...record, text: "conflicting retry" },
+    });
+    assert.notEqual(conflicting.status, 0);
+    assert.match(conflicting.stderr, /conflicting peer message identity/);
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("short writes complete before publication and accepted EEXIST race cleans temp", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-publication-race-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const sessionId = id();
+  const originSession = id();
+  const leaseId = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
+    name: "test Manager peer presence",
+  });
+  try {
+    const runtime = peerRuntime();
+    const manager = {
+      version: 2 as const,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "manager" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: sessionId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, manager);
+    const makeTransfer = (text: string) => {
+      const record = {
+        version: 2 as const,
+        build: manager.build,
+        id: id(),
+        leaseId,
+        kind: "peer_message" as const,
+        fromSessionId: originSession,
+        toSessionId: sessionId,
+        leadSessionId: sessionId,
+        text,
+        peerSource: { role: "manager" as const },
+        createdAt: Date.now(),
+      };
+      return {
+        record,
+        attachments: [],
+        correspondence: {
+          id: id(),
+          capability: "c".repeat(64),
+          originSession,
+          originGeneration: leaseId,
+          recipientSession: sessionId,
+          recipientGeneration: manager.claim.id,
+          acceptanceId: record.id,
+          replies: [],
+        },
+        recipientClaimId: manager.claim.id,
+        expectedDataRoot: herdsmanDataRoot(),
+      };
+    };
+    const run = (transfer: ReturnType<typeof makeTransfer>, support: string) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          `--import=./bin/${support}`,
+          "bin/peer-bridge.ts",
+          "accept",
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify(transfer)}\n`,
+          encoding: "utf8",
+        },
+      );
+    const markerPath = (transfer: ReturnType<typeof makeTransfer>) =>
+      join(
+        runtime.root,
+        "peer-acceptances",
+        `${createHash("sha256").update(`${originSession}\0${transfer.record.id}`).digest("hex")}.json`,
+      );
+    const shortWrite = makeTransfer("all bytes before publication");
+    const shortWriteResult = run(
+      shortWrite,
+      "peer-bridge-short-write.test-support.mjs",
+    );
+    assert.equal(shortWriteResult.error, undefined, shortWriteResult.stderr);
+    assert.equal(
+      JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).status,
+      "pending",
+    );
+    assert.deepEqual(
+      JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).transfer,
+      shortWrite,
+    );
+    assert.deepEqual(readdirSync(join(runtime.root, "peer-acceptances")), [
+      `${createHash("sha256").update(`${originSession}\0${shortWrite.record.id}`).digest("hex")}.json`,
+    ]);
+
+    const raced = makeTransfer("accepted marker race");
+    const raceResult = run(raced, "peer-bridge-eexist.test-support.mjs");
+    assert.equal(raceResult.status, 0, raceResult.stderr);
+    assert.deepEqual(JSON.parse(raceResult.stdout), {
+      accepted: true,
+      id: raced.record.id,
+    });
+    assert.equal(
+      JSON.parse(readFileSync(markerPath(raced), "utf8")).status,
+      "accepted",
+    );
+    assert.deepEqual(
+      readdirSync(join(runtime.root, "peer-acceptances")).sort(),
+      [basename(markerPath(shortWrite)), basename(markerPath(raced))].sort(),
+    );
   } finally {
     claim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;

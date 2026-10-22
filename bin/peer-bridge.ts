@@ -3,10 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
+  writeSync,
   writeFileSync,
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -38,7 +41,12 @@ import {
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
 import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "../extension/peer-transport.ts";
-import { afterDurablePeerAcceptanceStep } from "./peer-bridge-fault-seam.ts";
+import {
+  afterDurablePeerAcceptanceStep,
+  afterPendingMarkerTempWriteForTests,
+  beforePendingMarkerPublishForTests,
+  pendingMarkerWriteLimitForTests,
+} from "./peer-bridge-fault-seam.ts";
 
 let action = process.argv[2];
 if (
@@ -328,6 +336,7 @@ if (action === "probe") {
     .update(`${record.fromSessionId}\0${record.id}`)
     .digest("hex");
   const marker = join(markerDir, `${key}.json`);
+  let acceptedRace = false;
   try {
     const prior = JSON.parse(readFileSync(marker, "utf8")) as {
       digest?: unknown;
@@ -368,9 +377,170 @@ if (action === "probe") {
       )
     )
       throw new Error("exact destination Manager is not live");
+    const content = `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`;
+    const temp = `${marker}.${randomUUID()}.tmp`;
+    let fd: number | undefined;
+    try {
+      fd = openSync(temp, "wx", 0o600);
+      const bytes = Buffer.from(content, "utf8");
+      let offset = 0;
+      while (offset < bytes.length) {
+        const requested = bytes.length - offset;
+        const length = pendingMarkerWriteLimitForTests(requested);
+        if (!Number.isInteger(length) || length <= 0 || length > requested)
+          throw new Error("invalid pending peer acceptance write length");
+        const written = writeSync(fd, bytes, offset, length);
+        if (
+          !Number.isInteger(written) ||
+          written <= 0 ||
+          written > bytes.length - offset
+        )
+          throw new Error(
+            "unable to write complete pending peer acceptance marker",
+          );
+        offset += written;
+        afterPendingMarkerTempWriteForTests();
+      }
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      beforePendingMarkerPublishForTests(marker, content);
+      let alreadyExists = false;
+      try {
+        linkSync(temp, marker);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        alreadyExists = true;
+      }
+      syncDirectory(markerDir);
+      if (alreadyExists) {
+        const prior = JSON.parse(readFileSync(marker, "utf8")) as {
+          digest?: unknown;
+          recipientSession?: unknown;
+          status?: unknown;
+          transfer?: typeof envelope;
+        };
+        if (
+          prior.digest !== digest ||
+          prior.recipientSession !== record.toSessionId
+        )
+          throw new Error("conflicting peer message identity");
+        if (prior.status === "accepted") acceptedRace = true;
+        else if (
+          prior.status !== "pending" ||
+          !prior.transfer ||
+          prior.transfer.record?.id !== record.id ||
+          prior.transfer.record?.fromSessionId !== record.fromSessionId ||
+          prior.transfer.record?.toSessionId !== record.toSessionId ||
+          peerPayloadDigest({
+            record: prior.transfer.record,
+            attachments: prior.transfer.attachments ?? [],
+          }) !== prior.digest
+        )
+          throw new Error("invalid pending peer message acceptance");
+        else envelope = prior.transfer;
+      }
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      rmSync(temp, { force: true });
+    }
+    if (!acceptedRace) afterDurablePeerAcceptanceStep("pending-marker-durable");
+  }
+  acceptTransfer: {
+    if (acceptedRace) {
+      console.log(JSON.stringify({ accepted: true, id: record.id }));
+      break acceptTransfer;
+    }
+    if (
+      !listPeerLeadRecords(runtime).some(
+        (peer) =>
+          peer.role === "manager" &&
+          peer.piSessionId === record.toSessionId &&
+          peer.claim.id === envelope.recipientClaimId,
+      )
+    )
+      throw new Error("exact destination Manager is not live");
+    if (
+      !envelope.correspondence ||
+      envelope.correspondence.recipientSession !== record.toSessionId ||
+      envelope.correspondence.recipientGeneration !==
+        envelope.recipientClaimId ||
+      envelope.correspondence.originSession !== record.fromSessionId ||
+      envelope.correspondence.originGeneration !== record.leaseId
+    )
+      throw new Error("peer correspondence does not match message route");
+    const receivedRefs: string[] = [];
+    let receivedText = record.text as string;
+    for (const attachment of envelope.attachments) {
+      if (
+        typeof attachment.name !== "string" ||
+        typeof attachment.marker !== "string" ||
+        typeof attachment.text !== "string" ||
+        typeof attachment.sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(attachment.sha256)
+      )
+        throw new Error("invalid peer attachment metadata");
+      const contentDigest = createHash("sha256")
+        .update(attachment.text, "utf8")
+        .digest("hex");
+      if (contentDigest !== attachment.sha256)
+        throw new Error("peer attachment integrity check failed");
+      const markerIndex = receivedText.indexOf(attachment.marker);
+      if (
+        markerIndex < 0 ||
+        receivedText.indexOf(attachment.marker, markerIndex + 1) !== -1
+      )
+        throw new Error("peer attachment marker is missing or ambiguous");
+      receivedText =
+        receivedText.slice(0, markerIndex) +
+        attachment.text +
+        receivedText.slice(markerIndex + attachment.marker.length);
+      const binding = record.resultBindings?.find(
+        (item: { ref?: unknown }) => item.ref === attachment.ref,
+      );
+      const path = binding
+        ? persistPeerResultArtifact(binding.canonicalRef, attachment.text)
+        : persistPeerAttachment(attachment.name, attachment.text);
+      receivedRefs.push(
+        `${attachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : path}`,
+      );
+    }
+    const acceptedRecord = {
+      ...record,
+      ...(receivedRefs.length
+        ? {
+            text: `${receivedText}\n\nForwardable received files:\n${receivedRefs.join("\n")}`,
+          }
+        : { text: receivedText }),
+    };
+    storePeerCorrespondence(envelope.correspondence);
+    const accepted = acceptedRecord as never;
+    let published = false;
+    try {
+      const existing = readCoordinationMessage(
+        chiefMessagePath(runtime, record.toSessionId, record.id),
+      );
+      if (!isDeepStrictEqual(existing, accepted))
+        throw new Error("conflicting peer inbox message identity");
+      published = true;
+    } catch (error) {
+      const cause = error instanceof Error ? error.cause : undefined;
+      if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT")
+        throw error;
+    }
+    if (!published) {
+      const digest = coordinationMessageDigest(accepted);
+      if (
+        !hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest)
+      )
+        writeCoordinationMessage(accepted, runtime);
+      if (!published)
+        afterDurablePeerAcceptanceStep("inbox-publication-durable");
+    }
+    const markerTemp = `${marker}.${randomUUID()}.tmp`;
     writeFileSync(
-      marker,
-      `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`,
+      markerTemp,
+      `${JSON.stringify({ connection, digest, status: "accepted", recipientSession: record.toSessionId })}\n`,
       {
         encoding: "utf8",
         flag: "wx",
@@ -378,114 +548,19 @@ if (action === "probe") {
         flush: true,
       },
     );
+    renameSync(markerTemp, marker);
     syncDirectory(markerDir);
-    afterDurablePeerAcceptanceStep("pending-marker-durable");
-  }
-  if (
-    !listPeerLeadRecords(runtime).some(
-      (peer) =>
-        peer.role === "manager" &&
-        peer.piSessionId === record.toSessionId &&
-        peer.claim.id === envelope.recipientClaimId,
-    )
-  )
-    throw new Error("exact destination Manager is not live");
-  if (
-    !envelope.correspondence ||
-    envelope.correspondence.recipientSession !== record.toSessionId ||
-    envelope.correspondence.recipientGeneration !== envelope.recipientClaimId ||
-    envelope.correspondence.originSession !== record.fromSessionId ||
-    envelope.correspondence.originGeneration !== record.leaseId
-  )
-    throw new Error("peer correspondence does not match message route");
-  const receivedRefs: string[] = [];
-  let receivedText = record.text as string;
-  for (const attachment of envelope.attachments) {
-    if (
-      typeof attachment.name !== "string" ||
-      typeof attachment.marker !== "string" ||
-      typeof attachment.text !== "string" ||
-      typeof attachment.sha256 !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(attachment.sha256)
-    )
-      throw new Error("invalid peer attachment metadata");
-    const contentDigest = createHash("sha256")
-      .update(attachment.text, "utf8")
-      .digest("hex");
-    if (contentDigest !== attachment.sha256)
-      throw new Error("peer attachment integrity check failed");
-    const markerIndex = receivedText.indexOf(attachment.marker);
-    if (
-      markerIndex < 0 ||
-      receivedText.indexOf(attachment.marker, markerIndex + 1) !== -1
-    )
-      throw new Error("peer attachment marker is missing or ambiguous");
-    receivedText =
-      receivedText.slice(0, markerIndex) +
-      attachment.text +
-      receivedText.slice(markerIndex + attachment.marker.length);
-    const binding = record.resultBindings?.find(
-      (item: { ref?: unknown }) => item.ref === attachment.ref,
-    );
-    const path = binding
-      ? persistPeerResultArtifact(binding.canonicalRef, attachment.text)
-      : persistPeerAttachment(attachment.name, attachment.text);
-    receivedRefs.push(
-      `${attachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : path}`,
+    console.log(
+      JSON.stringify(
+        recoveringStatus
+          ? {
+              dataRoot: herdsmanDataRoot(),
+              id: record.id,
+              digest,
+              status: "accepted",
+            }
+          : { accepted: true, id: record.id },
+      ),
     );
   }
-  const acceptedRecord = {
-    ...record,
-    ...(receivedRefs.length
-      ? {
-          text: `${receivedText}\n\nForwardable received files:\n${receivedRefs.join("\n")}`,
-        }
-      : { text: receivedText }),
-  };
-  storePeerCorrespondence(envelope.correspondence);
-  const accepted = acceptedRecord as never;
-  let published = false;
-  try {
-    const existing = readCoordinationMessage(
-      chiefMessagePath(runtime, record.toSessionId, record.id),
-    );
-    if (!isDeepStrictEqual(existing, accepted))
-      throw new Error("conflicting peer inbox message identity");
-    published = true;
-  } catch (error) {
-    const cause = error instanceof Error ? error.cause : undefined;
-    if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT")
-      throw error;
-  }
-  if (!published) {
-    const digest = coordinationMessageDigest(accepted);
-    if (!hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest))
-      writeCoordinationMessage(accepted, runtime);
-    if (!published) afterDurablePeerAcceptanceStep("inbox-publication-durable");
-  }
-  const markerTemp = `${marker}.${randomUUID()}.tmp`;
-  writeFileSync(
-    markerTemp,
-    `${JSON.stringify({ connection, digest, status: "accepted", recipientSession: record.toSessionId })}\n`,
-    {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-      flush: true,
-    },
-  );
-  renameSync(markerTemp, marker);
-  syncDirectory(markerDir);
-  console.log(
-    JSON.stringify(
-      recoveringStatus
-        ? {
-            dataRoot: herdsmanDataRoot(),
-            id: record.id,
-            digest,
-            status: "accepted",
-          }
-        : { accepted: true, id: record.id },
-    ),
-  );
 }
