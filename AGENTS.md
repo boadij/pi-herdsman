@@ -1,5 +1,32 @@
 # Repository Project-Local AGENTS.md
 
+## Public disclosure safety
+
+Before publishing repository or task information to GitHub or another public
+destination, inspect the **exact material being published**. This includes
+commits (diffs, history, messages, and author metadata), issues, pull requests,
+reviews, comments, discussions, releases, CI logs and artifacts, and package or
+container publications.
+
+Publish only what is necessary. Remove credentials, tokens, private keys,
+personal or identifying information, confidential code or data, private
+infrastructure details, and sensitive local paths or environment values.
+Inspect generated text, tool responses, command output, stack traces, logs,
+screenshots, URLs, and attachments as carefully as source files. Replace
+sensitive details with synthetic examples or non-reconstructable placeholders
+while preserving useful technical evidence.
+
+Sanitize **before** publication. Do not assume material is safe because it is
+ignored by Git, came from an agent or tool, passed CI, or will be checked by
+reviewers or secret scanners. If its public disclosure is uncertain, withhold
+the sensitive material and obtain authorization through a private channel.
+Permission to inspect private material is not permission to publish it.
+
+If a disclosure occurs, do not repeat the sensitive content in public follow-up.
+Use a private channel to coordinate containment and remediation, promptly revoke
+or rotate exposed credentials, and assume that edits or deletion cannot reliably
+remove already published copies.
+
 ## Repository documentation
 
 Product, guide, reference, and maintainer documentation describes verified
