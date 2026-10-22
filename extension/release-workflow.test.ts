@@ -3,46 +3,68 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
-const workflow = readFileSync(resolve(".github/workflows/release.yml"), "utf8");
+const workflow = readFileSync(
+  resolve(".github/workflows/release.yml"),
+  "utf8",
+).replaceAll("\r\n", "\n");
 const previewWorkflow = readFileSync(
   resolve(".github/workflows/preview.yml"),
   "utf8",
 ).replaceAll("\r\n", "\n");
 
-test("release publication uses explicit release identity", () => {
+test("release publication recovers with exact identity", () => {
+  assert.match(workflow, /queue: max/);
+  assert.match(workflow, /googleapis\/release-please-action@v5/);
   assert.match(
     workflow,
-    /id:\s*release[\s\S]*if:\s*\$\{\{\s*github\.event_name\s*==\s*'push'\s*\}\}[\s\S]*googleapis\/release-please-action@v5/,
+    /workflow_dispatch:[\s\S]*tag:[\s\S]*required:\s*true/,
+  );
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(
+    workflow,
+    /- id: target\n\s+if: \$\{\{ !cancelled\(\) && steps\.source\.outcome == 'success' \}\}/,
+  );
+
+  const target = workflow.slice(
+    workflow.indexOf("- id: target"),
+    workflow.indexOf("- id: node"),
+  );
+  assert.match(target, /RELEASE_CREATED/);
+  assert.match(target, /releases\/tags\/\$TAG/);
+  assert.match(target, /HTTP 404/);
+  assert.match(target, /published_at != null/);
+  assert.match(target, /TAG_SHA.*GITHUB_SHA/);
+  assert.match(target, /git checkout --detach "\$TAG_SHA"/);
+  assert.match(target, /test "v\$VERSION" = "\$TAG"/);
+  assert.match(target, /releases\/latest/);
+  assert.match(target, /DIST_TAG=backfill/);
+  assert.match(target, /DIST_TAG=latest/);
+  assert.match(target, /docker_tags<<EOF/);
+
+  assert.match(workflow, /VERSIONS=\$\(npm view "\$PACKAGE" versions --json\)/);
+  assert.match(workflow, /npm run release:check -- --tag "\$DIST_TAG"/);
+  assert.match(workflow, /npm publish --tag "\$DIST_TAG"/);
+  assert.match(
+    workflow,
+    /- id: qemu\n\s+if: \$\{\{ !cancelled\(\) && steps\.target\.outputs\.publish == 'true' \}\}/,
   );
   assert.match(
     workflow,
-    /workflow_dispatch:[\s\S]*tag:[\s\S]*description:\s*Existing GitHub release tag to retry release publication[\s\S]*required:\s*true/,
-  );
-  assert.match(workflow, /steps\.release\.outputs\.release_created/);
-  assert.match(workflow, /steps\.release\.outputs\.tag_name/);
-  assert.match(
-    workflow,
-    /elif\s+\[\s*"\$RELEASE_CREATED"\s*=\s*"true"\s*\];\s*then[\s\S]*TAG="\$RELEASE_TAG"[\s\S]*else[\s\S]*publish=false/,
+    /- id: buildx\n\s+if: \$\{\{ !cancelled\(\) && steps\.qemu\.outcome == 'success' \}\}/,
   );
   assert.match(
     workflow,
-    /if:\s*\$\{\{\s*steps\.target\.outputs\.publish\s*==\s*'true'\s*\}\}[\s\S]*ref:\s*refs\/tags\/\$\{\{\s*steps\.target\.outputs\.tag\s*\}\}/,
+    /- id: login\n\s+if: \$\{\{ !cancelled\(\) && steps\.buildx\.outcome == 'success' \}\}/,
   );
   assert.match(
     workflow,
-    /- uses: actions\/setup-node@v\d+\s+if:\s*\$\{\{\s*steps\.target\.outputs\.publish\s*==\s*'true'\s*\}\}/,
+    /- name: Publish container\n\s+if: \$\{\{ !cancelled\(\) && steps\.login\.outcome == 'success' \}\}/,
   );
   assert.match(
     workflow,
-    /- name: Publish released npm version[\s\S]*if:\s*\$\{\{\s*steps\.target\.outputs\.publish\s*==\s*'true'\s*\}\}/,
+    /tags: \$\{\{ steps\.target\.outputs\.docker_tags \}\}/,
   );
-  assert.match(workflow, /test "v\$VERSION" = "\$RELEASE_TAG"/);
-  assert.match(workflow, /gh release view "\$RELEASE_TAG"/);
-  assert.match(workflow, /npm run release:check/);
-  assert.match(
-    workflow,
-    /npm run release:check[\s\S]*if npm view "\$PACKAGE@\$VERSION" version >\/dev\/null; then\s+echo "\$PACKAGE@\$VERSION is already published; skipping npm publish"\s+else\s+npm publish\s+fi[\s\S]*- name: Set up QEMU/,
-  );
+  assert.doesNotMatch(workflow, /steps\.package\./);
 });
 
 test("PR preview publication isolates publish credentials from PR code", () => {

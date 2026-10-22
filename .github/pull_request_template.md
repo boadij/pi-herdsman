@@ -1,9 +1,9 @@
 <!-- See CONTRIBUTING.md for PR title and contribution guidance. -->
 
-<!-- Before publishing, review the diff and commit metadata, this description,
-validation output, and linked logs, screenshots, or artifacts for secrets,
-personal information, and other private or sensitive details. Sanitize the
-outgoing content first; see CONTRIBUTING.md. -->
+<!-- Before publishing, review the diff and commit metadata, PR text,
+validation output, linked logs, screenshots, and artifacts for unauthorized
+disclosures. Redact sensitive material without changing legitimate attribution
+or evidence. See CONTRIBUTING.md. -->
 
 ## Summary
 
