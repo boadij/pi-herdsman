@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.32.1](https://github.com/boadij/pi-herdsman/compare/v0.32.0...v0.32.1) (2026-10-22)
+
+
+### Fixes
+
+* **agent:** preserve accepted assignments during cleanup contention ([#544](https://github.com/boadij/pi-herdsman/issues/544)) ([d95d715](https://github.com/boadij/pi-herdsman/commit/d95d715f6b8d808300d4b30ce7dfc655f1b9c7fe)), closes [#503](https://github.com/boadij/pi-herdsman/issues/503)
+* **deps:** exclude Node runtime version updates ([#526](https://github.com/boadij/pi-herdsman/issues/526)) ([3cd1ed8](https://github.com/boadij/pi-herdsman/commit/3cd1ed8946018826f3a091d084b5b6ec675248cf))
+* **deps:** match Node runtime by dependency name ([#527](https://github.com/boadij/pi-herdsman/issues/527)) ([8e2196b](https://github.com/boadij/pi-herdsman/commit/8e2196bed14528e44a665088d59d0bf59a2d6a59))
+* **deps:** retry npm lockfile generation ([#542](https://github.com/boadij/pi-herdsman/issues/542)) ([a91a87b](https://github.com/boadij/pi-herdsman/commit/a91a87bb35e5bac7d7f5b5a6c07525f825a52659))
+
+
+### Tests
+
+* **ci:** decouple release assertion from setup-node major version ([#539](https://github.com/boadij/pi-herdsman/issues/539)) ([eefb45e](https://github.com/boadij/pi-herdsman/commit/eefb45eca0c2b1fba128d36ca332f1053c2c2eb0))
+* **smoke:** gate Manager handoff on verified Lead provenance ([#528](https://github.com/boadij/pi-herdsman/issues/528)) ([7283128](https://github.com/boadij/pi-herdsman/commit/7283128737d2c32fc6c6e15ae99e3fc1c6b0403e))
+
+
+### Other Changes
+
+* **deps:** configure Renovate updates ([#523](https://github.com/boadij/pi-herdsman/issues/523)) ([dd146e7](https://github.com/boadij/pi-herdsman/commit/dd146e70e3cfbfb460e4d353b80f4b46cd605dce))
+* **deps:** update actions/checkout action to v7 ([#534](https://github.com/boadij/pi-herdsman/issues/534)) ([0b7ca97](https://github.com/boadij/pi-herdsman/commit/0b7ca9701cb073e6aa8a9444351b4a263fb7da2f))
+* **deps:** update actions/setup-node action to v7 ([#535](https://github.com/boadij/pi-herdsman/issues/535)) ([957aaf0](https://github.com/boadij/pi-herdsman/commit/957aaf07c86d4d8b229812ab525b1a437e89e944))
+* **deps:** update dependency @howaboua/pi-codex-conversion to v4 ([#536](https://github.com/boadij/pi-herdsman/issues/536)) ([ae7f9c6](https://github.com/boadij/pi-herdsman/commit/ae7f9c695189babcbfb70f4c133bb972fd635567))
+* **deps:** update dependency typebox to v1.4.3 ([#529](https://github.com/boadij/pi-herdsman/issues/529)) ([aade3ce](https://github.com/boadij/pi-herdsman/commit/aade3ceff58f7e449209acca2a303c3b9beffa32))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.17 ([#530](https://github.com/boadij/pi-herdsman/issues/530)) ([0565079](https://github.com/boadij/pi-herdsman/commit/0565079f7eb96860b870f8adf95d4774750086a2))
+* **deps:** update node.js to v26.12.1 ([#532](https://github.com/boadij/pi-herdsman/issues/532)) ([4cbbcb7](https://github.com/boadij/pi-herdsman/commit/4cbbcb709f16a4c8707ea67491e923b01f2df7a9))
+* **deps:** update tailscale/tailscale docker tag to v1.104.2 ([#533](https://github.com/boadij/pi-herdsman/issues/533)) ([3cb3ebb](https://github.com/boadij/pi-herdsman/commit/3cb3ebb4583bb558cee1ec0bd6fa4025a5d6c43f))
+
 ## [0.32.0](https://github.com/boadij/pi-herdsman/compare/v0.31.1...v0.32.0) (2026-10-22)
 
 
