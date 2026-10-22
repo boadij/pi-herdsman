@@ -46,6 +46,7 @@ import {
   afterPendingMarkerTempWriteForTests,
   beforePendingMarkerPublishForTests,
   pendingMarkerWriteLimitForTests,
+  afterAcceptedMarkerTempWriteForTests,
 } from "./peer-bridge-fault-seam.ts";
 
 let action = process.argv[2];
@@ -452,15 +453,6 @@ if (action === "probe") {
       break acceptTransfer;
     }
     if (
-      !listPeerLeadRecords(runtime).some(
-        (peer) =>
-          peer.role === "manager" &&
-          peer.piSessionId === record.toSessionId &&
-          peer.claim.id === envelope.recipientClaimId,
-      )
-    )
-      throw new Error("exact destination Manager is not live");
-    if (
       !envelope.correspondence ||
       envelope.correspondence.recipientSession !== record.toSessionId ||
       envelope.correspondence.recipientGeneration !==
@@ -513,7 +505,6 @@ if (action === "probe") {
           }
         : { text: receivedText }),
     };
-    storePeerCorrespondence(envelope.correspondence);
     const accepted = acceptedRecord as never;
     let published = false;
     try {
@@ -528,27 +519,78 @@ if (action === "probe") {
       if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT")
         throw error;
     }
+    const acceptedDigest = coordinationMessageDigest(accepted);
+    if (
+      !published &&
+      hasPeerDeliveryReceipt(
+        runtime,
+        record.toSessionId,
+        record.id,
+        acceptedDigest,
+      )
+    )
+      published = true;
     if (!published) {
-      const digest = coordinationMessageDigest(accepted);
+      const liveRecipient = listPeerLeadRecords(runtime).find(
+        (peer) =>
+          peer.role === "manager" && peer.piSessionId === record.toSessionId,
+      );
+      if (!liveRecipient)
+        throw new Error("exact destination Manager is not live");
+      if (liveRecipient.claim.id !== envelope.recipientClaimId) {
+        envelope = {
+          ...envelope,
+          recipientClaimId: liveRecipient.claim.id,
+          correspondence: {
+            ...envelope.correspondence,
+            recipientGeneration: liveRecipient.claim.id,
+          },
+        };
+        const pendingTemp = `${marker}.${randomUUID()}.tmp`;
+        try {
+          writeFileSync(
+            pendingTemp,
+            `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`,
+            { encoding: "utf8", flag: "wx", mode: 0o600, flush: true },
+          );
+          renameSync(pendingTemp, marker);
+        } finally {
+          rmSync(pendingTemp, { force: true });
+        }
+        syncDirectory(markerDir);
+      }
+    }
+    storePeerCorrespondence(envelope.correspondence);
+    if (!published) {
       if (
-        !hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest)
+        !hasPeerDeliveryReceipt(
+          runtime,
+          record.toSessionId,
+          record.id,
+          acceptedDigest,
+        )
       )
         writeCoordinationMessage(accepted, runtime);
       if (!published)
         afterDurablePeerAcceptanceStep("inbox-publication-durable");
     }
     const markerTemp = `${marker}.${randomUUID()}.tmp`;
-    writeFileSync(
-      markerTemp,
-      `${JSON.stringify({ connection, digest, status: "accepted", recipientSession: record.toSessionId })}\n`,
-      {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-        flush: true,
-      },
-    );
-    renameSync(markerTemp, marker);
+    try {
+      writeFileSync(
+        markerTemp,
+        `${JSON.stringify({ connection, digest, status: "accepted", recipientSession: record.toSessionId })}\n`,
+        {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+          flush: true,
+        },
+      );
+      afterAcceptedMarkerTempWriteForTests(markerTemp, marker);
+      renameSync(markerTemp, marker);
+    } finally {
+      rmSync(markerTemp, { force: true });
+    }
     syncDirectory(markerDir);
     console.log(
       JSON.stringify(

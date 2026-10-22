@@ -25,8 +25,10 @@ import {
   writePeerDeliveryReceipt,
   writePeerLeadRecord,
   peerLeadLockPath,
+  removePeerLeadRecord,
 } from "../extension/supervision.ts";
 import {
+  listPeerCorrespondences,
   peerPayloadDigest,
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
@@ -45,11 +47,11 @@ test("bridge recovers after process death at both durable acceptance cut points"
   const sessionId = id();
   const originSession = id();
   const leaseId = id();
-  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
+  let claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
     name: "test Manager peer presence",
   });
   const peers = peerRuntime();
-  const manager = {
+  let manager = {
     version: 2 as const,
     build: { version: "0.18.0", sha256: "a".repeat(64) },
     role: "manager" as const,
@@ -69,8 +71,15 @@ test("bridge recovers after process death at both durable acceptance cut points"
       { cut: "pending-marker-durable", consumed: false },
       { cut: "inbox-publication-durable", consumed: false },
       { cut: "inbox-publication-durable", consumed: true },
+      { cut: "pending-marker-durable", consumed: false, retargetCrash: true },
+      { cut: "pending-marker-durable", consumed: false, replacement: true },
     ] as const;
-    for (const { cut, consumed } of scenarios) {
+    for (const {
+      cut,
+      consumed,
+      replacement = false,
+      retargetCrash = false,
+    } of scenarios) {
       const messageId = id();
       const record = {
         version: 2 as const,
@@ -202,7 +211,98 @@ test("bridge recovers after process death at both durable acceptance cut points"
           /Unable to read Chief message/,
         );
       }
+      claim.release();
+      const recoverySession = replacement ? id() : sessionId;
+      claim = acquireProcessLock(peerLeadLockPath(runtime, recoverySession), {
+        name: "restarted test Manager peer presence",
+      });
+      manager = {
+        ...manager,
+        piSessionId: recoverySession,
+        claim: claim.claim,
+        updatedAt: Date.now(),
+      };
+      writePeerLeadRecord(runtime, manager);
       const digest = peerPayloadDigest({ record, attachments: [] });
+      const statusRequest = JSON.stringify({
+        id: messageId,
+        originSession,
+        recipientSession: sessionId,
+        digest,
+        expectedDataRoot: herdsmanDataRoot(),
+      });
+      if (retargetCrash) {
+        const publishedCrash = spawnSync(
+          process.execPath,
+          [
+            "--experimental-strip-types",
+            "--import=./bin/peer-bridge-kill-hook.test-support.mjs",
+            "bin/peer-bridge.ts",
+            "status",
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              PI_CODING_AGENT_DIR: agentDir,
+              HERDR_SOCKET_PATH: socket,
+              SSH_CONNECTION: "reconnected-ssh-connection",
+              PEER_TEST_KILL_AFTER: "inbox-publication-durable",
+            },
+            input: `${statusRequest}\n`,
+            encoding: "utf8",
+          },
+        );
+        assert.equal(publishedCrash.status, null, publishedCrash.stderr);
+        assert.equal(publishedCrash.signal, "SIGKILL");
+        const pending = JSON.parse(readFileSync(marker, "utf8"));
+        assert.equal(pending.status, "pending");
+        assert.equal(pending.transfer.recipientClaimId, manager.claim.id);
+        assert.equal(
+          pending.transfer.correspondence.recipientGeneration,
+          manager.claim.id,
+        );
+        removePeerLeadRecord(runtime, sessionId, manager);
+        claim.release();
+      }
+      if (cut === "pending-marker-durable" && !replacement) {
+        const failedPublication = spawnSync(
+          process.execPath,
+          [
+            "--experimental-strip-types",
+            "--import=./bin/peer-bridge-accepted-write-failure.test-support.mjs",
+            "bin/peer-bridge.ts",
+            "status",
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              PI_CODING_AGENT_DIR: agentDir,
+              HERDR_SOCKET_PATH: socket,
+              SSH_CONNECTION: "reconnected-ssh-connection",
+            },
+            input: `${statusRequest}\n`,
+            encoding: "utf8",
+          },
+        );
+        assert.notEqual(failedPublication.status, 0, failedPublication.stderr);
+        assert.match(
+          failedPublication.stderr,
+          /injected accepted marker publication failure/,
+        );
+        assert.equal(
+          JSON.parse(readFileSync(marker, "utf8")).status,
+          "pending",
+        );
+        assert.equal(
+          readdirSync(join(runtime.root, "peer-acceptances")).some((name) =>
+            name.endsWith(".tmp"),
+          ),
+          false,
+          "failed accepted-marker publication removes its exact temporary file",
+        );
+      }
       const output = spawnSync(
         process.execPath,
         ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
@@ -214,16 +314,19 @@ test("bridge recovers after process death at both durable acceptance cut points"
             HERDR_SOCKET_PATH: socket,
             SSH_CONNECTION: "reconnected-ssh-connection",
           },
-          input: `${JSON.stringify({
-            id: messageId,
-            originSession,
-            recipientSession: sessionId,
-            digest,
-            expectedDataRoot: herdsmanDataRoot(),
-          })}\n`,
+          input: `${statusRequest}\n`,
           encoding: "utf8",
         },
       );
+      if (replacement) {
+        assert.notEqual(output.status, 0, output.stderr);
+        assert.match(output.stderr, /exact destination Manager is not live/);
+        assert.equal(
+          JSON.parse(readFileSync(marker, "utf8")).status,
+          "pending",
+        );
+        continue;
+      }
       assert.equal(output.status, 0, output.stderr);
       assert.deepEqual(JSON.parse(output.stdout), {
         dataRoot: herdsmanDataRoot(),
@@ -233,7 +336,27 @@ test("bridge recovers after process death at both durable acceptance cut points"
       });
       const savedMarker = JSON.parse(readFileSync(marker, "utf8"));
       assert.equal(savedMarker.status, "accepted", cut);
+      assert.equal(
+        savedMarker.digest,
+        digest,
+        "recovery preserves transfer digest",
+      );
       if (cut === "pending-marker-durable") {
+        if (retargetCrash) {
+          assert.equal(
+            listPeerCorrespondences().find(
+              (item) => item.acceptanceId === messageId,
+            )?.recipientGeneration,
+            manager.claim.id,
+            "published recovery keeps the retargeted generation while offline",
+          );
+          claim = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+            name: "restarted test Manager after offline acceptance",
+          });
+          manager = { ...manager, claim: claim.claim, updatedAt: Date.now() };
+          writePeerLeadRecord(runtime, manager);
+          continue;
+        }
         assert.deepEqual(
           readCoordinationMessage(
             chiefMessagePath(runtime, sessionId, messageId),

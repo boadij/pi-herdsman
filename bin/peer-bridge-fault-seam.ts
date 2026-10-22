@@ -6,6 +6,8 @@ let pendingMarkerTempWriteHook: (() => void) | undefined;
 let pendingMarkerWriteLimitHook: ((requested: number) => number) | undefined;
 let pendingMarkerPublishHook:
   ((marker: string, content: string) => void) | undefined;
+let acceptedMarkerTempWriteHook:
+  ((temporary: string, marker: string) => void) | undefined;
 
 export function afterDurablePeerAcceptanceStep(
   cutPoint: PeerAcceptanceCutPoint,
@@ -49,4 +51,17 @@ export function setPendingMarkerPublishHookForTests(
   hook: (marker: string, content: string) => void,
 ): void {
   pendingMarkerPublishHook = hook;
+}
+
+export function afterAcceptedMarkerTempWriteForTests(
+  temporary: string,
+  marker: string,
+): void {
+  acceptedMarkerTempWriteHook?.(temporary, marker);
+}
+
+export function setAcceptedMarkerTempWriteHookForTests(
+  hook: (temporary: string, marker: string) => void,
+): void {
+  acceptedMarkerTempWriteHook = hook;
 }
