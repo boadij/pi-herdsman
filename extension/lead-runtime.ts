@@ -7283,6 +7283,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     signal?: AbortSignal,
     options: { expected?: PendingRemoval; preauthorized?: boolean } = {},
   ) => {
+    const pendingAtStart = pendingRemovals(ctx).get(branch);
     if (activeRole() !== "manager")
       throw new Error("Only Managers can remove project worktrees");
     const operationSignal = signal ?? ctx.signal;
@@ -7489,6 +7490,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         let retirementError: string | undefined;
         const checkoutState = gitPathStatus(candidate.checkoutPath);
         const checkoutRemoved = checkoutState === "absent";
+        const currentPending = pendingRemovals(ctx).get(branch);
+        if (
+          checkoutRemoved &&
+          pendingAtStart &&
+          pendingAtStart.repoKey === candidate.manager.repoKey &&
+          pendingAtStart.assignmentId === candidate.assignment.id &&
+          pendingAtStart.checkoutPath === candidate.checkoutPath &&
+          currentPending?.id === pendingAtStart.id &&
+          currentPending.repoKey === pendingAtStart.repoKey &&
+          currentPending.assignmentId === pendingAtStart.assignmentId &&
+          currentPending.checkoutPath === pendingAtStart.checkoutPath
+        )
+          resolvePendingRemoval(pendingAtStart, ctx);
         try {
           await host.reconcileProjectAssignments(
             ctx,

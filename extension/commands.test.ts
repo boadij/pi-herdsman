@@ -5107,6 +5107,8 @@ async function managerRemovalFixture(
     primaryWorkspaceAfterConfirmation?: boolean;
     replaceManagerAfterConfirmation?: boolean;
     interruptedRemove?: boolean;
+    replacePendingOnRemoval?: boolean;
+    replacementRequestId?: string;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -5264,6 +5266,21 @@ async function managerRemovalFixture(
       }
       if (args[1] === "remove") {
         removalOptions.push(runOptions);
+        if (options.replacePendingOnRemoval)
+          sessionEntries.push({
+            type: "custom",
+            customType: "pi-herdsman-pending-removal",
+            data: {
+              version: 1,
+              action: "request",
+              id: options.replacementRequestId,
+              sessionId: "manager-session",
+              branch,
+              repoKey,
+              assignmentId: assignment.id,
+              checkoutPath,
+            },
+          });
         if (options.interruptedRemove)
           throw new OperationError({
             category: "internal_failure",
@@ -5418,6 +5435,61 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
     /Pending removal (?:is no longer available|changed)/,
   );
   assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("successful direct Manager removal clears matching pending approval", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 1);
+  assert.match(
+    String(fixture.statusUpdates.at(-1)?.[1]),
+    /1 worktree removal approval pending/,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
+  assert.equal(fixture.statusUpdates.at(-1)?.[1], undefined);
+});
+
+test("successful direct Manager removal preserves a newer pending replacement", async (t) => {
+  const replacementId = randomUUID();
+  const fixture = await managerRemovalFixture(t, {
+    replacePendingOnRemoval: true,
+    replacementRequestId: replacementId,
+  });
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(
+    fixture.runtime.listPendingRemovals(fixture.ctx)[0]?.id,
+    replacementId,
+  );
+  assert.match(
+    String(fixture.statusUpdates.at(-1)?.[1]),
+    /1 worktree removal approval pending/,
+  );
 });
 
 test("pending removal intent restores from the active session branch and rejects malformed or foreign entries", async (t) => {

@@ -6950,42 +6950,38 @@ async function runManagerRecoverySmoke(ctx) {
       },
       { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
     );
+    const approvalUiBefore = await nestedPaneText(
+      ctx,
+      ctx.rootPaneId,
+      "visible",
+    );
     await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "remove"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
     const removal = await waitForEvidence(
       ctx,
       "manager-removal-guarded-executor",
       async () => {
-        const session = await rootSnapshot();
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        const results = session
-          ? sessionEntries(session.contents).filter(
-              (entry) =>
-                entry.type === "message" &&
-                entry.message?.role === "toolResult" &&
-                entry.message.toolName === "remove_worktree" &&
-                entry.message.details?.branch === branch,
-            )
-          : [];
-        const result =
-          results.length > cleanRemovalCount ? results.at(-1) : null;
-        const details = result?.message?.details;
-        const resultText = (result?.message?.content ?? [])
-          .map((item) => item.text ?? "")
-          .join(" ");
-        const worktreeCount = (await matchingWorktrees()).length;
-        const executorCompleted = details?.checkout_removed === true;
-        const checkoutRemoved = worktreeCount === 0;
+        const visible = text.replace(/\s+/gu, " ");
+        const visibleBefore = approvalUiBefore.replace(/\s+/gu, " ");
+        const matchingOwnedWorktrees = (await matchingWorktrees()).filter(
+          (item) => (item.path ?? item.worktree_path) === worktreePath,
+        );
+        const checkoutRemoved = matchingOwnedWorktrees.length === 0;
+        // /manager remove reports through the UI; it does not emit another
+        // remove_worktree tool result after the approval dialog.
+        const executorCompleted =
+          visible.includes(`removed checkout for ${branch}`) ||
+          visible.includes(`checkout removed for ${branch}`);
         const explicitRefusal =
-          details?.checkout_removed === false &&
-          details?.checkout_state === "present" &&
-          /(?:refus|preserv|dirty|occupied|changed before)/iu.test(resultText);
+          visible.includes(`worktree preserved for ${branch}`) ||
+          (/(?:worktree|checkout) preserved|removal refused/iu.test(visible) &&
+            !/(?:worktree|checkout) preserved|removal refused/iu.test(
+              visibleBefore,
+            ));
         const uncertain =
-          details?.checkout_state === "unknown" ||
-          (details?.checkout_removed === false && !explicitRefusal) ||
-          /may still complete removal|removal is unconfirmed/iu.test(
-            resultText,
-          );
+          visible.includes(`worktree removal is unconfirmed for ${branch}`) ||
+          visible.includes(`worktree removal result is unknown for ${branch}`);
         return {
           done:
             (executorCompleted && checkoutRemoved) ||
@@ -7002,7 +6998,6 @@ async function runManagerRecoverySmoke(ctx) {
             checkoutRemoved,
           },
           progress: {
-            resultObserved: Boolean(result),
             executorCompleted,
             checkoutRemoved,
             explicitRefusal,
@@ -7010,9 +7005,7 @@ async function runManagerRecoverySmoke(ctx) {
           },
           evidence: {
             visible: text.slice(-1200),
-            result: result?.message ?? null,
-            matchingWorktrees: worktreeCount,
-            session: session ? summarizeSession(session.contents) : null,
+            matchingWorktrees: matchingOwnedWorktrees,
           },
         };
       },
