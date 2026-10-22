@@ -86,6 +86,7 @@ export function parseSmokeArgs(args) {
       "manager-ready-timeout-ms": { type: "string" },
       "manager-recovery-diagnostics": { type: "boolean" },
       "manager-external-removal": { type: "boolean" },
+      "manager-removal-acceptance": { type: "boolean" },
     },
   });
   const scenario = parseScenario(positionals);
@@ -128,6 +129,12 @@ export function parseSmokeArgs(args) {
     throw new Error(
       "--manager-external-removal is only valid for manager-recovery",
     );
+  const managerRemovalAcceptance =
+    values["manager-removal-acceptance"] ?? false;
+  if (managerRemovalAcceptance && scenario !== "manager-recovery")
+    throw new Error(
+      "--manager-removal-acceptance is only valid for manager-recovery",
+    );
   return {
     scenario,
     model: values.model,
@@ -135,6 +142,7 @@ export function parseSmokeArgs(args) {
     managerReadyTimeoutMs,
     managerRecoveryDiagnostics,
     managerExternalRemoval,
+    managerRemovalAcceptance,
   };
 }
 
@@ -6552,6 +6560,7 @@ async function runManagerRecoverySmoke(ctx) {
   ];
   const allowedAssignmentKeys = [
     ...requiredAssignmentKeys,
+    "currentEvidenceIds",
     "requiredEvidence",
     "resultBindings",
   ];
@@ -6650,6 +6659,251 @@ async function runManagerRecoverySmoke(ctx) {
     pausedWorktrees[0].path ?? pausedWorktrees[0].worktree_path,
     worktreePath,
   );
+
+  if (ctx.managerRemovalAcceptance) {
+    const removalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
+    markStage(ctx, "manager-removal-pending-request");
+    await promptRoot(removalPrompt);
+    const pending = await waitForEvidence(
+      ctx,
+      "manager-removal-pending-result",
+      async () => {
+        const session = await rootSnapshot();
+        const result = session
+          ? sessionEntries(session.contents)
+              .filter(
+                (entry) =>
+                  entry.type === "message" &&
+                  entry.message?.role === "toolResult" &&
+                  entry.message.toolName === "remove_worktree",
+              )
+              .at(-1)
+          : null;
+        return {
+          done: result?.message?.details?.pending === true,
+          value: result,
+          progress: { pending: result?.message?.details?.pending === true },
+          evidence: session ? summarizeSession(session.contents) : null,
+        };
+      },
+      { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
+    );
+    assert.equal(pending.message.details.branch, branch);
+    assert.equal((await matchingWorktrees()).length, 1);
+    assert.equal(await lstat(assignmentPath).then(() => true), true);
+
+    markStage(ctx, "manager-removal-cancel");
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "down"]);
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await waitForEvidence(
+      ctx,
+      "manager-removal-cancelled",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done: text.includes("dismissed."),
+          progress: { dismissed: text.includes("dismissed.") },
+          evidence: text.slice(-1000),
+        };
+      },
+      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+    );
+    assert.equal((await matchingWorktrees()).length, 1);
+    assert.equal(await lstat(assignmentPath).then(() => true), true);
+
+    const dirtyMarker = join(worktreePath, ".smoke-manager-removal-dirty");
+    try {
+      const approvalPrompt = `The previous removal request was dismissed. This is a new safety check: call remove_worktree exactly once for branch ${branch} now. Do not use another tool.`;
+      const priorRemovalResults = sessionEntries(
+        (await rootSnapshot()).contents,
+      ).filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "remove_worktree",
+      ).length;
+      markStage(ctx, "manager-removal-approval-request");
+      await promptRoot(approvalPrompt);
+      await waitForEvidence(
+        ctx,
+        "manager-removal-approval-pending",
+        async () => {
+          const session = await rootSnapshot();
+          const results = session
+            ? sessionEntries(session.contents).filter(
+                (entry) =>
+                  entry.type === "message" &&
+                  entry.message?.role === "toolResult" &&
+                  entry.message.toolName === "remove_worktree",
+              )
+            : [];
+          const result = results.at(-1);
+          return {
+            done:
+              results.length === priorRemovalResults + 1 &&
+              result?.message?.details?.pending === true &&
+              result.message.details.branch === branch,
+            progress: { pending: result?.message?.details?.pending === true },
+            evidence: session ? summarizeSession(session.contents) : null,
+          };
+        },
+        { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
+      );
+      markStage(ctx, "manager-removal-approval-ui");
+      await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-keys",
+        ctx.rootPaneId,
+        "enter",
+      ]);
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-keys",
+        ctx.rootPaneId,
+        "enter",
+      ]);
+      await waitForEvidence(
+        ctx,
+        "manager-removal-confirmation-dialog",
+        async () => {
+          const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+          return {
+            done: text.includes("Type remove to confirm."),
+            progress: {
+              confirmationDialog: text.includes("Type remove to confirm."),
+            },
+            evidence: text.slice(-1000),
+          };
+        },
+        { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+      );
+      await writeFile(dirtyMarker, "owned smoke fixture\n", { flag: "wx" });
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-text",
+        ctx.rootPaneId,
+        "remove",
+      ]);
+      await nestedPaneInput(ctx, [
+        "pane",
+        "send-keys",
+        ctx.rootPaneId,
+        "enter",
+      ]);
+      await waitForEvidence(
+        ctx,
+        "manager-removal-approval-safety-refusal",
+        async () => {
+          const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+          const normalized = text.replace(/\s+/gu, " ");
+          const refusal =
+            "Checkout is dirty or could not be verified; worktree preserved";
+          return {
+            done: normalized.includes(refusal),
+            progress: { safetyRefusal: normalized.includes(refusal) },
+            evidence: text.slice(-1200),
+          };
+        },
+        { timeoutMs: 10_000, stallMs: CONTROL_STALL_MS },
+      );
+      assert.equal((await matchingWorktrees()).length, 1);
+      assert.equal(await lstat(assignmentPath).then(() => true), true);
+    } finally {
+      await rm(dirtyMarker, { force: true });
+    }
+
+    markStage(ctx, "manager-removal-preauthorization");
+    await submitPaneCommand(
+      ctx,
+      ctx.rootPaneId,
+      "/manager remove-preapproval on",
+    );
+    await waitForEvidence(
+      ctx,
+      "manager-removal-preauthorization-prompt",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done: text.includes("Type enable to confirm."),
+          progress: { promptVisible: text.includes("Type enable to confirm.") },
+          evidence: text.slice(-1000),
+        };
+      },
+      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+    );
+    await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "enable"]);
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await waitForEvidence(
+      ctx,
+      "manager-removal-preauthorization-saved",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done: text.includes("this repository is On"),
+          progress: { enabled: text.includes("this repository is On") },
+          evidence: text.slice(-1000),
+        };
+      },
+      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+    );
+    const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. The repository is preauthorized; do not ask for approval.`;
+    markStage(ctx, "manager-removal-preauthorized-tool-call");
+    await promptRoot(authorizedPrompt);
+    const removal = await waitForEvidence(
+      ctx,
+      "manager-removal-guarded-executor",
+      async () => {
+        const session = await rootSnapshot();
+        const results = session
+          ? staffActionResults(
+              session.contents,
+              "remove_worktree",
+              "remove",
+              authorizedPrompt,
+            )
+          : [];
+        return {
+          done:
+            results.length === 1 && (await matchingWorktrees()).length === 0,
+          value: results[0],
+          progress: { toolResult: results.length === 1 },
+          evidence: session ? summarizeSession(session.contents) : null,
+        };
+      },
+      { timeoutMs: 30_000, stallMs: MODEL_STALL_MS },
+    );
+    assert.equal(removal.branch, branch);
+    ctx.owned.managerWorktreeRetirementRequested = true;
+    await waitForEvidence(
+      ctx,
+      "manager-removal-assignment-retired",
+      async () => {
+        try {
+          await lstat(assignmentPath);
+          return { done: false, progress: { retired: false } };
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          return { done: true, progress: { retired: true } };
+        }
+      },
+      { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS },
+    );
+    assert.equal((await matchingWorktrees()).length, 0);
+    assert.equal(
+      (await worktrees()).some((item) => item.branch === primaryBranch),
+      true,
+    );
+    ctx.managerRecovery.removalAcceptance = {
+      pendingToolReturned: true,
+      cancellationPreservedCheckout: true,
+      approvalReachedGuardedSafetyRefusal: true,
+      repositoryPreauthorizationReachedGuardedExecutor: true,
+    };
+    return;
+  }
 
   const resumePrompt = managerRecoveryResumeOnlyPrompt(branch);
   ctx.managerRecovery.resumePrompt = resumePrompt;
@@ -9301,6 +9555,7 @@ async function main() {
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
     managerExternalRemoval: args.managerExternalRemoval,
+    managerRemovalAcceptance: args.managerRemovalAcceptance,
     expectedPackage: `${pkg.name}@${pkg.version}`,
     scenario,
     owned,

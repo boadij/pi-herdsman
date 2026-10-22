@@ -378,7 +378,7 @@ ${FILE_HANDOFF_GUIDANCE}`;
 const SUPERVISION_EVENT_GUIDANCE =
   "Supervision is event-driven. Do not poll staff tools, send repeated messages, or sleep solely to wait for Lead progress. When no independent work remains, end the turn; incoming Lead updates resume coordination.";
 const MANAGER_ROLE_CONTRACT = `## Manager role
-You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. The tool returns confirmation_required without removal or waiting for input. Direct the user to /manager remove <branch> or the Manager overview for independent human confirmation, then continue unrelated coordination. Do not repeat or poll the tool for confirmation; its result is not evidence of removal.
+You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
 ${SUPERVISION_EVENT_GUIDANCE}`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
@@ -1723,14 +1723,23 @@ function registerExtensionImpl(
             const input = prefix.trimStart();
             const [command, branchPrefix] = input.split(/\s+/u);
             if (!command)
-              return ["leave", "remove"].map((value) => ({
+              return ["leave", "remove", "remove-preapproval"].map((value) => ({
                 value,
                 label: value,
               }));
+            if (command === "remove-preapproval")
+              return input.trim().split(/\s+/u).length === 2
+                ? ["on", "off"]
+                    .filter((value) => value.startsWith(branchPrefix ?? ""))
+                    .map((value) => ({
+                      value: `remove-preapproval ${value}`,
+                      label: value,
+                    }))
+                : null;
             if (command !== "remove")
               return input.includes(" ")
                 ? null
-                : ["leave", "remove"]
+                : ["leave", "remove", "remove-preapproval"]
                     .filter((value) => value.startsWith(command))
                     .map((value) => ({ value, label: value }));
             if (input.trim().split(/\s+/u).length > 2) return null;
@@ -1753,15 +1762,94 @@ function registerExtensionImpl(
           },
           handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
             const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
+            if (args[0] === "remove-preapproval") {
+              if (args.length === 1) {
+                const policy =
+                  await projectRuntime.getRemovalPreauthorization(ctx);
+                ctx.ui.notify(
+                  `Worktree removal confirmation: ${policy.enabled ? "skipped" : "required"} for ${policy.repoKey}.`,
+                  "info",
+                );
+                return;
+              }
+              if (args.length !== 2 || !["on", "off"].includes(args[1]!)) {
+                ctx.ui.notify(
+                  "Usage: /manager remove-preapproval <on|off>",
+                  "error",
+                );
+                return;
+              }
+              const enabled = args[1] === "on";
+              const stored = await projectRuntime.setRemovalPreauthorization(
+                enabled,
+                ctx,
+              );
+              ctx.ui.notify(
+                `Skip worktree removal confirmation for ${enabled ? "this repository is On" : "this repository is Off"}${stored ? "." : "; setting unchanged."}`,
+                stored ? "info" : "warning",
+              );
+              return;
+            }
             if (args[0] === "remove") {
+              if (args.length === 1) {
+                const pending = projectRuntime.listPendingRemovals(ctx);
+                if (!pending.length) {
+                  ctx.ui.notify(
+                    "There are no pending worktree removals.",
+                    "info",
+                  );
+                  return;
+                }
+                const selected = await selectMenu(
+                  ctx,
+                  "Review pending worktree removal",
+                  pending.map(({ branch, checkoutPath }) => ({
+                    value: branch,
+                    label: `${branch} · ${checkoutPath}`,
+                  })),
+                );
+                if (!selected) return;
+                const request = pending.find(
+                  (item) => item.branch === selected,
+                );
+                if (!request) throw new Error("Pending removal is unavailable");
+                const action = await selectMenu(
+                  ctx,
+                  `Pending removal · ${selected}`,
+                  [
+                    { value: "approve", label: "Approve removal…" },
+                    { value: "dismiss", label: "Dismiss request" },
+                  ],
+                );
+                if (!action) return;
+                if (action === "dismiss") {
+                  if (!projectRuntime.cancelPendingRemoval(request))
+                    throw new Error(
+                      "Pending removal changed; review the new request",
+                    );
+                  ctx.ui.notify(
+                    `Pending removal of ${request.branch} dismissed.`,
+                    "info",
+                  );
+                  return;
+                }
+                const result = await projectRuntime.approvePendingRemoval(
+                  request,
+                  ctx,
+                );
+                ctx.ui.notify(
+                  result.content[0]?.text ?? "Removal finished.",
+                  result.details.ok || result.details.cancelled
+                    ? "info"
+                    : "warning",
+                );
+                return;
+              }
               if (args.length !== 2) {
                 ctx.ui.notify("Usage: /manager remove <branch>", "error");
                 return;
               }
-              const result = await leadRuntimes.projectRuntime!.removeWorktree(
-                args[1]!,
-                ctx,
-              );
+              const result = await projectRuntime.removeWorktree(args[1]!, ctx);
               ctx.ui.notify(
                 result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
                 result.details.ok || result.details.cancelled
@@ -2017,7 +2105,7 @@ function registerExtensionImpl(
           name: "remove_worktree",
           label: "remove worktree",
           description:
-            "Request human confirmation for an explicitly requested assigned project checkout removal. Validates without removing or waiting; the user completes removal through /manager remove <branch> or the Manager overview. Continue unrelated coordination without repeating or polling this tool.",
+            "Remove an explicitly requested assigned project's linked worktree. When project preauthorization is enabled, execute the guarded removal. Otherwise create an actionable human approval request and return promptly. Do not repeat or poll a pending request.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (

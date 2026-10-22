@@ -230,17 +230,16 @@ process-level model, extensions, skills, or filesystem environment. Choose a
 separate checkout or process independently when needed; avoid overlapping writers.
 
 For an explicitly requested checkout removal, an active Manager can use
-`/manager remove <branch>` or the `remove_worktree` staff tool. Both entry
-points use the same operation and require the user to type `remove` in an
-interactive confirmation; neither treats task completion, review, or inactivity
-as approval. The operation validates the exact Manager assignment and linked
-checkout, refuses a dirty or ambiguous target, and uses Herdr's non-forced
-worktree removal. If the assigned Lead is running, its owned execution may be
-stopped first and is not automatically restarted if a later step fails. A
-closed Herdr workspace may be reopened for the verified checkout. The result
-distinguishes checkout state from assignment retirement; the assignment is
-retired only after authoritative removal is confirmed. The Git branch and Pi
-conversation are preserved.
+`/manager remove <branch>` or the `remove_worktree` staff tool. Normally the
+tool records a pending request and returns immediately; review it with
+`/manager remove`. Removal asks for typed `remove` unless this exact repository
+has been preauthorized by a human with `/manager remove-preapproval on`.
+Neither task completion, review, nor inactivity is approval. All paths validate
+the exact Manager assignment and linked checkout, refuse dirty or ambiguous
+targets, and use Herdr's non-forced worktree removal. A running assigned Lead
+may be stopped first and is not automatically restarted if a later step fails.
+The checkout result remains distinct from assignment retirement, and the Git
+branch and Pi conversation are preserved.
 
 ## Leave and return
 

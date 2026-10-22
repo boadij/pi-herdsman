@@ -2627,6 +2627,7 @@ const writePeerLeadRecord = (runtime: any, record: any) =>
   });
 const {
   readConfig,
+  setWorktreeRemovalPreapproved,
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
@@ -5104,6 +5105,7 @@ async function managerRemovalFixture(
       : {}),
   };
   let checkoutPresent = true;
+  let checkoutDirty = false;
   let leadRunning = options.runningLead ?? false;
   let stoppedLeadCount = 0;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
@@ -5145,7 +5147,12 @@ async function managerRemovalFixture(
           return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
         if (args[0] === "worktree" && args[1] === "list")
           return { code: 0, stdout: inventoryOutput(), stderr: "" };
-        if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+        if (args[0] === "status")
+          return {
+            code: 0,
+            stdout: checkoutDirty ? "?? dirty-file\n" : "",
+            stderr: "",
+          };
         throw new Error(
           `Unexpected Git command: ${args.join(" ")} (${runOptions.cwd})`,
         );
@@ -5287,6 +5294,12 @@ async function managerRemovalFixture(
   return {
     runtime,
     ctx,
+    setCheckoutDirty: (dirty: boolean) => {
+      checkoutDirty = dirty;
+    },
+    replaceAssignment: () => {
+      assignment = { ...assignment, id: "replacement-assignment" };
+    },
     assignment: () => assignment,
     checkoutPath,
     calls,
@@ -5325,6 +5338,155 @@ test("Manager removal requests leave running and closed worktrees untouched", as
     assert.ok(existsSync(fixture.checkoutPath));
     assert.ok(fixture.calls.every((args) => args[1] === "list"));
   }
+});
+
+test("Manager removal requests are actionable, nonblocking, and consumed once", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  fixture.ctx.ui.input = async () => {
+    throw new Error("request must not prompt");
+  };
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  const first = await request();
+  const duplicate = await request();
+  assert.equal(first.details.pending, true);
+  assert.equal(duplicate.details.pending, true);
+  assert.equal(fixture.runtime.listPendingRemovals().length, 1);
+  assert.equal(fixture.confirmationCount(), 0);
+  const selected = fixture.runtime.listPendingRemovals()[0];
+  fixture.ctx.ui.input = async () => "remove";
+  const approved = await fixture.runtime.approvePendingRemoval(
+    selected,
+    fixture.ctx,
+  );
+  assert.equal(approved.details.checkout_removed, true);
+  assert.equal(fixture.runtime.listPendingRemovals().length, 0);
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
+    /Pending removal (?:is no longer available|changed)/,
+  );
+  assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("Manager pending selection cannot approve or dismiss its replacement", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  await request();
+  const selected = fixture.runtime.listPendingRemovals()[0];
+  fixture.replaceAssignment();
+  await request();
+  const replacement = fixture.runtime.listPendingRemovals()[0];
+  assert.notEqual(replacement, selected);
+
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
+    /Pending removal changed/,
+  );
+  assert.equal(fixture.runtime.cancelPendingRemoval(selected), false);
+  assert.equal(fixture.runtime.listPendingRemovals()[0], replacement);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+  assert.ok(existsSync(fixture.checkoutPath));
+});
+
+test("cancelling an approved request preserves a newer pending request", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const request = () =>
+    fixture.runtime.executeStaff(
+      "request",
+      { action: "remove", branch: "feat/remove-test" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+  await request();
+  const selected = fixture.runtime.listPendingRemovals()[0];
+
+  fixture.ctx.ui.input = async () => {
+    fixture.replaceAssignment();
+    await request();
+    return undefined;
+  };
+
+  const result = await fixture.runtime.approvePendingRemoval(
+    selected,
+    fixture.ctx,
+  );
+  assert.equal(result.details.cancelled, true);
+  assert.equal(
+    fixture.runtime.listPendingRemovals()[0].assignmentId,
+    "replacement-assignment",
+  );
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("human-approved dirty Manager removal refuses before Herdr remove", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const requested = await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(requested.details.pending, true);
+  let humanDialogCount = 0;
+  fixture.ctx.ui.input = async () => {
+    humanDialogCount++;
+    fixture.setCheckoutDirty(true);
+    return "remove";
+  };
+
+  await assert.rejects(
+    fixture.runtime.approvePendingRemoval(
+      fixture.runtime.listPendingRemovals()[0],
+      fixture.ctx,
+    ),
+    /Checkout is dirty or could not be verified; worktree preserved/,
+  );
+  assert.equal(humanDialogCount, 1);
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(
+    fixture.calls.some((args) => args[1] === "remove"),
+    false,
+    "dirty approval must not invoke Herdr worktree remove",
+  );
+  assert.ok(fixture.assignment());
+  assert.ok(existsSync(fixture.checkoutPath));
+});
+
+test("Manager preauthorization lets explicit model requests use the guarded remover", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  const repoKey = fixture.assignment().repoKey;
+  setWorktreeRemovalPreapproved(repoKey, true);
+  t.after(() => setWorktreeRemovalPreapproved(repoKey, false));
+  fixture.ctx.ui.input = async () => {
+    throw new Error("preauthorized removal must not prompt");
+  };
+  const result = await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.forced, false);
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.deepEqual(fixture.removals, ["child-workspace"]);
 });
 
 test("Manager removal rejects a replaced Manager after confirmation", async (t) => {
@@ -6486,10 +6648,19 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions(""), [
       { value: "leave", label: "leave" },
       { value: "remove", label: "remove" },
+      { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
       { value: "remove", label: "remove" },
+      { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
+    assert.deepEqual(
+      managerCommand.getArgumentCompletions("remove-preapproval o"),
+      [
+        { value: "remove-preapproval on", label: "on" },
+        { value: "remove-preapproval off", label: "off" },
+      ],
+    );
     assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
     ]);
@@ -6530,6 +6701,7 @@ async function managerDelegateAssignmentTest(
       action: "remove",
       branch: assignment.branch,
       confirmation_required: true,
+      pending: true,
     });
     assert.equal(confirmationPrompts, 0);
     assert.equal(

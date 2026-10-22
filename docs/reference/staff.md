@@ -186,8 +186,8 @@ exact-owner recovery remains independently authorized.
 
 ## `remove_worktree`
 
-Manager only. Validate an exact assigned project's linked checkout and request
-independent human confirmation without waiting or removing anything:
+Manager only. Remove an explicitly requested assigned project's linked
+checkout, or register an actionable approval request:
 
 ```json
 { "branch": "feat/example" }
@@ -196,16 +196,15 @@ independent human confirmation without waiting or removing anything:
 Use this only for an explicitly requested checkout removal, never as an
 inference from task completion, review, or inactivity. Herdsman requires the
 active Manager's exact current assignment and matching linked checkout and
-checks clean state and occupants. With UI available, a valid request returns
-`confirmation_required: true` and `ok: false`: no removal, execution shutdown,
-locks, or pending approval state is created. This is not a failed removal or
-evidence of checkout removal or assignment retirement; physical outcome fields
-are absent. Headless requests are refused.
+checks clean state and occupants. Without preauthorization, a valid request
+returns promptly with `confirmation_required: true`, `pending: true`, and
+`ok: false`. No removal, execution shutdown, or operation lock occurs. Review
+it with `/manager remove`; unanswered requests do not block coordination. A
+human preauthorization for this exact repository skips only the extra prompt.
 
-Direct the user to `/manager remove <branch>` or `/manager` → Project →
-Remove worktree… and continue unrelated coordination. Do not repeat or poll
-the tool for approval. Each human action validates current authority and target
-afresh; an earlier request confers no authorization.
+Do not repeat or poll a pending request. Pending intent is ephemeral and never
+authorizes deletion by itself. Each human approval validates current authority
+and the exact recorded target afresh.
 
 Both human entry points share one confirmed destructive operation. It requires the
 active Manager's exact current assignment and matching linked checkout, refuses

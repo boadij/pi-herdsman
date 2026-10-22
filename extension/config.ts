@@ -34,6 +34,7 @@ export type HerdsmanConfig = {
   autoActivateManager: boolean;
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
+  worktreeRemovalPreapprovedRepos: string[];
 };
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
@@ -43,6 +44,7 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   autoActivateManager: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
+  worktreeRemovalPreapprovedRepos: [],
 };
 
 export function validByteLimit(value: unknown): value is number {
@@ -62,6 +64,7 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "autoActivateManager",
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
+  "worktreeRemovalPreapprovedRepos",
 ]);
 
 function parseRawConfig(content: string): Partial<HerdsmanConfig> {
@@ -109,7 +112,58 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
       result[key] = record[key];
     }
+  if ("worktreeRemovalPreapprovedRepos" in record) {
+    const repos = record.worktreeRemovalPreapprovedRepos;
+    if (
+      !Array.isArray(repos) ||
+      repos.some((repo) => typeof repo !== "string" || !repo.trim()) ||
+      new Set(repos).size !== repos.length
+    )
+      throw new Error(
+        "Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos",
+      );
+    result.worktreeRemovalPreapprovedRepos = repos;
+  }
   return result;
+}
+
+export function isWorktreeRemovalPreapproved(repoKey: string): boolean {
+  return (
+    !!repoKey && readConfig().worktreeRemovalPreapprovedRepos.includes(repoKey)
+  );
+}
+
+export function setWorktreeRemovalPreapproved(
+  repoKey: string,
+  enabled: boolean,
+): void {
+  if (!repoKey || typeof enabled !== "boolean")
+    throw new Error(
+      "A verified repository identity and boolean policy are required",
+    );
+  const path = herdsmanConfigPath();
+  const release = claimProcessLock(`${path}.lock`, {
+    name: "Pi Herdsman config update",
+  });
+  try {
+    const current = readRawConfig();
+    const repos = new Set(current.worktreeRemovalPreapprovedRepos ?? []);
+    if (enabled) repos.add(repoKey);
+    else repos.delete(repoKey);
+    if (repos.size) current.worktreeRemovalPreapprovedRepos = [...repos];
+    else delete current.worktreeRemovalPreapprovedRepos;
+    if (Object.keys(current).length)
+      writeConfigAtomically(path, `${JSON.stringify(current, null, 2)}\n`);
+    else {
+      try {
+        unlinkSync(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  } finally {
+    release();
+  }
 }
 
 function readRawConfig(): Partial<HerdsmanConfig> {
@@ -335,10 +389,20 @@ export function updateConfig<K extends ConfigKey>(
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
       if (
+        key === "worktreeRemovalPreapprovedRepos" &&
+        (!Array.isArray(value) ||
+          value.some((repo) => typeof repo !== "string" || !repo.trim()) ||
+          new Set(value).size !== value.length)
+      )
+        throw new Error(
+          "Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos",
+        );
+      if (
         key !== "spawnPlacement" &&
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
+        key !== "worktreeRemovalPreapprovedRepos" &&
         !validByteLimit(value)
       )
         throw new Error(`Invalid Pi Herdsman config field ${key}`);

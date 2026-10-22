@@ -68,6 +68,8 @@ const {
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   readConfig,
+  isWorktreeRemovalPreapproved,
+  setWorktreeRemovalPreapproved,
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
@@ -92,6 +94,29 @@ test("missing config resolves to defaults without creating storage", () => {
   assert.equal(readConfig().defaultLeadExecution, "flexible");
   assert.equal(readConfig().autoActivateManager, false);
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
+});
+
+test("worktree-removal preauthorization is repository-scoped and survives reload", () => {
+  assert.equal(isWorktreeRemovalPreapproved("/repo-a"), false);
+  setWorktreeRemovalPreapproved("/repo-a", true);
+  assert.equal(isWorktreeRemovalPreapproved("/repo-a"), true);
+  assert.equal(isWorktreeRemovalPreapproved("/repo-b"), false);
+  assert.deepEqual(readConfig().worktreeRemovalPreapprovedRepos, ["/repo-a"]);
+  setWorktreeRemovalPreapproved("/repo-a", false);
+  assert.equal(isWorktreeRemovalPreapproved("/repo-a"), false);
+  assert.equal(realFs.existsSync(configPath!), false);
+});
+
+test("invalid worktree-removal preauthorization fails closed", () => {
+  realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
+  realFs.writeFileSync(
+    configPath!,
+    JSON.stringify({ worktreeRemovalPreapprovedRepos: ["/repo-a", 2] }),
+  );
+  assert.throws(
+    () => isWorktreeRemovalPreapproved("/repo-a"),
+    /worktreeRemovalPreapprovedRepos/,
+  );
 });
 
 test("partial and complete valid configs overlay defaults", () => {
@@ -122,6 +147,7 @@ test("partial and complete valid configs overlay defaults", () => {
     }),
   );
   assert.deepEqual(readConfig(), {
+    ...DEFAULT_CONFIG,
     spawnPlacement: "tab",
     defaultLeadExecution: "orchestrate",
     contextRetirement: true,
