@@ -24,6 +24,8 @@ function runPeerWorker(
   source: string,
   executable = process.execPath,
   timeout = 8_000,
+  onStart?: (terminate: () => void) => void,
+  onStderr?: (chunk: string) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = "";
@@ -38,9 +40,11 @@ function runPeerWorker(
         signal: abortSignal,
       },
     );
+    onStart?.(() => child.kill("SIGTERM"));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-4096);
+      onStderr?.(chunk);
     });
     child.once("error", (error) => {
       spawnError = !(abortSignal.aborted && error.name === "AbortError");
@@ -583,7 +587,7 @@ test("independent processes preserve concurrent reply acknowledgment and enqueue
   }
 });
 
-test("peer worker failures are classified without exposing stderr and cleanup still runs", async () => {
+test("peer worker failures wait for running siblings and clean up after propagation", async () => {
   const c = createPeerCorrespondence({
     originSession: randomUUID(),
     originGeneration: randomUUID(),
@@ -591,19 +595,49 @@ test("peer worker failures are classified without exposing stderr and cleanup st
     recipientGeneration: randomUUID(),
     acceptanceId: randomUUID(),
   });
+  let markSiblingReady!: () => void;
+  const siblingReady = new Promise<void>((resolve) => {
+    markSiblingReady = resolve;
+  });
   try {
-    const outcomes = await Promise.allSettled([
-      runPeerWorker(
-        "broken",
-        `console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + '{bad'); console.error('/private/path secret-capability'); process.exitCode = 1;`,
-      ),
-      runPeerWorker("sibling", ""),
-    ]);
-    assert.match(
-      String(outcomes[0]?.status === "rejected" && outcomes[0].reason),
-      /broken worker exit 1: unclassified/,
+    await assert.rejects(
+      async () => {
+        let terminateSibling!: () => void;
+        const sibling = runPeerWorker(
+          "sibling",
+          `console.error('SIBLING_READY'); setInterval(() => {}, 1000);`,
+          process.execPath,
+          8_000,
+          (terminate) => {
+            terminateSibling = terminate;
+          },
+          (chunk) => {
+            if (chunk.includes("SIBLING_READY")) markSiblingReady();
+          },
+        );
+        await siblingReady;
+        const failure = runPeerWorker(
+          "broken",
+          `console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + '{bad'); console.error('/private/path secret-capability'); process.exit(1);`,
+        );
+        const outcomesPromise = Promise.allSettled([failure, sibling]);
+        await assert.rejects(failure, /broken worker exit 1: unclassified/);
+        terminateSibling();
+        const outcomes = await outcomesPromise;
+        assert.equal(outcomes[1]?.status, "rejected");
+        assert.match(
+          String(outcomes[1]?.status === "rejected" && outcomes[1].reason),
+          /sibling worker signal SIGTERM: unclassified/,
+        );
+        if (outcomes[0]?.status === "rejected") throw outcomes[0].reason;
+      },
+      (error: unknown) => {
+        const message = String(error);
+        assert.match(message, /broken worker exit 1: unclassified/);
+        assert.doesNotMatch(message, /\/private\/path|secret-capability/);
+        return true;
+      },
     );
-    assert.equal(outcomes[1]?.status, "fulfilled");
   } finally {
     removePeerCorrespondence(c.id);
   }
@@ -626,5 +660,13 @@ test("peer worker reports cancellation and spawn errors only after close", async
   await assert.rejects(
     runPeerWorker("missing", "", "herdsman-no-such-worker"),
     /missing worker spawn_error: unclassified/,
+  );
+  await assert.rejects(
+    runPeerWorker("silent", "process.exitCode = 1"),
+    /silent worker exit 1: unclassified/,
+  );
+  await assert.rejects(
+    runPeerWorker("signalled", "process.kill(process.pid, 'SIGTERM')"),
+    /signalled worker signal SIGTERM: unclassified/,
   );
 });
