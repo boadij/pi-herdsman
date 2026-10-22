@@ -13,7 +13,8 @@
       "enabled": false
     },
     {
-      "matchDatasources": ["node-version"],
+      "matchManagers": ["npm", "github-actions"],
+      "matchPackageNames": ["node"],
       "enabled": false
     },
     {
