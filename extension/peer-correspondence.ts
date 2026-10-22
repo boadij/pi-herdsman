@@ -407,6 +407,9 @@ export function acknowledgePeerReply(
     const reply = c.replies.find((item) => item.id === replyId);
     if (!reply) throw new Error("unknown peer reply");
     reply.acknowledged = true;
+    reply.text = "";
+    delete reply.attachments;
+    delete reply.resultBindings;
   });
 }
 export function finalizePeerCorrespondence(

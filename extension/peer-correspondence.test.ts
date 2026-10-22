@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "./peer-transport.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 import {
@@ -299,6 +299,93 @@ test("peer payload digests canonicalize object key order", () => {
     peerPayloadDigest({ nested: { y: true, x: "v" }, a: 1 }),
   );
   assert.notEqual(peerPayloadDigest({ a: 1 }), peerPayloadDigest({ a: 2 }));
+});
+
+test("acknowledgment compacts evidence while preserving reply duplicate protection", () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const payloads = Array.from({ length: 2 }, (_, index) => {
+    const text = `reply ${index}`;
+    const attachmentText = `evidence ${index}`;
+    const attachments = [
+      {
+        name: `evidence-${index}.txt`,
+        marker: `marker-${index}`,
+        text: attachmentText,
+        sha256: createHash("sha256").update(attachmentText).digest("hex"),
+      },
+    ];
+    const resultBindings = [
+      {
+        ref: `result:reviewer#${index + 1}`,
+        canonicalRef: `result:${randomUUID()}`,
+      },
+    ];
+    return { id: randomUUID(), text, attachments, resultBindings };
+  });
+  for (const payload of payloads)
+    queuePeerReply(c, payload.id, payload.text, payload);
+  const digests = payloads.map((payload) =>
+    peerPayloadDigest({
+      text: payload.text,
+      attachments: payload.attachments,
+      resultBindings: payload.resultBindings,
+    }),
+  );
+  for (const payload of payloads)
+    acknowledgePeerReply(
+      c.id,
+      c.capability,
+      payload.id,
+      c.originSession,
+      c.originGeneration,
+      c.recipientSession,
+      c.recipientGeneration,
+    );
+
+  const compacted = listPeerCorrespondences().find((item) => item.id === c.id)!;
+  assert.deepEqual(
+    compacted.replies.map(
+      ({ id, digest, text, acknowledged, attachments, resultBindings }) => ({
+        id,
+        digest,
+        text,
+        acknowledged,
+        attachments,
+        resultBindings,
+      }),
+    ),
+    payloads.map((payload, index) => ({
+      id: payload.id,
+      digest: digests[index],
+      text: "",
+      acknowledged: true,
+      attachments: undefined,
+      resultBindings: undefined,
+    })),
+  );
+  for (const payload of payloads) {
+    assert.equal(
+      queuePeerReply(compacted, payload.id, payload.text, payload),
+      "duplicate",
+    );
+    assert.throws(
+      () =>
+        queuePeerReply(
+          compacted,
+          payload.id,
+          `${payload.text} changed`,
+          payload,
+        ),
+      /conflicting peer reply identity/,
+    );
+  }
+  removePeerCorrespondence(c.id);
 });
 
 test("reply polling bounds full serialized envelopes and drains replies in order", () => {

@@ -59,6 +59,7 @@ const {
   PROJECT_ASSIGNMENT_MAX_BYTES,
   projectAssignmentBytes,
   coordinationMessageBytes,
+  coordinationMessageDigest,
   coordinationMessagePath,
   drainCoordinationInbox,
   listCoordinationMessagePaths,
@@ -68,6 +69,8 @@ const {
   peerRuntime,
   readCoordinationMessage,
   readPeerLeadRecord,
+  hasPeerDeliveryReceipt,
+  writePeerDeliveryReceipt,
   removePeerLeadRecord,
   removeCoordinationMessage,
   supervisionRuntime,
@@ -101,6 +104,97 @@ const socket = () =>
   join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
+
+test("peer delivery receipts bind exact session, ID, and content durably", () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    peerSource: { role: "manager" },
+  });
+  const digest = coordinationMessageDigest(record);
+  assert.equal(
+    coordinationMessageDigest(
+      Object.fromEntries(
+        Object.entries(record).reverse(),
+      ) as ChiefMessageRecord,
+    ),
+    digest,
+  );
+  assert.equal(
+    hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest),
+    false,
+  );
+  writePeerDeliveryReceipt(runtime, record);
+  assert.equal(
+    hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest),
+    true,
+  );
+  assert.throws(
+    () =>
+      hasPeerDeliveryReceipt(
+        runtime,
+        record.toSessionId,
+        record.id,
+        "0".repeat(64),
+      ),
+    /Conflicting peer delivery receipt/,
+  );
+  assert.equal(
+    hasPeerDeliveryReceipt(runtime, "other-session", record.id, digest),
+    false,
+  );
+});
+
+test("verified Pi-history delivery persists peer receipt before inbox removal", async () => {
+  const runtime = peerRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    peerSource: { role: "manager" },
+  });
+  const path = writeCoordinationMessage(record, runtime);
+  let submitted = 0;
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => true,
+    sendMessage: () => submitted++,
+    accepted: (delivered) => writePeerDeliveryReceipt(runtime, delivered),
+  });
+  assert.equal(submitted, 0);
+  assert.equal(existsSync(path), false);
+  assert.equal(
+    hasPeerDeliveryReceipt(
+      runtime,
+      record.toSessionId,
+      record.id,
+      coordinationMessageDigest(record),
+    ),
+    true,
+  );
+});
+
+test("peer Pi-history entries carry the exact inbox-content digest", async () => {
+  const runtime = peerRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    peerSource: { role: "manager" },
+  });
+  writeCoordinationMessage(record, runtime);
+  let delivered = false;
+  let details: Record<string, unknown> | undefined;
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => delivered,
+    sendMessage: (message) => {
+      details = (message as { details?: Record<string, unknown> }).details;
+      delivered = true;
+    },
+  });
+  assert.equal(details?.digest, coordinationMessageDigest(record));
+});
 
 test("peer eligibility preserves global ordinary and Manager behavior while scoping managed Leads", () => {
   const groupA = { repoKey: "repo", primaryWorkspaceId: "primary" };

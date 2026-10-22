@@ -47,8 +47,10 @@ import {
   canMessagePeer,
   staffToolName,
   supervisorStateMessage,
+  coordinationMessageDelivered,
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
+  writePeerDeliveryReceipt,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
@@ -11641,18 +11643,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     ctx: ExtensionContext,
     record: ChiefMessageRecord,
   ): boolean =>
-    record.toSessionId === ctx.sessionManager.getSessionId() &&
-    ctx.sessionManager
-      .getEntries()
-      .some(
-        (entry: any) =>
-          entry?.customType === `pi-herdsman-${record.kind}` &&
-          entry?.details?.id === record.id &&
-          entry?.details?.leaseId === record.leaseId &&
-          entry?.details?.fromSessionId === record.fromSessionId &&
-          entry?.details?.leadSessionId === record.leadSessionId &&
-          entry?.details?.branch === record.branch,
-      );
+    coordinationMessageDelivered(
+      record,
+      ctx.sessionManager.getSessionId(),
+      ctx.sessionManager.getEntries(),
+    );
   const projectAssignmentAuthorized = (
     authorized: boolean,
     reason: string,
@@ -12376,6 +12371,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           },
         },
         accepted: async (record: ChiefMessageRecord) => {
+          if (record.kind === "peer_message")
+            writePeerDeliveryReceipt(peerInboxRuntime, record);
           submittedAt.delete(record.id);
           settledSubmissions.delete(record.id);
         },

@@ -444,6 +444,131 @@ export function chiefMessagePath(
   return join(inboxFor(runtime, toSessionId), `${id}.json`);
 }
 
+function peerDeliveryReceiptPath(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+  id: string,
+): string {
+  if (!UUID.test(id) || !validSession(sessionId))
+    throw new Error("Invalid peer delivery receipt identity");
+  return join(
+    runtime.root,
+    "peer-delivery-receipts",
+    createHash("sha256").update(sessionId).digest("hex"),
+    `${id}.json`,
+  );
+}
+
+/** Digest used to bind the Pi-history delivery receipt to exact inbox content. */
+export function coordinationMessageDigest(record: ChiefMessageRecord): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, item]) => [key, canonical(item)]),
+    );
+  };
+  const content = {
+    version: record.version,
+    build: record.build,
+    id: record.id,
+    leaseId: record.leaseId,
+    kind: record.kind,
+    fromSessionId: record.fromSessionId,
+    toSessionId: record.toSessionId,
+    leadSessionId: record.leadSessionId,
+    branch: record.branch,
+    text: record.text,
+    resultBindings: record.resultBindings,
+    peerSource: record.peerSource,
+    createdAt: record.createdAt,
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(content)))
+    .digest("hex");
+}
+
+/** The live Pi-history predicate shared by inbox draining and receipt tests. */
+export function coordinationMessageDelivered(
+  record: ChiefMessageRecord,
+  sessionId: string,
+  entries: readonly unknown[],
+): boolean {
+  return (
+    record.toSessionId === sessionId &&
+    entries.some((value) => {
+      const entry = value as {
+        customType?: unknown;
+        details?: Record<string, unknown>;
+      } | null;
+      return (
+        entry?.customType === `pi-herdsman-${record.kind}` &&
+        entry.details?.id === record.id &&
+        entry.details?.leaseId === record.leaseId &&
+        entry.details?.fromSessionId === record.fromSessionId &&
+        entry.details?.leadSessionId === record.leadSessionId &&
+        entry.details?.branch === record.branch &&
+        (record.kind !== "peer_message" ||
+          entry.details?.digest === coordinationMessageDigest(record))
+      );
+    })
+  );
+}
+
+/** Persist only after the live Pi-history receipt has been verified. */
+export function writePeerDeliveryReceipt(
+  runtime: SupervisionRuntime,
+  record: ChiefMessageRecord,
+): void {
+  if (record.kind !== "peer_message")
+    throw new Error("Peer delivery receipt requires a peer message");
+  const path = peerDeliveryReceiptPath(runtime, record.toSessionId, record.id);
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const receipt = {
+    sessionId: record.toSessionId,
+    id: record.id,
+    digest: coordinationMessageDigest(record),
+  };
+  const content = `${JSON.stringify(receipt)}\n`;
+  try {
+    const existing = JSON.parse(readFileSync(path, "utf8"));
+    if (!isDeepStrictEqual(existing, receipt))
+      throw new Error("Conflicting peer delivery receipt");
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  publishRecord(path, content);
+  fsyncDirectory(dirname(directory));
+}
+
+/** Missing is distinct from unreadable or mismatched; callers must fail closed. */
+export function hasPeerDeliveryReceipt(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+  id: string,
+  digest: string,
+): boolean {
+  try {
+    const receipt = JSON.parse(
+      readFileSync(peerDeliveryReceiptPath(runtime, sessionId, id), "utf8"),
+    ) as { sessionId?: unknown; id?: unknown; digest?: unknown };
+    if (
+      receipt.sessionId !== sessionId ||
+      receipt.id !== id ||
+      receipt.digest !== digest
+    )
+      throw new Error("Conflicting peer delivery receipt");
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function fsyncDirectory(directory: string): void {
   if (process.platform === "win32") return;
   const fd = openSync(directory, "r");
@@ -1218,6 +1343,9 @@ export async function drainCoordinationInbox(
                 toSessionId: record.toSessionId,
                 leadSessionId: record.leadSessionId,
                 ...(record.branch ? { branch: record.branch } : {}),
+                ...(record.kind === "peer_message"
+                  ? { digest: coordinationMessageDigest(record) }
+                  : {}),
               },
             },
             { deliverAs: deliverAs ?? "followUp", triggerTurn: true },

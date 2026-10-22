@@ -1,11 +1,24 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { nodeOnlyAgentDir, herdsmanDataRoot } from "../extension/storage.ts";
 import {
   listPeerLeadRecords,
   peerRuntime,
+  chiefMessagePath,
+  coordinationMessageDigest,
+  hasPeerDeliveryReceipt,
+  readCoordinationMessage,
   writeCoordinationMessage,
 } from "../extension/supervision.ts";
 import {
@@ -25,8 +38,9 @@ import {
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
 import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "../extension/peer-transport.ts";
+import { afterDurablePeerAcceptanceStep } from "./peer-bridge-fault-seam.ts";
 
-const action = process.argv[2];
+let action = process.argv[2];
 if (
   ![
     "probe",
@@ -55,6 +69,16 @@ if (!isAbsolute(agentDir)) {
 }
 
 const runtime = peerRuntime();
+let recoveringStatus = false;
+const syncDirectory = (directory: string): void => {
+  if (process.platform === "win32") return;
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+};
 if (action === "probe") {
   console.log(
     JSON.stringify({
@@ -72,7 +96,7 @@ if (action === "probe") {
       throw new Error("peer transfer exceeds the size limit");
     chunks.push(buffer);
   }
-  const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+  let envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
     record?: Record<string, any>;
     recipientClaimId?: unknown;
     attachments?: Array<{
@@ -117,6 +141,7 @@ if (action === "probe") {
         digest?: unknown;
         status?: unknown;
         recipientSession?: unknown;
+        transfer?: typeof envelope;
       };
       const status =
         prior.digest !== digest || prior.recipientSession !== recipientSession
@@ -126,9 +151,16 @@ if (action === "probe") {
             : prior.status === "pending"
               ? "pending"
               : "conflict";
-      console.log(
-        JSON.stringify({ dataRoot: herdsmanDataRoot(), id, digest, status }),
-      );
+      if (status === "pending" && prior.transfer) {
+        envelope = prior.transfer;
+        action = "accept";
+        recoveringStatus = true;
+      } else {
+        console.log(
+          JSON.stringify({ dataRoot: herdsmanDataRoot(), id, digest, status }),
+        );
+        process.exit(0);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       console.log(
@@ -140,7 +172,7 @@ if (action === "probe") {
         }),
       );
     }
-    process.exit(0);
+    if (action === "status") process.exit(0);
   }
   if (action !== "accept") {
     const {
@@ -291,6 +323,7 @@ if (action === "probe") {
   });
   const markerDir = join(runtime.root, "peer-acceptances");
   mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+  syncDirectory(runtime.root);
   const key = createHash("sha256")
     .update(`${record.fromSessionId}\0${record.id}`)
     .digest("hex");
@@ -300,6 +333,7 @@ if (action === "probe") {
       digest?: unknown;
       status?: unknown;
       recipientSession?: unknown;
+      transfer?: typeof envelope;
     };
     if (
       prior.digest !== digest ||
@@ -310,7 +344,19 @@ if (action === "probe") {
       console.log(JSON.stringify({ accepted: true, id: record.id }));
       process.exit(0);
     }
-    throw new Error("peer message acceptance is pending; status is ambiguous");
+    if (prior.status !== "pending" || !prior.transfer)
+      throw new Error("invalid pending peer message acceptance");
+    if (
+      prior.transfer.record?.id !== record.id ||
+      prior.transfer.record?.fromSessionId !== record.fromSessionId ||
+      prior.transfer.record?.toSessionId !== record.toSessionId ||
+      peerPayloadDigest({
+        record: prior.transfer.record,
+        attachments: prior.transfer.attachments ?? [],
+      }) !== prior.digest
+    )
+      throw new Error("invalid pending peer message transfer");
+    envelope = prior.transfer;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     if (
@@ -324,7 +370,7 @@ if (action === "probe") {
       throw new Error("exact destination Manager is not live");
     writeFileSync(
       marker,
-      `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId })}\n`,
+      `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`,
       {
         encoding: "utf8",
         flag: "wx",
@@ -332,7 +378,26 @@ if (action === "probe") {
         flush: true,
       },
     );
+    syncDirectory(markerDir);
+    afterDurablePeerAcceptanceStep("pending-marker-durable");
   }
+  if (
+    !listPeerLeadRecords(runtime).some(
+      (peer) =>
+        peer.role === "manager" &&
+        peer.piSessionId === record.toSessionId &&
+        peer.claim.id === envelope.recipientClaimId,
+    )
+  )
+    throw new Error("exact destination Manager is not live");
+  if (
+    !envelope.correspondence ||
+    envelope.correspondence.recipientSession !== record.toSessionId ||
+    envelope.correspondence.recipientGeneration !== envelope.recipientClaimId ||
+    envelope.correspondence.originSession !== record.fromSessionId ||
+    envelope.correspondence.originGeneration !== record.leaseId
+  )
+    throw new Error("peer correspondence does not match message route");
   const receivedRefs: string[] = [];
   let receivedText = record.text as string;
   for (const attachment of envelope.attachments) {
@@ -378,7 +443,26 @@ if (action === "probe") {
       : { text: receivedText }),
   };
   storePeerCorrespondence(envelope.correspondence);
-  writeCoordinationMessage(acceptedRecord as never, runtime);
+  const accepted = acceptedRecord as never;
+  let published = false;
+  try {
+    const existing = readCoordinationMessage(
+      chiefMessagePath(runtime, record.toSessionId, record.id),
+    );
+    if (!isDeepStrictEqual(existing, accepted))
+      throw new Error("conflicting peer inbox message identity");
+    published = true;
+  } catch (error) {
+    const cause = error instanceof Error ? error.cause : undefined;
+    if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT")
+      throw error;
+  }
+  if (!published) {
+    const digest = coordinationMessageDigest(accepted);
+    if (!hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest))
+      writeCoordinationMessage(accepted, runtime);
+    if (!published) afterDurablePeerAcceptanceStep("inbox-publication-durable");
+  }
   const markerTemp = `${marker}.${randomUUID()}.tmp`;
   writeFileSync(
     markerTemp,
@@ -391,5 +475,17 @@ if (action === "probe") {
     },
   );
   renameSync(markerTemp, marker);
-  console.log(JSON.stringify({ accepted: true, id: record.id }));
+  syncDirectory(markerDir);
+  console.log(
+    JSON.stringify(
+      recoveringStatus
+        ? {
+            dataRoot: herdsmanDataRoot(),
+            id: record.id,
+            digest,
+            status: "accepted",
+          }
+        : { accepted: true, id: record.id },
+    ),
+  );
 }
