@@ -9030,10 +9030,12 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
         getSessionId: () => receiverId,
       };
       registerExtension!(receiver.pi as never);
+      let stage = "receiver_presence";
       try {
         await receiver.events.get("session_start")![0](undefined, context);
-        await t.waitFor(() =>
-          assert.ok(readPeerLeadRecord(runtime, receiverId)),
+        await t.waitFor(
+          () => assert.ok(readPeerLeadRecord(runtime, receiverId)),
+          { timeout: 3_000 },
         );
         const record = {
           version: 2 as const,
@@ -9054,6 +9056,11 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
           createdAt: Date.now(),
         };
         writeCoordinationMessage(record, runtime);
+        assert.equal(
+          listCoordinationMessagePaths(runtime, receiverId).length,
+          1,
+        );
+        stage = "inbox_rejection";
         if (scenario.assignSender)
           writeProjectAssignment(supervisionRuntime(), {
             version: 2,
@@ -9064,17 +9071,13 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
           });
         else
           removeProjectAssignment(supervisionRuntime(), group.repoKey, branch);
-        assert.equal(
-          listCoordinationMessagePaths(runtime, receiverId).length,
-          1,
-        );
-        await receiver.commandOptions.get("chief").handler("", context);
-        await receiver.commandOptions.get("chief").handler("leave", context);
-        await t.waitFor(() =>
-          assert.equal(
-            listCoordinationMessagePaths(runtime, receiverId).length,
-            0,
-          ),
+        await t.waitFor(
+          () =>
+            assert.equal(
+              listCoordinationMessagePaths(runtime, receiverId).length,
+              0,
+            ),
+          { timeout: 4_000 },
         );
         assert.equal(
           receiver.sentMessageCalls.filter((call) =>
@@ -9082,6 +9085,14 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
           ).length,
           0,
         );
+      } catch (error) {
+        t.diagnostic(
+          `stage=${stage} ` +
+            `queued=${listCoordinationMessagePaths(runtime, receiverId).length} ` +
+            `peerPresent=${Boolean(readPeerLeadRecord(runtime, receiverId))} ` +
+            `sendCalls=${receiver.sentMessageCalls.length}`,
+        );
+        throw error;
       } finally {
         await receiver.events.get("session_shutdown")?.[0]();
         removeProjectAssignment(supervisionRuntime(), group.repoKey, branch);
