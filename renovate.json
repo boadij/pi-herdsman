@@ -14,7 +14,7 @@
     },
     {
       "matchManagers": ["npm", "github-actions"],
-      "matchPackageNames": ["node"],
+      "matchDepNames": ["node"],
       "enabled": false
     },
     {
