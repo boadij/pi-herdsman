@@ -118,9 +118,10 @@ remains bounded by the internal 8 KiB limit, with larger accepted bodies
 stored separately and verified before Pi delivery.
 
 Remote Manager sends are retained locally until the remote endpoint confirms
-durable acceptance; failed sends remain queued and are retried when the Manager
-lists peers again. Acceptance is not delivery to Pi or completion of the
-requested work. An accepted request also establishes a capability-scoped,
+durable acceptance. Failed sends remain queued and retry automatically while
+the Manager inbox is active; `list_peers` also triggers immediate
+reconciliation. Acceptance is not delivery to Pi or completion of the requested
+work. An accepted request also establishes a capability-scoped,
 durable return correspondence. The recipient Manager can reply to the exact
 originating session with `message_peer`; the reply is queued at the recipient.
 Remote Manager replies are retrieved automatically while the originating
