@@ -6122,7 +6122,22 @@ async function runManagerRecoverySmoke(ctx) {
     ]);
     if (!observed.ok) throw observationFailure(observed.error);
     const result = observed.value;
-    return result.worktrees ?? [];
+    if (!Array.isArray(result?.worktrees))
+      throw new Error("Herdr worktree inventory is malformed");
+    if (
+      !result.worktrees.every(
+        (item) =>
+          item !== null &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          typeof item.branch === "string" &&
+          item.branch.length > 0 &&
+          typeof (item.path ?? item.worktree_path) === "string" &&
+          (item.path ?? item.worktree_path).length > 0,
+      )
+    )
+      throw new Error("Herdr worktree inventory is malformed");
+    return result.worktrees;
   };
   const primaryPath = ctx.primaryCheckoutPath;
   const rootWorkspace = (
@@ -6666,6 +6681,14 @@ async function runManagerRecoverySmoke(ctx) {
 
   if (ctx.managerRemovalAcceptance) {
     const removalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
+    const removalResultCount = sessionEntries(
+      (await rootSnapshot()).contents,
+    ).filter(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "remove_worktree",
+    ).length;
     markStage(ctx, "manager-removal-pending-request");
     await promptRoot(removalPrompt);
     const pending = await waitForEvidence(
@@ -6692,9 +6715,56 @@ async function runManagerRecoverySmoke(ctx) {
       },
       { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
     );
+    assert.equal(
+      sessionEntries((await rootSnapshot()).contents).filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "remove_worktree",
+      ).length,
+      removalResultCount + 1,
+      "the initial request prompt must call remove_worktree exactly once",
+    );
     assert.equal(pending.message.details.branch, branch);
+    assert.equal(typeof pending.message.details.request_id, "string");
+    assert.ok(pending.message.details.request_id.length > 0);
     assert.equal((await matchingWorktrees()).length, 1);
     assert.equal(await lstat(assignmentPath).then(() => true), true);
+
+    const pendingSession = await rootSnapshot();
+    const pendingSessionId = sessionEntries(pendingSession.contents).find(
+      (entry) => entry.type === "session",
+    )?.id;
+    assert.equal(typeof pendingSessionId, "string");
+    const pendingStatus = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+    assert.match(pendingStatus, /removal approval pending|removals? pending/iu);
+    markStage(ctx, "manager-removal-reload");
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/reload");
+    await waitForEvidence(
+      ctx,
+      "manager-removal-reload-restored-session",
+      async () => {
+        const session = await rootSnapshot();
+        const sessionId = session
+          ? sessionEntries(session.contents).find(
+              (entry) => entry.type === "session",
+            )?.id
+          : null;
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done:
+            sessionId === pendingSessionId &&
+            text.includes("remov") &&
+            /pending/iu.test(text),
+          progress: {
+            sameSession: sessionId === pendingSessionId,
+            pendingVisible: /pending/iu.test(text),
+          },
+          evidence: { sessionId, visible: text.slice(-1000) },
+        };
+      },
+      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+    );
 
     markStage(ctx, "manager-removal-cancel");
     await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
@@ -6823,63 +6893,154 @@ async function runManagerRecoverySmoke(ctx) {
     await submitPaneCommand(
       ctx,
       ctx.rootPaneId,
-      "/manager remove-preapproval on",
+      "/manager remove-preapproval off",
     );
     await waitForEvidence(
       ctx,
-      "manager-removal-preauthorization-prompt",
+      "manager-removal-preauthorization-disabled",
       async () => {
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         return {
-          done: text.includes("Type enable to confirm."),
-          progress: { promptVisible: text.includes("Type enable to confirm.") },
+          done: text.includes("this repository is Off"),
+          progress: { disabled: text.includes("this repository is Off") },
           evidence: text.slice(-1000),
         };
       },
-      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+      { timeoutMs: 10_000, stallMs: CONTROL_STALL_MS },
     );
-    await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "enable"]);
-    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
-    await waitForEvidence(
-      ctx,
-      "manager-removal-preauthorization-saved",
-      async () => {
-        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
-        return {
-          done: text.includes("this repository is On"),
-          progress: { enabled: text.includes("this repository is On") },
-          evidence: text.slice(-1000),
-        };
-      },
-      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
-    );
-    const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. The repository is preauthorized; do not ask for approval.`;
-    markStage(ctx, "manager-removal-preauthorized-tool-call");
+    const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
+    const cleanRemovalCount = sessionEntries(
+      (await rootSnapshot()).contents,
+    ).filter(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "remove_worktree" &&
+        entry.message.details?.branch === branch,
+    ).length;
+    markStage(ctx, "manager-removal-clean-pending-request");
     await promptRoot(authorizedPrompt);
-    const removal = await waitForEvidence(
+    const cleanPending = await waitForEvidence(
       ctx,
-      "manager-removal-guarded-executor",
+      "manager-removal-clean-pending-result",
       async () => {
         const session = await rootSnapshot();
         const results = session
-          ? staffActionResults(
-              session.contents,
-              "remove_worktree",
-              "remove",
-              authorizedPrompt,
+          ? sessionEntries(session.contents).filter(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message?.role === "toolResult" &&
+                entry.message.toolName === "remove_worktree" &&
+                entry.message.details?.branch === branch,
             )
           : [];
         return {
           done:
-            results.length === 1 && (await matchingWorktrees()).length === 0,
-          value: results[0],
-          progress: { toolResult: results.length === 1 },
+            results.length === cleanRemovalCount + 1 &&
+            results.at(-1)?.message?.details?.pending === true,
+          value: results.at(-1),
+          progress: {
+            correlatedPendingResult:
+              results.at(-1)?.message?.details?.pending === true,
+          },
           evidence: session ? summarizeSession(session.contents) : null,
         };
       },
-      { timeoutMs: 30_000, stallMs: MODEL_STALL_MS },
+      { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
     );
-    assert.equal(removal.branch, branch);
+    assert.equal(cleanPending.message.details.branch, branch);
+    assert.equal(typeof cleanPending.message.details.request_id, "string");
+    markStage(ctx, "manager-removal-clean-pending-approval");
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    await waitForEvidence(
+      ctx,
+      "manager-removal-clean-confirmation-dialog",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        return {
+          done: text.includes("Type remove to confirm."),
+          progress: {
+            confirmationDialog: text.includes("Type remove to confirm."),
+          },
+          evidence: text.slice(-1000),
+        };
+      },
+      { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
+    );
+    await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "remove"]);
+    await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+    const removal = await waitForEvidence(
+      ctx,
+      "manager-removal-guarded-executor",
+      async () => {
+        const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+        const visible = text.replace(/\s+/gu, " ");
+        const matchingOwnedWorktrees = await matchingWorktrees();
+        const checkoutPathPresent = await lstat(worktreePath).then(
+          () => true,
+          (error) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
+        );
+        const assignmentFilePresent = await lstat(assignmentPath).then(
+          () => true,
+          (error) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
+        );
+        const checkoutRemoved =
+          matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
+        // /manager remove reports through the UI; it does not emit another
+        // remove_worktree tool result after the approval dialog.
+        const successMessage =
+          visible.includes(`removed checkout for ${branch}`) ||
+          visible.includes(`checkout removed for ${branch}`);
+        const executorCompleted = successMessage;
+        const verifiedSuccess = executorCompleted && checkoutRemoved;
+        return {
+          done: verifiedSuccess,
+          value: {
+            outcome: verifiedSuccess ? "verified-success" : "unverified",
+            executorCompleted,
+            checkoutRemoved,
+            branch,
+            checkoutPath: worktreePath,
+            workspaceId,
+            matchingWorktrees: matchingOwnedWorktrees,
+            checkoutPathPresent,
+            assignmentFilePresent,
+            visible: text.slice(-1200),
+          },
+          progress: {
+            executorCompleted,
+            checkoutRemoved,
+          },
+          evidence: {
+            branch,
+            checkoutPath: worktreePath,
+            workspaceId,
+            matchingWorktrees: matchingOwnedWorktrees,
+            checkoutPathPresent,
+            assignmentFilePresent,
+            visible: text.slice(-1200),
+          },
+        };
+      },
+      // Herdr's guarded remove is bounded at 180s; allow 30s for the final
+      // result and independent worktree inventory to become observable.
+      { timeoutMs: 210_000, stallMs: 210_000 },
+    );
+    assert.equal(
+      removal.outcome,
+      "verified-success",
+      `Guarded removal failed: ${JSON.stringify(removal)}`,
+    );
+    assert.equal(removal.executorCompleted, true);
+    assert.equal(removal.checkoutRemoved, true);
     ctx.owned.managerWorktreeRetirementRequested = true;
     await waitForEvidence(
       ctx,
@@ -6904,7 +7065,8 @@ async function runManagerRecoverySmoke(ctx) {
       pendingToolReturned: true,
       cancellationPreservedCheckout: true,
       approvalReachedGuardedSafetyRefusal: true,
-      repositoryPreauthorizationReachedGuardedExecutor: true,
+      reloadRestoredPendingReview: true,
+      cleanPendingApprovalReachedGuardedExecutor: true,
     };
     return;
   }
@@ -9563,7 +9725,7 @@ async function main() {
     expectedPackage: `${pkg.name}@${pkg.version}`,
     scenario,
     owned,
-    expectedPiVersion: pkg.piHerdsman.runtime.pi,
+    expectedPiVersion: preflightEvidence.piVersion,
     preflight: preflightEvidence,
   };
   ctx.initialPrompt = initialPromptForScenario(scenario, ctx);
