@@ -40,6 +40,14 @@ On supported Linux or macOS systems, with the prerequisites in
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
+Already have Pi and Herdr? Install Herdsman through
+[Pi's native package manager](https://pi.dev/packages/pi-herdsman):
+
+```sh
+pi install npm:pi-herdsman
+herdr integration install pi
+```
+
 In your project directory, start herdr and then Pi inside its pane:
 
 ```sh

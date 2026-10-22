@@ -1,6 +1,6 @@
 # Getting started
 
-[Documentation index](../README.md) · [Coordination API](coordination-api.md)
+[Documentation index](README.md) · [Coordination API](coordination-api.md)
 
 This guide takes you from installation to your first asynchronous delegation.
 You can ask Pi normally; you do not need to call coordination tools yourself.
@@ -36,7 +36,7 @@ herdr integration install pi
 
 Install Pi and herdr using their native Windows instructions; the Herdsman shell
 bootstrap supports Linux and macOS only. See [Herdr's installation
-instructions](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/install.mdx)
+instructions](https://herdr.dev/docs/install/)
 and [Pi's official Quickstart](https://pi.dev/docs/latest/quickstart), then
 install Herdsman and its Herdr integration:
 
@@ -136,13 +136,16 @@ required for ordinary Agent delegation. See
 
 ## First-use recovery
 
-| Problem                         | Next action                                                                                                                               |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `pi` command unavailable        | Follow [Pi's installation and PATH instructions](https://pi.dev/docs/latest/quickstart).                                                  |
-| `herdr` unavailable             | Follow [Herdr's installation instructions](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/install.mdx). |
-| No usable Pi model              | Configure authentication through Pi with `/login`.                                                                                        |
-| Herdsman inactive outside herdr | Start Pi inside herdr.                                                                                                                    |
-| Delegation rejected             | Follow the structured error and next action reported by Herdsman; see [Recovery](guides/recovery.md).                                     |
-| Agent result not yet available  | Continue normal work; pending work is not completion.                                                                                     |
+| Problem                         | Next action                                                                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pi` command unavailable        | Follow [Pi's installation and PATH instructions](https://pi.dev/docs/latest/quickstart).              |
+| `herdr` unavailable             | Follow [Herdr's installation instructions](https://herdr.dev/docs/install/).                          |
+| No usable Pi model              | Configure authentication through Pi with `/login`.                                                    |
+| Herdsman inactive outside herdr | Start Pi inside herdr.                                                                                |
+| Delegation rejected             | Follow the structured error and next action reported by Herdsman; see [Recovery](guides/recovery.md). |
+| Agent result not yet available  | Continue normal work; pending work is not completion.                                                 |
+
+If `/herdsman` is missing, check that the Herdsman extension is enabled in
+Pi's native `pi config`, then restart Pi inside Herdr.
 
 For the full human-facing command behavior, see [Commands](reference/commands.md).

@@ -194,6 +194,12 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
 
   printf '\nPi Herdsman package operation completed (target release %s). Pi %s and Herdr %s are available.\n' \
     "$herdsman_version" "$installed_pi" "$installed_herdr"
+  printf '\nNext steps:\n'
+  printf '  1. Open your project and run: herdr\n'
+  printf '  2. Start Pi inside a Herdr pane: pi\n'
+  printf '  3. In Pi, use /login if authentication is needed\n'
+  printf '  4. Ask: Use scout to inspect this repository without changing files.\n'
+  printf '  5. Open /herdsman for controls\n'
 }
 
 main "$@"

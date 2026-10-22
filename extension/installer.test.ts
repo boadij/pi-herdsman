@@ -237,6 +237,7 @@ test(
           `Pi Herdsman package operation completed (target release ${packageJson.version})`,
         ),
       );
+      assert.match(first.stdout, /Open your project and run: herdr/u);
 
       const firstLog = readFileSync(setup.log, "utf8");
       assert.match(firstLog, /curl .*https:\/\/pi\.dev\/install\.sh/u);
@@ -390,6 +391,7 @@ test(
         encoding: "utf8",
       });
       assert.notEqual(pinnedResult.status, 0);
+      assert.doesNotMatch(pinnedResult.stdout, /Next steps:/u);
       assert.match(
         pinnedResult.stderr,
         /version-pinned; this bootstrap cannot reconcile it to the latest release\. Change or remove the pin with Pi's package manager to reconcile to the latest release/u,
@@ -405,6 +407,7 @@ test(
         encoding: "utf8",
       });
       assert.notEqual(unavailableResult.status, 0);
+      assert.doesNotMatch(unavailableResult.stdout, /Next steps:/u);
       assert.match(
         unavailableResult.stderr,
         /could not inspect installed Pi packages/u,
@@ -440,6 +443,7 @@ test(
           encoding: "utf8",
         });
         assert.notEqual(result.status, 0);
+        assert.doesNotMatch(result.stdout, /Next steps:/u);
         assert.doesNotMatch(result.stdout, /package operation completed/u);
       }
       assert.match(
