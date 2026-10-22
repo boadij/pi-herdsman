@@ -134,7 +134,11 @@ to itself.
 When `contextRetirement` is enabled, `continue_agent` is rejected for a retired
 managed-agent session; delegate a fresh agent and pass the previous
 handoff/result and relevant files instead. Retired results explicitly instruct
-the controller to delegate a fresh agent.
+the controller to delegate a fresh agent when follow-up work remains, before
+the result text. The model-facing result omits the historical session selector
+when retirement is confirmed or cannot be verified. When retirement is
+verified as disabled or the session is not retired, the ordinary selector is
+preserved. Structured result details continue to retain session provenance.
 
 Fresh delegate assignments receive an automatically chosen logical label when
 no label is supplied. The saved session's logical label is inherited exactly
@@ -522,6 +526,13 @@ Result ref: result:<agent>#<index>
 Reusable result artifacts persist the source agent label, definition, assignment
 cwd, and producing Pi session ID (when available) with the agent-authored result
 so later `files` handoffs retain their provenance.
+
+The `session=<id>` selector is included only when retirement is verified as
+disabled or the session is not retired. If retirement is confirmed or cannot
+be verified, the header omits it and any continuation guidance precedes the
+completion text. Details retain durable session provenance for diagnosis and
+authorized inspection; the selector is not authorization, and continuation
+remains subject to runtime identity, ownership, and policy checks.
 
 Details retain durable `agentLabel`, `resultIndex` when present,
 `agentDefinition`, `piSessionId`, `piSessionFile`, canonical result references,
