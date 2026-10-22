@@ -108,36 +108,51 @@ jobs:
             }
           }
           Write-Output 'Pi and Herdr are absent before bootstrap.'
-      - name: Run native Windows bootstrap
+      - name: Check native Windows installer syntax
         shell: pwsh
-        run: .\install.ps1
-      - name: Verify installed stack
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./install.ps1).Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count) { throw ($errors | Out-String) }
+      - name: Install and verify Windows stack
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          node --version
-          npm --version
-          $pi = Get-Command pi.cmd -ErrorAction SilentlyContinue
-          if (-not $pi) { $pi = Get-Command pi -ErrorAction Stop }
-          $herdr = Get-Command herdr.exe -ErrorAction SilentlyContinue
-          if (-not $herdr) { $herdr = Get-Command herdr -ErrorAction Stop }
-          & $pi.Source --version
-          if ($LASTEXITCODE -ne 0) { throw 'Pi version check failed.' }
-          & $herdr.Source --version
-          if ($LASTEXITCODE -ne 0) { throw 'Herdr version check failed.' }
+          function Verify-InstalledStack {
+            node --version
+            npm --version
+            $pi = Get-Command pi.cmd -ErrorAction SilentlyContinue
+            if (-not $pi) { $pi = Get-Command pi -ErrorAction Stop }
+            $herdr = Get-Command herdr.exe -ErrorAction SilentlyContinue
+            if (-not $herdr) { $herdr = Get-Command herdr -ErrorAction Stop }
+            & $pi.Source --version
+            if ($LASTEXITCODE -ne 0) { throw 'Pi version check failed.' }
+            & $herdr.Source --version
+            if ($LASTEXITCODE -ne 0) { throw 'Herdr version check failed.' }
 
-          $packages = & $pi.Source list --no-approve
-          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect installed Pi packages.' }
-          if (-not ($packages | Where-Object { "$_".Trim() -match '^npm:pi-herdsman@\S+(?:\s+\(filtered\))?$' })) {
-            throw 'The installed Herdsman package is not sourced from npm:pi-herdsman.'
+            $packages = & $pi.Source list --no-approve
+            if ($LASTEXITCODE -ne 0) { throw 'Could not inspect installed Pi packages.' }
+            if (-not ($packages | Where-Object { "$($_)".Trim() -match '^npm:pi-herdsman(?:\s+\(filtered\))?$' })) {
+              throw 'The installed Herdsman package is not sourced from npm:pi-herdsman.'
+            }
+
+            $integrationStatus = & $herdr.Source integration status
+            if ($LASTEXITCODE -ne 0) { throw 'Herdr Pi integration status check failed.' }
+            if (-not (($integrationStatus -join "`n") -match '(?m)^pi: current \(v\d+\)(?: .+)?$')) {
+              throw "Herdr Pi integration is not enabled/current:`n$($integrationStatus -join "`n")"
+            }
           }
 
-          $integrationStatus = & $herdr.Source integration status
-          if ($LASTEXITCODE -ne 0) { throw 'Herdr Pi integration status check failed.' }
-          if (-not (($integrationStatus -join "`n") -match '(?m)^pi: current \(v\d+\)(?: .+)?$')) {
-            throw "Herdr Pi integration is not enabled/current:`n$($integrationStatus -join "`n")"
-          }
+          .\install.ps1
+          Verify-InstalledStack
+          .\install.ps1
+          Verify-InstalledStack
 
   package:
     needs: scope

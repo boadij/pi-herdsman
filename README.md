@@ -28,34 +28,25 @@ _Advanced orchestration: a live Manager → Lead → Agent workflow._
 - **Parallel and nested delegation.** Run independent work concurrently and let explicitly enabled Agents delegate their own bounded subtasks.
 - **Project orchestration.** A Manager coordinates durable branch-based work across independent Leads and their Agent trees.
 - **Direct supervision.** Chief, Manager, Lead, and Agent responsibilities stay explicit instead of collapsing into one global controller.
-- **Peer communication.** Independent Pi sessions can exchange messages, findings, and supported text evidence with same-role peers. Leads communicate on the same machine; Managers can also coordinate across connected machines.
+- **Peer communication.** Leads can exchange messages locally; Managers can also collaborate across connected machines.
 - **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session and its transitively owned managed Agents. An active Manager also sees the Leads in its current durable project assignments and their owned Agent trees.
 - **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 
 ## Quick start
 
-For a full-stack bootstrap on Linux or macOS, run:
+**Linux/macOS:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
-On Windows, run this in an interactive PowerShell session:
+**Windows (PowerShell):**
 
 ```powershell
 irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.ps1 | iex
 ```
 
-The Windows bootstrap uses the official Pi installer when Node.js is missing
-or below the released package minimum; that installer may interactively offer
-to install standalone Node.js. If Node.js remains too old, install/update it
-from [nodejs.org](https://nodejs.org/en/download), reopen PowerShell, and rerun
-the command. The bootstrap then uses the official Herdr installer and
-reconciles the Herdsman Pi package. Alternatively, install and manage Pi and
-Herdr natively yourself, then use the package commands below.
-
-Already have Pi and Herdr? Install Herdsman through
-[Pi's native package manager](https://pi.dev/packages/pi-herdsman):
+**Already using Pi and Herdr?**
 
 ```sh
 pi install npm:pi-herdsman
@@ -83,8 +74,8 @@ that delegated the task. Discover Agent management and other capabilities with:
 /herdsman
 ```
 
-See [Getting started](docs/getting-started.md) for installation details, first
-use, and optional configuration.
+See [Getting started](docs/getting-started.md) for prerequisites and
+troubleshooting.
 
 ## From one Agent to a project
 
@@ -130,23 +121,6 @@ history, not a separate checkout or fresh process configuration. See
 See [Coordination](docs/concepts/coordination.md) for the mental model and
 [Project orchestration](docs/guides/project-orchestration.md) for the Manager
 workflow.
-
-## Coordinate across machines
-
-Managers running on connected Herdr machines can exchange
-requests, plans, findings, and progress updates.
-
-For example, ask your Manager:
-
-> Ask the Manager on my other connected machine to review this
-> plan and send back their findings.
-
-Each Manager remains responsible for its own projects and
-Agents. Peer messaging does not give one Manager control over
-another machine's work.
-
-See [Peer communication](docs/reference/peer.md) for
-requirements and limitations.
 
 ## Choose your next step
 

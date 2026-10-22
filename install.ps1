@@ -17,7 +17,7 @@ function Invoke-UpstreamInstaller([string]$Url) {
         Invoke-WebRequest -Uri $Url -OutFile $file -UseBasicParsing
         if (-not (Test-Path $file) -or (Get-Item $file).Length -eq 0) { Fail "Downloaded installer was empty: $Url" }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $file
-        if ($LASTEXITCODE -ne 0) { Fail "Official installer failed with exit code $LASTEXITCODE: $Url" }
+        if ($LASTEXITCODE -ne 0) { Fail "Official installer failed with exit code ${LASTEXITCODE}: $Url" }
     } finally { Remove-Item $file -Force -ErrorAction SilentlyContinue }
     Refresh-Path
 }
