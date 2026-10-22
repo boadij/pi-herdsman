@@ -18,6 +18,316 @@ const packageLock = JSON.parse(
   readFileSync(resolve("package-lock.json"), "utf8"),
 );
 const installer = resolve("install.sh");
+const windowsInstaller = resolve("install.ps1");
+
+test("Windows bootstrap uses official temporary installers and preserves native channel selection", () => {
+  const source = readFileSync(windowsInstaller, "utf8");
+  assert.match(source, /https:\/\/pi\.dev\/install\.ps1/u);
+  assert.match(source, /https:\/\/herdr\.dev\/install\.ps1/u);
+  assert.match(source, /Invoke-WebRequest -Uri \$Url -OutFile \$file/u);
+  assert.match(source, /finally \{ Remove-Item \$file -Force/u);
+  assert.match(source, /-ExecutionPolicy Bypass -File \$file/u);
+  assert.match(source, /GetEnvironmentVariable\('Path', 'User'\)/u);
+  assert.match(source, /GetEnvironmentVariable\('Path', 'Machine'\)/u);
+  assert.doesNotMatch(source, /-Channel\s/u);
+  assert.match(
+    source,
+    /Invoke-RestMethod -Uri "https:\/\/registry\.npmjs\.org\/\$package\/latest"/u,
+  );
+  assert.ok(
+    source.indexOf("Invoke-RestMethod -Uri") <
+      source.indexOf("Invoke-UpstreamInstaller 'https://pi.dev/install.ps1'"),
+  );
+  assert.match(source, /Version 'npm\.cmd'/u);
+  assert.match(source, /npm:pi-herdsman@/u);
+  assert.match(source, /npm:pi-herdsman\(\?:/u);
+  assert.match(source, /LASTEXITCODE -ne 0/u);
+  assert.doesNotMatch(source, /IsInputRedirected/u);
+  assert.match(source, /Node\.js and\/or npm are unavailable/u);
+  const currentIntegration = /^pi: current \(v\d+\)(?: .+)?$/u;
+  assert.ok(source.includes("'(?m)^pi: current \\(v\\d+\\)(?: .+)?$'"));
+  for (const line of [
+    "pi: current (v9)",
+    "pi: current (v9) (C:\\Users\\user\\.herdr)",
+  ]) {
+    assert.match(line, currentIntegration);
+  }
+  for (const line of [
+    "pi: outdated (v8)",
+    "pi: repair required (v9)",
+    "pi: not installed",
+  ]) {
+    assert.doesNotMatch(line, currentIntegration);
+  }
+});
+
+function runWindowsBootstrap({
+  pi = "1.4.0",
+  herdr = "1.0.0",
+  node = "22.19.0",
+  installed = "",
+  fail = "",
+  status = "pi: current (v9) (C:\\mock\\integration)",
+} = {}) {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-test-"));
+  const harness = join(root, "harness.ps1");
+  const values = { pi, herdr, node, installed, fail, status };
+  const escaped = JSON.stringify(values).replaceAll("'", "''");
+  writeFileSync(
+    harness,
+    `
+$ErrorActionPreference = 'Stop'
+$script:case = ConvertFrom-Json '${escaped}'
+$script:log = [System.Collections.Generic.List[string]]::new()
+$script:LASTEXITCODE = 0
+. '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
+function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
+function Resolve-Command([string]$Name) {
+  if ($Name -eq 'pi.cmd' -or $Name -eq 'pi') { return [pscustomobject]@{Source='MockPi'} }
+  if ($Name -eq 'herdr.exe' -or $Name -eq 'herdr') { return [pscustomobject]@{Source='MockHerdr'} }
+  if ($Name -eq 'node') { return [pscustomobject]@{Source='MockNode'} }
+  if ($Name -eq 'npm.cmd') { return [pscustomobject]@{Source='MockNpm'} }
+  return $null
+}
+function Version([string]$Command) {
+  if ($Command -eq 'MockPi') { return [version]$script:case.pi }
+  if ($Command -eq 'MockHerdr') { return [version]($script:case.herdr -replace '-preview(?:\..*)?$', '') }
+  if ($Command -eq 'MockNode') { return [version]$script:case.node }
+  return [version]'10.0.0'
+}
+function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
+function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
+function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
+function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
+function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
+$failed = $false
+Invoke-UpstreamInstaller 'mock://installer'
+'PATHREFRESH ' + $env:Path.Contains('C:\\mock-installed')
+try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.Exception.Message) }
+'RESULT failed=' + $failed
+'LOG ' + ($script:log -join '|')
+`,
+  );
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      harness,
+    ],
+    { encoding: "utf8" },
+  );
+  rmSync(root, { recursive: true, force: true });
+  return result;
+}
+
+function runWindowsEntryPointFailure(fail) {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-entrypoint-"));
+  const harness = join(root, "harness.ps1");
+  const escaped = JSON.stringify({ fail }).replaceAll("'", "''");
+  writeFileSync(
+    harness,
+    `
+$ErrorActionPreference = 'Stop'
+$script:case = ConvertFrom-Json '${escaped}'
+$script:LASTEXITCODE = 0
+function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
+function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq '--version') { return '1.4.0' }; if ($Action -eq 'list') { return '' }; if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
+function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq '--version') { return '1.0.0' }; if ($Action -eq 'status') { return 'pi: current (v9)' }; if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
+function MockNode { '--version'; $script:LASTEXITCODE=0; return '22.19.0' }
+function MockNpm { '--version'; $script:LASTEXITCODE=0; return '10.0.0' }
+function Get-Command { param($Name,$ErrorAction) $source = switch ($Name) { 'pi.cmd' { 'MockPi' } 'pi' { 'MockPi' } 'herdr.exe' { 'MockHerdr' } 'herdr' { 'MockHerdr' } 'node' { 'MockNode' } 'npm.cmd' { 'MockNpm' } }; if ($source) { [pscustomobject]@{Source=$source} } }
+. '${windowsInstaller.replaceAll("'", "''")}'
+`,
+  );
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      harness,
+    ],
+    { encoding: "utf8" },
+  );
+  rmSync(root, { recursive: true, force: true });
+  return result;
+}
+
+test(
+  "Windows bootstrap executes in native PowerShell and reconciles a fresh package install",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = runWindowsBootstrap();
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /RESULT failed=False/u);
+    assert.match(result.stdout, /pi install npm:pi-herdsman --no-approve/u);
+    assert.match(result.stdout, /herdr integration install pi/u);
+    assert.match(result.stdout, /Next steps:/u);
+  },
+);
+
+test(
+  "Windows bootstrap refreshes PATH in the real upstream helper",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-path-"));
+    const harness = join(root, "path.ps1");
+    writeFileSync(
+      harness,
+      `
+$ErrorActionPreference = 'Stop'
+. '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
+$oldUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+try {
+  function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
+  function powershell.exe { [Environment]::SetEnvironmentVariable('Path', 'C:\\mock-installed', 'User'); $script:LASTEXITCODE=0 }
+  Invoke-UpstreamInstaller 'mock://installer'
+  'PATHREFRESH ' + $env:Path.Contains('C:\\mock-installed')
+} finally { [Environment]::SetEnvironmentVariable('Path', $oldUserPath, 'User') }
+`,
+    );
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        harness,
+      ],
+      { encoding: "utf8" },
+    );
+    rmSync(root, { recursive: true, force: true });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /PATHREFRESH True/u);
+  },
+);
+
+test(
+  "Windows upstream helper fails on a nonzero child exit and removes its temporary installer",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-child-failure-"));
+    const harness = join(root, "failure.ps1");
+    writeFileSync(
+      harness,
+      `
+$ErrorActionPreference = 'Stop'
+$env:TEMP = '${root.replaceAll("'", "''")}'
+$fakeBin = Join-Path $env:TEMP 'bin'
+New-Item -ItemType Directory -Path $fakeBin | Out-Null
+Copy-Item (Join-Path $PSHOME 'powershell.exe') (Join-Path $fakeBin 'powershell.exe')
+Copy-Item (Join-Path $PSHOME 'powershell.exe.config') $fakeBin
+$env:Path = $fakeBin + ';' + $env:Path
+. '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
+function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'exit 23' }
+$failed = $false
+try { Invoke-UpstreamInstaller 'mock://installer' } catch { $failed = $true }
+$remaining = @(Get-ChildItem -Path $env:TEMP -Filter '*.ps1' | Where-Object { $_.Name -match '^[0-9a-f-]{36}\\.ps1$' })
+'RESULT failed=' + $failed + ' remaining=' + $remaining.Count
+`,
+    );
+    try {
+      const result = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          harness,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /RESULT failed=True remaining=0/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "Windows bootstrap preserves newer runtimes, updates only unpinned package, and refuses pins",
+  { skip: process.platform !== "win32" },
+  () => {
+    const newer = runWindowsBootstrap({
+      pi: "9.0.0",
+      herdr: "9.0.0",
+      installed: "npm:pi-herdsman (filtered)",
+    });
+    assert.equal(newer.status, 0, newer.stderr);
+    assert.match(newer.stdout, /pi update npm:pi-herdsman --no-approve/u);
+    assert.doesNotMatch(newer.stdout, /installer https:/u);
+    const pinned = runWindowsBootstrap({ installed: "npm:pi-herdsman@^1.2.0" });
+    assert.match(pinned.stdout, /RESULT failed=True/u);
+    assert.match(pinned.stderr, /version-pinned/u);
+    assert.doesNotMatch(pinned.stdout, /pi (install|update) /u);
+    assert.doesNotMatch(pinned.stdout, /Next steps:/u);
+  },
+);
+
+test(
+  "Windows bootstrap accepts a preview-reported Herdr version and preserves its channel",
+  { skip: process.platform !== "win32" },
+  () => {
+    const source = readFileSync(windowsInstaller, "utf8");
+    assert.ok(source.includes("(?:-preview(?:\\.[0-9A-Za-z-]+)?)?"));
+    const result = runWindowsBootstrap({ herdr: "0.9.6-preview.1" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /RESULT failed=False/u);
+    assert.doesNotMatch(result.stdout, /installer https:\/\/herdr\.dev/u);
+    assert.match(result.stdout, /herdr integration install pi/u);
+    assert.doesNotMatch(
+      result.stdout,
+      /-Channel|installer https:\/\/herdr\.dev/u,
+    );
+  },
+);
+
+test(
+  "Windows bootstrap propagates package and integration failures without success output",
+  { skip: process.platform !== "win32" },
+  () => {
+    for (const fail of ["install", "integration"]) {
+      const result = runWindowsEntryPointFailure(fail);
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.doesNotMatch(
+        result.stdout,
+        /Next steps:|package operation completed/u,
+      );
+    }
+  },
+);
+
+test(
+  "Windows bootstrap rejects non-current Herdr integration status",
+  { skip: process.platform !== "win32" },
+  () => {
+    for (const status of [
+      "pi: outdated (v8)",
+      "pi: repair required (v9)",
+      "pi: legacy (v9)",
+      "pi: not installed",
+    ]) {
+      const result = runWindowsBootstrap({ status });
+      assert.match(result.stdout, /RESULT failed=True/u);
+      assert.match(result.stderr, /not enabled\/current/u);
+      assert.doesNotMatch(
+        result.stdout,
+        /Next steps:|package operation completed/u,
+      );
+    }
+  },
+);
 
 test("released runtime metadata matches locked Pi packages and has Herdr checksums", () => {
   const runtime = packageJson.piHerdsman?.runtime;

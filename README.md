@@ -34,12 +34,25 @@ _Advanced orchestration: a live Manager → Lead → Agent workflow._
 
 ## Quick start
 
-On supported Linux or macOS systems, with the prerequisites in
-[Getting started](docs/getting-started.md) installed, run:
+For a full-stack bootstrap on Linux or macOS, run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
+
+On Windows, run this in an interactive PowerShell session:
+
+```powershell
+irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.ps1 | iex
+```
+
+The Windows bootstrap uses the official Pi installer when Node.js is missing
+or below the released package minimum; that installer may interactively offer
+to install standalone Node.js. If Node.js remains too old, install/update it
+from [nodejs.org](https://nodejs.org/en/download), reopen PowerShell, and rerun
+the command. The bootstrap then uses the official Herdr installer and
+reconciles the Herdsman Pi package. Alternatively, install and manage Pi and
+Herdr natively yourself, then use the package commands below.
 
 Already have Pi and Herdr? Install Herdsman through
 [Pi's native package manager](https://pi.dev/packages/pi-herdsman):

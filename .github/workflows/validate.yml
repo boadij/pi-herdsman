@@ -78,6 +78,67 @@ jobs:
       - run: npm ci
       - run: npm run check
 
+  windows-bootstrap:
+    name: Windows bootstrap acceptance
+    needs: scope
+    if: ${{ needs.scope.outputs.tests == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+      - name: Check disposable runner prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Node.js is explicitly provisioned from package.json engine metadata.
+          node --version
+          npm --version
+
+          # Fail rather than describing a pre-populated runner as a fresh bootstrap.
+          foreach ($name in @('pi', 'pi.cmd', 'herdr', 'herdr.exe')) {
+            if (Get-Command $name -ErrorAction SilentlyContinue) {
+              throw "Expected a fresh runner, but $name is already available."
+            }
+          }
+          Write-Output 'Pi and Herdr are absent before bootstrap.'
+      - name: Run native Windows bootstrap
+        shell: pwsh
+        run: .\install.ps1
+      - name: Verify installed stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          node --version
+          npm --version
+          $pi = Get-Command pi.cmd -ErrorAction SilentlyContinue
+          if (-not $pi) { $pi = Get-Command pi -ErrorAction Stop }
+          $herdr = Get-Command herdr.exe -ErrorAction SilentlyContinue
+          if (-not $herdr) { $herdr = Get-Command herdr -ErrorAction Stop }
+          & $pi.Source --version
+          if ($LASTEXITCODE -ne 0) { throw 'Pi version check failed.' }
+          & $herdr.Source --version
+          if ($LASTEXITCODE -ne 0) { throw 'Herdr version check failed.' }
+
+          $packages = & $pi.Source list --no-approve
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect installed Pi packages.' }
+          if (-not ($packages | Where-Object { "$_".Trim() -match '^npm:pi-herdsman@\S+(?:\s+\(filtered\))?$' })) {
+            throw 'The installed Herdsman package is not sourced from npm:pi-herdsman.'
+          }
+
+          $integrationStatus = & $herdr.Source integration status
+          if ($LASTEXITCODE -ne 0) { throw 'Herdr Pi integration status check failed.' }
+          if (-not (($integrationStatus -join "`n") -match '(?m)^pi: current \(v\d+\)(?: .+)?$')) {
+            throw "Herdr Pi integration is not enabled/current:`n$($integrationStatus -join "`n")"
+          }
+
   package:
     needs: scope
     if: ${{ needs.scope.outputs.package == 'true' }}
@@ -178,7 +239,8 @@ jobs:
   ci:
     name: CI
     if: ${{ always() }}
-    needs: [scope, format, validate, package, container, smoke]
+    needs:
+      [scope, format, validate, package, container, smoke, windows-bootstrap]
     runs-on: ubuntu-latest
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
@@ -188,6 +250,7 @@ jobs:
       CONTAINER_RESULT: ${{ needs.container.result }}
       SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
       SMOKE_RESULT: ${{ needs.smoke.result }}
+      WINDOWS_BOOTSTRAP_RESULT: ${{ needs.windows-bootstrap.result }}
     steps:
       - run: |
           set -euo pipefail
@@ -202,6 +265,9 @@ jobs:
           do
             [ "$result" = "success" ] || [ "$result" = "skipped" ]
           done
+
+          [ "$WINDOWS_BOOTSTRAP_RESULT" = "success" ] || \
+            [ "$WINDOWS_BOOTSTRAP_RESULT" = "skipped" ]
 
           case "$SMOKE_REQUIRED:$SMOKE_RESULT" in
             true:success|false:skipped)

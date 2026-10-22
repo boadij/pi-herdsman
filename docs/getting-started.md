@@ -9,12 +9,21 @@ You can ask Pi normally; you do not need to call coordination tools yourself.
 
 Pi Herdsman requires Node.js 22.19 or newer, as specified by the released
 package's [`engines.node`](../package.json) requirement. The Linux/macOS
-bootstrap also requires Node.js and npm to be installed before you run it.
+bootstrap requires Node.js and npm beforehand. The Windows bootstrap fetches
+released runtime metadata directly from npm over HTTPS, then starts Pi's
+installer if Pi, Node.js, or npm is missing/outdated. When Node.js is missing
+or below the released minimum, Pi's installer may interactively offer to
+install standalone Node.js. If Node.js remains too old (including after a
+noninteractive run), install/update it from [nodejs.org](https://nodejs.org/en/download),
+close and reopen PowerShell so the updated PATH takes effect, then rerun the
+bootstrap. The script verifies the active Node.js version and exits with this
+recovery action rather than reporting success if it is still below minimum.
 
 For installing Pi and setting up a provider, see [Pi's official
 Quickstart](https://pi.dev/docs/latest/quickstart). Pi and herdr versions listed
 in the package metadata are tested minimums; the Linux/macOS bootstrap preserves
-newer existing installations.
+newer existing installations. The Windows bootstrap uses native Pi and Herdr
+installers and also preserves runtimes newer than the released minimums.
 
 ### Linux and macOS
 
@@ -34,16 +43,25 @@ herdr integration install pi
 
 ### Windows
 
-Install Pi and herdr using their native Windows instructions; the Herdsman shell
-bootstrap supports Linux and macOS only. See [Herdr's installation
-instructions](https://herdr.dev/docs/install/)
-and [Pi's official Quickstart](https://pi.dev/docs/latest/quickstart), then
-install Herdsman and its Herdr integration:
+Use the full-stack Windows bootstrap in an interactive PowerShell session:
+
+```powershell
+irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.ps1 | iex
+```
+
+Alternatively, install and manage Pi and Herdr yourself using [Herdr's
+installation instructions](https://herdr.dev/docs/install/) and [Pi's official
+Quickstart](https://pi.dev/docs/latest/quickstart), then install Herdsman and
+its Herdr integration:
 
 ```sh
 pi install npm:pi-herdsman
 herdr integration install pi
 ```
+
+The upstream PowerShell installers are fetched over HTTPS from their official
+hosts; they do not publish an independent signature or script hash, so this
+bootstrap does not claim signature or integrity-pinned verification.
 
 For an SSH-ready Docker deployment, see
 [Container deployment](guides/container-deployment.md). Docker uses separate,
