@@ -11551,9 +11551,13 @@ delegating or continuing managed Agent work, the herd run owns that handoff
 until it settles; summarize outcome, validation, and important unresolved
 points in your response.
 
-If the Manager needs coordination, a question, clarification, warning, or FYI
-before the normal result boundary, use message_supervisor. If it can wait, let
-the automatic result handoff carry it.
+Use message_supervisor when the Manager needs timely coordination
+before the normal result handoff, or when relevant files require
+explicit transfer.
+
+Report completion and review readiness in your normal response.
+Herdsman delivers it automatically. Do not send a separate completion
+announcement through message_supervisor.
 Undelivered project handoffs survive Manager absence. Once delivered, they
 are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }

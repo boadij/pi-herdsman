@@ -3947,6 +3947,11 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     );
     assert.match(
       charter,
+      /report completion and review readiness in\s+your normal response; Herdsman delivers it to the Manager automatically\./,
+    );
+    assert.match(charter, /not for a separate completion announcement/);
+    assert.match(
+      charter,
       /delegation task and ordinary files are recipient-specific/,
     );
     assert.match(charter, /`files` carries evidence, not runtime capability/);
@@ -4031,6 +4036,14 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /report completion and review readiness in\s+your normal response/,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /not for a separate completion announcement/,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /integration, validation, or onward handoff/,
   );
   assert.match(
@@ -4039,11 +4052,11 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /For assigned project work, automatic result handoffs contain summary text but no file attachments\./,
+    /For assigned project work, automatic result handoffs contain summary\s+text but no file attachments\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /explicitly transfer the relevant evidence through message_supervisor\.files\./,
+    /explicitly transfer\s+the relevant evidence through message_supervisor\.files\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,

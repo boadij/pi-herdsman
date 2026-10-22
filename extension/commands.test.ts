@@ -7087,7 +7087,11 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /If the Manager needs coordination, a question, clarification, warning, or FYI[\s\S]*use message_supervisor\. If it can wait, let[\s\S]*the automatic result handoff carry it\./,
+        /Use message_supervisor when the Manager needs timely coordination[\s\S]*or when relevant files require\s+explicit transfer\./,
+      );
+      assert.match(
+        assignmentDelivery.content!,
+        /Report completion and review readiness in your normal response\.[\s\S]*Do not send a separate completion\s+announcement through message_supervisor\./,
       );
       assert.equal(tabLabels.get("child-tab"), "Managed Lead");
       assert.equal(
