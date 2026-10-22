@@ -253,8 +253,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
             encoding: "utf8",
           },
         );
-        assert.equal(publishedCrash.status, null, publishedCrash.stderr);
-        assert.equal(publishedCrash.signal, "SIGKILL");
+        assert.equal(publishedCrash.error, undefined, publishedCrash.stderr);
         const pending = JSON.parse(readFileSync(marker, "utf8"));
         assert.equal(pending.status, "pending");
         assert.equal(pending.transfer.recipientClaimId, manager.claim.id);
@@ -262,6 +261,19 @@ test("bridge recovers after process death at both durable acceptance cut points"
           pending.transfer.correspondence.recipientGeneration,
           manager.claim.id,
         );
+        assert.deepEqual(
+          readCoordinationMessage(
+            chiefMessagePath(runtime, sessionId, messageId),
+          ),
+          record,
+          "inbox publication must be durable before process termination",
+        );
+        if (process.platform === "win32") {
+          assert.notEqual(publishedCrash.status, 0, publishedCrash.stderr);
+        } else {
+          assert.equal(publishedCrash.status, null, publishedCrash.stderr);
+          assert.equal(publishedCrash.signal, "SIGKILL");
+        }
         removePeerLeadRecord(runtime, sessionId, manager);
         claim.release();
       }
