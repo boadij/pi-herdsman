@@ -19,7 +19,11 @@ import {
   resultPath,
   resultRef,
 } from "./storage.ts";
-import { acquireProcessLock, claimProcessLock } from "./lock.ts";
+import {
+  acquireProcessLock,
+  assignmentLockPath,
+  claimProcessLock,
+} from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -76,6 +80,7 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const { readUnacknowledgedRequest } = await import("./mailbox.ts");
 const { visibleAgentCapabilities } = await import("./agent-controller.ts");
 const {
   listPendingRetirements,
@@ -10100,6 +10105,85 @@ test("assignment retains its request when acknowledgement never arrives", async 
   );
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(startup.mailbox);
+});
+
+test("accepted assignment survives post-ack lock contention and next submit cleans it", async () => {
+  setLeadEnvironment();
+  const label = "agent";
+  let heldRelease: (() => void) | undefined;
+  const submitted: RequestRecord[] = [];
+  let acceptedCount = 0;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    (_text, request) => {
+      if (request) submitted.push(request);
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    (request) => {
+      acceptedCount++;
+      if (acceptedCount === 1)
+        heldRelease = claimProcessLock(assignmentLockPath(startup.mailbox), {
+          name: "accepted-acknowledgment contention test",
+        });
+    },
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    const context = fakeContext();
+    const first = await agentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", task: "accepted task" },
+      undefined,
+      undefined,
+      context,
+    );
+    const requestId = submitted[0]?.requestId;
+    assert.equal(first.details.ok, true, JSON.stringify(first.details));
+    assert.equal(first.details.request_id, requestId);
+    assert.equal(submitted.filter(({ kind }) => kind === "task").length, 1);
+    assert.ok(heldRelease, "the successful acknowledgment must hold the lock");
+    assert.equal(
+      pi.calls.some(
+        ([resource, action]) => resource === "pane" && action === "close",
+      ),
+      false,
+      "accepted assignment must not roll back by closing its pane while the lock is held",
+    );
+    assert.ok(requestId);
+    assert.ok(readRequest(startup.mailbox, requestId));
+    const state = readAgentState(startup.mailbox)!;
+    assert.equal(state.lastAck?.requestId, requestId);
+    assert.equal(readUnacknowledgedRequest(startup.mailbox, state), undefined);
+
+    heldRelease?.();
+    heldRelease = undefined;
+    const steer = await agentTool(pi, "steer").execute(
+      "id",
+      { agent: label, message: "next submission" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(steer.details.ok, true, JSON.stringify(steer.details));
+    assert.equal(submitted.length, 2);
+    assert.equal(submitted[1]?.kind, "steer");
+    assert.equal(readRequest(startup.mailbox, requestId), undefined);
+  } finally {
+    heldRelease?.();
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+  }
 });
 
 test("registered lead exposes only explicit live controls", async () => {

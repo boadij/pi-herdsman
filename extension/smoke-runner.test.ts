@@ -93,6 +93,7 @@ import {
   removeManagerRecoveryWorktree,
   collectDiagnostics,
   rootDelegationDiagnostics,
+  assertNoFailedAgentDelegation,
   bestEffortDiagnostics,
   captureTerminalFailureAssignment,
   captureManagerHandoffWorktree,
@@ -272,6 +273,39 @@ test("root delegation diagnostics correlate results and exclude private data", (
     project([{ role: "assistant", stopReason: "PRIVATE_REASON" }])
       .assistantStopReason,
     "unknown",
+  );
+  const failed = [
+    call,
+    {
+      ...result,
+      details: {
+        ok: false,
+        error: { category: "agent_busy", message: "PRIVATE_ERROR" },
+      },
+    },
+  ]
+    .map((message) => JSON.stringify({ type: "message", message }))
+    .join("\n");
+  assert.throws(
+    () => assertNoFailedAgentDelegation(failed),
+    (error) =>
+      error.code === "SMOKE_DELEGATION_FAILED" &&
+      error.message === "delegate_agent failed (agent_busy)" &&
+      !error.message.includes("PRIVATE"),
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedAgentDelegation(
+      [call]
+        .map((message) => JSON.stringify({ type: "message", message }))
+        .join("\n"),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertNoFailedAgentDelegation(
+      [call, result]
+        .map((message) => JSON.stringify({ type: "message", message }))
+        .join("\n"),
+    ),
   );
 });
 

@@ -2196,6 +2196,9 @@ export function rootDelegationDiagnostics(contents) {
           : result.isError === false
             ? "success"
             : "unknown",
+    ...(result?.details?.error?.category === "agent_busy"
+      ? { errorCategory: "agent_busy" }
+      : {}),
     assistantObserved: Boolean(assistant),
     assistantStopReason: [
       "stop",
@@ -2213,6 +2216,15 @@ export function rootDelegationDiagnostics(contents) {
           assistant.errorMessage.length > 0)),
     ),
   };
+}
+
+export function assertNoFailedAgentDelegation(contents) {
+  const diagnostics = rootDelegationDiagnostics(contents);
+  if (diagnostics.matchingResult !== "error") return;
+  const category = diagnostics.errorCategory ?? "tool_error";
+  const error = new Error(`delegate_agent failed (${category})`);
+  error.code = "SMOKE_DELEGATION_FAILED";
+  throw error;
 }
 
 function coreDelegationEdge(contents, label, ownerSessionId) {
@@ -5897,6 +5909,7 @@ async function runContinuationSmoke(ctx) {
     "continuation-first-result",
     async () => {
       const session = await rootSessionSnapshot(ctx);
+      if (session) assertNoFailedAgentDelegation(session.contents);
       const result =
         session && assistantResultForSession(session, firstPrompt, firstMarker);
       return {
