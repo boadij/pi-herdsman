@@ -6120,6 +6120,19 @@ async function runManagerRecoverySmoke(ctx) {
     const result = observed.value;
     if (!Array.isArray(result?.worktrees))
       throw new Error("Herdr worktree inventory is malformed");
+    if (
+      !result.worktrees.every(
+        (item) =>
+          item !== null &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          typeof item.branch === "string" &&
+          item.branch.length > 0 &&
+          typeof (item.path ?? item.worktree_path) === "string" &&
+          (item.path ?? item.worktree_path).length > 0,
+      )
+    )
+      throw new Error("Herdr worktree inventory is malformed");
     return result.worktrees;
   };
   const primaryPath = ctx.primaryCheckoutPath;
@@ -6952,11 +6965,6 @@ async function runManagerRecoverySmoke(ctx) {
       },
       { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
     );
-    const approvalUiBefore = await nestedPaneText(
-      ctx,
-      ctx.rootPaneId,
-      "visible",
-    );
     await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "remove"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
     const removal = await waitForEvidence(
@@ -6965,7 +6973,6 @@ async function runManagerRecoverySmoke(ctx) {
       async () => {
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         const visible = text.replace(/\s+/gu, " ");
-        const visibleBefore = approvalUiBefore.replace(/\s+/gu, " ");
         const matchingOwnedWorktrees = await matchingWorktrees();
         const checkoutPathPresent = await lstat(worktreePath).then(
           () => true,
@@ -6985,52 +6992,37 @@ async function runManagerRecoverySmoke(ctx) {
           matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
         // /manager remove reports through the UI; it does not emit another
         // remove_worktree tool result after the approval dialog.
-        const executorCompleted =
+        const successMessage =
           visible.includes(`removed checkout for ${branch}`) ||
           visible.includes(`checkout removed for ${branch}`);
-        const explicitRefusal =
-          visible.includes(`worktree preserved for ${branch}`) ||
-          (/(?:worktree|checkout) preserved|removal refused/iu.test(visible) &&
-            !/(?:worktree|checkout) preserved|removal refused/iu.test(
-              visibleBefore,
-            ));
-        const uncertain =
-          visible.includes(`worktree removal is unconfirmed for ${branch}`) ||
-          visible.includes(`worktree removal result is unknown for ${branch}`);
+        const executorCompleted = successMessage;
+        const verifiedSuccess = executorCompleted && checkoutRemoved;
         return {
-          done:
-            (executorCompleted && checkoutRemoved) ||
-            explicitRefusal ||
-            uncertain,
+          done: verifiedSuccess,
           value: {
-            outcome:
-              executorCompleted && checkoutRemoved
-                ? "verified-success"
-                : explicitRefusal
-                  ? "guarded-refusal"
-                  : "interrupted-or-uncertain",
+            outcome: verifiedSuccess ? "verified-success" : "unverified",
             executorCompleted,
             checkoutRemoved,
             branch,
             checkoutPath: worktreePath,
             workspaceId,
             matchingWorktrees: matchingOwnedWorktrees,
+            checkoutPathPresent,
             assignmentFilePresent,
-            refusalText: text.slice(-1200),
+            visible: text.slice(-1200),
           },
           progress: {
             executorCompleted,
             checkoutRemoved,
-            explicitRefusal,
-            uncertain,
           },
           evidence: {
             branch,
             checkoutPath: worktreePath,
             workspaceId,
             matchingWorktrees: matchingOwnedWorktrees,
+            checkoutPathPresent,
             assignmentFilePresent,
-            refusalText: text.slice(-1200),
+            visible: text.slice(-1200),
           },
         };
       },
