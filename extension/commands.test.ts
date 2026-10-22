@@ -4141,7 +4141,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
                 ? respond({ snapshot: { agents: [], panes: [] } })
                 : respond({}),
   });
-  const ctx = fakeContext() as any;
+  const ctx = fakeContext(pi.entries) as any;
   const notices: string[] = [];
   ctx.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
@@ -4153,6 +4153,39 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       WORKSPACE,
     )?.leaseId;
     assert.ok(leaseId);
+    const pendingRequest = {
+      version: 1,
+      action: "request",
+      id: randomUUID(),
+      sessionId: LEAD_SESSION_ID,
+      branch: "fix/pending-removal",
+      repoKey: "repo-key",
+      assignmentId: "assignment-id",
+      checkoutPath: "/tmp/fix-pending-removal",
+    };
+    pi.pi.appendEntry("pi-herdsman-pending-removal", pendingRequest);
+    const originalAppendForRemoval = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      if (type === "pi-herdsman-pending-removal")
+        throw new Error("injected pending removal invalidation failure");
+      originalAppendForRemoval(type, data);
+    };
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    pi.pi.appendEntry = originalAppendForRemoval;
+    assert.ok(
+      notices.some((message) =>
+        message.includes("injected pending removal invalidation failure"),
+      ),
+    );
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      leaseId,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     const originalAppend = pi.pi.appendEntry;
     for (const failedType of ["pi-herdsman-role", "pi-herdsman-lead-state"]) {
       let failed = false;
@@ -5074,6 +5107,9 @@ async function managerRemovalFixture(
     primaryWorkspaceAfterConfirmation?: boolean;
     replaceManagerAfterConfirmation?: boolean;
     interruptedRemove?: boolean;
+    replacePendingOnRemoval?: boolean;
+    replacementRequestId?: string;
+    failPendingResolution?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -5116,6 +5152,9 @@ async function managerRemovalFixture(
   let lockCount = 0;
   let managerReplaced = false;
   let confirmationCount = 0;
+  const statusUpdates: Array<[string, string | undefined]> = [];
+  const sessionEntries: any[] = [];
+  let activeBranch: any[] = sessionEntries;
   const removals: string[] = [];
   const removalOptions: any[] = [];
   const calls: string[][] = [];
@@ -5139,6 +5178,15 @@ async function managerRemovalFixture(
   };
   const runtime = createLeadProjectRuntime({
     pi: {
+      appendEntry: (customType: string, data: unknown) => {
+        if (
+          options.failPendingResolution &&
+          customType === "pi-herdsman-pending-removal" &&
+          (data as { action?: string }).action === "resolve"
+        )
+          throw new Error("session append failed during resolution");
+        sessionEntries.push({ type: "custom", customType, data });
+      },
       exec: async (command: string, args: string[], runOptions: any) => {
         assert.equal(command, "git");
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
@@ -5226,6 +5274,21 @@ async function managerRemovalFixture(
       }
       if (args[1] === "remove") {
         removalOptions.push(runOptions);
+        if (options.replacePendingOnRemoval)
+          sessionEntries.push({
+            type: "custom",
+            customType: "pi-herdsman-pending-removal",
+            data: {
+              version: 1,
+              action: "request",
+              id: options.replacementRequestId,
+              sessionId: "manager-session",
+              branch,
+              repoKey,
+              assignmentId: assignment.id,
+              checkoutPath,
+            },
+          });
         if (options.interruptedRemove)
           throw new OperationError({
             category: "internal_failure",
@@ -5280,7 +5343,11 @@ async function managerRemovalFixture(
     HERDSMAN_BUILD: {} as any,
   } as any);
   const ctx = fakeContext([]) as any;
+  ctx.sessionManager.getSessionId = () => "manager-session";
+  ctx.sessionManager.getBranch = () => activeBranch;
   ctx.hasUI = true;
+  ctx.ui.setStatus = (key: string, value: string | undefined) =>
+    statusUpdates.push([key, value]);
   ctx.ui.input = async () => {
     assert.equal(lockCount, 0, "no operation lock may span human confirmation");
     confirmationCount++;
@@ -5294,6 +5361,8 @@ async function managerRemovalFixture(
   return {
     runtime,
     ctx,
+    sessionEntries,
+    statusUpdates,
     setCheckoutDirty: (dirty: boolean) => {
       checkoutDirty = dirty;
     },
@@ -5357,21 +5426,164 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
   const duplicate = await request();
   assert.equal(first.details.pending, true);
   assert.equal(duplicate.details.pending, true);
-  assert.equal(fixture.runtime.listPendingRemovals().length, 1);
+  assert.equal(first.details.request_id, duplicate.details.request_id);
+  assert.equal(fixture.sessionEntries.length, 1);
+  assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 1);
   assert.equal(fixture.confirmationCount(), 0);
-  const selected = fixture.runtime.listPendingRemovals()[0];
+  const selected = fixture.runtime.listPendingRemovals(fixture.ctx)[0];
   fixture.ctx.ui.input = async () => "remove";
   const approved = await fixture.runtime.approvePendingRemoval(
     selected,
     fixture.ctx,
   );
   assert.equal(approved.details.checkout_removed, true);
-  assert.equal(fixture.runtime.listPendingRemovals().length, 0);
+  assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 0);
   await assert.rejects(
     fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
     /Pending removal (?:is no longer available|changed)/,
   );
   assert.deepEqual(fixture.removals, ["child-workspace"]);
+});
+
+test("successful direct Manager removal clears matching pending approval", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 1);
+  assert.match(
+    String(fixture.statusUpdates.at(-1)?.[1]),
+    /1 worktree removal approval pending/,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
+  assert.equal(fixture.statusUpdates.at(-1)?.[1], undefined);
+});
+
+test("successful direct Manager removal preserves a newer pending replacement", async (t) => {
+  const replacementId = randomUUID();
+  const fixture = await managerRemovalFixture(t, {
+    replacePendingOnRemoval: true,
+    replacementRequestId: replacementId,
+  });
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(
+    fixture.runtime.listPendingRemovals(fixture.ctx)[0]?.id,
+    replacementId,
+  );
+  assert.match(
+    String(fixture.statusUpdates.at(-1)?.[1]),
+    /1 worktree removal approval pending/,
+  );
+});
+
+test("Manager removal retires assignment when pending approval resolution persistence fails", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    failPendingResolution: true,
+  });
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.assignment_retired, true);
+  assert.equal(fixture.assignment(), undefined);
+  assert.equal(existsSync(fixture.checkoutPath), false);
+  assert.match(
+    result.details.pendingResolutionError,
+    /session append failed during resolution/,
+  );
+  assert.match(
+    result.content[0].text,
+    /Warning: pending removal approval could not be resolved: session append failed during resolution/,
+  );
+});
+
+test("pending removal intent restores from the active session branch and rejects malformed or foreign entries", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  await fixture.runtime.executeStaff(
+    "request",
+    { action: "remove", branch: "feat/remove-test" },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  const request = fixture.runtime.listPendingRemovals(fixture.ctx)[0]!;
+  assert.ok(request.id);
+  assert.equal(
+    fixture.runtime.listPendingRemovals(fixture.ctx)[0]?.id,
+    request.id,
+  );
+  assert.match(
+    String(fixture.statusUpdates.at(-1)?.[1]),
+    /1 worktree removal approval pending.*\/manager remove/,
+  );
+  fixture.sessionEntries.push(
+    {
+      type: "custom",
+      customType: "pi-herdsman-pending-removal",
+      data: { version: 1, action: "request", id: "malformed" },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-pending-removal",
+      data: {
+        version: 1,
+        action: "request",
+        id: randomUUID(),
+        sessionId: "another-session",
+        branch: "feat/other",
+        repoKey: "repo",
+        assignmentId: "assignment",
+        checkoutPath: "/tmp/other",
+      },
+    },
+  );
+  assert.deepEqual(
+    fixture.runtime.listPendingRemovals(fixture.ctx).map(({ id }) => id),
+    [request.id],
+  );
+  fixture.ctx.sessionManager.getSessionId = () => "another-session";
+  fixture.ctx.sessionManager.getBranch = () => [];
+  assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
+  fixture.ctx.sessionManager.getSessionId = () => "manager-session";
+  fixture.ctx.sessionManager.getBranch = () => fixture.sessionEntries;
+  fixture.runtime.invalidatePendingRemovals(fixture.ctx);
+  assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
+  assert.equal(fixture.removals.length, 0);
+  assert.equal(fixture.statusUpdates.at(-1)?.[1], undefined);
 });
 
 test("Manager pending selection cannot approve or dismiss its replacement", async (t) => {
@@ -5385,18 +5597,25 @@ test("Manager pending selection cannot approve or dismiss its replacement", asyn
       fixture.ctx,
     );
   await request();
-  const selected = fixture.runtime.listPendingRemovals()[0];
+  const selected = fixture.runtime.listPendingRemovals(fixture.ctx)[0];
   fixture.replaceAssignment();
   await request();
-  const replacement = fixture.runtime.listPendingRemovals()[0];
+  const replacement = fixture.runtime.listPendingRemovals(fixture.ctx)[0];
   assert.notEqual(replacement, selected);
+  assert.notEqual(replacement.id, selected.id);
 
   await assert.rejects(
     fixture.runtime.approvePendingRemoval(selected, fixture.ctx),
     /Pending removal changed/,
   );
-  assert.equal(fixture.runtime.cancelPendingRemoval(selected), false);
-  assert.equal(fixture.runtime.listPendingRemovals()[0], replacement);
+  assert.equal(
+    fixture.runtime.cancelPendingRemoval(selected, fixture.ctx),
+    false,
+  );
+  assert.equal(
+    fixture.runtime.listPendingRemovals(fixture.ctx)[0].id,
+    replacement.id,
+  );
   assert.deepEqual(fixture.removals, []);
   assert.ok(fixture.assignment());
   assert.ok(existsSync(fixture.checkoutPath));
@@ -5413,7 +5632,7 @@ test("cancelling an approved request preserves a newer pending request", async (
       fixture.ctx,
     );
   await request();
-  const selected = fixture.runtime.listPendingRemovals()[0];
+  const selected = fixture.runtime.listPendingRemovals(fixture.ctx)[0];
 
   fixture.ctx.ui.input = async () => {
     fixture.replaceAssignment();
@@ -5427,7 +5646,7 @@ test("cancelling an approved request preserves a newer pending request", async (
   );
   assert.equal(result.details.cancelled, true);
   assert.equal(
-    fixture.runtime.listPendingRemovals()[0].assignmentId,
+    fixture.runtime.listPendingRemovals(fixture.ctx)[0].assignmentId,
     "replacement-assignment",
   );
   assert.deepEqual(fixture.removals, []);
@@ -5452,7 +5671,7 @@ test("human-approved dirty Manager removal refuses before Herdr remove", async (
 
   await assert.rejects(
     fixture.runtime.approvePendingRemoval(
-      fixture.runtime.listPendingRemovals()[0],
+      fixture.runtime.listPendingRemovals(fixture.ctx)[0],
       fixture.ctx,
     ),
     /Checkout is dirty or could not be verified; worktree preserved/,
@@ -6664,7 +6883,8 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
     ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("remove"), [
+    assert.deepEqual(managerCommand.getArgumentCompletions("remove"), []);
+    assert.deepEqual(managerCommand.getArgumentCompletions("remove "), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
     ]);
     let confirmationPrompts = 0;
@@ -6696,13 +6916,12 @@ async function managerDelegateAssignmentTest(
       undefined,
       ctx,
     );
-    assert.deepEqual(requestedTool.details, {
-      ok: false,
-      action: "remove",
-      branch: assignment.branch,
-      confirmation_required: true,
-      pending: true,
-    });
+    assert.equal(requestedTool.details.ok, false);
+    assert.equal(requestedTool.details.action, "remove");
+    assert.equal(requestedTool.details.branch, assignment.branch);
+    assert.equal(requestedTool.details.confirmation_required, true);
+    assert.equal(requestedTool.details.pending, true);
+    assert.match(requestedTool.details.request_id, /^[0-9a-f-]{36}$/);
     assert.equal(confirmationPrompts, 0);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "stop"),
@@ -12399,6 +12618,47 @@ test("Project override menu edits Off then Inherit without changing global Manag
       "Settings",
     ],
   );
+});
+
+test("Project Overrides exposes verified removal policy independently of project trust and storage", async () => {
+  const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
+  const menuCalls: { title: string; items: any[] }[] = [];
+  const notices: string[] = [];
+  let stored: boolean | undefined;
+  const answers = ["removal-confirmation", "skip", undefined];
+  const runtime = createLeadCommandRuntime({
+    readProjectOverrides: () => {
+      throw new Error("untrusted project settings");
+    },
+    getRemovalPreauthorization: async () => ({
+      repoKey: "/verified/repository",
+      enabled: false,
+    }),
+    setRemovalPreauthorization: async (enabled: boolean) => {
+      stored = enabled;
+      return true;
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      menuCalls.push({ title, items });
+      return answers.shift();
+    },
+  } as any);
+  await runtime.openProjectOverridesMenu({
+    isProjectTrusted: () => false,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any);
+  assert.equal(menuCalls[0]?.title, "Project overrides");
+  assert.deepEqual(
+    menuCalls[0]?.items.map(({ value }) => value),
+    ["removal-confirmation"],
+  );
+  assert.match(menuCalls[0]?.items[0]?.help, /\/verified\/repository/);
+  assert.match(menuCalls[0]?.items[0]?.help, /not \.pi\/settings\.json/);
+  assert.equal(menuCalls[1]?.title, "Worktree removal · /verified/repository");
+  assert.equal(stored, true);
+  assert.deepEqual(notices, [
+    "Worktree removal confirmation skipped for /verified/repository.",
+  ]);
 });
 
 test("registered RPC command edits project Manager auto-start Off then Inherit", async () => {

@@ -1467,7 +1467,7 @@ test("project Lead observes Manager availability across turnover without exposin
       /Managed project assignment is unavailable/,
     );
     assert.equal(changedAssignment.details.error.category, "internal_failure");
-    assert.equal(assignmentLookupCalls, 2);
+    assert.equal(assignmentLookupCalls, 3);
     assert.equal(
       listProjectMessages(runtime, "repo-key", assignment.branch).some(
         (message) => message.text === "ASSIGNMENT_CHANGED_BEFORE_PUBLICATION",

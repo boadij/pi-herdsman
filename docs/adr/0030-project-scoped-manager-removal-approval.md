@@ -1,5 +1,10 @@
 # Project-scoped Manager worktree-removal approval
 
+> **Pending-intent update:** [ADR 0031](0031-durable-manager-worktree-removal-approval.md)
+> supersedes only the decision below that pending intent is process-local and
+> does not survive reload. Its repository-scoped policy and deletion safeguards
+> remain in force.
+
 [Documentation index](../README.md)
 
 ## Status

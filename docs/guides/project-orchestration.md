@@ -232,8 +232,12 @@ separate checkout or process independently when needed; avoid overlapping writer
 For an explicitly requested checkout removal, an active Manager can use
 `/manager remove <branch>` or the `remove_worktree` staff tool. Normally the
 tool records a pending request and returns immediately; review it with
-`/manager remove`. Removal asks for typed `remove` unless this exact repository
-has been preauthorized by a human with `/manager remove-preapproval on`.
+`/manager remove`. The request remains on the active Pi session branch across
+reload and appears in native Pi status; it is intent, not deletion authority.
+The exact bare `/manager remove` opens review, while `/manager remove ` starts
+branch completion. Removal asks for typed `remove` unless this exact repository
+has been preauthorized by a human with `/manager remove-preapproval on` or the
+Project Overrides policy row.
 Neither task completion, review, nor inactivity is approval. All paths validate
 the exact Manager assignment and linked checkout, refuse dirty or ambiguous
 targets, and use Herdr's non-forced worktree removal. A running assigned Lead

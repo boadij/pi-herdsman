@@ -237,6 +237,7 @@ type LeadTransitionHost = {
 };
 
 type LeadRoleTransitionHost = LeadTransitionHost & {
+  invalidateManagerRemovalRequests?(ctx: ExtensionContext): void;
   captureInheritedTools?(): void;
   inheritedProjection?():
     { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
@@ -388,6 +389,14 @@ type LeadCommandHost = {
   readEffectiveConfig: typeof import("./config.ts").readEffectiveConfig;
   readProjectOverrides: typeof import("./config.ts").readProjectOverrides;
   updateProjectOverride: typeof import("./config.ts").updateProjectOverride;
+  getRemovalPreauthorization(ctx: ExtensionContext): Promise<{
+    repoKey: string;
+    enabled: boolean;
+  }>;
+  setRemovalPreauthorization(
+    enabled: boolean,
+    ctx: ExtensionContext,
+  ): Promise<boolean>;
   contextAgentDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
     roleDefinitions: AgentDefinition[];
@@ -2219,17 +2228,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (!selected) return;
         selectedSetting = selected;
         if (selected === "project-overrides") {
-          if (!ctx.isProjectTrusted()) {
-            ctx.ui.notify(
-              "Project overrides are unavailable because this project is not trusted.",
-              "warning",
-            );
-            continue;
-          }
-          if ("error" in project) {
-            ctx.ui.notify(project.error.replace(/^Error: /, ""), "error");
-            continue;
-          }
           await this.openProjectOverridesMenu(ctx);
         } else if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);
@@ -2264,33 +2262,92 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       ctx: ExtensionCommandContext,
     ): Promise<void> {
       while (true) {
-        if (!ctx.isProjectTrusted()) {
+        let overrides;
+        let overrideError: unknown;
+        if (ctx.isProjectTrusted()) {
+          try {
+            overrides = host.readProjectOverrides(ctx);
+          } catch (error) {
+            overrideError = error;
+          }
+        }
+        let removalPolicy:
+          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
+          | undefined;
+        try {
+          removalPolicy = await host.getRemovalPreauthorization(ctx);
+        } catch {
+          // Removal policy is available only with verified active Manager authority.
+        }
+        if (!ctx.isProjectTrusted() && !removalPolicy) {
           ctx.ui.notify(
             "Project overrides are unavailable because this project is not trusted.",
             "warning",
           );
           return;
         }
-        let overrides;
-        try {
-          overrides = host.readProjectOverrides(ctx);
-        } catch (error) {
-          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+        if (overrideError && !removalPolicy) {
+          ctx.ui.notify(String(overrideError).replace(/^Error: /, ""), "error");
           return;
         }
+        const fields = [
+          ...(ctx.isProjectTrusted()
+            ? [
+                {
+                  value: "autoActivateManager",
+                  label: "Manager auto-start",
+                  help: "Attempt Manager mode automatically on eligible future session starts.",
+                },
+                {
+                  value: "contextRetirement",
+                  label: "Context retirement",
+                  help: "Retire managed-Agent sessions at automatic context pressure.",
+                },
+              ]
+            : []),
+          ...(removalPolicy
+            ? [
+                {
+                  value: "removal-confirmation",
+                  label: `Worktree removal confirmation · ${removalPolicy.enabled ? "skip" : "required"}`,
+                  help: `Controls confirmation for verified repository ${removalPolicy.repoKey}. Stored in user-level Herdsman authorization, not .pi/settings.json.`,
+                },
+              ]
+            : []),
+        ];
         const field = await host.selectMenu(ctx, "Project overrides", [
-          {
-            value: "autoActivateManager",
-            label: "Manager auto-start",
-            help: "Attempt Manager mode automatically on eligible future session starts.",
-          },
-          {
-            value: "contextRetirement",
-            label: "Context retirement",
-            help: "Retire managed-Agent sessions at automatic context pressure.",
-          },
+          ...fields,
         ]);
         if (!field) return;
+        if (field === "removal-confirmation") {
+          const policy = await host.getRemovalPreauthorization(ctx);
+          const choice = await host.selectMenu(
+            ctx,
+            `Worktree removal · ${policy.repoKey}`,
+            [
+              { value: "required", label: "Require confirmation" },
+              {
+                value: "skip",
+                label: "Skip confirmation for this repository",
+              },
+            ],
+            policy.enabled ? "skip" : "required",
+          );
+          if (choice && (choice === "skip") !== policy.enabled) {
+            const stored = await host.setRemovalPreauthorization(
+              choice === "skip",
+              ctx,
+            );
+            ctx.ui.notify(
+              stored
+                ? `Worktree removal confirmation ${choice === "skip" ? "skipped" : "required"} for ${policy.repoKey}.`
+                : "Worktree removal policy unchanged.",
+              stored ? "info" : "warning",
+            );
+          }
+          continue;
+        }
+        if (!ctx.isProjectTrusted() || overrideError || !overrides) continue;
         const key = field as "autoActivateManager" | "contextRetirement";
         const global = host.readConfig()[key];
         const choice = await host.selectMenu(
@@ -2588,6 +2645,7 @@ export function registerLeadRuntime(
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
   let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
+  let assignmentVerificationGeneration = 0;
   let leadExecutionPending = false;
   let startupTools: string[] = [];
   let startupWasManaged = false;
@@ -3423,6 +3481,8 @@ export function registerLeadRuntime(
   };
   roleTransitions = createLeadRoleTransitions(options.leadRuntime, {
     ...roleTransitionServices,
+    invalidateManagerRemovalRequests: (ctx: ExtensionContext) =>
+      projectRuntime.invalidatePendingRemovals(ctx),
     ownedAgentManagementTools,
     pi,
     leadInstanceId: () => options.leadRuntime.instanceId,
@@ -3680,9 +3740,7 @@ export function registerLeadRuntime(
       const previous = managedLifecycle;
       try {
         await currentProjectAssignment(ctx);
-      } catch {
-        managedLifecycle = "unavailable";
-      }
+      } catch {}
       if (previous !== managedLifecycle) roleTransitions.reconcileRoleTools();
     }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
@@ -3913,6 +3971,10 @@ export function registerLeadRuntime(
   });
   const commandRuntime = createLeadCommandRuntime({
     ...options.commandHost,
+    getRemovalPreauthorization: (ctx: ExtensionContext) =>
+      projectRuntime.getRemovalPreauthorization(ctx),
+    setRemovalPreauthorization: (enabled: boolean, ctx: ExtensionContext) =>
+      projectRuntime.setRemovalPreauthorization(enabled, ctx),
     collectOwnedSessionUsage: (ctx) => {
       const managerActive =
         activeLeadRole(options.leadRuntime) === "manager" &&
@@ -3987,6 +4049,7 @@ export function registerLeadRuntime(
     signal: AbortSignal,
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
+    assignmentVerificationGeneration++;
     const identity = readSessionKind(
       ctx.sessionManager.getEntries(),
       sessionId,
@@ -4083,111 +4146,125 @@ export function registerLeadRuntime(
       throw new Error("Session identity is unavailable");
     const identity = sessionKind;
     if (identity.kind === "ordinary") return undefined;
-    if (identity.kind === "managed") managedLifecycle = "unavailable";
-    const replacement = roleHost.readProjectAssignment(
-      roleHost.supervisionRuntime(),
-      identity.repoKey,
-      identity.branch,
-    );
-    if (replacement && replacement.id !== identity.sessionId) {
-      managedLifecycle = "retired";
-      return undefined;
-    }
-    const scope = await roleTransitions.currentWorktreeScope(ctx);
-    if (
-      sessionKind !== identity ||
-      ctx.sessionManager.getSessionId() !== identity.sessionId
-    )
-      throw new Error("Session changed while resolving assignment");
-    const assignment = scope
-      ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
-      : undefined;
-    const validScope = scope?.repoKey === identity.repoKey;
-    if (validScope && assignment) {
+    const generation = ++assignmentVerificationGeneration;
+    const publish = (lifecycle: "assigned" | "unavailable" | "retired") => {
       if (
-        assignment.repoKey !== identity.repoKey ||
-        assignment.branch !== identity.branch
+        sessionKind === identity &&
+        ctx.sessionManager.getSessionId() === identity.sessionId &&
+        generation === assignmentVerificationGeneration
       )
-        throw new Error(
-          "Project assignment conflicts with permanent session identity",
-        );
-      managedLifecycle = "assigned";
-      roleTransitions.reconcileRoleTools();
-      return assignment;
-    }
-    const pendingRetirement =
-      !replacement &&
-      listPendingRetirements(
+        managedLifecycle = lifecycle;
+    };
+    try {
+      const replacement = roleHost.readProjectAssignment(
         roleHost.supervisionRuntime(),
         identity.repoKey,
-      ).some(
-        (retired) =>
-          retired.id === identity.sessionId &&
-          retired.branch === identity.branch,
+        identity.branch,
       );
-    let retirementVerified = false;
-    if (pendingRetirement) {
-      // The retirement commit is durable; verify checkout absence again before presenting it.
-      const workspaceId =
-        (validScope ? scope.primaryWorkspaceId : undefined) ??
-        process.env.HERDR_WORKSPACE_ID;
-      if (workspaceId) {
-        const topology = await roleHost.runHerdr(
-          pi,
-          ctx,
-          ["worktree", "list", "--workspace", workspaceId],
-          { signal: ctx.signal },
-        );
+      if (replacement && replacement.id !== identity.sessionId) {
+        publish("retired");
+        return undefined;
+      }
+      const scope = await roleTransitions.currentWorktreeScope(ctx);
+      if (
+        sessionKind !== identity ||
+        ctx.sessionManager.getSessionId() !== identity.sessionId
+      )
+        throw new Error("Session changed while resolving assignment");
+      const assignment = scope
+        ? roleTransitions.projectAssignmentForScope(scope, identity.sessionId)
+        : undefined;
+      const validScope = scope?.repoKey === identity.repoKey;
+      if (validScope && assignment) {
         if (
-          sessionKind !== identity ||
-          ctx.sessionManager.getSessionId() !== identity.sessionId
+          assignment.repoKey !== identity.repoKey ||
+          assignment.branch !== identity.branch
         )
-          throw new Error("Session changed while verifying retirement");
-        if (
-          topology?.source?.repo_key === identity.repoKey &&
-          typeof topology.source.source_checkout_path === "string" &&
-          Array.isArray(topology.worktrees) &&
-          !topology.worktrees.some(
-            (worktree: any) => worktree.branch === identity.branch,
-          )
-        ) {
-          const inventory = await pi.exec(
-            "git",
-            ["worktree", "list", "--porcelain", "-z"],
-            {
-              cwd: topology.source.source_checkout_path,
-              signal: ctx.signal,
-              timeout: 10_000,
-            },
+          throw new Error(
+            "Project assignment conflicts with permanent session identity",
           );
-          const worktrees =
-            inventory.code === 0 &&
-            !inventory.killed &&
-            !inventory.stderr?.trim()
-              ? parseGitWorktreeInventory(inventory.stdout)
-              : undefined;
+        publish("assigned");
+        roleTransitions.reconcileRoleTools();
+        return assignment;
+      }
+      const pendingRetirement =
+        !replacement &&
+        listPendingRetirements(
+          roleHost.supervisionRuntime(),
+          identity.repoKey,
+        ).some(
+          (retired) =>
+            retired.id === identity.sessionId &&
+            retired.branch === identity.branch,
+        );
+      let retirementVerified = false;
+      if (pendingRetirement) {
+        // The retirement commit is durable; verify checkout absence again before presenting it.
+        const workspaceId =
+          (validScope ? scope.primaryWorkspaceId : undefined) ??
+          process.env.HERDR_WORKSPACE_ID;
+        if (workspaceId) {
+          const topology = await roleHost.runHerdr(
+            pi,
+            ctx,
+            ["worktree", "list", "--workspace", workspaceId],
+            { signal: ctx.signal },
+          );
           if (
             sessionKind !== identity ||
             ctx.sessionManager.getSessionId() !== identity.sessionId
           )
             throw new Error("Session changed while verifying retirement");
           if (
-            worktrees &&
-            !worktrees.some((worktree) => worktree.branch === identity.branch)
+            topology?.source?.repo_key === identity.repoKey &&
+            typeof topology.source.source_checkout_path === "string" &&
+            Array.isArray(topology.worktrees) &&
+            !topology.worktrees.some(
+              (worktree: any) => worktree.branch === identity.branch,
+            )
           ) {
-            managedLifecycle = "retired";
-            retirementVerified = true;
+            const inventory = await pi.exec(
+              "git",
+              ["worktree", "list", "--porcelain", "-z"],
+              {
+                cwd: topology.source.source_checkout_path,
+                signal: ctx.signal,
+                timeout: 10_000,
+              },
+            );
+            const worktrees =
+              inventory.code === 0 &&
+              !inventory.killed &&
+              !inventory.stderr?.trim()
+                ? parseGitWorktreeInventory(inventory.stdout)
+                : undefined;
+            if (
+              sessionKind !== identity ||
+              ctx.sessionManager.getSessionId() !== identity.sessionId
+            )
+              throw new Error("Session changed while verifying retirement");
+            if (
+              worktrees &&
+              !worktrees.some((worktree) => worktree.branch === identity.branch)
+            ) {
+              publish("retired");
+              retirementVerified = true;
+            }
           }
         }
       }
+      if (!validScope && !retirementVerified)
+        throw new Error(
+          pendingRetirement && !process.env.HERDR_WORKSPACE_ID
+            ? "Cannot verify retired managed project checkout"
+            : "Cannot verify the original managed project scope",
+        );
+      publish(retirementVerified ? "retired" : "unavailable");
+      return undefined;
+    } catch (error) {
+      publish("unavailable");
+      throw error;
     }
-    if (!validScope && !retirementVerified)
-      throw new Error(
-        pendingRetirement && !process.env.HERDR_WORKSPACE_ID
-          ? "Cannot verify retired managed project checkout"
-          : "Cannot verify the original managed project scope",
-      );
-    return undefined;
   };
   const resolveExecutionDefinition = (
     ctx: ExtensionContext,
@@ -4490,6 +4567,7 @@ export function registerLeadRuntime(
     clearLeadExecution: () => {
       startupTools = pi.getActiveTools();
       startupWasManaged = sessionKind?.kind === "managed";
+      assignmentVerificationGeneration++;
       sessionKind = undefined;
       managedLifecycle = "unavailable";
       leadExecution = undefined;
@@ -4546,15 +4624,21 @@ export function registerLeadRuntime(
     )
       herdRunRuntime!.beforeSettle(event);
   });
-  pi.on("agent_settled", (event: { aborted: boolean }, ctx: ExtensionContext) =>
-    agentEvents.agentSettled(ctx, event.aborted),
+  pi.on(
+    "agent_settled",
+    (event: { aborted: boolean }, ctx: ExtensionContext) => {
+      const result = agentEvents.agentSettled(ctx, event.aborted);
+      projectRuntime.updateRemovalStatus(ctx);
+      return result;
+    },
   );
   pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
     agentEvents.toolCall(event, ctx),
   );
-  pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
-    return sessionStart.sessionStart(ctx);
+    await sessionStart.sessionStart(ctx);
+    projectRuntime.updateRemovalStatus(ctx);
   });
   pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
     if (!roleTransitions.chiefModeInactive()) return;
@@ -4574,6 +4658,7 @@ export function registerLeadRuntime(
   );
   pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
+    projectRuntime.updateRemovalStatus(ctx);
     return sessionTree.sessionTree(ctx);
   });
   pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) => {
@@ -7093,21 +7178,127 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Unrelated or ambiguously identified Pi execution occupies the worktree; worktree preserved",
       );
   };
+  const REMOVAL_ENTRY = "pi-herdsman-pending-removal";
   type PendingRemoval = {
+    id: string;
     branch: string;
     repoKey: string;
     assignmentId: string;
     checkoutPath: string;
-    manager: Awaited<ReturnType<typeof host.currentManager>>;
     sessionId: string;
   };
-  const pendingRemovals = new Map<string, PendingRemoval>();
+  const parseRemovalEntry = (
+    data: unknown,
+  ):
+    | ({ action: "request" } & PendingRemoval)
+    | { action: "resolve"; id: string; sessionId: string }
+    | undefined => {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return;
+    const value = data as Record<string, unknown>;
+    const valid = (key: string, max: number) =>
+      typeof value[key] === "string" &&
+      value[key].length > 0 &&
+      value[key].length <= max;
+    if (
+      value.version !== 1 ||
+      !valid("id", 128) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        value.id as string,
+      ) ||
+      !valid("sessionId", 256)
+    )
+      return;
+    if (value.action === "resolve") {
+      if (
+        Object.keys(value).some(
+          (key) => !["version", "action", "id", "sessionId"].includes(key),
+        )
+      )
+        return;
+      return {
+        action: "resolve",
+        id: value.id as string,
+        sessionId: value.sessionId as string,
+      };
+    }
+    if (
+      value.action !== "request" ||
+      Object.keys(value).some(
+        (key) =>
+          ![
+            "version",
+            "action",
+            "id",
+            "sessionId",
+            "branch",
+            "repoKey",
+            "assignmentId",
+            "checkoutPath",
+          ].includes(key),
+      ) ||
+      !valid("branch", 256) ||
+      !valid("repoKey", 4096) ||
+      !valid("assignmentId", 256) ||
+      !valid("checkoutPath", 4096)
+    )
+      return;
+    return {
+      action: "request",
+      id: value.id as string,
+      sessionId: value.sessionId as string,
+      branch: value.branch as string,
+      repoKey: value.repoKey as string,
+      assignmentId: value.assignmentId as string,
+      checkoutPath: value.checkoutPath as string,
+    };
+  };
+  const pendingRemovals = (ctx: ExtensionContext) => {
+    const pending = new Map<string, PendingRemoval>();
+    const sessionId = ctx.sessionManager.getSessionId();
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "custom" || entry.customType !== REMOVAL_ENTRY)
+        continue;
+      const event = parseRemovalEntry(entry.data);
+      if (!event || event.sessionId !== sessionId) continue;
+      if (event.action === "request") pending.set(event.branch, event);
+      else
+        for (const [branch, request] of pending)
+          if (request.id === event.id) pending.delete(branch);
+    }
+    return pending;
+  };
+  const updateRemovalStatus = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || typeof ctx.ui.setStatus !== "function") return;
+    const count =
+      activeRole() === "manager" && host.managerLease()
+        ? pendingRemovals(ctx).size
+        : 0;
+    ctx.ui.setStatus(
+      "pi-herdsman-removal",
+      count
+        ? `${count} worktree removal approval${count === 1 ? "" : "s"} pending · /manager remove`
+        : undefined,
+    );
+  };
+  const resolvePendingRemoval = (
+    request: PendingRemoval,
+    ctx: ExtensionContext,
+  ) => {
+    host.pi.appendEntry(REMOVAL_ENTRY, {
+      version: 1,
+      action: "resolve",
+      id: request.id,
+      sessionId: ctx.sessionManager.getSessionId(),
+    });
+    updateRemovalStatus(ctx);
+  };
   const removeWorktree = async (
     branch: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
     options: { expected?: PendingRemoval; preauthorized?: boolean } = {},
   ) => {
+    const pendingAtStart = pendingRemovals(ctx).get(branch);
     if (activeRole() !== "manager")
       throw new Error("Only Managers can remove project worktrees");
     const operationSignal = signal ?? ctx.signal;
@@ -7118,10 +7309,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (options.expected.repoKey !== candidate.manager.repoKey ||
         options.expected.assignmentId !== candidate.assignment.id ||
         options.expected.checkoutPath !== candidate.checkoutPath ||
-        !host.sameManagerDescriptor(
-          options.expected.manager,
-          candidate.manager,
-        ) ||
         options.expected.sessionId !== ctx.sessionManager.getSessionId())
     )
       throw new Error("Pending removal target changed; worktree preserved");
@@ -7341,6 +7528,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           retirementError =
             error instanceof Error ? error.message : String(error);
         }
+        let pendingResolutionError: string | undefined;
+        const currentPending = pendingRemovals(ctx).get(branch);
+        if (
+          checkoutRemoved &&
+          pendingAtStart &&
+          pendingAtStart.repoKey === candidate.manager.repoKey &&
+          pendingAtStart.assignmentId === candidate.assignment.id &&
+          pendingAtStart.checkoutPath === candidate.checkoutPath &&
+          currentPending?.id === pendingAtStart.id &&
+          currentPending.repoKey === pendingAtStart.repoKey &&
+          currentPending.assignmentId === pendingAtStart.assignmentId &&
+          currentPending.checkoutPath === pendingAtStart.checkoutPath
+        ) {
+          try {
+            resolvePendingRemoval(pendingAtStart, ctx);
+          } catch (error) {
+            pendingResolutionError =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
         const mayFinishLater =
           "error" in removed && removed.commandInterrupted
             ? " Herdr may still complete removal after the CLI stopped."
@@ -7351,8 +7558,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               type: "text" as const,
               text: checkoutRemoved
                 ? assignmentRetired
-                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.`
-                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}`
+                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
+                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
                 : checkoutState === "present"
                   ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal is unconfirmed for ${branch}; checkout was present at the last check; assignment ${assignmentRetired ? "was retired" : "remains recorded"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`
                   : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`,
@@ -7375,41 +7582,40 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ? { workspace_reopened: true }
               : {}),
             ...(retirementError ? { retirement_error: retirementError } : {}),
+            ...(pendingResolutionError ? { pendingResolutionError } : {}),
           },
         };
       },
     );
   };
-  const listPendingRemovals = (ctx?: ExtensionContext) => {
-    for (const [branch, pending] of pendingRemovals) {
-      const lease = host.managerLease();
-      if (
-        (ctx && pending.sessionId !== ctx.sessionManager.getSessionId()) ||
-        activeRole() !== "manager" ||
-        !lease ||
-        !host.sameManagerDescriptor(pending.manager, lease.descriptor)
-      )
-        pendingRemovals.delete(branch);
-    }
-    return [...pendingRemovals.values()];
+  const listPendingRemovals = (ctx: ExtensionContext) => {
+    const requests = [...pendingRemovals(ctx).values()];
+    if (activeRole() !== "manager" || !host.managerLease()) return [];
+    return requests;
   };
   const approvePendingRemoval = async (
     selected: PendingRemoval,
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
-    if (pendingRemovals.get(selected.branch) !== selected)
+    const current = pendingRemovals(ctx).get(selected.branch);
+    if (current?.id !== selected.id)
       throw new Error("Pending removal changed; review the new request");
-    pendingRemovals.delete(selected.branch);
-    if (activeRole() !== "manager")
+    if (activeRole() !== "manager" || !host.managerLease())
       throw new Error("Manager authority is no longer active");
+    resolvePendingRemoval(selected, ctx);
     return removeWorktree(selected.branch, ctx, signal ?? ctx.signal, {
       expected: selected,
     });
   };
-  const cancelPendingRemoval = (selected: PendingRemoval) => {
-    if (pendingRemovals.get(selected.branch) !== selected) return false;
-    return pendingRemovals.delete(selected.branch);
+  const cancelPendingRemoval = (
+    selected: PendingRemoval,
+    ctx: ExtensionContext,
+  ) => {
+    if (pendingRemovals(ctx).get(selected.branch)?.id !== selected.id)
+      return false;
+    resolvePendingRemoval(selected, ctx);
+    return true;
   };
   const setRemovalPreauthorization = async (
     enabled: boolean,
@@ -8372,11 +8578,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (!ctx.hasUI)
         throw new Error("Worktree removal approval requires an interactive UI");
       const pending: PendingRemoval = {
+        id: randomUUID(),
         branch: params.branch,
         repoKey: target.manager.repoKey,
         assignmentId: target.assignment.id,
         checkoutPath: target.checkoutPath,
-        manager: target.manager,
         sessionId: ctx.sessionManager.getSessionId(),
       };
       const verifiedAgain = await inspectRemovalTarget(
@@ -8396,12 +8602,30 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         verifiedAgain.manager.repoKey !== pending.repoKey
       )
         throw new Error("Manager authority changed while preparing approval");
-      pendingRemovals.set(params.branch, pending);
+      const existing = pendingRemovals(ctx).get(params.branch);
+      const request =
+        existing?.repoKey === pending.repoKey &&
+        existing.assignmentId === pending.assignmentId &&
+        existing.checkoutPath === pending.checkoutPath
+          ? existing
+          : pending;
+      if (request === pending)
+        host.pi.appendEntry(REMOVAL_ENTRY, {
+          version: 1,
+          action: "request",
+          ...pending,
+        });
+      updateRemovalStatus(ctx);
+      if (request === pending)
+        ctx.ui.notify(
+          `Worktree removal of ${pending.branch} awaits approval. Review with /manager remove.`,
+          "info",
+        );
       return {
         content: [
           {
             type: "text" as const,
-            text: `Removal of ${params.branch} awaits human approval. Review it with /manager remove.`,
+            text: `Removal of ${params.branch} awaits human approval (request ${request.id}). Review it with /manager remove.`,
           },
         ],
         details: {
@@ -8410,6 +8634,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branch: params.branch,
           confirmation_required: true,
           pending: true,
+          request_id: request.id,
         },
       };
     }
@@ -9069,12 +9294,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       ctx,
     );
   };
+  const invalidatePendingRemovals = (ctx: ExtensionContext) => {
+    for (const request of pendingRemovals(ctx).values())
+      resolvePendingRemoval(request, ctx);
+  };
   return {
     stopExecution,
     stop,
     activateProjectLead,
     removeWorktree,
     listPendingRemovals,
+    updateRemovalStatus,
+    invalidatePendingRemovals,
     approvePendingRemoval,
     cancelPendingRemoval,
     setRemovalPreauthorization,
@@ -13136,6 +13367,7 @@ export function createLeadRoleTransitions(
   ): Promise<string> => {
     if (state.controllerRole !== "manager" || !state.managerLease)
       throw new Error("Manager mode is not active");
+    host.invalidateManagerRemovalRequests?.(ctx);
     state.controllerRole = "lead";
     try {
       host.persistRole("lead");
