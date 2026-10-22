@@ -1625,6 +1625,16 @@ function value(v: unknown): string {
   return typeof v === "string" && v.trim() ? v : "";
 }
 
+function peerMessageStatus(details: Record<string, unknown>): string {
+  return details.accepted === true
+    ? "accepted remotely"
+    : details.accepted === false
+      ? "queued for remote retry"
+      : details.remoteSessionId
+        ? "reply queued"
+        : "peer message queued";
+}
+
 function agentDefinitionSuffix(label: string, definition: unknown): string {
   const name = value(definition);
   return name && name !== label ? ` · ${name}` : "";
@@ -2788,23 +2798,25 @@ function expandedResultLines(
         : tool === "peer"
           ? "peer"
           : "agents"
-      : action === "inspect"
-        ? `inspect ${display}`
-        : tool === "staff" && action === "remove"
-          ? "remove worktree"
-          : action === "delegate" || action === "continue"
-            ? `${display} started`
-            : tool === "supervisor"
-              ? "sent to supervisor"
-              : action === "steer"
-                ? "steering queued"
-                : action === "interrupt"
-                  ? "interrupt accepted"
-                  : tool === "agent" && action === "reply"
-                    ? `reply sent to ${display}`
-                    : action === "close"
-                      ? `${display} closed`
-                      : `${action} ${display}`;
+      : tool === "peer" && action === "message"
+        ? peerMessageStatus(details)
+        : action === "inspect"
+          ? `inspect ${display}`
+          : tool === "staff" && action === "remove"
+            ? "remove worktree"
+            : action === "delegate" || action === "continue"
+              ? `${display} started`
+              : tool === "supervisor"
+                ? "sent to supervisor"
+                : action === "steer"
+                  ? "steering queued"
+                  : action === "interrupt"
+                    ? "interrupt accepted"
+                    : tool === "agent" && action === "reply"
+                      ? `reply sent to ${display}`
+                      : action === "close"
+                        ? `${display} closed`
+                        : `${action} ${display}`;
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
@@ -2886,7 +2898,7 @@ function expandedResultLines(
       lines.push(
         "",
         `self ${self}`,
-        `peers ${peers.length}`,
+        `discovered peers ${peers.length}`,
         ...peers.flatMap((peer: any) =>
           peer && typeof peer === "object"
             ? (() => {
@@ -2899,6 +2911,30 @@ function expandedResultLines(
             : [],
         ),
       );
+      const replyOnly = Array.isArray(details.reply_only)
+        ? details.reply_only
+        : [];
+      if (replyOnly.length)
+        lines.push(
+          "",
+          `reply-only Managers ${replyOnly.length}`,
+          ...replyOnly.flatMap((item: any) =>
+            item && typeof item === "object"
+              ? [
+                  `  ${value(item.session) || "session"}`,
+                  "  Reply can be queued; current availability is unverified.",
+                ]
+              : [],
+          ),
+        );
+      const unavailableMachines = Array.isArray(details.unavailable_machines)
+        ? details.unavailable_machines
+        : [];
+      if (unavailableMachines.length)
+        lines.push(
+          "",
+          `unavailable machines ${unavailableMachines.map(value).join(", ")}`,
+        );
       return lines;
     }
     const reports = Array.isArray(details.reports) ? details.reports : [];
@@ -3149,16 +3185,20 @@ export function renderCoordinationResult(
   }
   if (tool === "peer" && action === "list") {
     const peers = Array.isArray(details.peers) ? details.peers : [];
+    const replyOnly = Array.isArray(details.reply_only)
+      ? details.reply_only
+      : [];
+    const summary = replyOnly.length
+      ? `peer · ${peers.length} discovered · ${replyOnly.length} reply-only`
+      : `peer · ${peers.length} peer${peers.length === 1 ? "" : "s"}`;
+    return new WidthSafeText(humanText(theme, "toolTitle", summary), 0, 0);
+  }
+  if (tool === "peer" && action === "message")
     return new WidthSafeText(
-      humanText(
-        theme,
-        "toolTitle",
-        `peer · ${peers.length} peer${peers.length === 1 ? "" : "s"}`,
-      ),
+      statusLine(theme, "success", "✓", peerMessageStatus(details)),
       0,
       0,
     );
-  }
   if (action === "list") {
     const reports = Array.isArray(details.reports) ? details.reports : [];
     const active = reports.filter(

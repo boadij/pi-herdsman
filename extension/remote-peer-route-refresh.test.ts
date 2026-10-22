@@ -10,6 +10,7 @@ type Machine = realTransport.SavedPeerMachine;
 type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
 const correspondences: any[] = [];
+const queuedReplies: any[] = [];
 const diagnostics: unknown[] = [];
 const deliveredReplies: any[] = [];
 let diagnosticAttempts = 0;
@@ -113,6 +114,10 @@ mock.module("./peer-correspondence.ts", {
       else correspondences[index] = item;
     },
     createPeerCorrespondence: (item: unknown) => item,
+    queuePeerReply: (...args: any[]) => {
+      queuedReplies.push(args);
+      return "queued";
+    },
   },
 });
 
@@ -156,6 +161,7 @@ function fixture() {
   support.setLeadEnvironment();
   machines.length = 0;
   correspondences.length = 0;
+  queuedReplies.length = 0;
   diagnostics.length = 0;
   deliveredReplies.length = 0;
   diagnosticAttempts = 0;
@@ -304,6 +310,92 @@ test("published route remains sendable during refresh and a stale discovery cann
     send(f.runtime, f.context, "peer-stale"),
     /not found|unavailable/,
   );
+});
+
+test("list_peers projects exact reply-only correspondence targets without exposing capabilities", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const correspondence = {
+    id: "corr-origin",
+    capability: "secret-capability",
+    originSession: "origin-manager",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    acceptanceId: "acceptance-id",
+    finalized: false,
+    replies: [],
+  };
+  correspondences.push(correspondence);
+
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(result.details?.peers, []);
+  assert.deepEqual(result.details?.reply_only, [{ session: "origin-manager" }]);
+  assert.deepEqual(JSON.parse(result.content[0].text).reply_only, [
+    { session: "origin-manager" },
+  ]);
+  assert.doesNotMatch(result.content[0].text, /secret-capability|corr-origin/);
+  assert.doesNotMatch(
+    JSON.stringify(result.details),
+    /secret-capability|corr-origin/,
+  );
+
+  const sent = await send(f.runtime, f.context, "origin-manager");
+  assert.equal(sent.details?.remoteSessionId, "origin-manager");
+  assert.equal(sent.details?.queued, true);
+  assert.equal(queuedReplies.length, 1);
+  assert.equal(queuedReplies[0][0].id, "corr-origin");
+
+  for (const invalid of [
+    { ...correspondence, finalized: true },
+    { ...correspondence, recipientSession: "another-manager" },
+    { ...correspondence, id: "corr-duplicate" },
+  ]) {
+    correspondences.length = 0;
+    correspondences.push(
+      invalid,
+      ...(invalid.id === "corr-duplicate" ? [correspondence] : []),
+    );
+    const excluded = await list(f.runtime, f.context);
+    assert.equal(excluded.details?.reply_only, undefined);
+    assert.equal(JSON.parse(excluded.content[0].text).reply_only, undefined);
+  }
+
+  correspondences.length = 0;
+  correspondences.push({
+    ...correspondence,
+    recipientGeneration: "old-generation",
+  });
+  const recovered = await list(f.runtime, f.context);
+  assert.deepEqual(recovered.details?.reply_only, [
+    { session: "origin-manager" },
+  ]);
+  assert.equal(correspondences[0].recipientGeneration, claim.id);
+});
+
+test("a discovered Manager is not duplicated in reply_only", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("origin-manager")])];
+  correspondences.push({
+    id: "corr-discovered-origin",
+    capability: "secret-capability",
+    originSession: "origin-manager",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    acceptanceId: "acceptance-id",
+    finalized: false,
+    replies: [],
+  });
+  const result = await list(f.runtime, f.context);
+  assert.ok(
+    result.details?.peers.some(
+      (peer: any) => peer.session === "origin-manager",
+    ),
+  );
+  assert.equal(result.details?.reply_only, undefined);
 });
 
 test("a correspondence failure is isolated, deduplicated, and retried", async (t) => {

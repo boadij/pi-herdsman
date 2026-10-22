@@ -97,6 +97,7 @@ import type {
   WorktreeGroupScope,
 } from "./herdr.ts";
 import type { RuntimeBuild } from "./compatibility.ts";
+import type { PeerCorrespondence } from "./peer-correspondence.ts";
 import {
   AGENT_COORDINATION_TOOLS,
   agentLaunchArgs,
@@ -10281,6 +10282,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   >();
   const ambiguousRemoteSessions = new Set<string>();
   const lastPeerCorrespondenceErrors = new Map<string, string>();
+  const matchesReturnRecipient = (
+    correspondence: PeerCorrespondence,
+    recipient: PeerLeadRecord,
+  ) =>
+    !correspondence.finalized &&
+    correspondence.recipientSession === recipient.piSessionId &&
+    correspondence.recipientGeneration === recipient.claim.id;
   let latestPeerDiscovery = 0;
   const deliverRemoteOutbound = async (
     machine: SavedPeerMachine,
@@ -10561,23 +10569,26 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         throw new Error(
           "Peer eligibility could not be verified; retry list_peers.",
         );
-      if (activeRole() === "manager" && own.role === "manager")
-        for (const correspondence of listPeerCorrespondences()) {
-          if (
-            !correspondence.finalized &&
-            correspondence.recipientSession === self &&
-            correspondence.recipientGeneration !== own.claim.id
-          ) {
-            updatePeerRecipientGeneration(
-              correspondence.id,
-              correspondence.capability,
-              self,
-              correspondence.recipientGeneration,
-              own.claim.id,
-            );
-            correspondence.recipientGeneration = own.claim.id;
-          }
+      const correspondences =
+        activeRole() === "manager" && own.role === "manager"
+          ? listPeerCorrespondences()
+          : [];
+      for (const correspondence of correspondences) {
+        if (
+          !correspondence.finalized &&
+          correspondence.recipientSession === self &&
+          correspondence.recipientGeneration !== own.claim.id
+        ) {
+          updatePeerRecipientGeneration(
+            correspondence.id,
+            correspondence.capability,
+            self,
+            correspondence.recipientGeneration,
+            own.claim.id,
+          );
+          correspondence.recipientGeneration = own.claim.id;
         }
+      }
       const peers = [];
       for (const record of listPeerLeadRecords(peerRuntime())) {
         if (
@@ -11074,6 +11085,26 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         for (const session of discoveredAmbiguousSessions)
           ambiguousRemoteSessions.add(session);
       }
+      const discovered = new Set(peers.map((peer) => peer.session));
+      const replyCounts = new Map<string, number>();
+      if (activeRole() === "manager" && own.role === "manager")
+        for (const correspondence of correspondences) {
+          if (!matchesReturnRecipient(correspondence, own)) continue;
+          replyCounts.set(
+            correspondence.originSession,
+            (replyCounts.get(correspondence.originSession) ?? 0) + 1,
+          );
+        }
+      const replyOnly = [...replyCounts]
+        .filter(
+          ([session, count]) =>
+            count === 1 &&
+            session !== self &&
+            !discovered.has(session) &&
+            !remotePeerRoutes.has(session) &&
+            !ambiguousRemoteSessions.has(session),
+        )
+        .map(([session]) => ({ session }));
       return {
         content: [
           {
@@ -11081,6 +11112,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             text: JSON.stringify({
               self,
               peers,
+              ...(replyOnly.length ? { reply_only: replyOnly } : {}),
               ...(unavailableMachines.length
                 ? { unavailable_machines: [...new Set(unavailableMachines)] }
                 : {}),
@@ -11092,6 +11124,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           action: "list",
           self,
           peers,
+          ...(replyOnly.length ? { reply_only: replyOnly } : {}),
           ...(unavailableMachines.length
             ? { unavailable_machines: [...new Set(unavailableMachines)] }
             : {}),
@@ -11104,10 +11137,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       sender && activeRole() === "manager" && !remoteRoute
         ? listPeerCorrespondences().filter(
             (item) =>
-              !item.finalized &&
-              item.originSession === params.session &&
-              item.recipientSession === sender.piSessionId &&
-              item.recipientGeneration === sender.claim.id,
+              matchesReturnRecipient(item, sender) &&
+              item.originSession === params.session,
           )
         : [];
     const target = remoteRoute

@@ -1912,9 +1912,10 @@ function registerExtensionImpl(
         name: "message_peer",
         label: "message peer",
         exposure: "model-only",
-        promptSnippet: "Discover and message live same-role peers",
+        promptSnippet:
+          "Discover peers and reply through existing correspondences",
         description:
-          "Send a message to another live same-role Lead or Manager session by exact session ID.",
+          "Send to an eligible same-role Lead or Manager by exact session ID; an existing return correspondence may allow a reply-only target without independent discovery or current availability.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>
@@ -2414,7 +2415,7 @@ function registerExtensionImpl(
           name: "list_peers",
           label: "list peers",
           description:
-            "List live same-role peer sessions; Managers also discover eligible remote Managers on reachable saved Herdr machines. Do not use for progress polling.",
+            "List independently discovered eligible same-role peers; Managers may also see reply-only originating Managers with existing return correspondences. Reply-only visibility does not prove availability or grant general initiation permission. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (
