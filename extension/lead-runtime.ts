@@ -2489,33 +2489,33 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : execution.mode,
               help: execution.managed
                 ? "This assigned session uses managed-lead. Use Pi /fork or /clone to continue independently (same Git checkout)."
-                : "Choose this ordinary Lead session's execution profile.",
+                : "Choose whether this session works directly or primarily delegates tasks.",
             },
             {
               value: "agents",
               label: "Agents",
-              help: "Manage running Agents, layout, and the owned Agent tree.",
+              help: "View and manage background Agents.",
             },
             {
               value: "manager",
               label: "Project manager",
               description: host.roleActive("manager") ? "active" : undefined,
-              help: "Coordinate durable project work across dedicated Lead sessions.",
+              help: "Coordinate independent project work across Git branches.",
             },
             {
               value: "stats",
               label: "Session stats",
-              help: "Show Pi-native token usage and cost for this session and managed work.",
+              help: "View token usage and model costs for this session and its managed work.",
             },
             {
               value: "definitions",
               label: "Definitions",
-              help: "Inspect effective Agent and role definitions and edit global overrides.",
+              help: "Inspect available Agents and their configuration.",
             },
             {
               value: "settings",
               label: "Settings",
-              help: "Configure future-session and user-wide Herdsman behavior.",
+              help: "Change Herdsman preferences.",
             },
             {
               value: "advanced",

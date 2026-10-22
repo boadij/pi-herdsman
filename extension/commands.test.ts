@@ -12051,29 +12051,26 @@ test("Herdsman root contextual help follows the selected row", async () => {
     }
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and role definitions|Configure future-session/u.test(
+        /Choose whether this session works directly|View and manage background Agents|Coordinate independent project work|View token usage and model costs|Inspect available Agents/u.test(
           line,
         ),
       ) ?? "";
     assert.match(
       help(0),
-      /Choose this ordinary Lead session's execution profile\./u,
+      /Choose whether this session works directly or primarily delegates tasks\./u,
     );
-    assert.match(
-      help(1),
-      /Manage running Agents, layout, and the owned Agent tree\./u,
-    );
+    assert.match(help(1), /View and manage background Agents\./u);
     assert.match(
       help(2),
-      /Coordinate durable project work across dedicated Lead sessions\./u,
+      /Coordinate independent project work across Git branches\./u,
     );
     assert.match(
       help(3),
-      /Show Pi-native token usage and cost for this session and managed work\./u,
+      /View token usage and model costs for this session and its managed work\./u,
     );
     assert.match(
       help(4),
-      /Inspect effective Agent and role definitions and edit global overrides\./u,
+      /Inspect available Agents and their configuration\./u,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

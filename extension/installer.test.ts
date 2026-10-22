@@ -55,6 +55,10 @@ function fixture({
   initialPiVersion = "0.1.0",
   initialHerdrVersion = "0.1.0",
   piInstallerVersion = packageJson.piHerdsman.runtime.pi,
+  initialPiList = "",
+  piListFails = false,
+  piInstallFails = false,
+  piUpdateFails = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -72,7 +76,7 @@ function fixture({
   writeFileSync(log, "");
   writeFileSync(piVersion, `${initialPiVersion}\n`);
   writeFileSync(herdrVersion, `${initialHerdrVersion}\n`);
-  writeFileSync(piList, `  npm:pi-herdsman@${packageJson.version}\n`);
+  writeFileSync(piList, initialPiList);
 
   executable(
     herdrAsset,
@@ -131,10 +135,15 @@ esac
     `#!/bin/sh
 case "\${1:-}" in
   --version) cat "$FAKE_PI_VERSION" ;;
-  list) cat "$FAKE_PI_LIST" ;;
+  list) cat "$FAKE_PI_LIST"; [ "$FAKE_PI_LIST_FAILS" != true ] ;;
   install)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
+    [ "$FAKE_PI_INSTALL_FAILS" != true ] || exit 1
     printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
+    ;;
+  update)
+    printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
+    [ "$FAKE_PI_UPDATE_FAILS" != true ] || exit 1
     ;;
 esac
 `,
@@ -202,6 +211,9 @@ process.stdin.on("end", () => {
       FAKE_PI_VERSION: piVersion,
       FAKE_HERDR_VERSION: herdrVersion,
       FAKE_PI_LIST: piList,
+      FAKE_PI_LIST_FAILS: String(piListFails),
+      FAKE_PI_INSTALL_FAILS: String(piInstallFails),
+      FAKE_PI_UPDATE_FAILS: String(piUpdateFails),
       FAKE_HERDR_ASSET: herdrAsset,
       FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
@@ -220,11 +232,9 @@ test(
         encoding: "utf8",
       });
       assert.equal(first.status, 0, first.stderr);
-      assert.match(
-        first.stdout,
-        new RegExp(
-          `Pi Herdsman ${packageJson.version} ready with Pi ${packageJson.piHerdsman.runtime.pi} and Herdr ${packageJson.piHerdsman.runtime.herdr.version}`,
-          "u",
+      assert.ok(
+        first.stdout.includes(
+          `Pi Herdsman package operation completed (target release ${packageJson.version})`,
         ),
       );
 
@@ -256,15 +266,12 @@ test(
           `Herdr ${packageJson.piHerdsman.runtime.herdr.version} already satisfies tested baseline ${packageJson.piHerdsman.runtime.herdr.version}`,
         ),
       );
-      assert.ok(
-        second.stdout.includes(
-          `Pi Herdsman ${packageJson.version} already installed`,
-        ),
-      );
+      assert.match(second.stdout, /Pi Herdsman package operation completed/u);
 
       const secondLog = readFileSync(setup.log, "utf8");
       assert.doesNotMatch(secondLog, /https:\/\/pi\.dev\/install\.sh/u);
       assert.doesNotMatch(secondLog, /releases\/download\/v/u);
+      assert.match(secondLog, /^pi update npm:pi-herdsman --no-approve$/mu);
       assert.doesNotMatch(secondLog, /^pi install /mu);
       assert.match(secondLog, /herdr integration install pi/u);
     } finally {
@@ -289,7 +296,7 @@ test(
       assert.equal(result.status, 0, result.stderr);
       assert.ok(
         result.stdout.includes(
-          `Pi Herdsman ${packageJson.version} ready with Pi 9.0.0 and Herdr ${packageJson.piHerdsman.runtime.herdr.version}`,
+          `Pi Herdsman package operation completed (target release ${packageJson.version})`,
         ),
       );
       assert.match(
@@ -333,6 +340,119 @@ test(
       assert.match(log, /herdr integration install pi/u);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer updates an exact unpinned source entry, including filtered entries",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture({
+      initialPiList: "  npm:pi-herdsman (filtered)\n",
+      initialPiVersion: packageJson.piHerdsman.runtime.pi,
+      initialHerdrVersion: packageJson.piHerdsman.runtime.herdr.version,
+    });
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(
+        readFileSync(setup.log, "utf8"),
+        /^pi update npm:pi-herdsman --no-approve$/mu,
+      );
+      assert.doesNotMatch(result.stdout, /installed version/u);
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer preserves pinned sources and refuses speculative installation when listing fails",
+  { skip: process.platform === "win32" },
+  () => {
+    const pinned = fixture({
+      initialPiList: "  npm:pi-herdsman@^1.2.0 (filtered)\n",
+      initialPiVersion: packageJson.piHerdsman.runtime.pi,
+      initialHerdrVersion: packageJson.piHerdsman.runtime.herdr.version,
+    });
+    const unavailable = fixture({
+      piListFails: true,
+      initialPiVersion: packageJson.piHerdsman.runtime.pi,
+      initialHerdrVersion: packageJson.piHerdsman.runtime.herdr.version,
+    });
+    try {
+      const pinnedResult = spawnSync("sh", [installer], {
+        env: pinned.env,
+        encoding: "utf8",
+      });
+      assert.notEqual(pinnedResult.status, 0);
+      assert.match(
+        pinnedResult.stderr,
+        /version-pinned; this bootstrap cannot reconcile it to the latest release\. Change or remove the pin with Pi's package manager to reconcile to the latest release/u,
+      );
+      assert.doesNotMatch(
+        readFileSync(pinned.log, "utf8"),
+        /^pi (install|update) /mu,
+      );
+      assert.doesNotMatch(pinnedResult.stdout, /package operation completed/u);
+
+      const unavailableResult = spawnSync("sh", [installer], {
+        env: unavailable.env,
+        encoding: "utf8",
+      });
+      assert.notEqual(unavailableResult.status, 0);
+      assert.match(
+        unavailableResult.stderr,
+        /could not inspect installed Pi packages/u,
+      );
+      assert.doesNotMatch(
+        readFileSync(unavailable.log, "utf8"),
+        /^pi (install|update) /mu,
+      );
+      assert.doesNotMatch(
+        unavailableResult.stdout,
+        /package operation completed/u,
+      );
+    } finally {
+      rmSync(pinned.root, { recursive: true, force: true });
+      rmSync(unavailable.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer reports install and update failures without success",
+  { skip: process.platform === "win32" },
+  () => {
+    const absent = fixture({ piInstallFails: true });
+    const present = fixture({
+      initialPiList: "  npm:pi-herdsman\n",
+      piUpdateFails: true,
+    });
+    try {
+      for (const setup of [absent, present]) {
+        const result = spawnSync("sh", [installer], {
+          env: setup.env,
+          encoding: "utf8",
+        });
+        assert.notEqual(result.status, 0);
+        assert.doesNotMatch(result.stdout, /package operation completed/u);
+      }
+      assert.match(
+        readFileSync(absent.log, "utf8"),
+        /^pi install npm:pi-herdsman --no-approve$/mu,
+      );
+      assert.match(
+        readFileSync(present.log, "utf8"),
+        /^pi update npm:pi-herdsman --no-approve$/mu,
+      );
+    } finally {
+      rmSync(absent.root, { recursive: true, force: true });
+      rmSync(present.root, { recursive: true, force: true });
     }
   },
 );

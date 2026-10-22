@@ -1,39 +1,44 @@
 # Getting started
 
-[Documentation index](README.md) · [Coordination API](coordination-api.md)
+[Documentation index](../README.md) · [Coordination API](coordination-api.md)
 
-This is the shortest path from installation to useful asynchronous delegation.
-You do not need to call structured coordination tools yourself.
+This guide takes you from installation to your first asynchronous delegation.
+You can ask Pi normally; you do not need to call coordination tools yourself.
 
-## 1. Install
+## 1. Prerequisites and installation
 
-You need:
+Pi Herdsman requires Node.js 22.19 or newer, as specified by the released
+package's [`engines.node`](../package.json) requirement. The Linux/macOS
+bootstrap also requires Node.js and npm to be installed before you run it.
 
-- Node satisfying the released package's `engines.node` requirement
-- Pi at least the released package's `piHerdsman.runtime.pi` baseline
-- herdr at least the released package's
-  `piHerdsman.runtime.herdr.version` baseline
+For installing Pi and setting up a provider, see [Pi's official
+Quickstart](https://pi.dev/docs/latest/quickstart). Pi and herdr versions listed
+in the package metadata are tested minimums; the Linux/macOS bootstrap preserves
+newer existing installations.
 
-On Linux or macOS, install the released, tested stack:
+### Linux and macOS
+
+Install the released stack with the bootstrap:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
-The released package publishes its Node, Pi, and herdr runtime requirements.
-On mutable host installs, Pi and herdr baselines are minimums; the bootstrap
-never downgrades a newer runtime.
+Or, if you already manage Pi and herdr yourself, install Herdsman and its
+Herdr integration:
 
-For Pi, a missing or older installation is handed to Pi's official managed
-installer and the result must meet the tested minimum. Pi's installer chooses
-its current managed release, so the installed Pi may be newer than Herdsman's
-tested baseline. Afterward, Pi remains natively updateable with `pi update`.
+```sh
+pi install npm:pi-herdsman
+herdr integration install pi
+```
 
-For herdr, a missing or older installation receives the exact checksum-verified
-tested release from package metadata. Existing newer installations are left
-untouched, and subsequent updates remain native through `herdr update`.
+### Windows
 
-If you already manage Pi and herdr yourself:
+Install Pi and herdr using their native Windows instructions; the Herdsman shell
+bootstrap supports Linux and macOS only. See [Herdr's installation
+instructions](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/install.mdx)
+and [Pi's official Quickstart](https://pi.dev/docs/latest/quickstart), then
+install Herdsman and its Herdr integration:
 
 ```sh
 pi install npm:pi-herdsman
@@ -41,106 +46,103 @@ herdr integration install pi
 ```
 
 For an SSH-ready Docker deployment, see
-[Container deployment](guides/container-deployment.md). The Docker image is a
-separate, deterministic deployment that installs exact Pi and herdr releases
-with checksum verification.
+[Container deployment](guides/container-deployment.md). Docker uses separate,
+deterministic runtime pins.
 
 ## 2. Start herdr and Pi
 
-Start herdr in your project:
+In your project directory, start herdr:
 
 ```sh
 herdr
 ```
 
-Then start Pi inside the herdr pane:
+Then start Pi inside a herdr pane:
 
 ```sh
 pi
 ```
 
-Pi loads the package extension and optional `agents` skill. A Lead started
-outside herdr cannot safely manage herdr-backed Agents.
+Herdsman manages background Agents through herdr, so start Pi inside herdr for
+delegation.
 
-## 3. Delegate without leaving the conversation
+## 3. Configure Pi authentication if needed
 
-Ask Pi normally:
+If Pi does not yet have access to a model, run `/login` and select a provider.
+Use `/model` to choose another available model when necessary. You do not need
+to log in again if Pi already has a working model. Pi owns provider
+authentication and credentials; do not copy credentials into Herdsman's
+configuration.
 
-```text
-Use scout to inspect this repository.
-```
+## 4. Delegate a first read-only task
 
-The Agent starts asynchronously. Once the assignment is accepted, the Lead
-conversation remains available while the Agent works.
-
-You can keep discussing the problem, delegate other genuinely independent work,
-or end the turn. Do not poll for completion. Results and Agent questions return
-to the exact owner when they need attention.
-
-The exact assignment behavior is documented in
-[Lifecycle](concepts/lifecycle.md).
-
-## 4. Open Pi Herdsman
-
-Run:
+Ask Pi to use the bundled `scout` Agent for a read-only reconnaissance task:
 
 ```text
-/herdsman
+Use scout to identify this repository's main entry points.
+Explain how the application starts. Don't change any files.
 ```
 
-The menu starts with `Agents`, `Project manager`, `Session stats`, `Definitions`,
-`Settings`, and `Advanced…`. Direct commands remain available when you already
-know which operation you want.
+This is a read-only example, not an operating-system sandbox. Delegation starts
+only after Herdsman accepts the assignment. Once accepted, the Agent works
+asynchronously and its result returns to the exact Pi session that delegated
+it.
 
-See [Commands](reference/commands.md) for the exact human-facing behavior.
+## 5. Understand asynchronous completion
 
-## 5. Customize when needed
+Your conversation remains available while the Agent works. Continue normal
+work; you do not need to repeatedly check or poll the Agent. Its result or a
+question needing your attention is delivered to the owning conversation.
+Pending work is not a completed result.
 
-Pi Herdsman is opinionated about coordination, not your development workflow.
-Definitions control models, thinking, tools, skills, extensions, instructions,
-and permitted delegation.
+See [Lifecycle](concepts/lifecycle.md) for the exact assignment and result
+behavior.
 
-Continue with:
+## 6. Inspect and control work
+
+Open the `/herdsman` menu to discover controls for your work. Its destinations
+are:
+
+```
+Execution
+Agents
+Project manager
+Session stats
+Definitions
+Settings
+Advanced…
+```
+
+The status widget also presents current managed work and transient startup
+activity. Presentation is not control authority; operations revalidate identity
+and lifecycle state. See [Commands](reference/commands.md) for exact command
+semantics and [Status widget](reference/status-widget.md) for status details.
+
+## 7. Customize and scale when needed
+
+Definitions configure Agent models, tools, skills, extensions, instructions,
+and permitted delegation. Continue with:
 
 - [Agent definitions](guides/agent-definitions.md)
 - [Customizing bundled Agents](guides/customizing-agents.md)
 - [Agent-definition schema](reference/agent-definition-schema.md)
 - [Configuration](reference/configuration.md)
 
-## 6. Observe active work
+For independent branch-based project work, an eligible Lead can enter Manager
+mode with `/manager`. Manager coordinates durable work across Leads; it is not
+required for ordinary Agent delegation. See
+[Project orchestration](guides/project-orchestration.md) and
+[Coordination](concepts/coordination.md).
 
-The status widget shows current managed work and transient startup activity.
-Presentation is not control authority: operations still revalidate exact
-identity and lifecycle state.
+## First-use recovery
 
-Completed Agent generations are cleaned up after result delivery. Their Pi
-sessions remain available for explicit continuation through the model-facing
-API.
+| Problem                         | Next action                                                                                                                               |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `pi` command unavailable        | Follow [Pi's installation and PATH instructions](https://pi.dev/docs/latest/quickstart).                                                  |
+| `herdr` unavailable             | Follow [Herdr's installation instructions](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/install.mdx). |
+| No usable Pi model              | Configure authentication through Pi with `/login`.                                                                                        |
+| Herdsman inactive outside herdr | Start Pi inside herdr.                                                                                                                    |
+| Delegation rejected             | Follow the structured error and next action reported by Herdsman; see [Recovery](guides/recovery.md).                                     |
+| Agent result not yet available  | Continue normal work; pending work is not completion.                                                                                     |
 
-See [Status widget](reference/status-widget.md) and
-[Agents and identity](concepts/agents.md).
-
-## 7. Scale to project orchestration
-
-When one Lead and its Agent tree are no longer the right coordination boundary,
-an eligible Lead in the primary workspace can enter Manager mode:
-
-```text
-/manager
-```
-
-Manager mode is also discoverable through `/herdsman → Project manager`.
-
-Manager coordinates durable branch-based work across Leads. It does not own
-their Agents or implement through an Agent tree of its own. No prior chat turn
-or existing linked worktree is required in an ordinary Git primary workspace.
-
-Continue with [Project orchestration](guides/project-orchestration.md). For the
-role and authority model, read [Coordination](concepts/coordination.md).
-
-## Next steps
-
-- Keep delegating naturally through the Lead conversation.
-- Use [Project orchestration](guides/project-orchestration.md) for independent branch-based work.
-- Use [Coordination API](coordination-api.md) when you need exact model-facing interfaces.
-- Use [Recovery](guides/recovery.md) only when normal coordination cannot converge safely.
+For the full human-facing command behavior, see [Commands](reference/commands.md).

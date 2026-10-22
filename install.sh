@@ -173,10 +173,16 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
     log "Herdr $installed_herdr already satisfies tested baseline $herdr_version"
   fi
 
-  if pi list --no-approve 2>/dev/null |
-    awk '{ print $1 }' |
-    grep -Fx "npm:$PACKAGE" >/dev/null 2>&1; then
-    log "Pi Herdsman $herdsman_version already installed"
+  packages="$(pi list --no-approve)" ||
+    err "could not inspect installed Pi packages; refusing to install speculatively"
+
+  if printf '%s\n' "$packages" |
+    grep -Eq "^[[:space:]]*npm:$PACKAGE@[^[:space:]]+([[:space:]]+\(filtered\))?[[:space:]]*$"; then
+    err "Pi Herdsman is version-pinned; this bootstrap cannot reconcile it to the latest release. Change or remove the pin with Pi's package manager to reconcile to the latest release"
+  elif printf '%s\n' "$packages" |
+    grep -Eq "^[[:space:]]*npm:$PACKAGE([[:space:]]+\(filtered\))?[[:space:]]*$"; then
+    log "updating Pi Herdsman"
+    pi update "npm:$PACKAGE" --no-approve
   else
     log "installing Pi Herdsman $herdsman_version"
     pi install "npm:$PACKAGE" --no-approve
@@ -186,7 +192,7 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   herdr integration install pi
   herdr integration status >/dev/null
 
-  printf '\nPi Herdsman %s ready with Pi %s and Herdr %s.\n' \
+  printf '\nPi Herdsman package operation completed (target release %s). Pi %s and Herdr %s are available.\n' \
     "$herdsman_version" "$installed_pi" "$installed_herdr"
 }
 

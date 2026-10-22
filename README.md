@@ -7,17 +7,18 @@
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml)
 [![License](https://img.shields.io/npm/l/pi-herdsman)](LICENSE)
 
-**The orchestration layer between [Pi](https://github.com/earendil-works/pi) and [herdr](https://github.com/herdrdev/herdr).**
+Pi Herdsman lets your AI coding assistant delegate tasks to other assistants
+running in the background, while you continue using your main conversation.
+Start with one Agent, or coordinate independent work across a larger project.
 
-Pi Herdsman turns independent Pi sessions into a coordinated agent system, from
-one background Agent to parallel branch-based project work. Pi owns each
-coding-agent conversation; herdr owns processes, panes, workspaces, and worktree
-placement; Herdsman connects them through delegation, ownership, supervision,
-and project orchestration.
+[Pi](https://github.com/earendil-works/pi) runs the coding assistants,
+[herdr](https://github.com/herdrdev/herdr)
+manages their terminal sessions and workspaces, and Herdsman coordinates their
+work.
 
 ## Demo
 
-_Realtime live demo of a manager > lead > agent workflow._
+_Advanced orchestration: a live Manager → Lead → Agent workflow._
 
 [![Live demo](https://github.com/user-attachments/assets/e1355ace-aaba-418e-a1d0-1246f1840fc6)](https://github.com/user-attachments/assets/d6ee6687-a96d-493e-ae75-429f586be393)
 
@@ -32,46 +33,36 @@ _Realtime live demo of a manager > lead > agent workflow._
 
 ## Quick start
 
-On Linux or macOS, install the released Pi, herdr, and Pi Herdsman stack:
+On supported Linux or macOS systems, with the prerequisites in
+[Getting started](docs/getting-started.md) installed, run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
-See [Getting started](docs/getting-started.md) for the tested runtime baselines
-and how the bootstrap handles newer Pi and herdr versions.
-
-If you already manage Pi and herdr yourself:
-
-```sh
-pi install npm:pi-herdsman
-herdr integration install pi
-```
-
-Start herdr in your project, then start Pi inside its pane:
+In your project directory, start herdr and then Pi inside its pane:
 
 ```sh
 herdr
 pi
 ```
 
-Delegate naturally:
+If Pi needs model authentication, use `/login`. Then try a read-only first task:
 
 ```text
-Use scout to inspect the authentication flow.
+Use scout to identify this repository's main entry points.
+Explain how the application starts. Don't change any files.
 ```
 
-The Agent runs asynchronously while the Lead conversation stays available.
-Open the human Agent-management surface at any time with:
+The Agent works independently and sends its result back to the conversation
+that delegated the task. Discover Agent management and other capabilities with:
 
 ```text
-/agents
+/herdsman
 ```
 
-It also exposes `Session stats` for the current Pi session and its owned Agent sessions; in active Manager mode, it includes current assigned project Leads and their owned Agent trees.
-
-See [Getting started](docs/getting-started.md) for prerequisites, configuration,
-observability, and the complete first-use path.
+See [Getting started](docs/getting-started.md) for installation details, first
+use, and optional configuration.
 
 ## From one Agent to a project
 
