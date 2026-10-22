@@ -3291,10 +3291,13 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     marker: boolean,
     enabled: boolean,
     targetCwd = "/tmp",
+    hasSessionFile = true,
+    resultStatus: "completed" | "failed" = "completed",
   ): Promise<any> => {
     const identity = recoveryIdentity(label);
     const child = {
       ...managedState(label, undefined, identity),
+      ...(hasSessionFile ? {} : { piSessionFile: undefined }),
       completedRequestId: REQUEST_ID,
     };
     const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -3308,35 +3311,38 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       workspaceId: child.workspaceId,
       agentLabel: child.agentLabel,
       paneId: child.paneId,
-      status: "completed",
-      text: "completed child work",
+      status: resultStatus,
+      ...(resultStatus === "completed"
+        ? { text: "completed child work" }
+        : { error: { code: "execution_error", message: "child failed" } }),
       completedAt: Date.now(),
     });
-    nativeSessions.set(identity.piSessionFile!, {
-      id: identity.piSessionId,
-      path: identity.piSessionFile!,
-      cwd: targetCwd,
-      entries: [
-        {
-          type: "custom",
-          customType: "pi-herdsman-agent-definition",
-          data: {
-            sessionId: identity.piSessionId,
-            definition: "agent",
-            label,
+    if (hasSessionFile)
+      nativeSessions.set(identity.piSessionFile!, {
+        id: identity.piSessionId,
+        path: identity.piSessionFile!,
+        cwd: targetCwd,
+        entries: [
+          {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: identity.piSessionId,
+              definition: "agent",
+              label,
+            },
           },
-        },
-        ...(marker
-          ? [
-              {
-                type: "custom",
-                customType: "pi-herdsman-agent-context-retired",
-                data: { sessionId: identity.piSessionId },
-              },
-            ]
-          : []),
-      ],
-    });
+          ...(marker
+            ? [
+                {
+                  type: "custom",
+                  customType: "pi-herdsman-agent-context-retired",
+                  data: { sessionId: identity.piSessionId },
+                },
+              ]
+            : []),
+        ],
+      });
     const lifecycle = cascadeExecutor([child]);
     const entries: unknown[] = [];
     let delivered: any;
@@ -3367,14 +3373,47 @@ test("result delivery reports retirement-policy uncertainty without losing resul
   };
 
   try {
-    const retired = await deliver(
-      "retired-delivery-agent",
+    const retired = await deliver("retired-delivery-agent", true, true, "/tmp");
+    const retiredHeader = retired.content.split("\n\n")[0];
+    assert.doesNotMatch(retiredHeader, /\bsession=/);
+    assert.match(retired.content, /Continuation unavailable/);
+    assert.match(retired.content, /delegate_agent/);
+    assert.match(retired.content, /with this result and relevant files/);
+    assert.ok(
+      retired.content.indexOf("Continuation unavailable") <
+        retired.content.indexOf("completed child work"),
+    );
+    assert.equal(retired.details.sessionRetired, true);
+    assert.equal(
+      retired.details.piSessionId,
+      recoveryIdentity("retired-delivery-agent").piSessionId,
+    );
+
+    const failedRetired = await deliver(
+      "failed-retired-delivery-agent",
+      true,
+      true,
+      "/tmp",
+      true,
+      "failed",
+    );
+    assert.match(failedRetired.content.split("\n\n")[0], /status=failed/);
+    assert.match(failedRetired.content, /child failed/);
+    assert.match(
+      failedRetired.content,
+      /delegate_agent with this result and relevant files/,
+    );
+    assert.doesNotMatch(failedRetired.content, /completed child work/);
+
+    const uncertain = await deliver(
+      "uncertain-delivery-agent",
       true,
       true,
       "/tmp/other-project",
     );
-    assert.match(retired.content, /retirement policy could not be verified/);
-    assert.equal(retired.details.sessionRetired, null);
+    assert.match(uncertain.content, /Continuation policy unverified/);
+    assert.doesNotMatch(uncertain.content.split("\n\n")[0], /\bsession=/);
+    assert.equal(uncertain.details.sessionRetired, null);
 
     const disabled = await deliver("disabled-delivery-agent", true, false);
     assert.doesNotMatch(
@@ -3382,6 +3421,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       /retirement policy could not be verified/,
     );
     assert.equal(disabled.details.sessionRetired, false);
+    assert.match(disabled.content.split("\n\n")[0], /\bsession=/);
 
     const ordinary = await deliver("ordinary-delivery-agent", false, true);
     assert.doesNotMatch(
@@ -3389,6 +3429,18 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       /Session retired after context pressure/,
     );
     assert.equal(ordinary.details.sessionRetired, false);
+    assert.match(ordinary.content.split("\n\n")[0], /\bsession=/);
+
+    const missingFile = await deliver(
+      "missing-session-file-agent",
+      false,
+      true,
+      "/tmp",
+      false,
+    );
+    assert.match(missingFile.content, /Continuation policy unverified/);
+    assert.doesNotMatch(missingFile.content.split("\n\n")[0], /\bsession=/);
+    assert.equal(missingFile.details.sessionRetired, null);
   } finally {
     updateConfig("contextRetirement", undefined);
   }

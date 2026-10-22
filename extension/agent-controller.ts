@@ -762,8 +762,10 @@ export const AGENT_DELEGATION_GUIDANCE =
   "otherwise unsuitable for an Agent, or delegation would add more coordination than value.";
 export const AGENT_HANDOFF_GUIDANCE =
   "Use delegate_agent to start a fresh bounded assignment from a definition; " +
-  "use continue_agent to resume an exact historical managed-Agent Pi session " +
-  "with a new bounded assignment. Each live Agent generation exists for one " +
+  "use continue_agent for eligible exact historical managed-Agent sessions. " +
+  "Retired sessions cannot be continued while context retirement is enabled. " +
+  "If further work is needed, delegate a fresh Agent with the prior handoff " +
+  "and relevant files. Each live Agent generation exists for one " +
   "assignment; after its terminal result is delivered, Herdsman cleans up that " +
   "generation. Agent labels identify the current live generation; exact Pi " +
   "sessions identify historical context and continuation. For new or updated " +
@@ -6257,23 +6259,25 @@ export function createAgentController(
         const sessionRetired = options.sessionRetired(context, runtime);
         const retirement =
           sessionRetired === true
-            ? "Session retired after context pressure. Do not continue this session. For follow-up, delegate a fresh agent and pass this result/handoff plus the relevant files."
+            ? "Continuation unavailable: session retired after context pressure. If follow-up work remains, use delegate_agent with this result and relevant files."
             : sessionRetired === undefined
-              ? "The saved session's retirement policy could not be verified. Continue only from its original trusted project context or create a fresh Agent."
+              ? "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent."
               : undefined;
         const status = resultStatus(runtime, result.requestId, entries);
         const header = [
           "Agent result",
           `agent=${result.agentLabel}`,
           `definition=${runtime.agentDefinition}`,
-          `session=${runtime.piSessionId ?? "?"}`,
+          ...(sessionRetired === false
+            ? [`session=${runtime.piSessionId ?? "?"}`]
+            : []),
           `status=${result.status}`,
         ].join(" · ");
         const content = [
           header,
           ...(semanticResult ? [`Result ref: ${semanticResult.ref}`] : []),
-          completion.content,
           ...(retirement ? [retirement] : []),
+          completion.content,
           ...(status ? [status.content] : []),
         ].join("\n\n");
         const details = {
@@ -8432,7 +8436,7 @@ export function createAgentController(
       name: "continue_agent",
       label: "continue agent",
       description:
-        "Start one bounded assignment from an exact historical managed-Agent Pi session.",
+        "Start one bounded assignment from an eligible exact historical managed-Agent Pi session. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

@@ -968,7 +968,7 @@ function registerExtensionImpl(
       );
     },
     sessionRetired: (ctx, runtime) => {
-      if (!runtime.piSessionFile) return false;
+      if (!runtime.piSessionFile) return undefined;
       try {
         const session = SessionManager.open(runtime.piSessionFile);
         if (!retiredManagedSession(session)) return false;

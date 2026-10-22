@@ -419,7 +419,8 @@ test("parent delegates two same-definition children with exact ownership", async
       .find((tool) => tool.name === "list_agents")!
       .promptGuidelines!.join(" ");
     for (const phrase of [
-      "Use delegate_agent to start a fresh bounded assignment from a definition; use continue_agent to resume an exact historical managed-Agent Pi session with a new bounded assignment.",
+      "Use delegate_agent to start a fresh bounded assignment from a definition; use continue_agent for eligible exact historical managed-Agent sessions.",
+      "Retired sessions cannot be continued while context retirement is enabled. If further work is needed, delegate a fresh Agent with the prior handoff and relevant files.",
       "Each live Agent generation exists for one assignment; after its terminal result is delivered, Herdsman cleans up that generation.",
       "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
       "Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because they exist.",
