@@ -2,38 +2,29 @@
 
 ## Public disclosure safety
 
-Before publishing repository or task information to GitHub or another public
-destination, inspect the **exact material being published**. This includes
-commits (diffs, history, and messages), issues, pull requests,
-reviews, comments, discussions, releases, CI logs and artifacts, and package or
-container publications.
+Before publishing to GitHub or another public destination, inspect the exact
+outgoing material, including commits (diffs, messages, and metadata), issues,
+pull requests, comments, reviews, releases, logs, artifacts, and attachments.
 
-Preserve intentionally public authorship and attribution, including Git author
-and committer identities, `Co-authored-by` trailers, contributor credits, and
-release acknowledgments. Identification alone is not grounds to remove them.
-Do not strip, anonymize, fabricate, or rewrite attribution as sanitization.
-If a commit identity would expose a genuinely private address, obtain the
-contributor's approved public or GitHub `noreply` identity before publishing
-new commits. Never silently change an identity or rewrite existing history.
+Publish only necessary, authorized information. Omit secrets, confidential
+material, private personal details, and private infrastructure information.
+Redact sensitive details in diagnostic output, paths, screenshots, and examples
+using non-reconstructable placeholders without distorting technical evidence.
 
-Publish only what is necessary. Remove credentials, tokens, private keys,
-personal or identifying information, confidential code or data, private
-infrastructure details, and sensitive local paths or environment values.
-Inspect generated text, tool responses, command output, stack traces, logs,
-screenshots, URLs, and attachments as carefully as source files. Replace
-sensitive details with synthetic examples or non-reconstructable placeholders
-while preserving useful technical evidence.
+Preserve legitimate public attribution and record integrity: Git author and
+committer identities, co-author credits, and release acknowledgments are not
+inherently sensitive merely because they identify people. Do not silently
+anonymize contributors, change Git identities, falsify evidence, or rewrite
+history as a privacy precaution.
 
-Sanitize **before** publication. Do not assume material is safe because it is
-ignored by Git, came from an agent or tool, passed CI, or will be checked by
-reviewers or secret scanners. If its public disclosure is uncertain, withhold
-the sensitive material and obtain authorization through a private channel.
-Permission to inspect private material is not permission to publish it.
+If private information cannot be withheld without altering an authoritative
+record, withhold publication and seek authorization for a correction. Access
+to private material is not authorization to publish it. Do not assume another
+agent, reviewer, or scanner has already checked the outgoing content.
 
-If a disclosure occurs, do not repeat the sensitive content in public follow-up.
-Use a private channel to coordinate containment and remediation, promptly revoke
-or rotate exposed credentials, and assume that edits or deletion cannot reliably
-remove already published copies.
+If a disclosure occurs, do not repeat the sensitive material publicly.
+Revoke or rotate exposed credentials and coordinate remediation privately;
+edits and deletion may not remove already published copies.
 
 ## Repository documentation
 
