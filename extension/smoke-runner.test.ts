@@ -144,7 +144,12 @@ test("package read identity accepts equivalent paths and rejects other files", (
 });
 
 test("smoke provenance resolves Pi metadata from the executing CLI path", () => {
-  const metadata = resolvePiPackageMetadata(localPi);
+  const metadata = resolvePiPackageMetadata(
+    resolve(
+      dirname(localPi),
+      "../@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+    ),
+  );
   assert.equal(metadata.name, "@earendil-works/pi-coding-agent");
   assert.equal(metadata.version, "1.4.0");
 });
@@ -171,7 +176,7 @@ test("parent Herdr environment retains nesting context and clears caller routing
     PI_SUBAGENT_PARENT_SESSION: "wrong-parent",
     PI_SUBAGENT_CHILD: "wrong-child",
     XDG_CONFIG_HOME: "/tmp/smoke-parent",
-    PATH: "/usr/bin:/bin",
+    PATH: ["/usr/bin", "/bin"].join(delimiter),
     PI_PACKAGE_DIR: "/wrong/package",
   };
   const paths = {
@@ -1468,7 +1473,7 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     XDG_STATE_HOME: "/parent/xdg-state",
     PI_CODING_AGENT_DIR: "/parent/pi-agent",
     PI_CODING_AGENT_SESSION_DIR: "/parent/pi-sessions",
-    PATH: "/usr/bin:/bin",
+    PATH: ["/usr/bin", "/bin"].join(delimiter),
     KEEP_ME: "yes",
   };
   const paths = {
@@ -1564,7 +1569,7 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     ...identity,
     HERDR_ENV: "1",
     KEEP_ME: "yes",
-    PATH: "/usr/bin:/bin",
+    PATH: ["/usr/bin", "/bin"].join(delimiter),
   };
   const descendantEnv = nestedControlEnv(base, paths, "smoke-child");
   assert.deepEqual(descendantEnv, {
@@ -1589,7 +1594,7 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     ...identity,
     HERDR_ENV: "1",
     KEEP_ME: "yes",
-    PATH: "/usr/bin:/bin",
+    PATH: ["/usr/bin", "/bin"].join(delimiter),
   });
 });
 
