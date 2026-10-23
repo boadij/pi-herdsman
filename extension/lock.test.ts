@@ -121,7 +121,7 @@ test("publication collision during release is reported as occupied", (t) => {
     } catch (error) {
       if (
         destination === path &&
-        ["EEXIST", "ENOTEMPTY"].includes(
+        ["EEXIST", "ENOTEMPTY", "EPERM"].includes(
           (error as NodeJS.ErrnoException).code ?? "",
         )
       ) {
