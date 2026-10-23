@@ -27,6 +27,7 @@ test("peer correlation diagnostics persist only the gated fixture projection", (
   const directory = mkdtempSync(join(tmpdir(), "peer-correlation-test-"));
   const priorDirectory = process.env.PI_CODING_AGENT_DIR;
   const priorGate = process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS;
+  const priorCorrelation = process.env.PEER_FEDERATION_CORRELATION_ACTIVE;
   process.env.PI_CODING_AGENT_DIR = directory;
   process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS = "1";
   t.mock.method(console, "error", () => {});
@@ -36,6 +37,7 @@ test("peer correlation diagnostics persist only the gated fixture projection", (
       triggerTurn: true,
       idle: true,
     });
+    assert.equal(process.env.PEER_FEDERATION_CORRELATION_ACTIVE, "1");
     assert.deepEqual(
       JSON.parse(
         readFileSync(
@@ -57,6 +59,9 @@ test("peer correlation diagnostics persist only the gated fixture projection", (
     if (priorGate === undefined)
       delete process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS;
     else process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS = priorGate;
+    if (priorCorrelation === undefined)
+      delete process.env.PEER_FEDERATION_CORRELATION_ACTIVE;
+    else process.env.PEER_FEDERATION_CORRELATION_ACTIVE = priorCorrelation;
     rmSync(directory, { recursive: true, force: true });
   }
 });

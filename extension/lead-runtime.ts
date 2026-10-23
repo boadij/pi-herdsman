@@ -184,17 +184,21 @@ export function peerCorrelationDiagnostic(
     event,
     ...fields,
   });
+  if (event === "send_invoked")
+    process.env.PEER_FEDERATION_CORRELATION_ACTIVE = "1";
   console.error(`[peer-correlation] ${diagnostic}`);
   try {
     const directory = process.env.PI_CODING_AGENT_DIR;
-    if (directory)
-      appendFileSync(
-        join(directory, "peer-federation-decisions.jsonl"),
-        `${diagnostic}\n`,
-        { mode: 0o600 },
-      );
+    if (!directory) throw new Error("diagnostic directory unavailable");
+    appendFileSync(
+      join(directory, "peer-federation-decisions.jsonl"),
+      `${diagnostic}\n`,
+      { mode: 0o600 },
+    );
   } catch {
-    // Diagnostics must not affect inbox delivery.
+    console.error(
+      '[peer-correlation] {"eventId":"peer-fixture-event","event":"diagnostic_emit_failure","outcome":"append_failed"}',
+    );
   }
 }
 
@@ -12605,23 +12609,26 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
-                  const correlatedFixture =
-                    record.kind === "peer_message" &&
-                    "text" in record &&
-                    typeof record.text === "string" &&
-                    record.text.includes("PEER_E2E_CORRELATION_ID");
-                  if (correlatedFixture) {
+                  const peerMessage = record.kind === "peer_message";
+                  if (peerMessage) {
                     peerCorrelationDiagnostic("inbound_persisted", {
                       outcome: "persisted",
                     });
-                    peerCorrelationDiagnostic("send_invoked", {
-                      outcome:
-                        options?.deliverAs === "followUp" ? "followUp" : "busy",
-                      triggerTurn: options?.triggerTurn === true,
-                      idle: ctx.isIdle(),
-                    });
                   }
-                  submitted = pi.sendMessage(payload, options);
+                  const idle = ctx.isIdle();
+                  try {
+                    submitted = pi.sendMessage(payload, options);
+                  } finally {
+                    if (peerMessage)
+                      peerCorrelationDiagnostic("send_invoked", {
+                        outcome:
+                          options?.deliverAs === "followUp"
+                            ? "followUp"
+                            : "busy",
+                        triggerTurn: options?.triggerTurn === true,
+                        idle,
+                      });
+                  }
                 };
                 if (
                   source.role === "manager" &&
