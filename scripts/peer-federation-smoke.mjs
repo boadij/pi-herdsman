@@ -2019,7 +2019,7 @@ try {
         "--timeout",
         "60000",
       ]);
-    } catch {
+    } catch (error) {
       const pane = herdr("a", [
         "pane",
         "read",
@@ -2033,6 +2033,19 @@ try {
         promptVisible: pane.includes("PEER_E2E_A_SEND"),
         inputReady: /\b(?:idle|ready)\b/iu.test(pane),
         errorVisible: /\b(?:error|failed|crashed)\b/iu.test(pane),
+        busy: /\b(?:busy|running|in progress)\b/iu.test(pane),
+        providerError: /\b(?:provider|model|rate limit|quota)\b/iu.test(pane),
+      };
+      const promptError = String(error);
+      const commandError = {
+        timeout: /\b(?:timeout|timed out)\b/iu.test(promptError),
+        busy: /\b(?:busy|running|in progress)\b/iu.test(promptError),
+        unavailable: /\b(?:not found|unavailable|closed|not running)\b/iu.test(
+          promptError,
+        ),
+        providerError: /\b(?:provider|model|rate limit|quota)\b/iu.test(
+          promptError,
+        ),
       };
       const sessionTail = JSON.parse(
         exec("a", [
@@ -2044,6 +2057,7 @@ try {
       );
       stage("manager-send-prompt-failed", {
         outcome: "status_timeout",
+        commandError,
         paneStatus,
         sessionTail,
         a: managerProjection("a"),
