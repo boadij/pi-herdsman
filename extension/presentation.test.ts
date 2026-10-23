@@ -2601,6 +2601,8 @@ test("list peers rendering distinguishes self from peers", () => {
           session: "other-origin-manager",
           name: "Research Manager",
         },
+        { session: "workspace-only", workspace_label: "project-beta" },
+        { session: "id-only" },
         { session: "unnamed-origin-manager" },
       ],
       unavailable_machines: ["office"],
@@ -2613,7 +2615,7 @@ test("list peers rendering distinguishes self from peers", () => {
         args: { action: "list" },
       }),
     ),
-    "peer · 1 discovered · 3 reply-only",
+    "peer · 1 discovered · 5 reply-only",
   );
 
   assert.equal(
@@ -2627,7 +2629,7 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 3\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  session: unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nunavailable machines office",
+    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  project-beta\n  session: workspace-only\n  Reply can be queued; current availability is unverified.\n  id-only\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nunavailable machines office",
   );
 
   assert.equal(

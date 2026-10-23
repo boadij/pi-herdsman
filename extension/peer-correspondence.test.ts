@@ -263,6 +263,24 @@ test("peer origin display metadata validates, persists, and enriches without bre
       }),
     /invalid peer correspondence/,
   );
+  for (const name of [
+    "bad\nname",
+    "bad\u202Ename",
+    "bad\u2066name",
+    "bad\u2028name",
+  ])
+    assert.throws(
+      () =>
+        createPeerCorrespondence({
+          originSession: randomUUID(),
+          originGeneration: randomUUID(),
+          recipientSession: randomUUID(),
+          recipientGeneration: randomUUID(),
+          acceptanceId: randomUUID(),
+          originDisplay: { name },
+        }),
+      /invalid peer correspondence/,
+    );
   for (const originDisplay of [
     {},
     { name: " " },

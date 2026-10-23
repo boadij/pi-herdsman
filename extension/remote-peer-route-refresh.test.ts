@@ -32,6 +32,7 @@ let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   return snapshot;
 };
 const deliveries: string[] = [];
+let outboundCorrespondence: any;
 mock.module("./peer-transport.ts", {
   namedExports: {
     ...realTransport,
@@ -47,7 +48,10 @@ mock.module("./peer-transport.ts", {
         recipientSession?: string;
         replyId?: string;
         record?: { id?: string };
+        correspondence?: unknown;
       };
+      if (request.correspondence)
+        outboundCorrespondence = request.correspondence;
       endpointCalls.push({
         action,
         recipientSession: request.recipientSession,
@@ -172,6 +176,7 @@ function fixture() {
   cReplyAcknowledged = false;
   nextSnapshots = [];
   deliveries.length = 0;
+  outboundCorrespondence = undefined;
   probeImpl = async () => {
     const value = nextSnapshots.shift();
     if (!value) throw new Error("missing test snapshot");
@@ -243,6 +248,7 @@ function fixture() {
   return {
     context,
     runtime,
+    sender,
     async close() {
       delete process.env.PI_CODING_AGENT_DIR;
       rmSync(root, { recursive: true, force: true });
@@ -316,6 +322,33 @@ test("published route remains sendable during refresh and a stale discovery cann
     send(f.runtime, f.context, "peer-stale"),
     /not found|unavailable/,
   );
+});
+
+test("outbound correspondence merges newly captured partial origin metadata", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [
+    snapshot([remote("peer-old")]),
+    snapshot([remote("peer-old")]),
+  ];
+  await list(f.runtime, f.context);
+  const correspondence = realCorrespondence.createPeerCorrespondence({
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-old",
+    recipientGeneration: "peer-old-generation",
+    acceptanceId: "acceptance-existing",
+    originDisplay: { workspaceLabel: "remembered workspace" },
+  });
+  correspondences.push(correspondence);
+  f.sender.workspaceLabel = "";
+  const sent = await send(f.runtime, f.context, "peer-old");
+  assert.equal(sent.details?.accepted, true);
+  assert.deepEqual(outboundCorrespondence.originDisplay, {
+    workspaceLabel: "remembered workspace",
+    name: "Local Research Manager",
+  });
 });
 
 test("list_peers projects exact reply-only correspondence targets without exposing capabilities", async (t) => {

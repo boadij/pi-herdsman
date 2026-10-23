@@ -11306,7 +11306,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         });
       correspondence.recipientGeneration = remoteRoute.claimId;
       if (Object.keys(originDisplay).length)
-        correspondence.originDisplay = originDisplay;
+        correspondence.originDisplay = {
+          ...correspondence.originDisplay,
+          ...originDisplay,
+        };
       storePeerCorrespondence(correspondence);
       const envelope = JSON.stringify({
         record,

@@ -84,7 +84,9 @@ export function validPeerDisplayText(value: unknown): value is string {
     typeof value === "string" &&
     value.trim().length > 0 &&
     value.length <= 512 &&
-    !/[\u0000-\u001f\u007f]/u.test(value)
+    !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(
+      value,
+    )
   );
 }
 
