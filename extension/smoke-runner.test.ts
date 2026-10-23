@@ -2929,13 +2929,13 @@ test("simulated Manager decision only delegates the exact requested project work
   );
 });
 
-test("federation Manager correlates its current branch after an earlier managed assignment", () => {
+test("federation Manager starts its branch after an earlier completed managed assignment", () => {
   const origin = "12345678-1234-1234-1234-123456789abc";
   const branch = "herdsman/federation-smoke-12345678";
   const messages = [
     {
       role: "user",
-      content: `Peer message from ${origin}: PEER_E2E_REQUEST; Forwardable received files:\nmanager-spec.md\nresult:abc#1`,
+      content: `Peer message from ${origin}: PEER_E2E_REQUEST; Forwardable received files:\nspec: manager-spec.md\nresult: result:abc#1`,
     },
     { role: "user", content: `Peer message from ${origin}: PEER_E2E_REQUEST` },
     {
@@ -2953,33 +2953,15 @@ test("federation Manager correlates its current branch after an earlier managed 
       role: "toolResult",
       toolName: "delegate_project",
       toolCallId: "managed-call",
-      isError: true,
-      content: [{ type: "text", text: "earlier managed assignment result" }],
-    },
-    { role: "user", content: "PEER_E2E_LOCAL_RESULT" },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "federation-call",
-          name: "delegate_project",
-          arguments: { branch },
-        },
-      ],
-    },
-    {
-      role: "toolResult",
-      toolName: "delegate_project",
-      toolCallId: "federation-call",
-      content: [{ type: "text", text: "Session: federation-session" }],
+      content: [{ type: "text", text: "Session: managed-session" }],
     },
   ];
 
   const answer = decide("federated-peer-b", { messages });
 
-  assert.equal(answer.stopReason, "stop");
-  assert.equal(answer.content[0].text, "Waiting for the local Lead result.");
+  assert.equal(answer.stopReason, "toolUse");
+  assert.equal(answer.content[0].name, "delegate_project");
+  assert.equal(answer.content[0].arguments.branch, branch);
 });
 
 test("core and continuation faux decisions wait for correlated delivered Agent results", () => {

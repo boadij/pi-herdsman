@@ -2138,9 +2138,49 @@ try {
       `repeated reply poll changed/lost the pending reply: ${JSON.stringify({ firstPoll, repeatedPoll })}`,
     );
   for (const tamper of [
-    { originSession: randomUUID() },
-    { originGeneration: randomUUID() },
+    {
+      change: { originSession: randomUUID() },
+      expectedError: "exact correspondence recipient is not live or authorized",
+    },
+    {
+      change: { originGeneration: randomUUID() },
+      expectedError: "peer correspondence authorization failed",
+    },
   ]) {
+    const liveRecipientProbe = JSON.parse(
+      command("docker", [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv("a"),
+        resources.a.container,
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        `UserKnownHostsFile=${resources.a.runtime.home}/.ssh/known_hosts`,
+        "-i",
+        `${resources.a.runtime.home}/.ssh/id_ed25519`,
+        "herdsman@peer-b",
+        "pi-herdsman-peer",
+        "probe",
+      ]),
+    );
+    if (
+      !liveRecipientProbe.peers.some(
+        (peer) =>
+          peer.role === "lead" &&
+          peer.sessionKind === "ordinary" &&
+          peer.piSessionId === correspondence.recipientSession &&
+          peer.claim?.id === correspondence.recipientGeneration,
+      )
+    )
+      throw new Error(
+        `intended correspondence recipient is not live: ${JSON.stringify({ recipientSession: correspondence.recipientSession, recipientGeneration: correspondence.recipientGeneration, peers: liveRecipientProbe.peers })}`,
+      );
     const rejected = spawnSync(
       "docker",
       [
@@ -2154,18 +2194,16 @@ try {
         ...pollArgs,
       ],
       {
-        input: JSON.stringify({ ...pollRequest, ...tamper }),
+        input: JSON.stringify({ ...pollRequest, ...tamper.change }),
         encoding: "utf8",
       },
     );
     if (
       rejected.status === 0 ||
-      !`${rejected.stderr}${rejected.stdout}`.includes(
-        "peer correspondence authorization failed",
-      )
+      !`${rejected.stderr}${rejected.stdout}`.includes(tamper.expectedError)
     )
       throw new Error(
-        `stale/replaced origin identity was not rejected: ${rejected.stderr}${rejected.stdout}`,
+        `stale/replaced origin identity did not fail with ${tamper.expectedError}: ${rejected.stderr}${rejected.stdout}`,
       );
   }
   resources.replyId = finalReply.id;
