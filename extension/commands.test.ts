@@ -5112,6 +5112,7 @@ async function managerRemovalFixture(
     replacementRequestId?: string;
     failPendingResolution?: boolean;
     integratedHeadSequence?: string[];
+    targetBranchSequence?: string[];
     integratedTargetCodes?: number[];
     replaceAssignmentAfterRemoval?: boolean;
     mergeEnabled?: boolean;
@@ -5164,6 +5165,7 @@ async function managerRemovalFixture(
   let mergeEnabled = options.mergeEnabled ?? true;
   let currentTargetHead = options.targetHead;
   let integratedHeadReads = 0;
+  let targetBranchReads = 0;
   let leadRunning = options.runningLead ?? false;
   let stoppedLeadCount = 0;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
@@ -5248,7 +5250,10 @@ async function managerRemovalFixture(
             managerReplaced = true;
           if (options.replaceAssignmentBeforeFinalReconcile)
             assignment = { ...assignment, id: "replacement-assignment" };
-          return { code: 0, stdout: "main\n", stderr: "" };
+          const branches = options.targetBranchSequence ?? ["main"];
+          const branch =
+            branches[Math.min(targetBranchReads++, branches.length - 1)];
+          return { code: 0, stdout: `${branch}\n`, stderr: "" };
         }
         if (args[0] === "merge") {
           gitMutations.push(args);
@@ -5779,6 +5784,40 @@ test("Manager merge runtime keeps integrated cleanup failure pending", async (t)
   assert.equal(result.details.assignment_retired, false);
 });
 
+test("Manager merge preserves the source if the primary branch changes after integration", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  for (const [targetBranchSequence, status] of [
+    [["main", "main", "other"], "blocked"],
+    [["main", "main", "main", "other"], "cleanup_pending"],
+    [["main", "main", "main", "main", "other"], "cleanup_pending"],
+  ] as const) {
+    const fixture = await managerRemovalFixture(t, {
+      sourceHead: acceptedHead,
+      targetHead: "0".repeat(40),
+      integratedTargetCodes: [1, 0, 1, 0, 1, 0, 0],
+      targetBranchSequence: [...targetBranchSequence],
+    });
+    const result = await fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: acceptedHead,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+
+    assert.equal(result.details.status, status);
+    assert.equal(result.details.checkout_removed, false);
+    assert.equal(fixture.removals.length, 0);
+    assert.ok(existsSync(fixture.checkoutPath));
+    if (status === "blocked") assert.equal(result.details.integrated, false);
+    else assert.equal(result.details.integrated, true);
+  }
+});
+
 test("Manager merge runtime fast-forwards and verifies cleanup against the exact accepted SHA", async (t) => {
   const acceptedHead = "2".repeat(40);
   const fixture = await managerRemovalFixture(t, {
@@ -5976,6 +6015,7 @@ test("integrated cleanup rechecks exact source HEAD and target ancestry immediat
           assignmentId: "assigned-lead",
           sourceHead: "2".repeat(40),
           targetPath: fixture.repoKey,
+          targetBranch: "main",
         },
       },
     );
@@ -5998,6 +6038,7 @@ test("integrated cleanup does not reconcile a same-branch replacement assignment
         assignmentId: "assigned-lead",
         sourceHead: "2".repeat(40),
         targetPath: fixture.repoKey,
+        targetBranch: "main",
       },
     },
   );

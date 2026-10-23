@@ -7457,6 +7457,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         assignmentId: string;
         sourceHead: string;
         targetPath: string;
+        targetBranch: string;
       };
     } = {},
   ) => {
@@ -7488,7 +7489,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         !mergeAuthorized() ||
         integrated.assignmentId !== candidate.assignment.id ||
-        integrated.targetPath !== candidate.sourceCheckoutPath
+        integrated.targetPath !== candidate.sourceCheckoutPath ||
+        !integrated.targetBranch
       )
         throw new Error(
           "Verified integration authorization is stale; worktree preserved",
@@ -7509,11 +7511,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           },
         ),
       ]);
+      const branch = await host.pi.exec(
+        "git",
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        {
+          cwd: candidate.sourceCheckoutPath,
+          signal: operationSignal,
+          timeout: 10_000,
+        },
+      );
       if (
         source.code !== 0 ||
         String(source.stdout ?? "").trim() !== integrated.sourceHead ||
         target.code !== 0 ||
-        target.killed
+        target.killed ||
+        branch.code !== 0 ||
+        branch.killed ||
+        branch.stderr?.trim() ||
+        String(branch.stdout ?? "").trim() !== integrated.targetBranch
       )
         throw new Error(
           "Integrated source or target could not be reverified; worktree preserved",
@@ -7689,7 +7704,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     "Project removal preauthorization was revoked",
                   );
                 if (integrated) {
-                  const [source, target] = await Promise.all([
+                  const [source, target, targetBranch] = await Promise.all([
                     host.pi.exec("git", ["rev-parse", "HEAD"], {
                       cwd: final.checkoutPath,
                       signal: operationSignal,
@@ -7709,6 +7724,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                         timeout: 10_000,
                       },
                     ),
+                    host.pi.exec(
+                      "git",
+                      ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                      {
+                        cwd: final.sourceCheckoutPath,
+                        signal: operationSignal,
+                        timeout: 10_000,
+                      },
+                    ),
                   ]);
                   if (
                     source.code !== 0 ||
@@ -7716,7 +7740,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     String(source.stdout ?? "").trim() !==
                       integrated.sourceHead ||
                     target.code !== 0 ||
-                    target.killed
+                    target.killed ||
+                    targetBranch.code !== 0 ||
+                    targetBranch.killed ||
+                    targetBranch.stderr?.trim() ||
+                    String(targetBranch.stdout ?? "").trim() !==
+                      integrated.targetBranch
                   )
                     throw new Error(
                       "Integrated source or target changed before removal; worktree preserved",
@@ -8576,6 +8605,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
                 { cwd: targetPath, timeout: 10_000 },
               );
+              const observedBranch = await host.pi.exec(
+                "git",
+                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                { cwd: targetPath, timeout: 10_000 },
+              );
               const operationStates: string[] = [];
               let stateUnknown = false;
               for (const state of [
@@ -8611,7 +8645,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               const integrationVerified =
                 !!observedHead &&
                 containsAccepted.code === 0 &&
-                !containsAccepted.killed;
+                !containsAccepted.killed &&
+                observedBranch.code === 0 &&
+                !observedBranch.killed &&
+                !observedBranch.stderr?.trim() &&
+                String(observedBranch.stdout ?? "").trim() === targetBranch;
               const gitStateClean =
                 status.code === 0 &&
                 !status.killed &&
@@ -8699,6 +8737,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           assignmentId: candidate.assignment.id,
           sourceHead: expectedHead,
           targetPath,
+          targetBranch: integration.targetBranch,
         },
       });
       const d = removed.details as Record<string, unknown>;
