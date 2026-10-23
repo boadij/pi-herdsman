@@ -402,6 +402,7 @@ try {
       const lines = text.split("\\n");
       let matchingDeliveryCount = 0, matchingReplyCount = 0, delivered, importedResultBinding;
       let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
+      const replyCalls = new Map(), replyResults = [];
       let inSendTurn = false, receipt = null, listPeersCalls = 0;
       for (const line of lines) {
         if (!line) continue;
@@ -416,11 +417,12 @@ try {
           receipt = { id: details.id, fromSessionId: details.fromSessionId, remoteSessionId: details.remoteSessionId };
         const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
         if (hasListPeers) listPeersCalls++;
-        if (kind === "recipient") {
-          const serialized = JSON.stringify(entry);
-          hasLeadReplyRef ||= serialized.includes(ref);
-          hasLeadReply ||= serialized.includes("PEER_E2E_LEAD_REPLY");
-          hasPortableContent ||= serialized.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
+        if (kind === "recipient" && entry.message?.role === "assistant") {
+          for (const part of entry.message.content ?? [])
+            if (part.type === "toolCall" && part.name === "message_peer" && typeof part.id === "string") replyCalls.set(part.id, JSON.stringify(part.arguments ?? {}));
+        }
+        if (kind === "recipient" && entry.message?.role === "toolResult" && entry.message.toolName === "message_peer") {
+          replyResults.push(entry);
         }
         if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id) {
           matchingDeliveryCount++;
@@ -433,6 +435,15 @@ try {
           delivered ??= entry;
         }
       }
+      for (const result of replyResults) {
+        const call = replyCalls.get(result.message.toolCallId);
+        if (call && result.message.isError !== true) {
+          const evidence = call + JSON.stringify(result.message.content ?? []);
+          hasLeadReplyRef ||= evidence.includes(ref);
+          hasLeadReply ||= evidence.includes("PEER_E2E_LEAD_REPLY");
+          hasPortableContent ||= evidence.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
+        }
+      }
       const tail = Buffer.from(text).subarray(-2048).toString("utf8");
       const recentTools = [];
       for (const line of tail.split("\\n")) {
@@ -441,11 +452,17 @@ try {
           for (const part of entry.message?.content ?? []) if (part.type === "toolCall" && typeof part.name === "string") recentTools.push({ id: part.id, name: part.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40), outcome: "called" });
           if (entry.message?.role === "toolResult") {
             const call = recentTools.findLast(item => item.id === entry.message.toolCallId);
-            if (call) call.outcome = entry.message.isError ? "error" : "result";
+            if (call) {
+              call.outcome = entry.message.isError ? "error" : "result";
+              if (call.name === "message_peer" && entry.message.isError) {
+                const errorText = (entry.message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" ");
+                call.errorCategory = errorText.includes("not available on the current branch") ? "missing-result-binding" : errorText.includes("same-role peer") ? "peer-authorization" : "other";
+              }
+            }
           }
         } catch {}
       }
-      const safeTools = recentTools.slice(-12).map(({ name, outcome }) => ({ name, outcome }));
+      const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
       process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
     `;
     const output = exec(side, [
@@ -1482,28 +1499,28 @@ try {
     resources.evidence.leadResultRef = leadResult.semanticRef;
     resources.evidence.leadResultSha256 = leadResult.artifactSha256;
     save();
-    const bindingHost = join(root, "peer-result-binding-lead-b.json");
+    const bindingHost = join(root, "peer-result-binding-lead-a.json");
     writeFileSync(bindingHost, `${JSON.stringify(leadResult.binding)}\n`, {
       mode: 0o600,
     });
     command("docker", [
       "cp",
       bindingHost,
-      `${resources.b.container}:${resources.b.runtime.piAgentDir}/peer-result-binding.json`,
+      `${resources.a.container}:${resources.a.runtime.piAgentDir}/peer-result-binding.json`,
     ]);
-    exec("b", [
+    exec("a", [
       "chown",
       "herdsman:herdsman",
-      `${resources.b.runtime.piAgentDir}/peer-result-binding.json`,
+      `${resources.a.runtime.piAgentDir}/peer-result-binding.json`,
     ]);
-    herdr("b", [
+    herdr("a", [
       "pane",
       "send-text",
-      resources.b.ordinaryLead.pane,
+      resources.a.ordinaryLead.pane,
       "/peer-import-result",
     ]);
-    herdr("b", ["pane", "send-keys", resources.b.ordinaryLead.pane, "Enter"]);
-    const leadImportMarker = `${resources.b.runtime.piAgentDir}/peer-result-import.done`;
+    herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
+    const leadImportMarker = `${resources.a.runtime.piAgentDir}/peer-result-import.done`;
     let leadImported;
     for (let attempt = 0; attempt < 80; attempt++) {
       const result = spawnSync(
@@ -1512,8 +1529,8 @@ try {
           "exec",
           "--user",
           "herdsman",
-          ...herdrEnv("b"),
-          resources.b.container,
+          ...herdrEnv("a"),
+          resources.a.container,
           "cat",
           leadImportMarker,
         ],
@@ -1530,7 +1547,14 @@ try {
       leadImported?.canonicalRef !== leadResult.binding.canonicalRef
     )
       throw new Error(
-        "B ordinary Lead did not import A's transferred result binding",
+        "A ordinary Lead did not import its result binding before sending",
+      );
+    if (
+      readOrdinaryLeadSession("b", "recipient", "", leadResult.binding.ref)
+        .importedResultBinding
+    )
+      throw new Error(
+        "B ordinary Lead was pre-seeded with A's result binding before delivery",
       );
     exec("a", [
       "rm",
@@ -1624,9 +1648,6 @@ try {
       importedResultBinding.data?.canonicalRef !==
         leadResult.binding.canonicalRef ||
       !JSON.stringify(delivered).includes(leadResult.artifactText) ||
-      !bRead.hasLeadReplyRef ||
-      !bRead.hasLeadReply ||
-      !bRead.hasPortableContent ||
       !leadResult.artifactText.includes(
         "PEER_E2E_PORTABLE_RESULT_CONTENT_V1",
       ) ||
@@ -1653,6 +1674,20 @@ try {
       "--timeout",
       "60000",
     ]);
+    const replyEvidence = readOrdinaryLeadSession(
+      "b",
+      "recipient",
+      acceptance.id,
+      resources.evidence.leadResultRef,
+    );
+    if (
+      !replyEvidence.hasLeadReplyRef ||
+      !replyEvidence.hasLeadReply ||
+      !replyEvidence.hasPortableContent
+    )
+      throw new Error(
+        "B ordinary Lead did not use the received result in its correlated message_peer reply",
+      );
     let resolvedStatus;
     let leadAcceptAttempts = [];
     let leadStatusAttempts = [];
