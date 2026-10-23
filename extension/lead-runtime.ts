@@ -11273,7 +11273,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             .digest("hex"),
         };
       });
-      withProjectAssignmentAuthority((assignments) => {
+      const enqueueReply = (
+        assignments?: Map<
+          string,
+          import("./supervision.ts").GlobalProjectAssignment[]
+        >,
+      ) => {
         const currentSender = readPeerLeadRecord(
           peerRuntime(),
           sender.piSessionId,
@@ -11292,7 +11297,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           !currentSender ||
           !samePeerLeadAuthority(currentSender, sender) ||
           (activeRole() === "lead" &&
-            (!isRemoteOrdinaryLead(currentSender, assignments) ||
+            (!assignments ||
+              !isRemoteOrdinaryLead(currentSender, assignments) ||
               currentCorrespondence.length !== 1)) ||
           (activeRole() !== "lead" && currentCorrespondence.length !== 1)
         )
@@ -11308,7 +11314,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               : {}),
           },
         );
-      });
+      };
+      if (activeRole() === "lead") withProjectAssignmentAuthority(enqueueReply);
+      else enqueueReply();
       const recipientRole = correspondence.role ?? "manager";
       return {
         content: [

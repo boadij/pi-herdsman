@@ -6,6 +6,7 @@ import { mock, test } from "node:test";
 
 const realTransport = await import("./peer-transport.ts");
 const realCorrespondence = await import("./peer-correspondence.ts");
+const { acquireProcessLock } = await import("./lock.ts");
 type Machine = realTransport.SavedPeerMachine;
 type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
@@ -428,6 +429,78 @@ test("reply receipt names the originating Lead correspondence role", async (t) =
     sent.content?.[0]?.text ?? "",
     /^Reply queued for originating Lead peer-old \([0-9a-f-]+\)\.$/u,
   );
+});
+
+test("Manager reply enqueue avoids assignment authority lock while Lead still requires it", async (t) => {
+  let managerLock: ReturnType<typeof acquireProcessLock> | undefined;
+  const managerEntered = gate<void>();
+  const manager = fixture("manager", async () => {
+    managerLock = acquireProcessLock(
+      supervision.projectAssignmentAuthorityLockPath(),
+    );
+    managerEntered.resolve();
+    return { inline: { bytes: 10000 }, mailbox: { bytes: 10000 } };
+  });
+  t.after(manager.close);
+  correspondences.push({
+    id: "manager-lock-return",
+    originSession: "origin-manager",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    finalized: false,
+    replies: [],
+  });
+  const managerSending = send(
+    manager.runtime,
+    manager.context,
+    "origin-manager",
+  );
+  await managerEntered.promise;
+  try {
+    const sent = await managerSending;
+    assert.equal(sent.details?.queued, true);
+    assert.equal(queuedReplies.length, 1);
+  } finally {
+    managerLock?.release();
+  }
+
+  correspondences.length = 0;
+  let leadLock: ReturnType<typeof acquireProcessLock> | undefined;
+  const leadEntered = gate<void>();
+  const lead = fixture("lead", async () => {
+    leadLock = acquireProcessLock(
+      supervision.projectAssignmentAuthorityLockPath(),
+    );
+    leadEntered.resolve();
+    return { inline: { bytes: 10000 }, mailbox: { bytes: 10000 } };
+  });
+  t.after(lead.close);
+  lead.sender.sessionKind = "ordinary";
+  lead.sender.workspaceId = "route-test-workspace";
+  lead.sender.socket = "/test-route-refresh.sock";
+  lead.sender.group = {
+    repoKey: assignment.repoKey,
+    primaryWorkspaceId: "route-test-workspace",
+  };
+  correspondences.push({
+    id: "lead-lock-return",
+    originSession: "origin-lead",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    role: "lead",
+    finalized: false,
+    replies: [],
+  });
+  const leadSending = send(lead.runtime, lead.context, "origin-lead");
+  await leadEntered.promise;
+  try {
+    await assert.rejects(leadSending);
+    assert.equal(queuedReplies.length, 0);
+  } finally {
+    leadLock?.release();
+  }
 });
 
 test("list_peers projects exact reply-only correspondence targets without exposing capabilities", async (t) => {

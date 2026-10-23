@@ -796,7 +796,7 @@ export function decide(model, context) {
       if (!assignment)
         return call("delegate_project", {
           branch: "herdsman/peer-smoke-managed",
-          task: "PEER_E2E_MANAGED_LEAD_PENDING: confirm the assigned task is complete.",
+          task: "Confirm the assigned task is complete and report PEER_E2E_MANAGED_LEAD_COMPLETE.",
         });
       if (assignment.result.isError)
         throw new Error("managed Lead project assignment failed");
@@ -943,8 +943,8 @@ export function decide(model, context) {
   }
   if (model === "federated-peer-lead") {
     const promptMessage = text(lastUser(messages));
-    if (promptMessage.includes("PEER_E2E_MANAGED_LEAD_PENDING"))
-      return new Promise(() => {});
+    if (promptMessage.includes("PEER_E2E_MANAGED_LEAD_COMPLETE"))
+      return fauxAssistantMessage("PEER_E2E_MANAGED_LEAD_COMPLETE");
     const isBTask = promptMessage.includes("PEER_E2E_LOCAL_TASK");
     const isATask = promptMessage.includes("PEER_E2E_A_FORWARD_TASK");
     if (!isBTask && !isATask)
