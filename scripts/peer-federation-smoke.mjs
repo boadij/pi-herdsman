@@ -891,7 +891,7 @@ try {
       "pane",
       "run",
       pane,
-      ...(side === "b"
+      ...(side === "b" && resources.diagnosticsEnabled
         ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
         : []),
       "pi",
@@ -1724,6 +1724,8 @@ try {
       acceptance.id,
       resources.evidence.leadResultRef,
     );
+    if (resources.diagnosticsEnabled)
+      stage("peer-correlation", { events: readBDecisionDiagnostics() });
     const delivered = bRead.delivered;
     const importedResultBinding = bRead.importedResultBinding;
     const checks = {

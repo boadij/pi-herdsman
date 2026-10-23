@@ -54,18 +54,6 @@ import {
   writePeerDeliveryReceipt,
 } from "./supervision.ts";
 
-function peerCorrelationDiagnostic(
-  event: "inbound_persisted" | "send_invoked",
-  fields: Record<string, boolean | string>,
-): void {
-  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS !== "1") return;
-  const diagnostic = JSON.stringify({
-    eventId: "peer-fixture-event",
-    event,
-    ...fields,
-  });
-  console.error(`[peer-correlation] ${diagnostic}`);
-}
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
@@ -150,8 +138,8 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { appendFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
   listSavedPeerMachines,
@@ -179,6 +167,36 @@ import {
   updatePeerRecipientGeneration,
   validPeerDisplayText,
 } from "./peer-correspondence.ts";
+
+export function peerCorrelationDiagnostic(
+  event: "inbound_persisted" | "send_invoked",
+  fields:
+    | { outcome: "persisted" }
+    | {
+        outcome: "followUp" | "busy";
+        triggerTurn: boolean;
+        idle: boolean;
+      },
+): void {
+  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS !== "1") return;
+  const diagnostic = JSON.stringify({
+    eventId: "peer-fixture-event",
+    event,
+    ...fields,
+  });
+  console.error(`[peer-correlation] ${diagnostic}`);
+  try {
+    const directory = process.env.PI_CODING_AGENT_DIR;
+    if (directory)
+      appendFileSync(
+        join(directory, "peer-federation-decisions.jsonl"),
+        `${diagnostic}\n`,
+        { mode: 0o600 },
+      );
+  } catch {
+    // Diagnostics must not affect inbox delivery.
+  }
+}
 
 type LeadIdentityHost = {
   expectedSession(id: string, path?: string): ExpectedSession;
@@ -12589,11 +12607,9 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   importResultBindings(pi, ctx, resultBindings, record.kind);
                   const correlatedFixture =
                     record.kind === "peer_message" &&
-                    typeof payload === "object" &&
-                    payload !== null &&
-                    "content" in payload &&
-                    typeof payload.content === "string" &&
-                    payload.content.includes("PEER_E2E_CORRELATION_ID");
+                    "text" in record &&
+                    typeof record.text === "string" &&
+                    record.text.includes("PEER_E2E_CORRELATION_ID");
                   if (correlatedFixture) {
                     peerCorrelationDiagnostic("inbound_persisted", {
                       outcome: "persisted",

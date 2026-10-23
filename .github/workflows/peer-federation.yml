@@ -30,4 +30,7 @@ jobs:
       - name: Manager federation acceptance
         run: node scripts/peer-federation-smoke.mjs
       - name: Ordinary Lead federation acceptance
-        run: PEER_SMOKE_PHASE=delivery node scripts/peer-federation-smoke.mjs
+        env:
+          PEER_SMOKE_DIAGNOSTICS: "1"
+          PEER_SMOKE_PHASE: delivery
+        run: node scripts/peer-federation-smoke.mjs

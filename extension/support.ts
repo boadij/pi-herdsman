@@ -128,6 +128,7 @@ process.on("exit", () => {
 });
 mock.module("node:fs", {
   namedExports: {
+    appendFileSync: realFs.appendFileSync,
     accessSync: realFs.accessSync,
     constants: realFs.constants,
     closeSync: realFs.closeSync,
