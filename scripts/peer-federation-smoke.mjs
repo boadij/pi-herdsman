@@ -400,10 +400,10 @@ try {
       const path = process.argv[1], kind = process.argv[2], id = process.argv[3], ref = process.argv[4];
       const text = fs.readFileSync(path, "utf8");
       const lines = text.split("\\n");
-      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
+      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, modelTurnsAfterInbound = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
       let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
       const replyCalls = new Map(), replyResults = [];
-      let inSendTurn = false, receipt = null, listPeersCalls = 0;
+      let inSendTurn = false, receipt = null, listPeersCalls = 0, inboundSeen = false;
       for (const line of lines) {
         if (!line) continue;
         let entry;
@@ -418,6 +418,7 @@ try {
         const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
         if (hasListPeers) listPeersCalls++;
         if (kind === "recipient" && entry.message?.role === "assistant") {
+          if (inboundSeen) modelTurnsAfterInbound++;
           for (const part of entry.message.content ?? []) {
             if (part.type === "toolCall" && part.name === "read") artifactReadCount++;
             if (part.type === "toolCall" && part.name === "message_peer") replyCallCount++;
@@ -431,7 +432,10 @@ try {
           matchingDeliveryCount++;
           delivered ??= entry;
         }
-        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.content?.includes("PEER_E2E_LEAD_REQUEST")) inboundLeadRequestCount++;
+        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.content?.includes("PEER_E2E_LEAD_REQUEST")) {
+          inboundLeadRequestCount++;
+          inboundSeen = true;
+        }
         if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef)
           importedResultBinding ??= entry;
         if (kind === "reply" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id && entry.content?.includes("PEER_E2E_LEAD_REPLY")) {
@@ -468,7 +472,7 @@ try {
         } catch {}
       }
       const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
-      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, artifactReadCount, replyCallCount, successfulReplyCount, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent: !!importedResultBinding, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
     `;
     const output = exec(side, [
       "node",
@@ -1726,7 +1730,7 @@ try {
         ]).trim(),
       );
       throw new Error(
-        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0 })}`,
+        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0 })}`,
       );
     }
     if (

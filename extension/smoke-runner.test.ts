@@ -2987,7 +2987,12 @@ test("federation Lead handles inbound request after its capture prompt and impor
   assert.equal(answer.content[0].name, "read");
   assert.equal(
     answer.content[0].arguments.path,
-    `${process.env.PI_CODING_AGENT_DIR}/pi-herdsman/results/${canonical.slice("result:".length)}`,
+    join(
+      process.env.PI_CODING_AGENT_DIR!,
+      "pi-herdsman",
+      "results",
+      canonical.slice("result:".length),
+    ),
   );
 });
 
