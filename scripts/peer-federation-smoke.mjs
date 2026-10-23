@@ -1998,20 +1998,70 @@ try {
     });
     // Reuse the live Manager pair and its existing faux delegation/reply path
     // to keep Manager federation covered in this independently runnable phase.
-    herdr("a", [
-      "agent",
-      "prompt",
-      resources.a.paneId,
-      `PEER_E2E_A_SEND ${leadResult.semanticRef}`,
-      "--wait",
-      "--timeout",
-      "60000",
-    ]);
     const managerEntries = (side) =>
       exec(side, ["cat", resources[side].managerSessionFile])
         .split("\n")
         .filter(Boolean)
         .map(JSON.parse);
+    const managerPromptSummary = (side) => {
+      const entries = managerEntries(side);
+      const messages = entries
+        .map((entry) => entry.message)
+        .filter((message) => message && typeof message === "object");
+      const calls = (name) =>
+        messages.reduce(
+          (count, message) =>
+            count +
+            (message.role === "assistant"
+              ? (message.content ?? []).filter(
+                  (part) => part.type === "toolCall" && part.name === name,
+                ).length
+              : 0),
+          0,
+        );
+      return {
+        sendPromptObserved: messages.some(
+          (message) =>
+            message.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.includes("PEER_E2E_A_SEND"),
+        ),
+        listPeersCalls: calls("list_peers"),
+        messagePeerCalls: calls("message_peer"),
+        inboundRequests: entries.filter(
+          (entry) =>
+            entry.type === "custom_message" &&
+            entry.customType === "pi-herdsman-peer_message" &&
+            ["PEER_E2E_REQUEST:", "PEER_E2E_REQUEST_SECOND:"].some((marker) =>
+              JSON.stringify(entry).includes(marker),
+            ),
+        ).length,
+        finalReplies: entries.filter(
+          (entry) =>
+            entry.type === "custom_message" &&
+            entry.customType === "pi-herdsman-peer_message" &&
+            JSON.stringify(entry).includes("PEER_E2E_REPLY_FINAL"),
+        ).length,
+      };
+    };
+    try {
+      herdr("a", [
+        "agent",
+        "prompt",
+        resources.a.paneId,
+        `PEER_E2E_A_SEND ${leadResult.semanticRef}`,
+        "--wait",
+        "--timeout",
+        "60000",
+      ]);
+    } catch {
+      stage("manager-send-prompt-failed", {
+        outcome: "status_timeout",
+        a: managerPromptSummary("a"),
+        b: managerPromptSummary("b"),
+      });
+      throw new Error("Manager send prompt did not settle");
+    }
     const managerDelivery = (entry, marker) =>
       entry.type === "custom_message" &&
       entry.customType === "pi-herdsman-peer_message" &&
