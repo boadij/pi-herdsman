@@ -57,6 +57,8 @@ import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import {
   isWorktreeRemovalPreapproved,
+  effectiveMergePolicy,
+  setManagerMergeOverride,
   setWorktreeRemovalPreapproved,
 } from "./config.ts";
 import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -564,6 +566,8 @@ type LeadProjectHost = {
     sourceCheckoutPath: string,
     alreadyLocked?: boolean,
     onlyBranch?: string,
+    retryLockContention?: boolean,
+    expectedAssignmentId?: string,
   ): Promise<void>;
   findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
@@ -2255,6 +2259,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Retire managed-Agent sessions at automatic context pressure instead of allowing normal threshold compaction.",
             },
             {
+              value: "manager-merge",
+              label: "Manager local merge",
+              description: `Global ${config.managerMergeEnabled ? "on" : "off"}`,
+              help: "Allow the Manager to fast-forward accepted local project branches and automatically clean up integrated source worktrees.",
+            },
+            {
               value: "message-limits",
               label: "Message limits",
               help: "Configure inline attachment and managed mailbox payload byte limits.",
@@ -2297,6 +2307,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ctx.ui.notify(
             `Global ${key === "contextRetirement" ? "context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
           );
+        } else if (selected === "manager-merge") {
+          const enabled = !host.readConfig().managerMergeEnabled;
+          if (enabled) {
+            const confirm = await ctx.ui.input(
+              "Enable Manager local merge? This authorizes fast-forward integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
+              undefined,
+            );
+            if (confirm !== "enable") continue;
+          }
+          host.updateConfig("managerMergeEnabled", enabled);
+          ctx.ui.notify(
+            `Global Manager local merge: ${enabled ? "on" : "off"}`,
+          );
         }
       }
     },
@@ -2320,6 +2343,23 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           removalPolicy = await host.getRemovalPreauthorization(ctx);
         } catch {
           // Removal policy is available only with verified active Manager authority.
+        }
+        let mergePolicy:
+          | {
+              repoKey: string;
+              enabled: boolean;
+              source: "global" | "repository";
+            }
+          | undefined;
+        try {
+          const manager = await host.getRemovalPreauthorization(ctx);
+          const policy = effectiveMergePolicy(
+            host.readConfig(),
+            manager.repoKey,
+          );
+          mergePolicy = { repoKey: manager.repoKey, ...policy };
+        } catch {
+          // Merge permission is exposed only with verified active Manager authority.
         }
         if (!ctx.isProjectTrusted() && !removalPolicy) {
           ctx.ui.notify(
@@ -2356,6 +2396,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 },
               ]
             : []),
+          ...(mergePolicy
+            ? [
+                {
+                  value: "merge-permission",
+                  label: `Manager local merge · ${mergePolicy.enabled ? "on" : "off"} (${mergePolicy.source})`,
+                  help: `Controls local fast-forward integration and automatic cleanup for verified repository ${mergePolicy.repoKey}.`,
+                },
+              ]
+            : []),
         ];
         const field = await host.selectMenu(ctx, "Project overrides", [
           ...fields,
@@ -2387,6 +2436,52 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               stored ? "info" : "warning",
             );
           }
+          continue;
+        }
+        if (field === "merge-permission" && mergePolicy) {
+          const global = host.readConfig().managerMergeEnabled;
+          const current = effectiveMergePolicy(
+            host.readConfig(),
+            mergePolicy.repoKey,
+          );
+          const choice = await host.selectMenu(
+            ctx,
+            `Manager local merge · ${mergePolicy.repoKey}`,
+            [
+              {
+                value: "inherit",
+                label: `Inherit global (${global ? "on" : "off"})`,
+              },
+              { value: "on", label: "On for this project" },
+              { value: "off", label: "Off for this project" },
+            ],
+            current.source === "global"
+              ? "inherit"
+              : current.enabled
+                ? "on"
+                : "off",
+          );
+          if (!choice) continue;
+          const enabled = choice === "inherit" ? undefined : choice === "on";
+          if (
+            enabled === true &&
+            !(current.enabled && current.source === "repository")
+          ) {
+            const confirm = await ctx.ui.input(
+              "Enabling Manager local merge allows automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
+              undefined,
+            );
+            if (confirm !== "enable") continue;
+          }
+          const exactManager = await host.getRemovalPreauthorization(ctx);
+          if (exactManager.repoKey !== mergePolicy.repoKey)
+            throw new Error(
+              "Manager repository changed; policy was not updated",
+            );
+          setManagerMergeOverride(mergePolicy.repoKey, enabled);
+          ctx.ui.notify(
+            `Manager local merge ${enabled === undefined ? "inherits global" : enabled ? "enabled" : "disabled"} for ${mergePolicy.repoKey}.`,
+          );
           continue;
         }
         if (!ctx.isProjectTrusted() || overrideError || !overrides) continue;
@@ -7355,7 +7450,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     branch: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
-    options: { expected?: PendingRemoval; preauthorized?: boolean } = {},
+    options: {
+      expected?: PendingRemoval;
+      preauthorized?: boolean;
+      integration?: {
+        assignmentId: string;
+        sourceHead: string;
+        targetPath: string;
+      };
+    } = {},
   ) => {
     const pendingAtStart = pendingRemovals(ctx).get(branch);
     if (activeRole() !== "manager")
@@ -7375,9 +7478,49 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const preauthorized = isWorktreeRemovalPreapproved(
       candidate.manager.repoKey,
     );
+    const integrated = options.integration;
+    const mergeAuthorized = () =>
+      !!integrated &&
+      effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey)
+        .enabled;
+    if (integrated) {
+      if (
+        !mergeAuthorized() ||
+        integrated.assignmentId !== candidate.assignment.id ||
+        integrated.targetPath !== candidate.sourceCheckoutPath
+      )
+        throw new Error(
+          "Verified integration authorization is stale; worktree preserved",
+        );
+      const [source, target] = await Promise.all([
+        host.pi.exec("git", ["rev-parse", "HEAD"], {
+          cwd: candidate.checkoutPath,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
+        host.pi.exec(
+          "git",
+          ["merge-base", "--is-ancestor", integrated.sourceHead, "HEAD"],
+          {
+            cwd: candidate.sourceCheckoutPath,
+            signal: operationSignal,
+            timeout: 10_000,
+          },
+        ),
+      ]);
+      if (
+        source.code !== 0 ||
+        String(source.stdout ?? "").trim() !== integrated.sourceHead ||
+        target.code !== 0 ||
+        target.killed
+      )
+        throw new Error(
+          "Integrated source or target could not be reverified; worktree preserved",
+        );
+    }
     if (options.preauthorized && !preauthorized)
       throw new Error("Project removal preauthorization was revoked");
-    const bypass = preauthorized;
+    const bypass = preauthorized || !!integrated;
     if (!bypass && !ctx.hasUI)
       throw new Error("Worktree removal requires interactive confirmation");
     const answer = bypass
@@ -7435,16 +7578,20 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   "Removal target changed during confirmation; worktree preserved",
                 );
               if (
-                bypass &&
-                !isWorktreeRemovalPreapproved(current.manager.repoKey)
+                (options.preauthorized &&
+                  !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
+                (integrated &&
+                  (!mergeAuthorized() ||
+                    integrated.assignmentId !== current.assignment.id))
               )
                 throw new Error("Project removal preauthorization was revoked");
               await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
               if (current.liveLead) {
                 try {
                   if (
-                    bypass &&
-                    !isWorktreeRemovalPreapproved(current.manager.repoKey)
+                    (options.preauthorized &&
+                      !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
+                    (integrated && !mergeAuthorized())
                   )
                     throw new Error(
                       "Project removal preauthorization was revoked",
@@ -7528,12 +7675,49 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               try {
                 operationSignal?.throwIfAborted();
                 if (
-                  bypass &&
-                  !isWorktreeRemovalPreapproved(final.manager.repoKey)
+                  (options.preauthorized &&
+                    !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
+                  (integrated &&
+                    (!mergeAuthorized() ||
+                      final.assignment.id !== integrated.assignmentId))
                 )
                   throw new Error(
                     "Project removal preauthorization was revoked",
                   );
+                if (integrated) {
+                  const [source, target] = await Promise.all([
+                    host.pi.exec("git", ["rev-parse", "HEAD"], {
+                      cwd: final.checkoutPath,
+                      signal: operationSignal,
+                      timeout: 10_000,
+                    }),
+                    host.pi.exec(
+                      "git",
+                      [
+                        "merge-base",
+                        "--is-ancestor",
+                        integrated.sourceHead,
+                        "HEAD",
+                      ],
+                      {
+                        cwd: final.sourceCheckoutPath,
+                        signal: operationSignal,
+                        timeout: 10_000,
+                      },
+                    ),
+                  ]);
+                  if (
+                    source.code !== 0 ||
+                    source.killed ||
+                    String(source.stdout ?? "").trim() !==
+                      integrated.sourceHead ||
+                    target.code !== 0 ||
+                    target.killed
+                  )
+                    throw new Error(
+                      "Integrated source or target changed before removal; worktree preserved",
+                    );
+                }
                 return {
                   result: await host.runHerdr(
                     host.pi,
@@ -7572,6 +7756,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             candidate.sourceCheckoutPath,
             true,
             branch,
+            false,
+            integrated?.assignmentId,
           );
           assignmentRetired = !host.readProjectAssignment(
             host.supervisionRuntime(),
@@ -7843,6 +8029,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
     | { action: "resume"; branch: string }
     | { action: "remove"; branch: string }
+    | { action: "merge"; branch: string; expected_head: string }
     | { action: "stop"; session: string }
     | { action: "inspect" | "transcript"; session: string }
     | {
@@ -7887,6 +8074,597 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
       activateProjectLeadLocked(operation, ctx, signal),
     );
+  };
+  const mergeProject = async (
+    branch: string,
+    expectedHead: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const operationSignal = signal ?? ctx.signal;
+    operationSignal?.throwIfAborted();
+    if (!/^[0-9a-f]{40,64}$/i.test(expectedHead))
+      throw new Error("expected_head must be a full commit SHA");
+    let candidate: Awaited<ReturnType<typeof inspectRemovalTarget>>;
+    try {
+      candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
+    } catch (sourceError) {
+      // Reconcile a vanished source only when Git independently proves its accepted SHA is integrated.
+      const manager = await host.currentManager(ctx);
+      const assignment =
+        manager &&
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          branch,
+        );
+      if (
+        !manager ||
+        !assignment ||
+        !effectiveMergePolicy(host.readConfig(), manager.repoKey).enabled
+      )
+        throw sourceError;
+      const topology = await host.runHerdr(
+        host.pi,
+        ctx,
+        ["worktree", "list", "--workspace", manager.workspaceId],
+        { signal: operationSignal },
+      );
+      if (
+        topology?.source?.source_workspace_id !== manager.workspaceId ||
+        topology?.source?.repo_key !== manager.repoKey ||
+        typeof topology?.source?.source_checkout_path !== "string"
+      )
+        throw sourceError;
+      const targetPath = topology.source.source_checkout_path;
+      const [branchResult, targetResult, ancestryResult] = await Promise.all([
+        host.pi.exec("git", ["symbolic-ref", "--short", "HEAD"], {
+          cwd: targetPath,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
+        host.pi.exec("git", ["rev-parse", "HEAD"], {
+          cwd: targetPath,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
+        host.pi.exec(
+          "git",
+          ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
+          { cwd: targetPath, signal: operationSignal, timeout: 10_000 },
+        ),
+      ]);
+      if (
+        branchResult.code !== 0 ||
+        targetResult.code !== 0 ||
+        ancestryResult.code !== 0 ||
+        ancestryResult.killed
+      )
+        throw sourceError;
+      const targetBranch = String(branchResult.stdout ?? "").trim();
+      const targetHead = String(targetResult.stdout ?? "").trim();
+      if (!targetBranch || !targetHead) throw sourceError;
+      if (!assignment.piSessionFile || !Array.isArray(topology.worktrees))
+        throw sourceError;
+      let sourcePath: string;
+      try {
+        const session = host.SessionManager.open(assignment.piSessionFile);
+        if (session.getSessionId() !== assignment.id) throw new Error();
+        sourcePath = resolve(session.getCwd());
+      } catch {
+        throw sourceError;
+      }
+      if (
+        gitPathStatus(sourcePath) !== "absent" ||
+        topology.worktrees.some(
+          (worktree: any) =>
+            worktree?.branch === branch ||
+            (typeof worktree?.path === "string" &&
+              resolve(worktree.path) === sourcePath),
+        )
+      )
+        throw sourceError;
+      const inventory = await host.pi.exec(
+        "git",
+        ["worktree", "list", "--porcelain", "-z"],
+        { cwd: targetPath, signal: operationSignal, timeout: 10_000 },
+      );
+      const parsedInventory = parseGitWorktreeInventory(
+        String(inventory.stdout ?? ""),
+      );
+      if (
+        inventory.code !== 0 ||
+        inventory.killed ||
+        !parsedInventory ||
+        parsedInventory.some(
+          (worktree) =>
+            worktree.branch === branch || resolve(worktree.path) === sourcePath,
+        )
+      )
+        throw sourceError;
+      await host.reconcileProjectAssignments(
+        ctx,
+        manager.repoKey,
+        manager.workspaceId,
+        targetPath,
+        true,
+        branch,
+        false,
+        assignment.id,
+      );
+      const retired = !host.readProjectAssignment(
+        host.supervisionRuntime(),
+        manager.repoKey,
+        branch,
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: retired
+              ? `Integrated ${branch} at ${expectedHead}; absent checkout reconciled and assignment retired.`
+              : `Integrated ${branch} at ${expectedHead}; absent checkout reconciliation is pending.`,
+          },
+        ],
+        details: {
+          ok: retired,
+          action: "merge",
+          branch,
+          target_branch: targetBranch,
+          source_head: expectedHead,
+          target_head: targetHead,
+          status: retired ? "complete" : "cleanup_pending",
+          integrated: true,
+          checkout_removed: true,
+          assignment_retired: retired,
+          ...(!retired ? { reason: "absence_reconciliation_pending" } : {}),
+        },
+      };
+    }
+    const permission = () =>
+      effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey);
+    if (!permission().enabled)
+      throw new Error("Manager local merge is not enabled for this repository");
+    const runGit = async (cwd: string, args: string[]) => {
+      operationSignal?.throwIfAborted();
+      const result = await host.pi.exec("git", args, {
+        cwd,
+        signal: operationSignal,
+        timeout: 30_000,
+      });
+      return result;
+    };
+    const output = async (cwd: string, args: string[]) => {
+      const result = await runGit(cwd, args);
+      if (result.code !== 0 || result.killed || result.stderr?.trim())
+        throw new Error(`Git verification failed: ${result.stderr || args[0]}`);
+      return String(result.stdout ?? "").trim();
+    };
+    const sourceHead = await output(candidate.checkoutPath, [
+      "rev-parse",
+      "HEAD",
+    ]);
+    if (sourceHead !== expectedHead)
+      throw new Error("Accepted source SHA is stale; worktree preserved");
+    const targetPath = candidate.sourceCheckoutPath;
+    const targetBranch = await output(targetPath, [
+      "symbolic-ref",
+      "--short",
+      "HEAD",
+    ]);
+    const targetHead = await output(targetPath, ["rev-parse", "HEAD"]);
+    const clean = async (path: string) => {
+      const status = await runGit(path, [
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+      ]);
+      if (
+        status.code !== 0 ||
+        status.killed ||
+        status.stderr?.trim() ||
+        status.stdout?.trim()
+      )
+        throw new Error(
+          "Source and target worktrees must be clean; no changes were discarded",
+        );
+      for (const state of [
+        "MERGE_HEAD",
+        "REBASE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+      ]) {
+        const probe = await runGit(path, ["rev-parse", "--git-path", state]);
+        if (probe.code !== 0 || probe.killed || probe.stderr?.trim())
+          throw new Error("Git operation state is unverifiable");
+        try {
+          statSync(resolve(path, String(probe.stdout ?? "").trim()));
+          throw new Error(`Git operation ${state} is in progress`);
+        } catch (error) {
+          if (
+            (error as NodeJS.ErrnoException).code !== "ENOENT" &&
+            !(
+              error instanceof Error &&
+              error.message.startsWith("Git operation ")
+            )
+          )
+            throw new Error("Git operation state is unverifiable");
+          if (
+            error instanceof Error &&
+            error.message.startsWith("Git operation ")
+          )
+            throw error;
+        }
+      }
+    };
+    await clean(targetPath);
+    await clean(candidate.checkoutPath);
+    const targetOccupants = await host.herdrSessionSnapshot(
+      host.pi,
+      ctx,
+      operationSignal,
+    );
+    if (
+      targetOccupants.agents.some(
+        (agent) =>
+          agent.workspace_id === candidate.manager.workspaceId &&
+          host.isPiAgent(agent),
+      )
+    )
+      throw new Error(
+        "An active execution occupies the primary target; no integration was attempted",
+      );
+    const ancestry = async (ancestor: string, descendant: string) => {
+      const result = await runGit(targetPath, [
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+      ]);
+      if (result.code === 0 && !result.killed && !result.stderr?.trim())
+        return true;
+      if (result.code === 1 && !result.killed && !result.stderr?.trim())
+        return false;
+      throw new Error("Git ancestry could not be verified");
+    };
+    await ancestry(expectedHead, targetHead);
+    if (!(await ancestry(targetHead, expectedHead)))
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${targetHead}.`,
+          },
+        ],
+        details: {
+          ok: false,
+          action: "merge",
+          branch,
+          target_branch: targetBranch,
+          source_head: expectedHead,
+          target_head: targetHead,
+          status: "needs_update",
+          integrated: false,
+          checkout_removed: false,
+          assignment_retired: false,
+        },
+      };
+    await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
+    const integration = await host.withProjectWorkLock(
+      `${candidate.manager.repoKey}\0${branch}`,
+      () =>
+        host.withProjectAssignmentLock(
+          candidate.manager.repoKey,
+          branch,
+          async () => {
+            const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
+            const lease = host.acquireProcessLock(lockPath, {
+              name: "repository integration lock",
+            });
+            try {
+              const current = await inspectRemovalTarget(
+                branch,
+                ctx,
+                operationSignal,
+              );
+              if (
+                current.assignment.id !== candidate.assignment.id ||
+                current.checkoutPath !== candidate.checkoutPath ||
+                current.sourceCheckoutPath !== targetPath
+              )
+                throw new Error(
+                  "Merge target changed; no integration performed",
+                );
+              if (!permission().enabled)
+                throw new Error("Manager local merge permission was revoked");
+              await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
+              if (current.liveLead)
+                await stopExecution(
+                  current.assignment.id,
+                  current.liveLead,
+                  ctx,
+                  operationSignal,
+                );
+              const targetOccupantsNow = await host.herdrSessionSnapshot(
+                host.pi,
+                ctx,
+                operationSignal,
+              );
+              if (
+                targetOccupantsNow.agents.some(
+                  (agent) =>
+                    agent.workspace_id === current.manager.workspaceId &&
+                    host.isPiAgent(agent),
+                )
+              )
+                throw new Error(
+                  "An active execution occupies the primary target; no integration was attempted",
+                );
+              await clean(targetPath);
+              await clean(current.checkoutPath);
+              const currentSource = await output(current.checkoutPath, [
+                "rev-parse",
+                "HEAD",
+              ]);
+              const currentTargetBranch = await output(targetPath, [
+                "symbolic-ref",
+                "--short",
+                "HEAD",
+              ]);
+              const currentTarget = await output(targetPath, [
+                "rev-parse",
+                "HEAD",
+              ]);
+              if (currentSource !== expectedHead)
+                throw new Error(
+                  "Accepted source SHA changed before integration",
+                );
+              if (currentTargetBranch !== targetBranch)
+                throw new Error(
+                  "Primary target branch changed before integration",
+                );
+              if (await ancestry(expectedHead, currentTarget))
+                return {
+                  targetHead: currentTarget,
+                  targetBranch,
+                  alreadyIntegrated: true as const,
+                };
+              if (!(await ancestry(currentTarget, expectedHead)))
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
+                    },
+                  ],
+                  details: {
+                    ok: false,
+                    action: "merge",
+                    branch,
+                    target_branch: targetBranch,
+                    source_head: expectedHead,
+                    target_head: currentTarget,
+                    status: "needs_update",
+                    integrated: false,
+                    checkout_removed: false,
+                    assignment_retired: false,
+                  },
+                };
+              if (!permission().enabled)
+                throw new Error("Manager local merge permission was revoked");
+              let mergeError: string | undefined;
+              const merged = await runGit(targetPath, [
+                "merge",
+                "--ff-only",
+                "--no-autostash",
+                "--no-overwrite-ignore",
+                expectedHead,
+              ]).catch((error) => {
+                mergeError =
+                  error instanceof Error ? error.message : String(error);
+                return {
+                  code: -1,
+                  killed: true,
+                  stdout: "",
+                  stderr: mergeError,
+                };
+              });
+              const interrupted =
+                merged.killed === true || operationSignal?.aborted === true;
+              const observed = await host.pi.exec(
+                "git",
+                ["rev-parse", "HEAD"],
+                { cwd: targetPath, timeout: 10_000 },
+              );
+              const index = await host.pi.exec(
+                "git",
+                ["ls-files", "--unmerged"],
+                { cwd: targetPath, timeout: 10_000 },
+              );
+              const status = await host.pi.exec(
+                "git",
+                ["status", "--porcelain=v1", "--untracked-files=all"],
+                { cwd: targetPath, timeout: 10_000 },
+              );
+              const containsAccepted = await host.pi.exec(
+                "git",
+                ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
+                { cwd: targetPath, timeout: 10_000 },
+              );
+              const operationStates: string[] = [];
+              let stateUnknown = false;
+              for (const state of [
+                "MERGE_HEAD",
+                "REBASE_HEAD",
+                "CHERRY_PICK_HEAD",
+                "rebase-merge",
+                "rebase-apply",
+              ]) {
+                const path = await host.pi.exec(
+                  "git",
+                  ["rev-parse", "--git-path", state],
+                  { cwd: targetPath, timeout: 10_000 },
+                );
+                if (path.code !== 0 || path.killed) {
+                  stateUnknown = true;
+                  continue;
+                }
+                try {
+                  statSync(
+                    resolve(targetPath, String(path.stdout ?? "").trim()),
+                  );
+                  operationStates.push(state);
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                    stateUnknown = true;
+                }
+              }
+              const observedHead =
+                observed.code === 0 && !observed.killed
+                  ? String(observed.stdout ?? "").trim()
+                  : "";
+              const integrationVerified =
+                !!observedHead &&
+                containsAccepted.code === 0 &&
+                !containsAccepted.killed;
+              const gitStateClean =
+                status.code === 0 &&
+                !status.killed &&
+                !status.stderr?.trim() &&
+                !status.stdout?.trim() &&
+                index.code === 0 &&
+                !index.killed &&
+                !index.stdout?.trim() &&
+                !stateUnknown &&
+                operationStates.length === 0;
+              if (
+                !integrationVerified ||
+                !gitStateClean ||
+                (merged.code !== 0 && !interrupted)
+              )
+                return {
+                  blocked: true as const,
+                  targetHead: observedHead || currentTarget,
+                  targetBranch,
+                  integrated: integrationVerified,
+                  reason: !integrationVerified
+                    ? "accepted_revision_not_verified_after_merge"
+                    : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
+                };
+              return {
+                targetHead: observedHead,
+                targetBranch,
+                alreadyIntegrated: false as const,
+              };
+            } finally {
+              lease.release();
+            }
+          },
+          operationSignal,
+        ),
+    );
+    if ("blocked" in integration)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Git integration did not reach a verified clean state; inspect the primary checkout before retrying.",
+          },
+        ],
+        details: {
+          ok: false,
+          action: "merge",
+          branch,
+          target_branch: integration.targetBranch,
+          source_head: expectedHead,
+          target_head: integration.targetHead,
+          status: "blocked",
+          integrated: integration.integrated,
+          checkout_removed: false,
+          assignment_retired: false,
+          reason: integration.reason,
+        },
+      };
+    if (!permission().enabled)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Integrated ${branch} at ${expectedHead}; cleanup is pending because permission was revoked.`,
+          },
+        ],
+        details: {
+          ok: false,
+          action: "merge",
+          branch,
+          target_branch: integration.targetBranch,
+          source_head: expectedHead,
+          target_head: integration.targetHead,
+          status: "cleanup_pending",
+          integrated: true,
+          checkout_removed: false,
+          assignment_retired: false,
+          reason: "merge_permission_revoked_before_cleanup",
+        },
+      };
+    try {
+      const removed = await removeWorktree(branch, ctx, operationSignal, {
+        integration: {
+          assignmentId: candidate.assignment.id,
+          sourceHead: expectedHead,
+          targetPath,
+        },
+      });
+      const d = removed.details as Record<string, unknown>;
+      const complete =
+        d.checkout_removed === true && d.assignment_retired === true;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: complete
+              ? `Integrated ${branch} at ${expectedHead}; checkout removed and assignment retired.`
+              : `Integrated ${branch} at ${expectedHead}; automatic cleanup remains pending.`,
+          },
+        ],
+        details: {
+          ok: complete,
+          action: "merge",
+          branch,
+          target_branch: integration.targetBranch,
+          source_head: expectedHead,
+          target_head: integration.targetHead,
+          status: complete ? "complete" : "cleanup_pending",
+          integrated: true,
+          checkout_removed: d.checkout_removed === true,
+          assignment_retired: d.assignment_retired === true,
+          ...(!complete ? { reason: "guarded_cleanup_incomplete" } : {}),
+        },
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Integrated ${branch} at ${expectedHead}; automatic cleanup remains pending: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        details: {
+          ok: false,
+          action: "merge",
+          branch,
+          target_branch: integration.targetBranch,
+          source_head: expectedHead,
+          target_head: integration.targetHead,
+          status: "cleanup_pending",
+          integrated: true,
+          checkout_removed: false,
+          assignment_retired: false,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
   };
   const activateProjectLeadLocked = async (
     operation: ProjectLeadActivation,
@@ -8618,6 +9396,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can control project work");
       return activateProjectLead(params, ctx, signal);
+    }
+    if (params.action === "merge") {
+      if (activeRole() !== "manager")
+        throw new Error("Only Managers can integrate project branches");
+      return mergeProject(params.branch, params.expected_head, ctx, signal);
     }
     if (params.action === "remove") {
       if (activeRole() !== "manager")
@@ -13635,6 +14418,7 @@ export function createLeadRoleTransitions(
     projectWorkLocked = false,
     onlyBranch?: string,
     retryLockContention = false,
+    expectedAssignmentId?: string,
   ): Promise<void> => {
     const manager = await currentManager(ctx);
     if (
@@ -13685,7 +14469,11 @@ export function createLeadRoleTransitions(
       );
     };
     for (const observed of assignments) {
-      if (onlyBranch && observed.branch !== onlyBranch) continue;
+      if (
+        (onlyBranch && observed.branch !== onlyBranch) ||
+        (expectedAssignmentId && observed.id !== expectedAssignmentId)
+      )
+        continue;
       if (checkoutMaySurvive(observed, initialInventory)) continue;
       const initialMatches = initialInventory.filter(
         (worktree) => worktree.branch === observed.branch,

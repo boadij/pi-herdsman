@@ -51,7 +51,9 @@ schema is:
   "autoActivateManager": false,
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072,
-  "worktreeRemovalPreapprovedRepos": ["/verified/repository"]
+  "worktreeRemovalPreapprovedRepos": ["/verified/repository"],
+  "managerMergeEnabled": false,
+  "managerMergeOverrides": { "/verified/repository": true }
 }
 ```
 
@@ -66,6 +68,8 @@ An absent file means these defaults:
 | `inlineAttachmentLimitBytes`      | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `mailboxPayloadLimitBytes`        | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `worktreeRemovalPreapprovedRepos` |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
+| `managerMergeEnabled`             |            `false` | boolean; global default for Manager local Git integration                     |
+| `managerMergeOverrides`           |               `{}` | map of verified repository identities to boolean overrides                    |
 
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human
@@ -124,6 +128,30 @@ Updates to an existing project settings file coordinate with Pi's settings
 lock. With Pi 1.3.0, concurrent independent writers can still race when
 creating a missing `.pi/settings.json`, because Pi reads the missing file before
 acquiring that lock.
+
+### Manager local merge
+
+Manager local-merge permission is stored only in this user-wide Herdsman
+configuration, not in project `.pi/settings.json`, Agent-modifiable project
+settings, or Manager definition overlays. It is disabled by default. The
+global `managerMergeEnabled` value applies unless the exact verified repository
+identity has an entry in `managerMergeOverrides`; `true` enables and `false`
+denies for that repository. Removing an entry restores inheritance from the
+global value. This policy is separate from
+`worktreeRemovalPreapprovedRepos`: enabling local merge does not authorize
+general worktree-removal requests.
+
+The permission covers fast-forward integration and the operation's narrowly
+scoped guarded cleanup of an integrated source checkout; it does not grant
+arbitrary removal authority. Settings provides a global toggle, and a verified
+Manager's project overrides provide `Inherit / On / Off` controls for that
+repository. Enabling either requires typing `enable`. The policy is persisted
+in user-wide Herdsman configuration, not project settings. `cleanup_pending`
+means integration succeeded but checkout removal and/or assignment retirement
+is incomplete; with permission still enabled, retrying the same accepted SHA
+can retry guarded cleanup. An already-absent checkout is reconciled only when
+the accepted SHA is verified on the primary branch and assignment/provenance
+checks pass.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`

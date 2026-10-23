@@ -111,6 +111,29 @@ not imply ownership, and Manager must not start another writer beside a Lead
 that already occupies the relevant worktree. Use separate Leads when work is
 independent enough to justify separate branch and execution boundaries.
 
+## Integrate completed branches
+
+When an assigned Lead has completed and validated its branch, the Manager can
+accept its exact source commit and use the Manager-only `merge_project` staff
+tool to fast-forward the verified primary branch. This is local Git
+integration; it does not fetch, push, or merge a hosted pull request. The source
+and target must be clean, and a branch that does not contain the current target
+is returned as `needs_update`. That result is not proof of a content conflict.
+Use `message_staff` to ask the responsible Lead to incorporate the reported
+target revision, resolve any actual conflicts, run relevant checks, and report
+the exact validated new source HEAD. Then accept that revision before retrying.
+
+Independent feature branches may be integrated one at a time; a later branch
+may need to incorporate earlier integration first. The Git branch is preserved.
+After verified integration, the operation attempts guarded removal of the
+exact source checkout and retirement of its assignment. `cleanup_pending`
+means integration is verified but at least one cleanup fact is not; retry
+with the same accepted SHA while permission remains enabled to retry the
+guarded cleanup. If the checkout is already absent, reconciliation requires
+independent Git proof that the accepted SHA is on the verified primary branch
+and exact assignment/provenance checks. Checkout removal or assignment
+retirement alone does not prove integration or project validation succeeded.
+
 ## Coordinate and review
 
 While a Lead remains assigned, Herdsman automatically returns every completed

@@ -75,9 +75,17 @@ Agents or alter project assignments or authority. Its reserved `manager`
 definition customizes instructions, ordinary tool selection, and this
 direct-delegation allowlist.
 
-Project execution belongs to assigned Leads and their Agent trees. Manager can
-inspect and communicate with all direct Leads, but it does not
-acquire ownership of their Agents.
+Project implementation, technical conflict repair, and validation belong to
+assigned Leads and their Agent trees. The Manager owns
+project-level integration decisions and may use `merge_project` to fast-forward
+an accepted assigned branch into the verified primary branch when local-merge
+permission is enabled. Manager's Git integration does not grant ownership of
+the Lead's Agents or transfer responsibility for technical validation. The
+Successful integration normally triggers guarded removal of that exact source
+checkout and retirement of its assignment. A `cleanup_pending` result reports
+the partial outcome truthfully; an authorized retry with the same accepted
+SHA can retry cleanup, while an absent checkout is reconciled only after Git
+proves the SHA is on the verified primary branch.
 
 ### Chief
 

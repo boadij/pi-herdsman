@@ -315,6 +315,15 @@ approval request unless the repository has human preauthorization, in which
 case it invokes the same guarded operation without another confirmation.
 See [Staff tools](staff.md#remove_worktree) for the result contract.
 
+Local branch integration is exposed to an authorized Manager through the
+`merge_project` staff tool, not a `/manager` slash command or Manager overview
+action. Its separate opt-in is available in Settings and in the verified
+Manager's project overrides (`Inherit / On / Off`); enabling either policy
+requires typing `enable`. The authorization is stored in user-wide Herdsman
+configuration. See
+[Configuration](configuration.md#manager-local-merge) and
+[Staff tools](staff.md#merge_project).
+
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` refreshes its validated profile after the current turn
 becomes idle and then opens the overview; a failed refresh keeps the previous

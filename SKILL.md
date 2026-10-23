@@ -460,6 +460,18 @@ Pi Herdsman uses one durable vocabulary:
   pending project messages. Unavailable or ambiguous inventory preserves the
   assignment. A retired assignment cannot be resumed, but new work may reuse
   its remaining Git branch;
+- the Manager owns project-level integration decisions. When separately
+  authorized by the Manager local-merge policy, it can accept the exact
+  validated source revision and use `merge_project` to fast-forward that
+  assigned branch into the verified primary branch. A `needs_update` result
+  means ask the responsible Lead to incorporate the reported target revision,
+  resolve actual conflicts, validate, and report the new exact HEAD; it does
+  not itself prove a content conflict. Leads retain technical integration and
+  validation ownership. When cleanup is incomplete, `cleanup_pending` reports
+  integration separately from checkout removal and assignment retirement; an
+  authorized retry with the same accepted SHA can retry guarded cleanup,
+  including reconciling an already-absent checkout only after Git proves that
+  SHA is on the verified primary branch;
 - each completed direct turn by an assigned Lead is automatically returned as a
   project message to the current or a replacement Manager; if managed Agent
   work is active, the herd run owns the handoff until it settles, and the

@@ -8,7 +8,8 @@ is available when persisted session evidence is available. Manager and Chief
 have the same direct-report observation and communication capabilities.
 Manager additionally has
 the branch-based project operations `delegate_project`, `resume_project`,
-`stop_lead`, and `remove_worktree`. Chief has no project-operation tools.
+`stop_lead`, `remove_worktree`, and `merge_project`. Chief has no
+project-operation tools.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `list_staff`. Project actions use the Git branch.
@@ -232,6 +233,39 @@ assignment retirement are both confirmed; when checkout state is `unknown`, a
 false value is not proof that the assignment remains. Overall success requires
 both checkout absence and assignment retirement to be confirmed. Removal never
 deletes the Git branch or Pi conversation.
+
+## `merge_project`
+
+Manager only. Integrate an assigned local branch into the verified primary
+branch using fast-forward-only Git:
+
+```json
+{ "branch": "feat/example", "expected_head": "<full commit SHA>" }
+```
+
+`expected_head` is the exact source revision the Manager accepted after
+validation; the source branch must still point to it. This operation is
+separately controlled by the Manager local-merge policy (see
+[Configuration](configuration.md#manager-local-merge)). It does not fetch,
+push, create a merge commit, or delete the Git branch. Divergence returns
+`needs_update` with the observed target revision; this means the source branch
+must incorporate the target, not necessarily that Git found a content conflict.
+The Lead remains responsible for resolving changes and validating the updated
+branch before the Manager accepts a new revision.
+
+The structured result reports `status`, `integrated`, `checkout_removed`, and
+`assignment_retired` independently. `needs_update` leaves both checkouts
+untouched. Successful integration triggers guarded cleanup of the exact
+assigned checkout, followed by assignment reconciliation; `complete` requires
+both cleanup facts. If either is incomplete, `cleanup_pending` reports the
+partial result without claiming finalization. An authorized retry with the
+same accepted SHA rechecks the exact assignment and policy and retries
+guarded cleanup. If the checkout is already absent, it is reconciled only
+after fresh Git evidence proves the accepted SHA is contained in the verified
+primary branch, plus checkout provenance and exact-assignment checks. Absence
+alone never proves integration. Other validation or Git-state uncertainty
+fails closed; a `blocked` result may require inspecting the primary checkout
+before retrying.
 
 ## See also
 

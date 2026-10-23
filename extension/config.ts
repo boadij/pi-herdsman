@@ -35,6 +35,8 @@ export type HerdsmanConfig = {
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
   worktreeRemovalPreapprovedRepos: string[];
+  managerMergeEnabled: boolean;
+  managerMergeOverrides: Record<string, boolean>;
 };
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
@@ -45,6 +47,8 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
   worktreeRemovalPreapprovedRepos: [],
+  managerMergeEnabled: false,
+  managerMergeOverrides: {},
 };
 
 export function validByteLimit(value: unknown): value is number {
@@ -65,7 +69,36 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
   "worktreeRemovalPreapprovedRepos",
+  "managerMergeEnabled",
+  "managerMergeOverrides",
 ]);
+
+function validRepoIdentity(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !!value.trim() &&
+    value === value.trim() &&
+    value.length <= 4096 &&
+    value !== "__proto__" &&
+    value !== "constructor" &&
+    value !== "prototype" &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function validManagerMergeOverrides(
+  value: unknown,
+): value is Record<string, boolean> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([repoKey, enabled]) =>
+        validRepoIdentity(repoKey) && typeof enabled === "boolean",
+    )
+  );
+}
 
 function parseRawConfig(content: string): Partial<HerdsmanConfig> {
   let parsed: unknown;
@@ -103,6 +136,16 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       throw new Error("Invalid Pi Herdsman config field autoActivateManager");
     result.autoActivateManager = record.autoActivateManager;
   }
+  if ("managerMergeEnabled" in record) {
+    if (typeof record.managerMergeEnabled !== "boolean")
+      throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
+    result.managerMergeEnabled = record.managerMergeEnabled;
+  }
+  if ("managerMergeOverrides" in record) {
+    if (!validManagerMergeOverrides(record.managerMergeOverrides))
+      throw new Error("Invalid Pi Herdsman config field managerMergeOverrides");
+    result.managerMergeOverrides = record.managerMergeOverrides;
+  }
   for (const key of [
     "inlineAttachmentLimitBytes",
     "mailboxPayloadLimitBytes",
@@ -131,6 +174,60 @@ export function isWorktreeRemovalPreapproved(repoKey: string): boolean {
   return (
     !!repoKey && readConfig().worktreeRemovalPreapprovedRepos.includes(repoKey)
   );
+}
+
+export type EffectiveMergePolicy = {
+  enabled: boolean;
+  source: "global" | "repository";
+};
+
+export function effectiveMergePolicy(
+  config: Pick<HerdsmanConfig, "managerMergeEnabled" | "managerMergeOverrides">,
+  repoKey: string,
+): EffectiveMergePolicy {
+  if (!validRepoIdentity(repoKey))
+    throw new Error("A verified repository identity is required");
+  const override = config.managerMergeOverrides[repoKey];
+  return !Object.hasOwn(config.managerMergeOverrides, repoKey)
+    ? { enabled: config.managerMergeEnabled, source: "global" }
+    : { enabled: override, source: "repository" };
+}
+
+export function setManagerMergeOverride(
+  repoKey: string,
+  enabled: boolean | undefined,
+): void {
+  if (
+    !validRepoIdentity(repoKey) ||
+    (enabled !== undefined && typeof enabled !== "boolean")
+  )
+    throw new Error(
+      "A verified repository identity and optional boolean policy are required",
+    );
+  const path = herdsmanConfigPath();
+  const release = claimProcessLock(`${path}.lock`, {
+    name: "Pi Herdsman config update",
+  });
+  try {
+    const current = readRawConfig();
+    const overrides = { ...current.managerMergeOverrides };
+    if (enabled === undefined) delete overrides[repoKey];
+    else overrides[repoKey] = enabled;
+    if (Object.keys(overrides).length)
+      current.managerMergeOverrides = overrides;
+    else delete current.managerMergeOverrides;
+    if (Object.keys(current).length)
+      writeConfigAtomically(path, `${JSON.stringify(current, null, 2)}\n`);
+    else {
+      try {
+        unlinkSync(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  } finally {
+    release();
+  }
 }
 
 export function setWorktreeRemovalPreapproved(
@@ -177,7 +274,9 @@ function readRawConfig(): Partial<HerdsmanConfig> {
 }
 
 export function readConfig(): HerdsmanConfig {
-  return { ...DEFAULT_CONFIG, ...readRawConfig() };
+  const config = { ...DEFAULT_CONFIG, ...readRawConfig() };
+  config.managerMergeOverrides = { ...config.managerMergeOverrides };
+  return config;
 }
 
 type ProjectContext = Pick<ExtensionContext, "cwd" | "isProjectTrusted">;
@@ -388,6 +487,12 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error("Invalid Pi Herdsman config field contextRetirement");
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
+      if (key === "managerMergeEnabled" && typeof value !== "boolean")
+        throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
+      if (key === "managerMergeOverrides" && !validManagerMergeOverrides(value))
+        throw new Error(
+          "Invalid Pi Herdsman config field managerMergeOverrides",
+        );
       if (
         key === "worktreeRemovalPreapprovedRepos" &&
         (!Array.isArray(value) ||
@@ -402,6 +507,8 @@ export function updateConfig<K extends ConfigKey>(
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
+        key !== "managerMergeEnabled" &&
+        key !== "managerMergeOverrides" &&
         key !== "worktreeRemovalPreapprovedRepos" &&
         !validByteLimit(value)
       )

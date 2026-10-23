@@ -70,6 +70,8 @@ const {
   readConfig,
   isWorktreeRemovalPreapproved,
   setWorktreeRemovalPreapproved,
+  effectiveMergePolicy,
+  setManagerMergeOverride,
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
@@ -116,6 +118,66 @@ test("invalid worktree-removal preauthorization fails closed", () => {
   assert.throws(
     () => isWorktreeRemovalPreapproved("/repo-a"),
     /worktreeRemovalPreapprovedRepos/,
+  );
+});
+
+test("Manager merge policy defaults off and repository overrides inherit, set, and clear", () => {
+  assert.equal(readConfig().managerMergeEnabled, false);
+  assert.deepEqual(readConfig().managerMergeOverrides, {});
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: false,
+    source: "global",
+  });
+
+  updateConfig("managerMergeEnabled", true);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    source: "global",
+  });
+  setManagerMergeOverride("/repo-a", false);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: false,
+    source: "repository",
+  });
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-b"), {
+    enabled: true,
+    source: "global",
+  });
+  setManagerMergeOverride("/repo-a", true);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    source: "repository",
+  });
+  setManagerMergeOverride("/repo-a", undefined);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    source: "global",
+  });
+  assert.deepEqual(readConfig().worktreeRemovalPreapprovedRepos, []);
+});
+
+test("Manager merge policy strictly validates booleans and repository keys", () => {
+  realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
+  for (const value of [
+    { managerMergeEnabled: "true" },
+    { managerMergeOverrides: [] },
+    { managerMergeOverrides: { "/repo-a": "true" } },
+    { managerMergeOverrides: { " /repo-a": true } },
+    { managerMergeOverrides: { "bad\nkey": false } },
+  ]) {
+    realFs.writeFileSync(configPath!, JSON.stringify(value));
+    assert.throws(() => readConfig(), /managerMerge/);
+  }
+  for (const repoKey of ["", " /repo", "repo\nkey", "__proto__"]) {
+    assert.throws(
+      () => setManagerMergeOverride(repoKey, true),
+      /verified repository identity/,
+    );
+  }
+  assert.throws(() => setManagerMergeOverride("/repo-a", "yes" as never));
+  assert.throws(
+    () => updateConfig("managerMergeOverrides", { "/repo-a": 1 } as never),
+    /managerMergeOverrides/,
   );
 });
 
