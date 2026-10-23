@@ -2020,8 +2020,32 @@ try {
         "60000",
       ]);
     } catch {
+      const pane = herdr("a", [
+        "pane",
+        "read",
+        resources.a.paneId,
+        "--source",
+        "recent",
+        "--lines",
+        "40",
+      ]);
+      const paneStatus = {
+        promptVisible: pane.includes("PEER_E2E_A_SEND"),
+        inputReady: /\b(?:idle|ready)\b/iu.test(pane),
+        errorVisible: /\b(?:error|failed|crashed)\b/iu.test(pane),
+      };
+      const sessionTail = JSON.parse(
+        exec("a", [
+          "node",
+          "-e",
+          `const fs=require('node:fs');const lines=fs.readFileSync(process.argv[1],'utf8').trimEnd().split('\\n').slice(-40);const entries=lines.filter(Boolean).map(line=>JSON.parse(line));process.stdout.write(JSON.stringify({promptObserved:entries.some(entry=>entry.message?.role==='user'&&String(entry.message.content).includes('PEER_E2E_A_SEND')),tail:entries.map(({type,customType,message,timestamp})=>({type,customType,role:message?.role,timestamp}))}));`,
+          resources.a.managerSessionFile,
+        ]),
+      );
       stage("manager-send-prompt-failed", {
         outcome: "status_timeout",
+        paneStatus,
+        sessionTail,
         a: managerProjection("a"),
         b: managerProjection("b"),
       });
