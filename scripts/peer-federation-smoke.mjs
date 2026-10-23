@@ -22,6 +22,7 @@ import {
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+import { managerProjectionSource } from "./peer-federation-manager-projection.mjs";
 
 let runId = `peer474-${randomUUID()}`;
 let root = join(tmpdir(), runId);
@@ -1998,52 +1999,16 @@ try {
     });
     // Reuse the live Manager pair and its existing faux delegation/reply path
     // to keep Manager federation covered in this independently runnable phase.
-    const managerEntries = (side) =>
-      exec(side, ["cat", resources[side].managerSessionFile])
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-    const managerPromptSummary = (side) => {
-      const entries = managerEntries(side);
-      const messages = entries
-        .map((entry) => entry.message)
-        .filter((message) => message && typeof message === "object");
-      const calls = (name) =>
-        messages.reduce(
-          (count, message) =>
-            count +
-            (message.role === "assistant"
-              ? (message.content ?? []).filter(
-                  (part) => part.type === "toolCall" && part.name === name,
-                ).length
-              : 0),
-          0,
-        );
-      return {
-        sendPromptObserved: messages.some(
-          (message) =>
-            message.role === "user" &&
-            typeof message.content === "string" &&
-            message.content.includes("PEER_E2E_A_SEND"),
-        ),
-        listPeersCalls: calls("list_peers"),
-        messagePeerCalls: calls("message_peer"),
-        inboundRequests: entries.filter(
-          (entry) =>
-            entry.type === "custom_message" &&
-            entry.customType === "pi-herdsman-peer_message" &&
-            ["PEER_E2E_REQUEST:", "PEER_E2E_REQUEST_SECOND:"].some((marker) =>
-              JSON.stringify(entry).includes(marker),
-            ),
-        ).length,
-        finalReplies: entries.filter(
-          (entry) =>
-            entry.type === "custom_message" &&
-            entry.customType === "pi-herdsman-peer_message" &&
-            JSON.stringify(entry).includes("PEER_E2E_REPLY_FINAL"),
-        ).length,
-      };
-    };
+    const managerProjection = (side) =>
+      JSON.parse(
+        exec(side, [
+          "node",
+          "-e",
+          managerProjectionSource,
+          resources[side].managerSessionFile,
+          resources.a.remoteProbe.session,
+        ]),
+      );
     try {
       herdr("a", [
         "agent",
@@ -2057,61 +2022,42 @@ try {
     } catch {
       stage("manager-send-prompt-failed", {
         outcome: "status_timeout",
-        a: managerPromptSummary("a"),
-        b: managerPromptSummary("b"),
+        a: managerProjection("a"),
+        b: managerProjection("b"),
       });
       throw new Error("Manager send prompt did not settle");
     }
-    const managerDelivery = (entry, marker) =>
-      entry.type === "custom_message" &&
-      entry.customType === "pi-herdsman-peer_message" &&
-      entry.details?.toSessionId === resources.a.remoteProbe.session &&
-      JSON.stringify(entry).includes(marker);
-    const firstManagerDeliveries = () =>
-      bManagerEntries.filter((entry) =>
-        managerDelivery(entry, "PEER_E2E_REQUEST:"),
-      );
-    const secondManagerDeliveries = () =>
-      bManagerEntries.filter((entry) =>
-        managerDelivery(entry, "PEER_E2E_REQUEST_SECOND:"),
-      );
-    let bManagerEntries = [];
-    let managerReply;
+    let bManagerEvidence;
+    let aManagerEvidence;
     for (let attempt = 0; attempt < 120; attempt++) {
-      bManagerEntries = managerEntries("b");
-      managerReply = managerEntries("a").find(
-        (entry) =>
-          entry.type === "custom_message" &&
-          entry.customType === "pi-herdsman-peer_message" &&
-          JSON.stringify(entry).includes("PEER_E2E_REPLY_FINAL"),
-      );
+      bManagerEvidence = managerProjection("b");
+      aManagerEvidence = managerProjection("a");
       if (
-        firstManagerDeliveries().length >= 1 &&
-        secondManagerDeliveries().length >= 1 &&
-        managerReply
+        bManagerEvidence.firstDeliveryCount >= 1 &&
+        bManagerEvidence.secondDeliveryCount >= 1 &&
+        aManagerEvidence.replyCount >= 1
       )
         break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
     const managerFile = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/received-evidence/${resources.evidence.managerSpecSha256}-manager-spec.md`;
     const managerFileContent = exec("b", ["cat", managerFile]);
-    const firstManagerDelivery = firstManagerDeliveries()[0];
+    const firstManagerDelivery = bManagerEvidence.firstDelivery;
+    const secondManagerDelivery = bManagerEvidence.secondDelivery;
+    const managerReply = aManagerEvidence.replyId;
     if (
       !managerReply ||
-      firstManagerDeliveries().length !== 1 ||
-      secondManagerDeliveries().length !== 1 ||
-      typeof firstManagerDeliveries()[0].details?.id !== "string" ||
-      typeof secondManagerDeliveries()[0].details?.id !== "string" ||
-      firstManagerDeliveries()[0].details.id ===
-        secondManagerDeliveries()[0].details.id ||
+      bManagerEvidence.firstDeliveryCount !== 1 ||
+      bManagerEvidence.secondDeliveryCount !== 1 ||
+      typeof firstManagerDelivery.id !== "string" ||
+      typeof secondManagerDelivery.id !== "string" ||
+      firstManagerDelivery.id === secondManagerDelivery.id ||
       managerFileContent !== managerSpecText ||
       digest(managerFileContent) !== resources.evidence.managerSpecSha256 ||
-      !JSON.stringify(firstManagerDelivery).includes(
-        "PEER_E2E_MANAGER_FILE_CONTENT_V1",
-      )
+      !firstManagerDelivery.file
     )
       throw new Error(
-        `Manager federation did not deliver distinct expected requests, portable file evidence, and a reply: reply=${Boolean(managerReply)}, first=${firstManagerDeliveries().length}, second=${secondManagerDeliveries().length}, file=${managerFile}`,
+        `Manager federation did not deliver distinct expected requests, portable file evidence, and a reply: reply=${Boolean(managerReply)}, first=${bManagerEvidence.firstDeliveryCount}, second=${bManagerEvidence.secondDeliveryCount}, file=${managerFile}`,
       );
     stage("manager-federation-delivery-evidence-reply-verified", {
       aSession: resources.a.managerSessionId,
@@ -2119,7 +2065,7 @@ try {
       deliveries: 2,
       portableFileSha256: resources.evidence.managerSpecSha256,
       portableFile: "manager-spec.md",
-      replyId: managerReply.details?.id,
+      replyId: managerReply,
       discovery: resources.a.remoteProbe?.session,
     });
     if (process.env.PEER_SMOKE_KEEP === "1")
