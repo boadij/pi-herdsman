@@ -2290,19 +2290,20 @@ try {
   const resultArtifact = `${resources.b.runtime.piAgentDir}/pi-herdsman/results/${resultRef.slice("result:".length)}`;
   const digestOutput = exec("b", [
     "sha256sum",
-    `${receivedDir}/${resources.evidence.specSha256}-spec.md`,
+    `${receivedDir}/${resources.evidence.managerSpecSha256}-manager-spec.md`,
     resultArtifact,
-    `${receivedDir}/${resources.evidence.escapedSha256}-escaped.txt`,
   ]);
   const receivedDigests = digestOutput
     .split("\n")
     .map((line) => line.split(/\s+/u)[0]);
   if (
-    receivedDigests[0] !== resources.evidence.specSha256 ||
-    receivedDigests[1] !== resources.evidence.artifactSha256 ||
-    receivedDigests[2] !== resources.evidence.escapedSha256
+    receivedDigests.length !== 2 ||
+    receivedDigests[0] !== resources.evidence.managerSpecSha256 ||
+    receivedDigests[1] !== resources.evidence.artifactSha256
   )
-    throw new Error(`forwarded evidence digest mismatch: ${digestOutput}`);
+    throw new Error(
+      `Manager federation evidence digest mismatch: ${digestOutput}`,
+    );
   const evidenceSnapshots = exec("b", [
     "sh",
     "-c",
@@ -2312,18 +2313,15 @@ try {
     .split("\n")
     .map((line) => line.split(/\s+/u)[0]);
   if (
-    !snapshotDigests.includes(resources.evidence.specSha256) ||
-    !snapshotDigests.includes(resources.evidence.artifactSha256) ||
-    !snapshotDigests.includes(resources.evidence.escapedSha256)
+    !snapshotDigests.includes(resources.evidence.managerSpecSha256) ||
+    !snapshotDigests.includes(resources.evidence.artifactSha256)
   )
     throw new Error(
-      `B's local assignment snapshots did not preserve both forwarded digests: ${evidenceSnapshots}`,
+      `B's local assignment snapshots did not preserve both Manager evidence digests: ${evidenceSnapshots}`,
     );
-  resources.evidence.receivedSpecSha256 = receivedDigests[0];
+  resources.evidence.receivedManagerSpecSha256 = receivedDigests[0];
   resources.evidence.receivedResultSha256 = receivedDigests[1];
-  resources.evidence.receivedEscapedSha256 = receivedDigests[2];
   resources.evidence.assignmentSnapshotDigests = snapshotDigests;
-  resources.evidence.bLocalEvidenceReads = 2;
   save();
   const originalSession = resources.a.remoteProbe.session;
   const originalGeneration = resources.a.remoteProbe.generation;
