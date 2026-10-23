@@ -394,6 +394,71 @@ try {
           return { malformed: line.slice(0, 200) };
         }
       });
+  const readOrdinaryLeadSession = (side, kind, id, ref) => {
+    const script = `
+      const fs = require("node:fs");
+      const path = process.argv[1], kind = process.argv[2], id = process.argv[3], ref = process.argv[4];
+      const text = fs.readFileSync(path, "utf8");
+      const lines = text.split("\\n");
+      let matchingDeliveryCount = 0, matchingReplyCount = 0, delivered, importedResultBinding;
+      let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
+      let inSendTurn = false, receipt = null, listPeersCalls = 0;
+      for (const line of lines) {
+        if (!line) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry.message?.role === "user") {
+          inSendTurn = entry.message.content?.some?.(part => part.type === "text" && part.text?.startsWith("PEER_E2E_A_LEAD_SEND ")) ?? false;
+          if (inSendTurn) receipt = null;
+        }
+        const details = entry.message?.details ?? entry.details;
+        if (inSendTurn && details?.queued === true && typeof details.id === "string")
+          receipt = { id: details.id, fromSessionId: details.fromSessionId, remoteSessionId: details.remoteSessionId };
+        const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
+        if (hasListPeers) listPeersCalls++;
+        if (kind === "recipient") {
+          const serialized = JSON.stringify(entry);
+          hasLeadReplyRef ||= serialized.includes(ref);
+          hasLeadReply ||= serialized.includes("PEER_E2E_LEAD_REPLY");
+          hasPortableContent ||= serialized.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
+        }
+        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id) {
+          matchingDeliveryCount++;
+          delivered ??= entry;
+        }
+        if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef)
+          importedResultBinding ??= entry;
+        if (kind === "reply" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id && entry.content?.includes("PEER_E2E_LEAD_REPLY")) {
+          matchingReplyCount++;
+          delivered ??= entry;
+        }
+      }
+      const tail = Buffer.from(text).subarray(-2048).toString("utf8");
+      const recentTools = [];
+      for (const line of tail.split("\\n")) {
+        try {
+          const entry = JSON.parse(line);
+          for (const part of entry.message?.content ?? []) if (part.type === "toolCall" && typeof part.name === "string") recentTools.push({ id: part.id, name: part.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40), outcome: "called" });
+          if (entry.message?.role === "toolResult") {
+            const call = recentTools.findLast(item => item.id === entry.message.toolCallId);
+            if (call) call.outcome = entry.message.isError ? "error" : "result";
+          }
+        } catch {}
+      }
+      const safeTools = recentTools.slice(-12).map(({ name, outcome }) => ({ name, outcome }));
+      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+    `;
+    const output = exec(side, [
+      "node",
+      "-e",
+      script,
+      resources[side].ordinaryLead.sessionPath,
+      kind,
+      id ?? "",
+      ref ?? "",
+    ]);
+    return JSON.parse(output);
+  };
   const capturePeerDiagnostics = () => {
     if (!resources.diagnosticsEnabled) return undefined;
     const diagnostics = {
@@ -1485,23 +1550,17 @@ try {
     herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
     let acceptance;
     for (let attempt = 0; attempt < 120; attempt++) {
-      const aEntries = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      acceptance = aEntries
-        .map((entry) => entry.message?.details ?? entry.details)
-        .find(
-          (details) =>
-            details?.queued === true && typeof details.id === "string",
-        );
+      const sendRead = readOrdinaryLeadSession("a", "send");
+      acceptance = sendRead.receipt;
       if (acceptance) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
-    if (!acceptance)
+    if (!acceptance) {
+      const diagnostics = readOrdinaryLeadSession("a", "send").diagnostics;
       throw new Error(
-        `A ordinary Lead's Pi session has no durable remote peer queue receipt; pane=${herdr("a", ["pane", "read", resources.a.ordinaryLeadPaneId, "--source", "recent", "--lines", "80"])}; session=${exec("a", ["tail", "-n", "40", resources.a.ordinaryLead.sessionPath])}`,
+        `A ordinary Lead's Pi session has no durable remote peer queue receipt; diagnostics=${JSON.stringify(diagnostics)}`,
       );
+    }
     resources.acceptanceMessageId = acceptance.id;
     exec("a", [
       "sh",
@@ -1518,10 +1577,12 @@ try {
     stage("lead-outbound-retry-released", { id: acceptance.id });
     let inbox = "";
     for (let attempt = 0; attempt < 80; attempt++) {
-      const bEntries = exec("b", ["cat", resources.b.ordinaryLead.sessionPath])
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
+      const bRead = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
       inbox = exec(
         "b",
         [
@@ -1531,45 +1592,48 @@ try {
         ],
         ["--user", "herdsman"],
       );
-      if (ordinaryLeadDeliveryReady(bEntries, acceptance.id, inbox)) break;
+      if (
+        ordinaryLeadDeliveryReady(
+          bRead.matchingDeliveryCount === 1 ? [bRead.delivered] : [],
+          acceptance.id,
+          inbox,
+        )
+      )
+        break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
     if (inbox.trim())
       throw new Error(
         `B observed the single peer message but its inbox record remains: ${inbox}`,
       );
-    const bEntries = exec("b", ["cat", resources.b.ordinaryLead.sessionPath])
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse);
-    const matchingDeliveries = bEntries.filter(
-      (entry) =>
-        entry.type === "custom_message" &&
-        entry.customType === "pi-herdsman-peer_message" &&
-        entry.details?.id === acceptance.id,
+    const bRead = readOrdinaryLeadSession(
+      "b",
+      "recipient",
+      acceptance.id,
+      resources.evidence.leadResultRef,
     );
-    const delivered = matchingDeliveries[0];
-    const importedResultBinding = bEntries.find(
-      (entry) =>
-        entry.type === "custom" &&
-        entry.customType === "pi-herdsman-result-ref" &&
-        entry.data?.ref === resources.evidence.leadResultRef &&
-        entry.data?.canonicalRef === leadResult.binding.canonicalRef,
-    );
+    const delivered = bRead.delivered;
+    const importedResultBinding = bRead.importedResultBinding;
     if (
       !delivered ||
-      matchingDeliveries.length !== 1 ||
+      bRead.matchingDeliveryCount !== 1 ||
       delivered.details?.toSessionId !==
         resources.a.remoteProbe.ordinaryLeadSession ||
       !importedResultBinding ||
+      importedResultBinding.data?.ref !== leadResult.binding.ref ||
+      importedResultBinding.data?.canonicalRef !==
+        leadResult.binding.canonicalRef ||
       !JSON.stringify(delivered).includes(leadResult.artifactText) ||
+      !bRead.hasLeadReplyRef ||
+      !bRead.hasLeadReply ||
+      !bRead.hasPortableContent ||
       !leadResult.artifactText.includes(
         "PEER_E2E_PORTABLE_RESULT_CONTENT_V1",
       ) ||
       digest(leadResult.artifactText) !== resources.evidence.leadResultSha256
     )
       throw new Error(
-        `B's exact ordinary Lead session did not persist the delivered artifact and imported binding for ${acceptance.id}`,
+        `B's exact ordinary Lead session did not persist the delivered artifact and imported binding for ${acceptance.id}; diagnostics=${JSON.stringify(bRead.diagnostics)}`,
       );
     const recipientArtifactPath = `${resources.b.runtime.piAgentDir}/pi-herdsman/results/${leadResult.binding.canonicalRef.slice("result:".length)}`;
     const recipientArtifact = exec("b", ["cat", recipientArtifactPath]);
@@ -1688,15 +1752,6 @@ try {
       path: leadEvidence,
       sha256: resources.evidence.specSha256,
     });
-    const leadReplyText = JSON.stringify(bEntries);
-    if (
-      !leadReplyText.includes(resources.evidence.leadResultRef) ||
-      !leadReplyText.includes("PEER_E2E_LEAD_REPLY") ||
-      !leadReplyText.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1")
-    )
-      throw new Error(
-        `B's ordinary Lead did not use and cite the portable result reference ${resources.evidence.leadResultRef}`,
-      );
     stage("ordinary-lead-result-reference-used", {
       ref: resources.evidence.leadResultRef,
       canonicalRef: leadResult.binding.canonicalRef,
@@ -1730,19 +1785,10 @@ try {
       replyId: replyCorrespondence.replies[0].id,
       reverseRoute: false,
     });
-    const hasListPeersCall = (entry) =>
-      Array.isArray(entry.message?.content) &&
-      entry.message.content.some(
-        (part) => part.type === "toolCall" && part.name === "list_peers",
-      );
-    const listPeersBeforeReply = exec("a", [
-      "cat",
-      resources.a.ordinaryLead.sessionPath,
-    ])
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse)
-      .filter(hasListPeersCall).length;
+    const listPeersBeforeReply = readOrdinaryLeadSession(
+      "a",
+      "reply",
+    ).listPeersCalls;
     herdr("a", [
       "agent",
       "prompt",
@@ -1752,42 +1798,31 @@ try {
       "--timeout",
       "60000",
     ]);
-    let aReplyEntries = [];
+    let aReplyRead;
     let receivedReplies = [];
     let acknowledged;
     for (let attempt = 0; attempt < 120; attempt++) {
-      aReplyEntries = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      receivedReplies = aReplyEntries.filter(
-        (entry) =>
-          entry.type === "custom_message" &&
-          entry.customType === "pi-herdsman-peer_message" &&
-          entry.details?.id === replyCorrespondence.replies[0].id &&
-          entry.content?.includes("PEER_E2E_LEAD_REPLY"),
+      aReplyRead = readOrdinaryLeadSession(
+        "a",
+        "reply",
+        replyCorrespondence.replies[0].id,
       );
+      receivedReplies = aReplyRead.matchingReplyCount;
       acknowledged = JSON.parse(exec("b", ["cat", replyFiles[0]]));
-      if (
-        receivedReplies.length === 1 &&
-        acknowledged.replies?.[0]?.acknowledged
-      )
+      if (receivedReplies === 1 && acknowledged.replies?.[0]?.acknowledged)
         break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
-    const listPeersAfterReply = aReplyEntries.filter(hasListPeersCall).length;
-    if (
-      receivedReplies.length !== 1 ||
-      listPeersAfterReply !== listPeersBeforeReply
-    )
+    const listPeersAfterReply = aReplyRead.listPeersCalls;
+    if (receivedReplies !== 1 || listPeersAfterReply !== listPeersBeforeReply)
       throw new Error(
-        `A did not retrieve exactly one Lead correspondence reply unattended: replies=${receivedReplies.length}, list_peers before=${listPeersBeforeReply}, after=${listPeersAfterReply}`,
+        `A did not retrieve exactly one Lead correspondence reply unattended: replies=${receivedReplies}, list_peers before=${listPeersBeforeReply}, after=${listPeersAfterReply}`,
       );
     stage("lead-reply-retrieved-and-acked-unattended", {
       correspondenceId: replyCorrespondence.id,
       replyId: replyCorrespondence.replies[0].id,
       aSession: resources.a.ordinaryLead.sessionId,
-      deliveredExactlyOnce: receivedReplies.length === 1,
+      deliveredExactlyOnce: receivedReplies === 1,
       modelListPeersCallsAdded: listPeersAfterReply - listPeersBeforeReply,
       acknowledged: acknowledged.replies[0].acknowledged,
       reverseRoute: false,
