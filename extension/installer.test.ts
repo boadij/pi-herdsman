@@ -100,10 +100,8 @@ function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-C
 function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
 function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
 function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
-function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
+function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'integration' -and $Arg1 -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
 $failed = $false
-Invoke-UpstreamInstaller 'mock://installer'
-'PATHREFRESH ' + $env:Path.Contains('C:\\mock-installed')
 try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.Exception.Message) }
 'RESULT failed=' + $failed
 'LOG ' + ($script:log -join '|')
@@ -285,7 +283,7 @@ test(
     mkdirSync(bin);
     writeFileSync(
       join(bin, "pi.cmd"),
-      '@echo off\r\nif "%1"=="--version" (echo 1.4.0 & exit /b 0)\r\nif "%1"=="list" exit /b 0\r\nif "%1"=="install" exit /b 17\r\nexit /b 0\r\n',
+      '@echo off\r\nif "%1"=="--version" (echo 1.4.0 & exit /b 0)\r\nif "%1"=="list" exit /b 0\r\nif "%1"=="install" (echo MOCK_PI_INSTALL_FAILED & exit /b 17)\r\nexit /b 0\r\n',
     );
     writeFileSync(
       join(bin, "herdr.cmd"),
@@ -300,6 +298,7 @@ $env:Path = '${bin.replaceAll("'", "''")}' + ';' + $env:Path
 function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
 function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) throw "Unexpected Invoke-WebRequest: $Uri" }
 & '${windowsInstaller.replaceAll("'", "''")}'
+exit $LASTEXITCODE
 `,
     );
     try {
@@ -317,6 +316,7 @@ function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) throw
       );
       assert.notEqual(result.status, null, result.error?.message);
       assert.notEqual(result.status, 0, result.stdout);
+      assert.match(result.stdout, /MOCK_PI_INSTALL_FAILED/u);
       assert.doesNotMatch(
         result.stdout,
         /Next steps:|package operation completed/u,
