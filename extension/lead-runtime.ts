@@ -7479,6 +7479,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       candidate.manager.repoKey,
     );
     const integrated = options.integration;
+    const usedRemovalPreapproval = preauthorized && !integrated;
     const mergeAuthorized = () =>
       !!integrated &&
       effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey)
@@ -7518,7 +7519,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "Integrated source or target could not be reverified; worktree preserved",
         );
     }
-    if (options.preauthorized && !preauthorized)
+    if (
+      usedRemovalPreapproval &&
+      !isWorktreeRemovalPreapproved(candidate.manager.repoKey)
+    )
       throw new Error("Project removal preauthorization was revoked");
     const bypass = preauthorized || !!integrated;
     if (!bypass && !ctx.hasUI)
@@ -7578,7 +7582,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   "Removal target changed during confirmation; worktree preserved",
                 );
               if (
-                (options.preauthorized &&
+                (usedRemovalPreapproval &&
                   !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
                 (integrated &&
                   (!mergeAuthorized() ||
@@ -7589,7 +7593,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               if (current.liveLead) {
                 try {
                   if (
-                    (options.preauthorized &&
+                    (usedRemovalPreapproval &&
                       !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
                     (integrated && !mergeAuthorized())
                   )
@@ -7675,7 +7679,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               try {
                 operationSignal?.throwIfAborted();
                 if (
-                  (options.preauthorized &&
+                  (usedRemovalPreapproval &&
                     !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
                   (integrated &&
                     (!mergeAuthorized() ||
@@ -8104,6 +8108,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !effectiveMergePolicy(host.readConfig(), manager.repoKey).enabled
       )
         throw sourceError;
+      const activeManager = await host.currentManager(ctx);
+      if (
+        !activeManager ||
+        !host.sameManagerDescriptor(activeManager, manager) ||
+        !leadRuntime.managerLease ||
+        !host.sameManagerDescriptor(
+          leadRuntime.managerLease.descriptor,
+          manager,
+        )
+      )
+        throw sourceError;
       const topology = await host.runHerdr(
         host.pi,
         ctx,
@@ -8117,6 +8132,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       )
         throw sourceError;
       const targetPath = topology.source.source_checkout_path;
+      const sourceRef = await host.pi.exec(
+        "git",
+        ["show-ref", "--verify", "--hash", `refs/heads/${branch}`],
+        { cwd: targetPath, signal: operationSignal, timeout: 10_000 },
+      );
+      if (
+        sourceRef.code !== 0 ||
+        sourceRef.killed ||
+        String(sourceRef.stdout ?? "").trim() !== expectedHead
+      )
+        throw sourceError;
       const [branchResult, targetResult, ancestryResult] = await Promise.all([
         host.pi.exec("git", ["symbolic-ref", "--short", "HEAD"], {
           cwd: targetPath,
@@ -8182,12 +8208,31 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         )
       )
         throw sourceError;
+      const finalManager = await host.currentManager(ctx);
+      const finalAssignment = host.readProjectAssignment(
+        host.supervisionRuntime(),
+        manager.repoKey,
+        branch,
+      );
+      if (
+        !finalManager ||
+        !host.sameManagerDescriptor(finalManager, manager) ||
+        !leadRuntime.managerLease ||
+        !host.sameManagerDescriptor(
+          leadRuntime.managerLease.descriptor,
+          manager,
+        ) ||
+        finalAssignment?.id !== assignment.id ||
+        finalAssignment.branch !== branch ||
+        finalAssignment.repoKey !== manager.repoKey
+      )
+        throw sourceError;
       await host.reconcileProjectAssignments(
         ctx,
         manager.repoKey,
         manager.workspaceId,
         targetPath,
-        true,
+        false,
         branch,
         false,
         assignment.id,
@@ -8305,12 +8350,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       ctx,
       operationSignal,
     );
+    const managerOccupants = targetOccupants.agents.filter(
+      (agent) =>
+        agent.workspace_id === candidate.manager.workspaceId &&
+        host.isPiAgent(agent),
+    );
+    const isCurrentManager = (agent: (typeof managerOccupants)[number]) =>
+      agent.workspace_id === candidate.manager.workspaceId &&
+      agent.pane_id === candidate.manager.paneId &&
+      agent.tab_id === candidate.manager.tabId &&
+      host.herdrSessionId(agent) === candidate.manager.piSessionId;
     if (
-      targetOccupants.agents.some(
-        (agent) =>
-          agent.workspace_id === candidate.manager.workspaceId &&
-          host.isPiAgent(agent),
-      )
+      managerOccupants.filter(isCurrentManager).length !== 1 ||
+      managerOccupants.some((agent) => !isCurrentManager(agent))
     )
       throw new Error(
         "An active execution occupies the primary target; no integration was attempted",
@@ -8328,8 +8380,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         return false;
       throw new Error("Git ancestry could not be verified");
     };
-    await ancestry(expectedHead, targetHead);
-    if (!(await ancestry(targetHead, expectedHead)))
+    const initiallyIntegrated = await ancestry(expectedHead, targetHead);
+    if (!initiallyIntegrated && !(await ancestry(targetHead, expectedHead)))
       return {
         content: [
           {
@@ -8379,6 +8431,36 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               if (!permission().enabled)
                 throw new Error("Manager local merge permission was revoked");
               await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
+              await clean(targetPath);
+              await clean(current.checkoutPath);
+              const preStopTarget = await output(targetPath, [
+                "rev-parse",
+                "HEAD",
+              ]);
+              if (
+                !(await ancestry(expectedHead, preStopTarget)) &&
+                !(await ancestry(preStopTarget, expectedHead))
+              )
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                    },
+                  ],
+                  details: {
+                    ok: false,
+                    action: "merge",
+                    branch,
+                    target_branch: targetBranch,
+                    source_head: expectedHead,
+                    target_head: preStopTarget,
+                    status: "needs_update",
+                    integrated: false,
+                    checkout_removed: false,
+                    assignment_retired: false,
+                  },
+                };
               if (current.liveLead)
                 await stopExecution(
                   current.assignment.id,
@@ -8391,12 +8473,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 ctx,
                 operationSignal,
               );
+              const currentTargetOccupants = targetOccupantsNow.agents.filter(
+                (agent) =>
+                  agent.workspace_id === current.manager.workspaceId &&
+                  host.isPiAgent(agent),
+              );
               if (
-                targetOccupantsNow.agents.some(
-                  (agent) =>
-                    agent.workspace_id === current.manager.workspaceId &&
-                    host.isPiAgent(agent),
-                )
+                currentTargetOccupants.filter(isCurrentManager).length !== 1 ||
+                currentTargetOccupants.some((agent) => !isCurrentManager(agent))
               )
                 throw new Error(
                   "An active execution occupies the primary target; no integration was attempted",
@@ -8586,6 +8670,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           reason: integration.reason,
         },
       };
+    if ("details" in integration) return integration;
     if (!permission().enabled)
       return {
         content: [

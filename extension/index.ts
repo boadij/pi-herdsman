@@ -2141,45 +2141,47 @@ function registerExtensionImpl(
           renderResult: (r: any, o: any, t: any, c: any) =>
             renderCoordinationResult("staff", "remove", r, o, t, c),
         });
-        if (processRole === "manager")
-          pi.registerTool({
-            ...staffTool,
-            name: "merge_project",
-            label: "merge project",
-            description:
-              "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may finalize and remove the source checkout when authorized.",
-            parameters: Type.Object({
+        pi.registerTool({
+          ...staffTool,
+          name: "merge_project",
+          label: "merge project",
+          description:
+            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may finalize and remove the source checkout when authorized.",
+          parameters: Type.Object(
+            {
               branch: Type.String({
                 description: "Exact assigned local branch",
               }),
               expected_head: Type.String({
                 description: "Exact full SHA of the accepted source commit",
               }),
-            }),
-            promptSnippet: undefined,
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                {
-                  action: "merge",
-                  branch: p.branch,
-                  expected_head: p.expected_head,
-                },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "merge", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "merge", r, o, t, c),
-          });
+            },
+            { additionalProperties: false },
+          ),
+          promptSnippet: undefined,
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              {
+                action: "merge",
+                branch: p.branch,
+                expected_head: p.expected_head,
+              },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "merge", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "merge", r, o, t, c),
+        });
         pi.registerTool({
           ...staffTool,
           name: "stop_lead",

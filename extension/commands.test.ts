@@ -833,6 +833,7 @@ const managerTools = [
   "resume_project",
   "stop_lead",
   "remove_worktree",
+  "merge_project",
 ];
 const chiefTools = [
   "list_staff",
@@ -5118,10 +5119,18 @@ async function managerRemovalFixture(
     targetHead?: string;
     revokeMergeAfterMutation?: boolean;
     replaceAssignmentOnMerge?: boolean;
+    targetOccupants?: any[];
+    targetAdvanceAtWorkLock?: string;
+    branchRefHead?: string;
+    absentCheckout?: boolean;
+    revokeRemovalPreapprovalAfterPreflight?: boolean;
+    replaceManagerBeforeFinalReconcile?: boolean;
+    replaceAssignmentBeforeFinalReconcile?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
   const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  if (options.absentCheckout) rmSync(checkoutPath, { recursive: true });
   const persistedCheckoutPath = options.persistedCheckoutPath
     ? realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-original-"))
     : undefined;
@@ -5135,6 +5144,8 @@ async function managerRemovalFixture(
   const manager = {
     repoKey,
     workspaceId: "manager-workspace",
+    paneId: "manager-pane",
+    tabId: "manager-tab",
     leaseId: "manager-lease",
     piSessionId: "manager-session",
   };
@@ -5148,7 +5159,7 @@ async function managerRemovalFixture(
       ? { piSessionFile: "persisted-session.jsonl" }
       : {}),
   };
-  let checkoutPresent = true;
+  let checkoutPresent = !options.absentCheckout;
   let checkoutDirty = false;
   let mergeEnabled = options.mergeEnabled ?? true;
   let currentTargetHead = options.targetHead;
@@ -5171,6 +5182,8 @@ async function managerRemovalFixture(
   const calls: string[][] = [];
   const gitMutations: string[][] = [];
   let reconciliationAssignmentId: string | undefined;
+  let reconciliationProjectWorkLocked: boolean | undefined;
+  let liveLeadChecks = 0;
   const inventoryOutput = () => {
     const worktrees = [
       `worktree ${repoKey}`,
@@ -5206,8 +5219,20 @@ async function managerRemovalFixture(
           return { code: 0, stdout: `${checkoutPath}\n`, stderr: "" };
         if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
           return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
+        if (
+          args[0] === "worktree" &&
+          args[1] === "list" &&
+          args[2] === "--porcelain"
+        )
+          return { code: 0, stdout: inventoryOutput(), stderr: "" };
         if (args[0] === "worktree" && args[1] === "list")
           return { code: 0, stdout: inventoryOutput(), stderr: "" };
+        if (args[0] === "show-ref" && args[1] === "--verify")
+          return {
+            code: 0,
+            stdout: `${options.branchRefHead ?? "2".repeat(40)}\n`,
+            stderr: "",
+          };
         if (args[0] === "rev-parse" && args[1] === "HEAD") {
           if (options.sourceHead && runOptions.cwd === checkoutPath)
             return { code: 0, stdout: `${options.sourceHead}\n`, stderr: "" };
@@ -5218,8 +5243,13 @@ async function managerRemovalFixture(
             sequence[Math.min(integratedHeadReads++, sequence.length - 1)];
           return { code: 0, stdout: `${value}\n`, stderr: "" };
         }
-        if (args[0] === "symbolic-ref")
+        if (args[0] === "symbolic-ref") {
+          if (options.replaceManagerBeforeFinalReconcile)
+            managerReplaced = true;
+          if (options.replaceAssignmentBeforeFinalReconcile)
+            assignment = { ...assignment, id: "replacement-assignment" };
           return { code: 0, stdout: "main\n", stderr: "" };
+        }
         if (args[0] === "merge") {
           gitMutations.push(args);
           currentTargetHead = args.at(-1);
@@ -5279,8 +5309,14 @@ async function managerRemovalFixture(
         getCwd: () => persistedCheckoutPath ?? checkoutPath,
       }),
     },
-    liveLead: async () =>
-      leadRunning
+    liveLead: async () => {
+      liveLeadChecks++;
+      if (
+        options.revokeRemovalPreapprovalAfterPreflight &&
+        liveLeadChecks === 2
+      )
+        setWorktreeRemovalPreapproved(repoKey, false);
+      return leadRunning
         ? [
             {
               workspace_id: "child-workspace",
@@ -5289,7 +5325,8 @@ async function managerRemovalFixture(
               cwd: checkoutPath,
             },
           ]
-        : [],
+        : [];
+    },
     readLeadCoordinationState: () => ({
       role: "lead",
       piSessionId: assignment?.id,
@@ -5365,10 +5402,20 @@ async function managerRemovalFixture(
     herdrSessionSnapshot: async () => {
       if (options.snapshotErrorAfterStop && !leadRunning)
         throw new Error("snapshot failed after stop");
-      return { agents: [], panes: [] };
+      return {
+        agents: options.targetOccupants ?? [
+          {
+            workspace_id: "manager-workspace",
+            pane_id: "manager-pane",
+            tab_id: "manager-tab",
+            pi_session_id: "manager-session",
+          },
+        ],
+        panes: [],
+      };
     },
     isPiAgent: () => true,
-    herdrSessionId: () => "assigned-lead",
+    herdrSessionId: (agent: any) => agent.pi_session_id ?? "assigned-lead",
     scanAgentStates: () => ({ states: [] }),
     stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
     stopProjectLeadPane: async () => {
@@ -5377,6 +5424,10 @@ async function managerRemovalFixture(
     },
     withProjectWorkLock: async (_key: string, operation: () => unknown) => {
       lockCount++;
+      if (options.targetAdvanceAtWorkLock) {
+        currentTargetHead = options.targetAdvanceAtWorkLock;
+        options.targetAdvanceAtWorkLock = undefined;
+      }
       return operation();
     },
     withProjectAssignmentLock: async (
@@ -5394,6 +5445,7 @@ async function managerRemovalFixture(
     reconcileProjectAssignments: async (...args: any[]) => {
       assert.equal(assignmentLockHeld, false);
       reconciliationAssignmentId = args[7];
+      reconciliationProjectWorkLocked = args[4];
       if (options.reconcileError) throw new Error("reconcile uncertain");
       if (!checkoutPresent && (!args[7] || assignment?.id === args[7]))
         assignment = undefined;
@@ -5438,6 +5490,7 @@ async function managerRemovalFixture(
     stoppedLeadCount: () => stoppedLeadCount,
     lockCount: () => lockCount,
     reconciliationAssignmentId: () => reconciliationAssignmentId,
+    reconciliationProjectWorkLocked: () => reconciliationProjectWorkLocked,
   };
 }
 
@@ -5500,6 +5553,213 @@ test("Manager merge runtime reports target divergence without checkout mutation"
   assert.deepEqual(fixture.removals, []);
 });
 
+test("Manager merge permits exactly its verified target occupant", async (t) => {
+  const managerOccupant = {
+    workspace_id: "manager-workspace",
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    pi_session_id: "manager-session",
+  };
+  for (const targetOccupants of [
+    [
+      managerOccupant,
+      {
+        ...managerOccupant,
+        pane_id: "other-pane",
+        pi_session_id: "other-session",
+      },
+    ],
+    [managerOccupant, managerOccupant],
+  ]) {
+    const fixture = await managerRemovalFixture(t, { targetOccupants });
+    await assert.rejects(
+      fixture.runtime.executeStaff(
+        "merge",
+        {
+          action: "merge",
+          branch: "feat/remove-test",
+          expected_head: "2".repeat(40),
+        },
+        undefined,
+        undefined,
+        fixture.ctx,
+      ),
+      /occupies the primary target/,
+    );
+    assert.deepEqual(fixture.gitMutations, []);
+    assert.deepEqual(fixture.removals, []);
+  }
+});
+
+test("already-integrated retry cleans up after the target advances", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const advancedTarget = "4".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    sourceHead: acceptedHead,
+    targetHead: advancedTarget,
+    integratedTargetCodes: [0, 0, 0, 0],
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: acceptedHead,
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.status, "complete");
+  assert.equal(result.details.integrated, true);
+  assert.deepEqual(fixture.gitMutations, []);
+  assert.equal(fixture.removals.length, 1);
+});
+
+test("target divergence discovered under integration lock returns needs_update without stopping or cleanup", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    targetHead: "0".repeat(40),
+    targetAdvanceAtWorkLock: "4".repeat(40),
+    integratedTargetCodes: [1, 0, 1, 1],
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: acceptedHead,
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.status, "needs_update");
+  assert.equal(result.details.integrated, false);
+  assert.equal(fixture.stoppedLeadCount(), 0);
+  assert.deepEqual(fixture.gitMutations, []);
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("absent checkout recovery rejects a source branch advanced past the accepted SHA", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    branchRefHead: "3".repeat(40),
+  });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: acceptedHead,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+  );
+  assert.ok(fixture.assignment());
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.reconciliationAssignmentId(), undefined);
+});
+
+test("absent checkout recovery reconciles an exact accepted source revision without claiming a work lock", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    branchRefHead: acceptedHead,
+    targetHead: acceptedHead,
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: acceptedHead,
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.status, "complete");
+  assert.equal(result.details.integrated, true);
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.assignment_retired, true);
+  assert.equal(fixture.reconciliationAssignmentId(), "assigned-lead");
+  assert.equal(fixture.reconciliationProjectWorkLocked(), false);
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.assignment(), undefined);
+});
+
+test("absent checkout recovery refuses reconciliation after Manager identity changes", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    branchRefHead: acceptedHead,
+    targetHead: acceptedHead,
+    replaceManagerBeforeFinalReconcile: true,
+  });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: acceptedHead,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.reconciliationAssignmentId(), undefined);
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("absent checkout recovery refuses reconciliation after assignment identity changes", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    branchRefHead: acceptedHead,
+    targetHead: acceptedHead,
+    replaceAssignmentBeforeFinalReconcile: true,
+  });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: acceptedHead,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+  );
+  assert.equal(fixture.assignment()?.id, "replacement-assignment");
+  assert.equal(fixture.reconciliationAssignmentId(), undefined);
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("ordinary preapproved removal aborts if repository approval is revoked before Herdr removal", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    revokeRemovalPreapprovalAfterPreflight: true,
+  });
+  setWorktreeRemovalPreapproved(fixture.repoKey, true);
+  t.after(() => setWorktreeRemovalPreapproved(fixture.repoKey, false));
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /preauthorization was revoked/,
+  );
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+});
+
 test("Manager merge runtime keeps integrated cleanup failure pending", async (t) => {
   const fixture = await managerRemovalFixture(t, { removeError: true });
   const result = await fixture.runtime.executeStaff(
@@ -5524,7 +5784,7 @@ test("Manager merge runtime fast-forwards and verifies cleanup against the exact
   const fixture = await managerRemovalFixture(t, {
     sourceHead: acceptedHead,
     targetHead: "0".repeat(40),
-    integratedTargetCodes: [1, 0, 1, 0, 0],
+    integratedTargetCodes: [1, 0, 1, 0, 1, 0, 0],
   });
   const result = await fixture.runtime.executeStaff(
     "merge",
@@ -5560,7 +5820,7 @@ test("Manager merge runtime leaves verified integration pending when permission 
   const fixture = await managerRemovalFixture(t, {
     sourceHead: acceptedHead,
     targetHead: "0".repeat(40),
-    integratedTargetCodes: [1, 0, 1, 0, 0],
+    integratedTargetCodes: [1, 0, 1, 0, 1, 0, 0],
     revokeMergeAfterMutation: true,
   });
   const result = await fixture.runtime.executeStaff(
@@ -5589,7 +5849,7 @@ test("Manager merge runtime does not clean up a replacement assignment after int
   const fixture = await managerRemovalFixture(t, {
     sourceHead: acceptedHead,
     targetHead: "0".repeat(40),
-    integratedTargetCodes: [1, 0, 1, 0, 0],
+    integratedTargetCodes: [1, 0, 1, 0, 1, 0, 0],
     replaceAssignmentOnMerge: true,
   });
   const result = await fixture.runtime.executeStaff(

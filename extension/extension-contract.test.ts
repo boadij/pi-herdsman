@@ -274,6 +274,7 @@ const REGISTERED_ROLE_TOOLS = [
     "resume_project",
     "stop_lead",
     "remove_worktree",
+    "merge_project",
   ].map((name) => ({ name })),
 ];
 
@@ -527,6 +528,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "resume_project",
       "stop_lead",
       "remove_worktree",
+      "merge_project",
     ].sort(),
   );
   for (const name of [
@@ -538,6 +540,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "resume_project",
     "stop_lead",
     "remove_worktree",
+    "merge_project",
   ]) {
     const tool = tools.get(name)!;
     assert.equal(tool.defaultActive, false);
@@ -677,6 +680,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
     }
     for (const name of ["delegate_project", "stop_lead"])
       assert.equal(tools.get(name)?.exposure, "model-only", name);
+    assert.equal(chief.pi.getActiveTools().includes("merge_project"), false);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -856,8 +860,10 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "resume_project",
       "stop_lead",
       "remove_worktree",
+      "merge_project",
     ].sort(),
   );
+  assert.equal(lead.pi.getActiveTools().includes("merge_project"), false);
   assert.equal(
     lead.pi.getActiveTools().some((name) => name.startsWith("staff_")),
     false,
@@ -1015,6 +1021,10 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   registerExtension!(managed.pi as never);
   assert.equal(
     managed.tools.some((tool) => tool.name.startsWith("peer_")),
+    false,
+  );
+  assert.equal(
+    managed.tools.some((tool) => tool.name === "merge_project"),
     false,
   );
   assert.equal(
@@ -4429,11 +4439,19 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
       "resume_project",
       "stop_lead",
       "remove_worktree",
+      "merge_project",
     ])
       assert.ok(
         pi.pi.getActiveTools().includes(name),
         `${name} is active for the Manager`,
       );
+    const mergeTool = pi.tools.find((tool) => tool.name === "merge_project");
+    assert.ok(mergeTool);
+    assertPortableToolSchema(mergeTool);
+    assert.deepEqual([...mergeTool.parameters.required].sort(), [
+      "branch",
+      "expected_head",
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     setLeadEnvironment();
