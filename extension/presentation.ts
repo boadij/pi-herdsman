@@ -2782,6 +2782,7 @@ function expandedResultLines(
   details: Record<string, unknown>,
   args: Record<string, unknown>,
   theme: any,
+  activeRole?: string,
 ): string[] {
   const display =
     value(details.display_name) ||
@@ -2917,7 +2918,7 @@ function expandedResultLines(
       if (replyOnly.length)
         lines.push(
           "",
-          `reply-only Managers ${replyOnly.length}`,
+          `reply-only ${activeRole === "lead" ? "Leads" : "Managers"} ${replyOnly.length}`,
           ...replyOnly.flatMap((item: any) => {
             if (!item || typeof item !== "object") return [];
             const name = value(item.name);
@@ -3091,7 +3092,14 @@ export function renderCoordinationResult(
       details.checkout_removed !== undefined)
   )
     return new WidthSafeText(
-      expandedResultLines(tool, action, details, args, theme).join("\n"),
+      expandedResultLines(
+        tool,
+        action,
+        details,
+        args,
+        theme,
+        context?.activeRole,
+      ).join("\n"),
       0,
       0,
     );
@@ -3111,7 +3119,14 @@ export function renderCoordinationResult(
     });
   if (expanded)
     return new WidthSafeText(
-      expandedResultLines(tool, action, details, args, theme).join("\n"),
+      expandedResultLines(
+        tool,
+        action,
+        details,
+        args,
+        theme,
+        context?.activeRole,
+      ).join("\n"),
       0,
       0,
     );

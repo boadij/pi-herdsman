@@ -56,6 +56,7 @@ export function resolvePeerResultBindings(
 export type PeerCorrespondence = {
   id: string;
   capability: string;
+  role?: "manager" | "lead";
   originSession: string;
   originGeneration: string;
   recipientSession: string;
@@ -120,6 +121,7 @@ function valid(value: unknown): value is PeerCorrespondence {
   return (
     ID.test(c.id) &&
     /^[0-9a-f]{64}$/u.test(c.capability) &&
+    (c.role === undefined || c.role === "manager" || c.role === "lead") &&
     [
       c.originSession,
       c.originGeneration,
@@ -198,6 +200,7 @@ export function createPeerCorrespondence(
 ): PeerCorrespondence {
   const c: PeerCorrespondence = {
     ...input,
+    role: input.role ?? "manager",
     id: randomUUID(),
     capability: randomBytes(32).toString("hex"),
     replies: [],
@@ -213,6 +216,8 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
     mutate(c.id, (current) => {
       if (current.finalized)
         throw new Error("peer correspondence is already finalized");
+      if ((current.role ?? "manager") !== (c.role ?? "manager"))
+        throw new Error("conflicting peer correspondence role");
       if (
         [
           "capability",
@@ -236,7 +241,7 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
     });
     return;
   }
-  save(c);
+  save({ ...c, role: c.role ?? "manager" });
 }
 export function updatePeerOriginGeneration(
   id: string,

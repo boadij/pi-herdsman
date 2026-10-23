@@ -9116,6 +9116,96 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
   }
 });
 
+test("remote ordinary-Lead inbox delivery is role-authorized and still requires an ordinary recipient", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `remote-lead-inbox-${randomUUID()}.sock`);
+  const recipientId = randomUUID();
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_PANE_ID = "remote-lead-recipient-pane";
+  process.env.HERDR_TAB_ID = "remote-lead-recipient-tab";
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  const runtime = peerRuntime();
+  const branch = `remote-recipient-${randomUUID()}`;
+  const entries: unknown[] = [];
+  const receiver = fakeChiefPi({
+    entries,
+    exec: peerTopologyExec,
+    activeTools: ["read", "bash"],
+  });
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => recipientId,
+  };
+  const makeRecord = (text: string) => ({
+    version: 2 as const,
+    build: HERDSMAN_BUILD,
+    id: randomUUID(),
+    leaseId: randomUUID(),
+    kind: "peer_message" as const,
+    fromSessionId: randomUUID(),
+    toSessionId: recipientId,
+    leadSessionId: "",
+    peerSource: { role: "lead" as const, remoteOrdinary: true as const },
+    text,
+    createdAt: Date.now(),
+  });
+  registerExtension!(receiver.pi as never);
+  try {
+    await receiver.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() => assert.ok(readPeerLeadRecord(runtime, recipientId)));
+    const allowed = makeRecord("remote ordinary Lead delivery");
+    allowed.leadSessionId = allowed.fromSessionId;
+    writeCoordinationMessageRaw(allowed, runtime);
+    await t.waitFor(() =>
+      assert.equal(
+        receiver.sentMessageCalls.filter((call) =>
+          String((call.message as any)?.content ?? "").includes(
+            "remote ordinary Lead delivery",
+          ),
+        ).length,
+        1,
+      ),
+    );
+
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: recipientId,
+      repoKey: "peer-test-repo",
+      branch,
+      text: "recipient is now assigned",
+    });
+    const denied = makeRecord(
+      "remote ordinary Lead must not reach assigned recipient",
+    );
+    denied.leadSessionId = denied.fromSessionId;
+    writeCoordinationMessageRaw(denied, runtime);
+    await t.waitFor(() =>
+      assert.equal(
+        listCoordinationMessagePaths(runtime, recipientId).length,
+        1,
+      ),
+    );
+    assert.equal(
+      receiver.sentMessageCalls.some((call) =>
+        String((call.message as any)?.content ?? "").includes(
+          "must not reach assigned recipient",
+        ),
+      ),
+      false,
+      "remote source authorization must not bypass local recipient eligibility",
+    );
+  } finally {
+    removeProjectAssignment(supervisionRuntime(), recipientId, branch);
+    await receiver.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_WORKSPACE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("peer delivery rejects same-generation recipient provenance changes before send", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `peer-authority-delivery-${randomUUID()}.sock`);

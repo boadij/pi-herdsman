@@ -17,6 +17,9 @@ import { isDeepStrictEqual } from "node:util";
 import { nodeOnlyAgentDir, herdsmanDataRoot } from "../extension/storage.ts";
 import {
   listPeerLeadRecords,
+  globalProjectAssignmentSnapshot,
+  isRemoteOrdinaryLead,
+  withProjectAssignmentAuthority,
   peerRuntime,
   chiefMessagePath,
   coordinationMessageDigest,
@@ -89,10 +92,25 @@ const syncDirectory = (directory: string): void => {
   }
 };
 if (action === "probe") {
+  const peers = listPeerLeadRecords(runtime);
+  let ordinaryLeadsComplete = true;
+  let eligibleLeads: typeof peers = [];
+  try {
+    const assignments = globalProjectAssignmentSnapshot();
+    eligibleLeads = peers.filter((peer) =>
+      isRemoteOrdinaryLead(peer, assignments),
+    );
+  } catch {
+    ordinaryLeadsComplete = false;
+  }
   console.log(
     JSON.stringify({
       dataRoot: herdsmanDataRoot(),
-      peers: listPeerLeadRecords(runtime),
+      peers: [
+        ...peers.filter((peer) => peer.role === "manager"),
+        ...eligibleLeads,
+      ],
+      ordinaryLeadsComplete,
     }),
   );
 } else {
@@ -207,41 +225,114 @@ if (action === "probe") {
       action === "recover-recipient"
         ? envelope.newRecipientGeneration
         : recipientGeneration;
-    if (
-      !listPeerLeadRecords(runtime).some(
+    const runCorrespondenceOperation = (
+      assignments?: Map<
+        string,
+        import("../extension/supervision.ts").GlobalProjectAssignment[]
+      >,
+    ) => {
+      const correspondence = listPeerCorrespondences().find(
+        (item) => item.id === id,
+      );
+      const correspondenceRole = correspondence?.role ?? "manager";
+      const live = listPeerLeadRecords(runtime).find(
         (peer) =>
-          peer.role === "manager" &&
           peer.piSessionId === recipientSession &&
           peer.claim.id === liveRecipientGeneration,
+      );
+      const recipientIsLive =
+        !!live &&
+        (correspondenceRole === "manager"
+          ? live.role === "manager"
+          : correspondenceRole === "lead" &&
+            !!assignments &&
+            isRemoteOrdinaryLead(live, assignments));
+      if (
+        !recipientIsLive ||
+        !correspondence ||
+        correspondenceRole !== (correspondence?.role ?? "manager") ||
+        correspondence.originSession !== originSession ||
+        correspondence.recipientSession !== recipientSession ||
+        correspondence.capability !== capability
       )
-    )
-      throw new Error("exact destination Manager is not live");
-    if (action === "recover") {
-      if (typeof previousOriginGeneration !== "string")
-        throw new Error("invalid peer correspondence recovery");
-      updatePeerOriginGeneration(
-        id,
-        capability,
-        originSession,
-        previousOriginGeneration,
-        originGeneration,
-      );
-      console.log(JSON.stringify({ recovered: true, id }));
-    } else if (action === "recover-recipient") {
-      if (typeof envelope.newRecipientGeneration !== "string")
-        throw new Error("invalid peer recipient recovery");
-      updatePeerRecipientGeneration(
-        id,
-        capability,
-        recipientSession,
-        recipientGeneration,
-        envelope.newRecipientGeneration,
-      );
-      console.log(JSON.stringify({ recovered: true, id }));
-    } else if (action === "poll") {
-      let replies: ReturnType<typeof pollPeerReplies>;
-      try {
-        replies = pollPeerReplies(
+        throw new Error(
+          "exact correspondence recipient is not live or authorized",
+        );
+      if (action === "recover") {
+        if (typeof previousOriginGeneration !== "string")
+          throw new Error("invalid peer correspondence recovery");
+        updatePeerOriginGeneration(
+          id,
+          capability,
+          originSession,
+          previousOriginGeneration,
+          originGeneration,
+        );
+        console.log(JSON.stringify({ recovered: true, id }));
+      } else if (action === "recover-recipient") {
+        if (typeof envelope.newRecipientGeneration !== "string")
+          throw new Error("invalid peer recipient recovery");
+        updatePeerRecipientGeneration(
+          id,
+          capability,
+          recipientSession,
+          recipientGeneration,
+          envelope.newRecipientGeneration,
+        );
+        console.log(JSON.stringify({ recovered: true, id }));
+      } else if (action === "poll") {
+        let replies: ReturnType<typeof pollPeerReplies>;
+        try {
+          replies = pollPeerReplies(
+            id,
+            capability,
+            originSession,
+            originGeneration,
+            recipientSession,
+            recipientGeneration,
+          );
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error(
+            JSON.stringify({
+              action: "poll",
+              correspondenceId: id,
+              originSession,
+              originGeneration,
+              recipientSession,
+              recipientGeneration,
+              expectedDataRoot: envelope.expectedDataRoot,
+              error: detail,
+            }),
+          );
+          process.exit(1);
+        }
+        console.log(
+          JSON.stringify({
+            dataRoot: herdsmanDataRoot(),
+            replies,
+            hasReplies:
+              (listPeerCorrespondences().find((item) => item.id === id)?.replies
+                .length ?? 0) > 0,
+          }),
+        );
+      } else if (action === "ack") {
+        if (typeof envelope.replyId !== "string")
+          throw new Error("invalid reply acknowledgement");
+        acknowledgePeerReply(
+          id,
+          capability,
+          envelope.replyId,
+          originSession,
+          originGeneration,
+          recipientSession,
+          recipientGeneration,
+        );
+        console.log(
+          JSON.stringify({ acknowledged: true, replyId: envelope.replyId }),
+        );
+      } else {
+        finalizePeerCorrespondence(
           id,
           capability,
           originSession,
@@ -249,56 +340,21 @@ if (action === "probe") {
           recipientSession,
           recipientGeneration,
         );
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error(
-          JSON.stringify({
-            action: "poll",
-            correspondenceId: id,
-            originSession,
-            originGeneration,
-            recipientSession,
-            recipientGeneration,
-            expectedDataRoot: envelope.expectedDataRoot,
-            error: detail,
-          }),
-        );
-        process.exit(1);
+        console.log(JSON.stringify({ finalized: true, id }));
       }
-      console.log(
-        JSON.stringify({
-          dataRoot: herdsmanDataRoot(),
-          replies,
-          hasReplies:
-            (listPeerCorrespondences().find((item) => item.id === id)?.replies
-              .length ?? 0) > 0,
-        }),
-      );
-    } else if (action === "ack") {
-      if (typeof envelope.replyId !== "string")
-        throw new Error("invalid reply acknowledgement");
-      acknowledgePeerReply(
-        id,
-        capability,
-        envelope.replyId,
-        originSession,
-        originGeneration,
-        recipientSession,
-        recipientGeneration,
-      );
-      console.log(
-        JSON.stringify({ acknowledged: true, replyId: envelope.replyId }),
+    };
+    // Keep the live Lead check and every synchronous correspondence mutation/read
+    // under the assignment authority lock; otherwise eligibility can be revoked
+    // after the check but before an ACK discards the durable reply.
+    const role =
+      listPeerCorrespondences().find((item) => item.id === id)?.role ??
+      "manager";
+    if (role === "lead") {
+      withProjectAssignmentAuthority((assignments) =>
+        runCorrespondenceOperation(assignments),
       );
     } else {
-      finalizePeerCorrespondence(
-        id,
-        capability,
-        originSession,
-        originGeneration,
-        recipientSession,
-        recipientGeneration,
-      );
-      console.log(JSON.stringify({ finalized: true, id }));
+      runCorrespondenceOperation();
     }
     process.exit(0);
   }
@@ -307,12 +363,24 @@ if (action === "probe") {
   if (
     !record ||
     record.kind !== "peer_message" ||
-    record.peerSource?.role !== "manager" ||
+    !record.peerSource ||
     typeof record.id !== "string" ||
     typeof record.fromSessionId !== "string" ||
     typeof record.toSessionId !== "string"
   )
     throw new Error("invalid peer transfer");
+  const correspondenceRole = envelope.correspondence?.role ?? "manager";
+  const remoteOrdinarySource =
+    record.peerSource.role === "lead" &&
+    record.peerSource.remoteOrdinary === true &&
+    Object.keys(record.peerSource).length === 2;
+  if (
+    (correspondenceRole !== "manager" && correspondenceRole !== "lead") ||
+    (correspondenceRole === "manager" &&
+      record.peerSource.role !== "manager") ||
+    (correspondenceRole === "lead" && !remoteOrdinarySource)
+  )
+    throw new Error("peer source role does not match correspondence role");
   if (!Array.isArray(envelope.attachments) || envelope.attachments.length > 32)
     throw new Error("invalid peer transfer evidence");
   const connection = process.env.SSH_CONNECTION;
@@ -360,6 +428,8 @@ if (action === "probe") {
       prior.transfer.record?.id !== record.id ||
       prior.transfer.record?.fromSessionId !== record.fromSessionId ||
       prior.transfer.record?.toSessionId !== record.toSessionId ||
+      (prior.transfer.correspondence?.role ?? "manager") !==
+        correspondenceRole ||
       peerPayloadDigest({
         record: prior.transfer.record,
         attachments: prior.transfer.attachments ?? [],
@@ -369,15 +439,22 @@ if (action === "probe") {
     envelope = prior.transfer;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    if (
-      !listPeerLeadRecords(runtime).some(
-        (peer) =>
-          peer.role === "manager" &&
-          peer.piSessionId === record.toSessionId &&
-          peer.claim.id === envelope.recipientClaimId,
-      )
-    )
-      throw new Error("exact destination Manager is not live");
+    const liveRecipient = listPeerLeadRecords(runtime).find(
+      (peer) =>
+        peer.piSessionId === record.toSessionId &&
+        peer.claim.id === envelope.recipientClaimId,
+    );
+    const authorized =
+      liveRecipient &&
+      (correspondenceRole === "manager"
+        ? liveRecipient.role === "manager"
+        : withProjectAssignmentAuthority((assignments) =>
+            isRemoteOrdinaryLead(liveRecipient, assignments),
+          ));
+    if (!authorized)
+      throw new Error(
+        "exact correspondence recipient is not live or authorized",
+      );
     const content = `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`;
     const temp = `${marker}.${randomUUID()}.tmp`;
     let fd: number | undefined;
@@ -433,6 +510,8 @@ if (action === "probe") {
           prior.transfer.record?.id !== record.id ||
           prior.transfer.record?.fromSessionId !== record.fromSessionId ||
           prior.transfer.record?.toSessionId !== record.toSessionId ||
+          (prior.transfer.correspondence?.role ?? "manager") !==
+            correspondenceRole ||
           peerPayloadDigest({
             record: prior.transfer.record,
             attachments: prior.transfer.attachments ?? [],
@@ -532,11 +611,14 @@ if (action === "probe") {
       published = true;
     if (!published) {
       const liveRecipient = listPeerLeadRecords(runtime).find(
-        (peer) =>
-          peer.role === "manager" && peer.piSessionId === record.toSessionId,
+        (peer) => peer.piSessionId === record.toSessionId,
       );
       if (!liveRecipient)
-        throw new Error("exact destination Manager is not live");
+        throw new Error(
+          correspondenceRole === "manager"
+            ? "exact destination Manager is not live"
+            : "exact correspondence recipient is not live",
+        );
       if (liveRecipient.claim.id !== envelope.recipientClaimId) {
         envelope = {
           ...envelope,
@@ -560,9 +642,28 @@ if (action === "probe") {
         syncDirectory(markerDir);
       }
     }
-    storePeerCorrespondence(envelope.correspondence);
-    if (!published) {
+    const publish = () => {
+      if (published && correspondenceRole === "manager") {
+        storePeerCorrespondence(envelope.correspondence!);
+        return;
+      }
+      const current = listPeerLeadRecords(runtime).find(
+        (peer) =>
+          peer.piSessionId === record.toSessionId &&
+          peer.claim.id === envelope.recipientClaimId,
+      );
+      const authorized =
+        current &&
+        (correspondenceRole === "manager"
+          ? current.role === "manager"
+          : isRemoteOrdinaryLead(current, globalProjectAssignmentSnapshot()));
+      if (!authorized)
+        throw new Error(
+          "exact correspondence recipient is not live or authorized",
+        );
+      storePeerCorrespondence(envelope.correspondence!);
       if (
+        !published &&
         !hasPeerDeliveryReceipt(
           runtime,
           record.toSessionId,
@@ -571,9 +672,32 @@ if (action === "probe") {
         )
       )
         writeCoordinationMessage(accepted, runtime);
-      if (!published)
-        afterDurablePeerAcceptanceStep("inbox-publication-durable");
-    }
+    };
+    if (correspondenceRole === "lead") {
+      withProjectAssignmentAuthority((assignments) => {
+        const current = listPeerLeadRecords(runtime).find(
+          (peer) =>
+            peer.piSessionId === record.toSessionId &&
+            peer.claim.id === envelope.recipientClaimId,
+        );
+        if (!current || !isRemoteOrdinaryLead(current, assignments))
+          throw new Error(
+            "exact correspondence recipient is not live or authorized",
+          );
+        storePeerCorrespondence(envelope.correspondence!);
+        if (
+          !published &&
+          !hasPeerDeliveryReceipt(
+            runtime,
+            record.toSessionId,
+            record.id,
+            acceptedDigest,
+          )
+        )
+          writeCoordinationMessage(accepted, runtime);
+      });
+    } else publish();
+    if (!published) afterDurablePeerAcceptanceStep("inbox-publication-durable");
     const markerTemp = `${marker}.${randomUUID()}.tmp`;
     try {
       writeFileSync(

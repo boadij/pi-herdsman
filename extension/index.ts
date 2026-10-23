@@ -1913,9 +1913,9 @@ function registerExtensionImpl(
         label: "message peer",
         exposure: "model-only",
         promptSnippet:
-          "Discover peers and reply through existing correspondences",
+          "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
-          "Send to an eligible same-role Lead or Manager by exact session ID; an existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
+          "Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>
@@ -1923,14 +1923,10 @@ function registerExtensionImpl(
         renderCall: (args: unknown, theme: any, context: any) =>
           renderCoordinationCall("peer", "message", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
-          renderCoordinationResult(
-            "peer",
-            "message",
-            result,
-            options,
-            theme,
-            context,
-          ),
+          renderCoordinationResult("peer", "message", result, options, theme, {
+            ...context,
+            activeRole: activeRole(),
+          }),
       };
       const staffTool = {
         name: "message_staff",
@@ -2415,7 +2411,7 @@ function registerExtensionImpl(
           name: "list_peers",
           label: "list peers",
           description:
-            "List independently discovered eligible same-role peers; Managers may also see reply-only originating Managers with existing return correspondences and optional last-known name/workspace display context. Use only the exact session as a target; labels do not verify identity, availability, or permission to initiate unrelated messages. Do not use for progress polling.",
+            "List independently discovered eligible same-role peers, including eligible ordinary Leads or Managers on reachable saved Herdr machines. Remote Lead discovery requires verified ordinary, unassigned status; incomplete discovery is not proof that no peers exist. A reply-only originating Lead or Manager may also appear when an existing return correspondence allows a reply without independent discovery or current availability. Use only the exact session as a target; labels do not verify identity, availability, or permission to initiate unrelated messages. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (
@@ -2428,7 +2424,10 @@ function registerExtensionImpl(
           renderCall: (a: unknown, t: any, c: any) =>
             renderCoordinationCall("peer", "list", a, t, c),
           renderResult: (r: any, o: any, t: any, c: any) =>
-            renderCoordinationResult("peer", "list", r, o, t, c),
+            renderCoordinationResult("peer", "list", r, o, t, {
+              ...c,
+              activeRole: activeRole(),
+            }),
         });
         pi.registerTool({
           ...peerTool,
@@ -2453,7 +2452,10 @@ function registerExtensionImpl(
           renderCall: (a: unknown, t: any, c: any) =>
             renderCoordinationCall("peer", "message", a, t, c),
           renderResult: (r: any, o: any, t: any, c: any) =>
-            renderCoordinationResult("peer", "message", r, o, t, c),
+            renderCoordinationResult("peer", "message", r, o, t, {
+              ...c,
+              activeRole: activeRole(),
+            }),
         });
       }
     }

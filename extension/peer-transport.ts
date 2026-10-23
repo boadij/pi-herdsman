@@ -31,8 +31,10 @@ export type RemotePeerSnapshot = Readonly<{
     repo?: string;
     branch?: string;
     workspaceLabel?: string;
+    sessionKind?: "ordinary" | "managed";
     build?: unknown;
   }>;
+  ordinaryLeadsComplete?: boolean;
 }>;
 
 export function peerRecoveryRequest(
@@ -102,9 +104,37 @@ export function resolveRemotePeerOutboundRetry(
     return { kind: "pending" };
   if (status.status === "accepted") return { kind: "accepted" };
   if (status.status !== "absent") return { kind: "pending" };
+  let correspondenceRole: "manager" | "lead";
+  try {
+    const parsed: unknown = JSON.parse(outbound.envelope);
+    if (!parsed || typeof parsed !== "object") return { kind: "pending" };
+    const correspondence = (parsed as { correspondence?: { role?: unknown } })
+      .correspondence;
+    const source = (
+      parsed as {
+        record?: { peerSource?: { role?: unknown; remoteOrdinary?: unknown } };
+      }
+    ).record?.peerSource;
+    correspondenceRole =
+      correspondence?.role === undefined
+        ? "manager"
+        : (correspondence.role as "manager" | "lead");
+    if (
+      (correspondenceRole !== "manager" && correspondenceRole !== "lead") ||
+      (correspondenceRole === "manager" && source?.role !== "manager") ||
+      (correspondenceRole === "lead" &&
+        (source?.role !== "lead" || source.remoteOrdinary !== true)) ||
+      (correspondenceRole === "lead" && snapshot.ordinaryLeadsComplete !== true)
+    )
+      return { kind: "pending" };
+  } catch {
+    return { kind: "pending" };
+  }
   const recipient = snapshot.peers.find(
     (peer) =>
-      peer.role === "manager" && peer.piSessionId === outbound.recipientSession,
+      peer.role === correspondenceRole &&
+      peer.piSessionId === outbound.recipientSession &&
+      (correspondenceRole !== "lead" || peer.sessionKind === "ordinary"),
   );
   if (!recipient) return { kind: "pending" };
   const envelope = JSON.parse(outbound.envelope) as {
@@ -474,5 +504,25 @@ export async function probePeerEndpoint(
     !Array.isArray((probe as { peers?: unknown }).peers)
   )
     throw new Error("Peer endpoint returned invalid probe data");
-  return probe as RemotePeerSnapshot;
+  const snapshot = probe as RemotePeerSnapshot;
+  if (
+    snapshot.peers.some(
+      (peer) =>
+        !peer ||
+        typeof peer !== "object" ||
+        typeof peer.piSessionId !== "string" ||
+        peer.piSessionId.length === 0 ||
+        !peer.claim ||
+        typeof peer.claim.id !== "string" ||
+        peer.claim.id.length === 0 ||
+        (peer.role !== "manager" && peer.role !== "lead") ||
+        (peer.role === "lead" &&
+          peer.sessionKind !== "ordinary" &&
+          peer.sessionKind !== "managed"),
+    ) ||
+    (snapshot.ordinaryLeadsComplete !== undefined &&
+      typeof snapshot.ordinaryLeadsComplete !== "boolean")
+  )
+    throw new Error("Peer endpoint returned invalid probe data");
+  return snapshot;
 }

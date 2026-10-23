@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Manager peers remain user-global. Ordinary Leads can communicate globally, including across Herdr sockets; if either Lead is a Managed Lead, it must have a current exact `ProjectAssignment` and both must be in the same verified Herdr worktree group on the same socket. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
+`peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Local ordinary Leads can communicate globally. Local managed or assigned Leads are restricted to the same verified Herdr worktree group on the same socket, with current exact assignment evidence. Across saved Herdr machines, only verified ordinary, unassigned Leads are eligible; Managers retain their existing Manager-to-Manager federation. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
 
 Assignment mutations and peer authorization share a short-lived user-global
 process lock. Under it, Herdsman validates every canonical assignment record
@@ -66,9 +66,9 @@ Ordinary Leads and active Managers have `list_peers` and `message_peer`.
 ```
 
 Returns this session separately from independently discovered eligible
-same-role sessions. An active Manager may also receive an optional
-`reply_only` collection for originating Managers with an existing authorized
-return correspondence:
+same-role sessions. A Lead or Manager may also receive an optional
+`reply_only` collection for originating sessions of its current role with an
+existing authorized return correspondence:
 
 ```json
 {
@@ -85,8 +85,8 @@ return correspondence:
   ],
   "reply_only": [
     {
-      "session": "<exact originating Manager session ID>",
-      "name": "Research Manager",
+      "session": "<exact originating same-role session ID>",
+      "name": "Research peer",
       "workspace_label": "project-alpha/main"
     }
   ]
@@ -105,7 +105,7 @@ identity and authority when sending. Missing reciprocal Herdr/SSH configuration
 does not prevent replies through an existing correspondence; reverse
 connectivity is needed only to independently initiate communication. Therefore,
 an empty `peers` list does not necessarily mean communication with known
-originating Managers is impossible.
+originating peers through current-role correspondences is impossible.
 
 `self` is never repeated in `peers`. Each peer has a `session`, `name`, `cwd`,
 `repo`, `branch`, and `workspace_label`; presentation metadata may be empty.
@@ -114,13 +114,17 @@ and workspace labels are display metadata, not target handles. The model-facing
 list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 When the active coordinator is a Manager, the list also discovers live Managers
-on enabled, reachable saved Herdr machines. Those entries retain the exact Pi
-session ID and include a `machine` display label. Reachable-machine probe
-failures are reported separately as `unavailable_machines`; labels are not
+on enabled, reachable saved Herdr machines. An ordinary Lead similarly
+discovers only remote Leads verified as ordinary and unassigned by the remote
+machine's authoritative assignment scan. Managed or assigned Leads are not
+remote federation targets. Those entries retain the exact Pi session ID and
+include a `machine` display label. Reachable-machine probe failures are
+reported separately as `unavailable_machines`. If remote Lead eligibility
+cannot be verified, that machine does not contribute Lead results; an
+incomplete scan does not mean that no eligible Leads exist. Labels are not
 authority. Remote transport requires an independently working noninteractive
 OpenSSH target with normal strict host-key verification. `ssh://` targets and
 SSH-config aliases are supported; Herdr-only temporary authentication is not.
-Ordinary Lead discovery and messaging remain local/same-machine behavior.
 
 ```json
 {
@@ -142,24 +146,21 @@ remains bounded by the internal 8 KiB limit, with larger accepted bodies
 stored separately and verified before Pi delivery.
 
 Targets do not all need to be independently discoverable and currently live:
-an active Manager may reply to an exact `reply_only` target through its
-existing return correspondence. This does not grant general initiation
-permission.
+a coordinator may reply to an exact `reply_only` target through its existing
+return correspondence. This does not grant general initiation permission.
 
-Remote Manager sends are retained locally until the remote endpoint confirms
-durable acceptance. Failed sends remain queued and retry automatically while
-the Manager inbox is active; `list_peers` also triggers immediate
+Remote sends are retained locally until the remote endpoint confirms durable
+acceptance. Failed sends remain queued and retry automatically while the
+coordinator inbox is active; `list_peers` also triggers immediate
 reconciliation. Acceptance is not delivery to Pi or completion of the requested
-work. An accepted request also establishes a capability-scoped,
-durable return correspondence. The recipient Manager can reply to the exact
-originating session with `message_peer`; the reply is queued at the recipient.
-Remote Manager replies are retrieved automatically while the originating
-Manager's inbox runtime is active. Calling `list_peers` also triggers
-reconciliation immediately. Replies remain queued until acknowledged,
-including across temporary disconnections; reverse SSH is not required.
-Recovery is allowed only for the same exact Pi session after it has
-re-established live Manager authority; a
-replacement session is not substituted. Requests also verify the endpoint's
-effective Herdsman data root against the discovered route before recovery or
-reply transfer. Delivery to Pi and completion of the requested work remain
-separate states.
+work. An accepted request establishes a capability-scoped, durable return
+correspondence bound to the coordinator role. The recipient can reply to the
+exact originating session with `message_peer`; the reply is queued at the
+recipient and retrieved automatically while the origin's inbox runtime is
+active. Replies remain queued until acknowledged, including across temporary
+disconnections; reverse SSH is not required. Recovery is allowed only for the
+same exact Pi session after it re-establishes live authority for that role; a
+replacement session or a different role is not substituted. Requests also
+verify the endpoint's effective Herdsman data root against the discovered
+route before recovery or reply transfer. Delivery to Pi and completion of the
+requested work remain separate states.

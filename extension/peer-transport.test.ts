@@ -84,7 +84,12 @@ test("queued transfer retries only after definitive absence and exact-session ge
   const recipient = randomUUID();
   const oldGeneration = randomUUID();
   const newGeneration = randomUUID();
-  const record = { id, fromSessionId: origin, toSessionId: recipient };
+  const record = {
+    id,
+    fromSessionId: origin,
+    toSessionId: recipient,
+    peerSource: { role: "manager" },
+  };
   const attachments: unknown[] = [];
   const digest = transportPayloadDigest({ record, attachments });
   const outbound = {
@@ -160,6 +165,71 @@ test("queued transfer retries only after definitive absence and exact-session ge
       { ...absent, digest: "f".repeat(64) },
       snapshot,
     ),
+    { kind: "pending" },
+  );
+});
+
+test("ordinary Lead retry requires complete snapshot and exact ordinary Lead role", () => {
+  const id = randomUUID();
+  const origin = randomUUID();
+  const recipient = randomUUID();
+  const generation = randomUUID();
+  const record = {
+    id,
+    fromSessionId: origin,
+    toSessionId: recipient,
+    peerSource: { role: "lead", remoteOrdinary: true },
+  };
+  const attachments: unknown[] = [];
+  const digest = transportPayloadDigest({ record, attachments });
+  const outbound = {
+    id,
+    machine: { id: "m", label: "m", target: "m", reachable: true },
+    dataRoot: "/test/root",
+    session: origin,
+    claimId: randomUUID(),
+    recipientSession: recipient,
+    digest,
+    envelope: JSON.stringify({
+      record,
+      recipientClaimId: generation,
+      attachments,
+      correspondence: {
+        role: "lead",
+        originSession: origin,
+        recipientSession: recipient,
+        recipientGeneration: generation,
+      },
+    }),
+  };
+  const status = { dataRoot: outbound.dataRoot, id, digest, status: "absent" };
+  const peer = {
+    role: "lead",
+    sessionKind: "ordinary",
+    piSessionId: recipient,
+    claim: { id: generation },
+  };
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(outbound, status, {
+      dataRoot: outbound.dataRoot,
+      peers: [peer],
+    }),
+    { kind: "pending" },
+  );
+  assert.equal(
+    resolveRemotePeerOutboundRetry(outbound, status, {
+      dataRoot: outbound.dataRoot,
+      ordinaryLeadsComplete: true,
+      peers: [peer],
+    }).kind,
+    "retry",
+  );
+  assert.deepEqual(
+    resolveRemotePeerOutboundRetry(outbound, status, {
+      dataRoot: outbound.dataRoot,
+      ordinaryLeadsComplete: true,
+      peers: [{ ...peer, sessionKind: "managed" }],
+    }),
     { kind: "pending" },
   );
 });

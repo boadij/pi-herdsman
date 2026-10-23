@@ -56,6 +56,7 @@ const {
   projectAssignmentAuthorityLockPath,
   samePeerLeadAuthority,
   canMessagePeer,
+  isRemoteOrdinaryLead,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   projectAssignmentBytes,
   coordinationMessageBytes,
@@ -93,6 +94,7 @@ const {
   writeLeadCoordinationState,
 } = await import("./supervision.ts");
 import type {
+  GlobalProjectAssignment,
   LeadCoordinationState,
   OpenProjectWorkspace,
   PeerLeadRecord,
@@ -224,6 +226,52 @@ test("peer eligibility preserves global ordinary and Manager behavior while scop
   ] as const;
   for (const [sender, recipient, expected] of cases)
     assert.equal(canMessagePeer(sender, recipient), expected);
+});
+
+test("remote Lead eligibility requires an ordinary Lead with no assignments", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "remote-ordinary-lead", { role: "lead" });
+  const assigned = new Map<string, GlobalProjectAssignment[]>([
+    [fixture.record.piSessionId, [{} as GlobalProjectAssignment]],
+  ]);
+  try {
+    assert.equal(isRemoteOrdinaryLead(fixture.record, new Map()), true);
+    assert.equal(
+      isRemoteOrdinaryLead(
+        fixture.record,
+        new Map([[fixture.record.piSessionId, []]]),
+      ),
+      true,
+    );
+    assert.equal(isRemoteOrdinaryLead(fixture.record, assigned), false);
+    assert.equal(
+      isRemoteOrdinaryLead(
+        fixture.record,
+        new Map([
+          [fixture.record.piSessionId, [{}, {}] as GlobalProjectAssignment[]],
+        ]),
+      ),
+      false,
+    );
+    assert.equal(
+      isRemoteOrdinaryLead(
+        { ...fixture.record, sessionKind: "managed" },
+        new Map(),
+      ),
+      false,
+    );
+    assert.equal(
+      isRemoteOrdinaryLead({ ...fixture.record, role: "manager" }, new Map()),
+      false,
+    );
+    assert.equal(
+      isRemoteOrdinaryLead({ ...fixture.record, role: undefined }, new Map()),
+      false,
+    );
+  } finally {
+    removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
+    fixture.release();
+  }
 });
 const state = (
   piSessionId: string,
@@ -783,6 +831,13 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
   });
   const path = writeCoordinationMessage(record, runtime);
   assert.deepEqual(readCoordinationMessage(path), record);
+  const remoteRecord = {
+    ...record,
+    id: id(),
+    peerSource: { role: "lead" as const, remoteOrdinary: true as const },
+  };
+  const remotePath = writeCoordinationMessage(remoteRecord, runtime);
+  assert.deepEqual(readCoordinationMessage(remotePath), remoteRecord);
   assert.equal(
     coordinationMessagePath(runtime, record.toSessionId, record.id),
     path,
@@ -793,6 +848,28 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
       writeCoordinationMessage({ ...record, kind: "peer" } as never, runtime),
     /Invalid Chief message record/,
   );
+  for (const peerSource of [
+    { role: "lead", remoteOrdinary: false },
+    { role: "lead", remoteOrdinary: true, socket: "/sock" },
+    {
+      role: "lead",
+      remoteOrdinary: true,
+      socket: "/sock",
+      group: null,
+      managed: false,
+    },
+    { role: "manager", remoteOrdinary: true },
+    { role: "lead", remoteOrdinary: true, extra: "field" },
+  ]) {
+    assert.throws(
+      () =>
+        writeCoordinationMessage(
+          { ...record, id: id(), peerSource } as never,
+          runtime,
+        ),
+      /Invalid Chief message record/,
+    );
+  }
   assert.throws(
     () =>
       writeCoordinationMessage(

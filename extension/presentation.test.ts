@@ -2618,6 +2618,20 @@ test("list peers rendering distinguishes self from peers", () => {
     "peer · 1 discovered · 5 reply-only",
   );
 
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        "list",
+        result,
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "list" }, activeRole: "lead" },
+      ),
+    ),
+    /reply-only Leads 5/,
+  );
+
   assert.equal(
     renderedText(
       renderCoordinationResult(
