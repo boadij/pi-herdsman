@@ -891,9 +891,6 @@ try {
       "pane",
       "run",
       pane,
-      ...(side === "b" && resources.diagnosticsEnabled
-        ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
-        : []),
       "pi",
       "--model",
       `smoke-faux/federated-peer-${side}`,
@@ -980,6 +977,9 @@ try {
       "pane",
       "run",
       pane,
+      ...(side === "b" && resources.diagnosticsEnabled
+        ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
+        : []),
       "pi",
       "--model",
       `smoke-faux/federated-peer-${side}`,
