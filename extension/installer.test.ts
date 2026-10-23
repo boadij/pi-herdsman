@@ -92,10 +92,11 @@ function Resolve-Command([string]$Name) {
 function Version([string]$Command) {
   if ($Command -eq 'MockPi') { return [version]$script:case.pi }
   if ($Command -eq 'MockHerdr') { return [version]($script:case.herdr -replace '-preview(?:\..*)?$', '') }
-  if ($Command -eq 'MockNode') { return [version]$script:case.node }
-  return [version]'10.0.0'
+  if ($Command -in @('MockNode', 'node')) { return [version]$script:case.node }
+  if ($Command -eq 'npm.cmd') { return [version]'10.0.0' }
+  throw "Unexpected version command: $Command"
 }
-function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
+function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
 function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
 function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
 function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
@@ -106,41 +107,6 @@ Invoke-UpstreamInstaller 'mock://installer'
 try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.Exception.Message) }
 'RESULT failed=' + $failed
 'LOG ' + ($script:log -join '|')
-`,
-  );
-  const result = spawnSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      harness,
-    ],
-    { encoding: "utf8" },
-  );
-  rmSync(root, { recursive: true, force: true });
-  return result;
-}
-
-function runWindowsEntryPointFailure(fail) {
-  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-entrypoint-"));
-  const harness = join(root, "harness.ps1");
-  const escaped = JSON.stringify({ fail }).replaceAll("'", "''");
-  writeFileSync(
-    harness,
-    `
-$ErrorActionPreference = 'Stop'
-$script:case = ConvertFrom-Json '${escaped}'
-$script:LASTEXITCODE = 0
-function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
-function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq '--version') { return '1.4.0' }; if ($Action -eq 'list') { return '' }; if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
-function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq '--version') { return '1.0.0' }; if ($Action -eq 'status') { return 'pi: current (v9)' }; if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
-function MockNode { '--version'; $script:LASTEXITCODE=0; return '22.19.0' }
-function MockNpm { '--version'; $script:LASTEXITCODE=0; return '10.0.0' }
-function Get-Command { param($Name,$ErrorAction) $source = switch ($Name) { 'pi.cmd' { 'MockPi' } 'pi' { 'MockPi' } 'herdr.exe' { 'MockHerdr' } 'herdr' { 'MockHerdr' } 'node' { 'MockNode' } 'npm.cmd' { 'MockNpm' } }; if ($source) { [pscustomobject]@{Source=$source} } }
-. '${windowsInstaller.replaceAll("'", "''")}'
 `,
   );
   const result = spawnSync(
@@ -185,7 +151,7 @@ $ErrorActionPreference = 'Stop'
 . '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
 $oldUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 try {
-  function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
+  function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
   function powershell.exe { [Environment]::SetEnvironmentVariable('Path', 'C:\\mock-installed', 'User'); $script:LASTEXITCODE=0 }
   Invoke-UpstreamInstaller 'mock://installer'
   'PATHREFRESH ' + $env:Path.Contains('C:\\mock-installed')
@@ -227,7 +193,7 @@ Copy-Item (Join-Path $PSHOME 'powershell.exe') (Join-Path $fakeBin 'powershell.e
 Copy-Item (Join-Path $PSHOME 'powershell.exe.config') $fakeBin
 $env:Path = $fakeBin + ';' + $env:Path
 . '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
-function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Set-Content -Path $OutFile -Value 'exit 23' }
+function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'exit 23' }
 $failed = $false
 try { Invoke-UpstreamInstaller 'mock://installer' } catch { $failed = $true }
 $remaining = @(Get-ChildItem -Path $env:TEMP -Filter '*.ps1' | Where-Object { $_.Name -match '^[0-9a-f-]{36}\\.ps1$' })
@@ -294,16 +260,69 @@ test(
 );
 
 test(
-  "Windows bootstrap propagates package and integration failures without success output",
+  "Windows bootstrap catches package and integration failures without success output",
   { skip: process.platform !== "win32" },
   () => {
     for (const fail of ["install", "integration"]) {
-      const result = runWindowsEntryPointFailure(fail);
+      const result = runWindowsBootstrap({ fail });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /RESULT failed=True/u);
+      assert.doesNotMatch(
+        result.stdout,
+        /Next steps:|package operation completed/u,
+      );
+    }
+  },
+);
+
+test(
+  "Windows top-level installer exits nonzero when package installation fails",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-entrypoint-"));
+    const bin = join(root, "bin");
+    const harness = join(root, "entrypoint.ps1");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "pi.cmd"),
+      '@echo off\r\nif "%1"=="--version" (echo 1.4.0 & exit /b 0)\r\nif "%1"=="list" exit /b 0\r\nif "%1"=="install" exit /b 17\r\nexit /b 0\r\n',
+    );
+    writeFileSync(
+      join(bin, "herdr.cmd"),
+      '@echo off\r\nif "%1"=="--version" (echo 1.0.0 & exit /b 0)\r\nif "%1"=="integration" if "%2"=="status" (echo pi: current (v9) & exit /b 0)\r\nexit /b 0\r\n',
+    );
+    writeFileSync(join(bin, "node.cmd"), "@echo 22.19.0\r\n");
+    writeFileSync(join(bin, "npm.cmd"), "@echo 10.0.0\r\n");
+    writeFileSync(
+      harness,
+      `
+$env:Path = '${bin.replaceAll("'", "''")}' + ';' + $env:Path
+function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
+function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) throw "Unexpected Invoke-WebRequest: $Uri" }
+& '${windowsInstaller.replaceAll("'", "''")}'
+`,
+    );
+    try {
+      const result = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          harness,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.notEqual(result.status, null, result.error?.message);
       assert.notEqual(result.status, 0, result.stdout);
       assert.doesNotMatch(
         result.stdout,
         /Next steps:|package operation completed/u,
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   },
 );
