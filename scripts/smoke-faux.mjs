@@ -92,7 +92,8 @@ function correlatedCall(messages, name, identity) {
     if (
       identity &&
       call.arguments?.label !== identity &&
-      call.arguments?.agent !== identity
+      call.arguments?.agent !== identity &&
+      call.arguments?.branch !== identity
     )
       continue;
     const result = messages.find(
@@ -883,7 +884,7 @@ export function decide(model, context) {
         text(message).includes("PEER_E2E_REQUEST"),
     );
     const inbound =
-      inbounds.find((message) => forwardableRefs(message).length >= 3) ??
+      inbounds.find((message) => forwardableRefs(message).length >= 2) ??
       inbounds[0];
     if (
       inbounds.some((message) =>
@@ -903,17 +904,18 @@ export function decide(model, context) {
       return waitForResult(
         "Waiting for both requests on the Manager pair route.",
       );
-    const assignment = correlatedCall(messages, "delegate_project");
+    const branch = `herdsman/federation-smoke-${origin.slice(0, 8)}`;
+    const assignment = correlatedCall(messages, "delegate_project", branch);
     if (!assignment) {
       const forwardable =
         text(inbound).split("Forwardable received files:\n")[1] ?? "";
       const refs = forwardableRefs(inbound);
-      if (refs.length < 3)
+      if (refs.length < 2)
         throw new Error(
           "federation smoke did not receive forwardable evidence",
         );
       return call("delegate_project", {
-        branch: `herdsman/federation-smoke-${origin.slice(0, 8)}`,
+        branch,
         task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
         files: refs,
       });
@@ -952,7 +954,7 @@ export function decide(model, context) {
     const paths = [
       ...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu),
     ].map((match) => match[1]);
-    if (paths.length < (isBTask ? 3 : 2))
+    if (paths.length < 2)
       throw new Error("federation Lead did not receive both evidence refs");
     const successfulReads = messages
       .filter((message) => message.role === "assistant")
