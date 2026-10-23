@@ -20,6 +20,7 @@ import {
   matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
+  ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
 
 let runId = `peer474-${randomUUID()}`;
@@ -1476,23 +1477,27 @@ try {
     // retry must resolve the same transfer without duplicate delivery.
     exec("a", ["touch", `${resources.a.runtime.home}/drop-accept-ack`]);
     herdr("a", [
-      "agent",
-      "prompt",
+      "pane",
+      "send-text",
       resources.a.ordinaryLead.pane,
       `PEER_E2E_A_LEAD_SEND ${leadResult.semanticRef}`,
-      "--wait",
-      "--timeout",
-      "60000",
     ]);
-    const aEntries = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse);
-    const acceptance = aEntries
-      .map((entry) => entry.message?.details ?? entry.details)
-      .find(
-        (details) => details?.queued === true && typeof details.id === "string",
-      );
+    herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
+    let acceptance;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const aEntries = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
+        .split("\n")
+        .filter(Boolean)
+        .map(JSON.parse);
+      acceptance = aEntries
+        .map((entry) => entry.message?.details ?? entry.details)
+        .find(
+          (details) =>
+            details?.queued === true && typeof details.id === "string",
+        );
+      if (acceptance) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
     if (!acceptance)
       throw new Error(
         `A ordinary Lead's Pi session has no durable remote peer queue receipt; pane=${herdr("a", ["pane", "read", resources.a.ordinaryLeadPaneId, "--source", "recent", "--lines", "80"])}; session=${exec("a", ["tail", "-n", "40", resources.a.ordinaryLead.sessionPath])}`,
@@ -1513,6 +1518,10 @@ try {
     stage("lead-outbound-retry-released", { id: acceptance.id });
     let inbox = "";
     for (let attempt = 0; attempt < 80; attempt++) {
+      const bEntries = exec("b", ["cat", resources.b.ordinaryLead.sessionPath])
+        .split("\n")
+        .filter(Boolean)
+        .map(JSON.parse);
       inbox = exec(
         "b",
         [
@@ -1522,7 +1531,7 @@ try {
         ],
         ["--user", "herdsman"],
       );
-      if (!inbox.trim()) break;
+      if (ordinaryLeadDeliveryReady(bEntries, acceptance.id, inbox)) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
     if (inbox.trim())

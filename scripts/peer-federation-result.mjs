@@ -1,5 +1,17 @@
 const MAX_EVIDENCE_LENGTH = 500;
 
+export function ordinaryLeadDeliveryReady(entries, messageId, inbox) {
+  return (
+    !inbox.trim() &&
+    entries.filter(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-peer_message" &&
+        entry.details?.id === messageId,
+    ).length === 1
+  );
+}
+
 export function isLiveCorrespondenceRecipient(probe, correspondence) {
   const role = correspondence.role ?? "manager";
   return (

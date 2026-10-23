@@ -6,7 +6,27 @@ import {
   matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
+  ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+
+test("ordinary Lead delivery wait does not accept an initially empty inbox", () => {
+  const messageId = "expected-message";
+  const delivered = {
+    type: "custom_message",
+    customType: "pi-herdsman-peer_message",
+    details: { id: messageId },
+  };
+  assert.equal(ordinaryLeadDeliveryReady([], messageId, ""), false);
+  assert.equal(ordinaryLeadDeliveryReady([delivered], messageId, ""), true);
+  assert.equal(
+    ordinaryLeadDeliveryReady([delivered, delivered], messageId, ""),
+    false,
+  );
+  assert.equal(
+    ordinaryLeadDeliveryReady([delivered], messageId, "pending"),
+    false,
+  );
+});
 
 test("live correspondence recipient matches role, session, generation, and Lead eligibility", () => {
   const correspondence = {
