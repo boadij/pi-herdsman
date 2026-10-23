@@ -30,6 +30,8 @@ const modelIds = [
   "terminal-agent-error",
   "manager-handoff",
   "manager-handoff-lead",
+  "manager-merge",
+  "manager-merge-lead",
   "agent-crash-root",
   "agent-crash-recovery",
   "agent-crash-target",
@@ -583,6 +585,82 @@ export function decide(model, context) {
       throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
     return call("message_supervisor", { message: marker });
   }
+  if (model === "manager-merge-lead") {
+    const firstSupervisorResult = messages.findIndex(
+      (message) =>
+        message.role === "toolResult" &&
+        message.toolName === "message_supervisor",
+    );
+    const repairIndex = messages.findIndex(
+      (message, index) =>
+        index > firstSupervisorResult &&
+        message.role === "user" &&
+        text(message).includes("MANAGER_MERGE_REPAIR"),
+    );
+    const repair =
+      firstSupervisorResult >= 0 && repairIndex > firstSupervisorResult;
+    const command = repair
+      ? "git merge --no-edit main && test -f manager-merge-source.txt && git status --porcelain && git rev-parse HEAD"
+      : "git config user.name 'Herdsman Smoke' && git config user.email smoke@example.invalid && printf 'source\n' > manager-merge-source.txt && git add manager-merge-source.txt && git commit -m 'Manager merge smoke source' && git rev-parse HEAD";
+    const bash = correlatedCall(messages, "bash");
+    if (!bash || (repair && bash.resultIndex < repairIndex))
+      return call("bash", { command, timeout: 30000 });
+    const result = bash.result;
+    if (!result || result.isError)
+      throw new Error("Manager merge Lead Git command failed");
+    const sha = text(result)
+      .match(/\b[0-9a-f]{40,64}\b/gi)
+      ?.at(-1);
+    if (!sha) throw new Error("Manager merge Lead Git command omitted HEAD");
+    const message = `${repair ? "MANAGER_MERGE_REPAIRED" : "MANAGER_MERGE_SOURCE_READY"} ${sha}`;
+    const reported = correlatedCall(messages, "message_supervisor");
+    if (!reported || reported.resultIndex < bash.resultIndex)
+      return call("message_supervisor", { message });
+    return waitForResult(
+      "Waiting for the Manager merge scenario's next Lead instruction.",
+    );
+  }
+  if (model === "manager-merge") {
+    const assignment = correlatedCall(messages, "delegate_project");
+    if (!assignment && prompt.includes("MANAGER_MERGE_ASSIGN")) {
+      const branch = prompt.match(/branch ([^\s]+)/)?.[1];
+      if (!branch) throw new Error("Manager merge assignment omitted branch");
+      return call("delegate_project", {
+        branch,
+        task: "Create a committed source change using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for a MANAGER_MERGE_REPAIR message; merge main, validate the source file and clean Git status, then message_supervisor with MANAGER_MERGE_REPAIRED and the exact resulting HEAD.",
+      });
+    }
+    if (!assignment)
+      throw new Error("Manager merge decision lacks its assigned Lead");
+    const attempt = prompt.match(/MANAGER_MERGE_ATTEMPT ([0-9a-f]{40,64})/i);
+    if (attempt) {
+      const previous = correlatedCall(messages, "merge_project");
+      if (previous?.call.arguments?.expected_head === attempt[1])
+        return waitForResult(
+          "Waiting for the next explicit Manager merge scenario step.",
+        );
+      return call("merge_project", {
+        branch: assignment.call.arguments.branch,
+        expected_head: attempt[1],
+      });
+    }
+    const repair = prompt.match(
+      /MANAGER_MERGE_NOTIFY ([A-Za-z0-9._-]+) ([0-9a-f]{40,64})/i,
+    );
+    if (repair) {
+      if (correlatedCall(messages, "message_staff"))
+        return waitForResult(
+          "Waiting for the assigned Lead's reconciliation report.",
+        );
+      return call("message_staff", {
+        session: repair[1],
+        message: `MANAGER_MERGE_REPAIR Incorporate target main at ${repair[2]}, preserve your source change, validate, and report exact final HEAD.`,
+      });
+    }
+    return waitForResult(
+      "Waiting for the next explicit Manager merge scenario step.",
+    );
+  }
   if (model === "manager-handoff") {
     const assignment = correlatedCall(messages, "delegate_project");
     if (!assignment && prompt.includes("Use delegate_project exactly once")) {
@@ -1035,6 +1113,32 @@ export default function install(pi) {
     const currentSessionId = sessionId;
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
+    if (model.id === "manager-merge" || model.id === "manager-merge-lead") {
+      const tools = getCurrentTools(context.messages).map((tool) => tool.name);
+      const latestUser = lastUser(context.messages);
+      const firstSupervisorResult = context.messages.findIndex(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === "message_supervisor",
+      );
+      const repairInstructionObserved =
+        model.id === "manager-merge-lead" &&
+        context.messages.some(
+          (message, index) =>
+            index > firstSupervisorResult &&
+            message.role === "user" &&
+            text(message).includes("MANAGER_MERGE_REPAIR"),
+        );
+      appendFileSync(
+        join(
+          process.env.PI_CODING_AGENT_DIR,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-attempts.jsonl",
+        ),
+        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", repairInstructionObserved, tools: tools.filter((name) => ["bash", "delegate_project", "merge_project", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "merge_project"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
+      );
+    }
     if (!recordedSessions.has(currentSessionId)) {
       let piPackage;
       try {

@@ -1355,6 +1355,9 @@ function registerExtensionImpl(
       });
     };
     const projectHost = {
+      readConfig,
+      projectAssignmentPath,
+      acquireProcessLock,
       stopProjectLeadPane: (
         ctx: ExtensionContext,
         target: any,

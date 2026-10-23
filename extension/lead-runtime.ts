@@ -552,6 +552,9 @@ type LeadHerdRunHost = {
 };
 
 type LeadProjectHost = {
+  readConfig: typeof import("./config.ts").readConfig;
+  projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
+  acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
   currentManager(ctx: ExtensionContext): Promise<ManagerDescriptor | undefined>;
   managerLease(): ManagerLease | undefined;
   sameManagerDescriptor(

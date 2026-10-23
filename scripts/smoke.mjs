@@ -33,6 +33,7 @@ const scenarioNames = [
   "terminal-failure",
   "agent-terminal-failure",
   "manager-handoff",
+  "manager-merge",
   "agent-crash-recovery",
 ];
 const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
@@ -100,6 +101,7 @@ export function parseSmokeArgs(args) {
     [
       "agent-terminal-failure",
       "manager-handoff",
+      "manager-merge",
       "agent-crash-recovery",
     ].includes(scenario)
   )
@@ -4473,6 +4475,448 @@ async function runManagerHandoffSmoke(ctx) {
     throw new Error("Assigned Lead workspace changed during Manager handoff");
 }
 
+function managerMergeToolRows(contents) {
+  const entries = sessionEntries(contents);
+  return entries.flatMap((entry) => {
+    const message = entry.message;
+    if (entry.type !== "message" || message?.role !== "assistant") return [];
+    return (Array.isArray(message.content) ? message.content : [])
+      .filter(
+        (part) => part?.type === "toolCall" && part.name === "merge_project",
+      )
+      .map((call) => {
+        const result = entries.find(
+          (candidate) =>
+            candidate.type === "message" &&
+            candidate.message?.role === "toolResult" &&
+            candidate.message.toolCallId === call.id,
+        );
+        return {
+          arguments: call.arguments,
+          result: result
+            ? {
+                isError: result.message.isError === true,
+                details: result.message.details ?? null,
+                content: messageText(result.message.content),
+              }
+            : null,
+        };
+      });
+  });
+}
+
+async function managerMergeCheckoutState(path) {
+  const [branch, head, status, files] = await Promise.all([
+    run("git", ["branch", "--show-current"], { cwd: path }),
+    run("git", ["rev-parse", "HEAD"], { cwd: path }),
+    run("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: path,
+    }),
+    run("git", ["ls-tree", "-r", "HEAD"], { cwd: path }),
+  ]);
+  return {
+    branch: branch.stdout.trim(),
+    head: head.stdout.trim(),
+    status: status.stdout,
+    files: files.stdout,
+  };
+}
+
+async function runManagerMergeSmoke(ctx) {
+  const branch = `herdsman/smoke-manager-merge-${randomUUID()}`;
+  ctx.owned.managerBranch = branch;
+  ctx.managerRecovery = { branch };
+  const manager = async () => rootSessionSnapshot(ctx);
+  const reportedSha = (contents, marker) => {
+    const serialized = sessionEntries(contents)
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    return serialized.match(
+      new RegExp(`${marker}[^0-9a-f]*([0-9a-f]{40,64})`, "i"),
+    )?.[1];
+  };
+
+  await run("git", ["add", ".pi/agents/managed-lead.md"], { cwd: ctx.rootCwd });
+  await run(
+    "git",
+    [
+      "-c",
+      "user.name=Herdsman Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-m",
+      "Configure Manager merge Lead",
+    ],
+    { cwd: ctx.rootCwd },
+  );
+  await waitForEvidence(
+    ctx,
+    "manager-merge-root-agent",
+    async () => {
+      const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+      return {
+        done: agents.some(
+          (agent) =>
+            agent.pane_id === ctx.rootPaneId &&
+            typeof agent.agent_session?.value === "string",
+        ),
+      };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Manager mode active.",
+    "--timeout",
+    "15000",
+  ]);
+  await submitPaneCommand(
+    ctx,
+    ctx.rootPaneId,
+    `MANAGER_MERGE_ASSIGN branch ${branch}`,
+  );
+
+  const assigned = await waitForEvidence(
+    ctx,
+    "manager-merge-assignment",
+    async () => {
+      const topology = await nestedCommand(ctx, [
+        "worktree",
+        "list",
+        "--workspace",
+        ctx.rootWorkspaceId,
+      ]);
+      const worktree = captureManagerHandoffWorktree(
+        ctx,
+        topology.worktrees ?? [],
+        branch,
+      );
+      const session = await manager();
+      const rows = session
+        ? staffDelegateResults(session.contents).filter(
+            (row) => row.branch === branch,
+          )
+        : [];
+      if (rows.length !== 1 || !worktree)
+        return {
+          done: false,
+          progress: { assignments: rows.length, worktree: !!worktree },
+        };
+      const row = rows[0];
+      assert.ok(row.session && row.workspace_id);
+      assert.equal(worktree.open_workspace_id, row.workspace_id);
+      ctx.owned.managerWorkspaceId = row.workspace_id;
+      return {
+        done: true,
+        value: { row, worktree, repoKey: topology.source?.repo_key },
+      };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  const sourcePath = assigned.worktree.path;
+  assert.ok(
+    assigned.repoKey,
+    "Herdr must expose the verified repository identity",
+  );
+  const assignmentPath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "supervision-v2",
+    createHash("sha256")
+      .update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName))
+      .digest("hex"),
+    "assignments",
+    createHash("sha256").update(assigned.repoKey).digest("hex"),
+    `${createHash("sha256").update(branch).digest("hex")}.json`,
+  );
+  const assignmentRecord = JSON.parse(await readFile(assignmentPath, "utf8"));
+  assert.equal(assignmentRecord.branch, branch);
+  const assignmentId = assignmentRecord.id;
+  assert.ok(sourcePath && sourcePath !== ctx.primaryCheckoutPath);
+  assert.equal(
+    (await run("git", ["remote"], { cwd: ctx.rootCwd })).stdout.trim(),
+    "",
+    "fixture must have no remotes",
+  );
+  const primaryBefore = await managerMergeCheckoutState(
+    ctx.primaryCheckoutPath,
+  );
+  assert.equal(primaryBefore.branch, "main");
+
+  const sourceReport = await waitForEvidence(
+    ctx,
+    "manager-merge-lead-source",
+    async () => {
+      const session = await manager();
+      const sha =
+        session && reportedSha(session.contents, "MANAGER_MERGE_SOURCE_READY");
+      return { done: !!sha, value: sha };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  const initialSha = sourceReport;
+  const sourceInitial = await managerMergeCheckoutState(sourcePath);
+  assert.equal(sourceInitial.branch, branch);
+  assert.equal(sourceInitial.head, initialSha);
+  assert.equal(sourceInitial.status, "");
+
+  await run(
+    "git",
+    [
+      "-c",
+      "user.name=Herdsman Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Independent target advance",
+    ],
+    { cwd: ctx.rootCwd },
+  );
+  const targetAdvanced = await managerMergeCheckoutState(
+    ctx.primaryCheckoutPath,
+  );
+  assert.equal(targetAdvanced.branch, "main");
+  assert.notEqual(targetAdvanced.head, primaryBefore.head);
+  const divergencePrompt = `MANAGER_MERGE_ATTEMPT ${initialSha}`;
+  await submitPaneCommand(ctx, ctx.rootPaneId, divergencePrompt);
+  const needsUpdate = await waitForEvidence(
+    ctx,
+    "manager-merge-needs-update",
+    async () => {
+      const session = await manager();
+      const rows = session ? managerMergeToolRows(session.contents) : [];
+      const matching = rows.find(
+        (row) =>
+          row.arguments?.expected_head === initialSha &&
+          row.result?.details?.status === "needs_update",
+      );
+      const attempts = await readFile(
+        join(
+          ctx.paths.piAgent,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-attempts.jsonl",
+        ),
+        "utf8",
+      ).catch(() => "");
+      const managerAttempts = attempts
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line);
+            return entry.model === "manager-merge" ? [entry] : [];
+          } catch {
+            return [];
+          }
+        });
+      return {
+        done: !!matching,
+        value: matching,
+        progress: {
+          calls: rows.map((row) => ({
+            arguments: row.arguments,
+            result: row.result,
+          })),
+          attempts: managerAttempts,
+        },
+      };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  assert.equal(needsUpdate.arguments.branch, branch);
+  assert.equal(needsUpdate.result.isError, false);
+  assert.equal(needsUpdate.result.details.target_branch, "main");
+  assert.equal(needsUpdate.result.details.integrated, false);
+  assert.equal(needsUpdate.result.details.checkout_removed, false);
+  assert.equal(needsUpdate.result.details.assignment_retired, false);
+  assert.deepEqual(
+    await managerMergeCheckoutState(sourcePath),
+    sourceInitial,
+    "needs_update must preserve source branch/worktree/HEAD/files",
+  );
+  assert.deepEqual(
+    await managerMergeCheckoutState(ctx.primaryCheckoutPath),
+    targetAdvanced,
+    "needs_update must preserve target branch/worktree/HEAD/files",
+  );
+  const topologyAfterDivergence = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  assert.equal(topologyAfterDivergence.source?.repo_key, assigned.repoKey);
+  assert.equal(
+    captureManagerHandoffWorktree(
+      ctx,
+      topologyAfterDivergence.worktrees ?? [],
+      branch,
+      assigned.row.workspace_id,
+    )?.path,
+    sourcePath,
+  );
+  assert.equal(
+    JSON.parse(await readFile(assignmentPath, "utf8")).id,
+    assignmentId,
+  );
+
+  const notifyPrompt = `MANAGER_MERGE_NOTIFY ${assigned.row.session} ${targetAdvanced.head}`;
+  await submitPaneCommand(ctx, ctx.rootPaneId, notifyPrompt);
+  await waitForEvidence(
+    ctx,
+    "manager-merge-repair-message",
+    async () => {
+      const session = await manager();
+      const sent =
+        session &&
+        staffActionResults(
+          session.contents,
+          "message_staff",
+          "message",
+          notifyPrompt,
+        );
+      return { done: !!sent?.length };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  const repaired = await waitForEvidence(
+    ctx,
+    "manager-merge-lead-repair",
+    async () => {
+      const session = await manager();
+      const sha =
+        session && reportedSha(session.contents, "MANAGER_MERGE_REPAIRED");
+      const attempts = await readFile(
+        join(
+          ctx.paths.piAgent,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-attempts.jsonl",
+        ),
+        "utf8",
+      ).catch(() => "");
+      const mergeAttempts = attempts
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line);
+            return entry.model.startsWith("manager-merge") ? [entry] : [];
+          } catch {
+            return [];
+          }
+        });
+      return {
+        done: !!sha,
+        value: sha,
+        progress: { mergeAttempts: mergeAttempts.slice(-8) },
+      };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  assert.notEqual(repaired, initialSha);
+  const repairedState = await managerMergeCheckoutState(sourcePath);
+  assert.equal(repairedState.branch, branch);
+  assert.equal(repairedState.head, repaired);
+  assert.equal(repairedState.status, "");
+  await run(
+    "git",
+    ["merge-base", "--is-ancestor", targetAdvanced.head, repaired],
+    { cwd: sourcePath },
+  );
+
+  const retryPrompt = `MANAGER_MERGE_ATTEMPT ${repaired}`;
+  await submitPaneCommand(ctx, ctx.rootPaneId, retryPrompt);
+  const complete = await waitForEvidence(
+    ctx,
+    "manager-merge-complete",
+    async () => {
+      const session = await manager();
+      const rows = session ? managerMergeToolRows(session.contents) : [];
+      const matching = rows.find(
+        (row) =>
+          row.arguments?.expected_head === repaired &&
+          row.result?.details?.status === "complete",
+      );
+      return { done: !!matching, value: matching };
+    },
+    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
+  );
+  assert.equal(complete.arguments.branch, branch);
+  assert.equal(complete.result.isError, false);
+  assert.equal(complete.result.details.source_head, repaired);
+  assert.equal(complete.result.details.target_branch, "main");
+  assert.equal(complete.result.details.integrated, true);
+  assert.equal(complete.result.details.checkout_removed, true);
+  assert.equal(complete.result.details.assignment_retired, true);
+  const finalTarget = await managerMergeCheckoutState(ctx.primaryCheckoutPath);
+  assert.equal(
+    finalTarget.branch,
+    "main",
+    "target branch identity must remain main",
+  );
+  assert.equal(
+    finalTarget.head,
+    repaired,
+    "verified target must reach exactly the accepted source SHA",
+  );
+  assert.equal(finalTarget.status, "");
+  await run(
+    "git",
+    ["merge-base", "--is-ancestor", repaired, finalTarget.head],
+    { cwd: ctx.primaryCheckoutPath },
+  );
+  const finalTopology = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  assert.equal(
+    (finalTopology.worktrees ?? []).filter((item) => item.branch === branch)
+      .length,
+    0,
+    "only the exact integrated source worktree must be automatically removed",
+  );
+  assert.equal(finalTopology.source?.repo_key, assigned.repoKey);
+  assert.ok(
+    (finalTopology.worktrees ?? []).some(
+      (item) =>
+        item.branch === "main" &&
+        resolve(item.path) === resolve(ctx.primaryCheckoutPath),
+    ),
+    "the primary main worktree must remain",
+  );
+  await assert.rejects(
+    readFile(assignmentPath),
+    { code: "ENOENT" },
+    "the exact active assignment must be retired",
+  );
+  const finalAgents =
+    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  assert.equal(
+    finalAgents.some(
+      (agent) => agent.workspace_id === assigned.row.workspace_id,
+    ),
+    false,
+    "the exact assigned Lead workspace must be absent after retirement",
+  );
+  ctx.owned.managerWorktreeRetirementRequested = true;
+}
+
 export function managerRecoveryResumePrompt(branch) {
   return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
@@ -4573,6 +5017,7 @@ export function initialPromptForScenario(scenario, ctx) {
       return undefined;
     case "agent-terminal-failure":
     case "manager-handoff":
+    case "manager-merge":
       return undefined;
     case "agent-crash-recovery":
       return undefined;
@@ -4600,6 +5045,8 @@ export async function runScenario(ctx, scenario) {
       return runAgentTerminalFailureSmoke(ctx);
     case "manager-handoff":
       return runManagerHandoffSmoke(ctx);
+    case "manager-merge":
+      return runManagerMergeSmoke(ctx);
     case "agent-crash-recovery":
       return runAgentCrashRecoverySmoke(ctx);
     default:
@@ -9793,6 +10240,7 @@ async function main() {
             scenario === "terminal-failure" ||
             scenario === "agent-terminal-failure" ||
             scenario === "manager-handoff" ||
+            scenario === "manager-merge" ||
             scenario === "supervisor-agent"
           ? await prepareManagerRepository(paths)
           : repoRoot;
@@ -9803,6 +10251,7 @@ async function main() {
       scenario === "terminal-failure" ||
       scenario === "agent-terminal-failure" ||
       scenario === "manager-handoff" ||
+      scenario === "manager-merge" ||
       scenario === "supervisor-agent"
     ) {
       ctx.primaryCheckoutPath = ctx.rootCwd;
@@ -9858,6 +10307,18 @@ async function main() {
       await writeFile(
         join(ctx.rootCwd, ".pi", "agents", "managed-lead.md"),
         `---\nname: managed-lead\nmodel: smoke-faux/manager-handoff-lead\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+      );
+    }
+    if (scenario === "manager-merge") {
+      await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
+      await writeFile(
+        join(ctx.rootCwd, ".pi", "agents", "managed-lead.md"),
+        `---\nname: managed-lead\nmodel: smoke-faux/manager-merge-lead\ntools: [bash]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+      );
+      await mkdir(join(paths.piAgent, "pi-herdsman"), { recursive: true });
+      await writeFile(
+        join(paths.piAgent, "pi-herdsman", "config.json"),
+        JSON.stringify({ managerMergeEnabled: true }) + "\n",
       );
     }
     if (scenario === "agent-crash-recovery") {

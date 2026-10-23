@@ -57,7 +57,7 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for eight bounded
+The harness also supports an opt-in Pi-native faux provider for nine bounded
 scenarios:
 
 ```sh
@@ -68,6 +68,7 @@ npm run smoke -- supervisor-agent --simulated
 npm run smoke -- terminal-failure --simulated
 npm run smoke -- agent-terminal-failure --simulated
 npm run smoke -- manager-handoff --simulated
+npm run smoke -- manager-merge --simulated
 npm run smoke -- agent-crash-recovery --simulated
 ```
 
@@ -87,6 +88,22 @@ controller tools are real. The scenario never uses the default Herdr server.
 Simulated runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.
+
+`manager-merge` is an independently invoked simulated Manager integration
+acceptance scenario; it is deliberately not part of the GitHub validation
+workflow or any default/every-PR smoke loop. It uses real Pi, Herdsman tool
+registration, Herdr, and an isolated local repository with no remote. The
+assigned managed Lead uses Pi's real `bash` tool to commit source work, then
+incorporates an independent target-side commit, validates the reconciled
+checkout, and reports the exact final SHA. The scenario verifies actual
+Manager `merge_project` calls/results: divergence returns `needs_update`
+without changing either checkout; retrying the accepted reconciled SHA
+fast-forwards verified `main` to exactly that SHA. Before generic teardown it
+checks that the exact source worktree is gone, its active assignment record is
+retired, its Lead workspace is absent, and the primary `main` worktree remains.
+Only model decisions are scripted; Git, Pi tools, Herdsman, and Herdr behavior
+are real. Merge permission is enabled only in the scenario's isolated
+Herdsman configuration.
 
 Nested Agent completions arrive asynchronously through Herdsman's normal
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })` path. Pi
@@ -132,7 +149,10 @@ with a pending project message, verified missing-worktree retirement without
 recreating the assignment, and refusal to resume retired work),
 `agent-terminal-failure` (managed-Agent terminal failure settlement and exact
 owner delivery), `manager-handoff` (project-message retention during Manager
-absence and delivery after role reentry), `agent-crash-recovery` (full isolated
+absence and delivery after role reentry), `manager-merge` (Manager-driven
+no-remote fast-forward, untouched divergence refusal, Lead-driven
+reconciliation and validation, and exact automatic assignment/worktree
+retirement), `agent-crash-recovery` (full isolated
 Herdr server restart, exact owner-session reopen, safe pending-child projection,
 verified close receipt, and same-session new-generation continuation), and
 `terminal-failure` (assigned-Lead terminal failure and project reporting).
