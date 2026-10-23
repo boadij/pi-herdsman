@@ -132,7 +132,7 @@ function readLinuxBirth(pid: number): NonNullable<LockOwner["linuxBirth"]> {
   const startTicks = fields[19];
   if (
     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootId) ||
-    fields.length !== 50 ||
+    fields.length < 20 ||
     !startTicks ||
     !/^(0|[1-9][0-9]*)$/.test(startTicks)
   )
