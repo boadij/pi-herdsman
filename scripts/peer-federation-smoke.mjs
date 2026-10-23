@@ -400,7 +400,7 @@ try {
       const path = process.argv[1], kind = process.argv[2], id = process.argv[3], ref = process.argv[4];
       const text = fs.readFileSync(path, "utf8");
       const lines = text.split("\\n");
-      let matchingDeliveryCount = 0, matchingReplyCount = 0, delivered, importedResultBinding;
+      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
       let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
       const replyCalls = new Map(), replyResults = [];
       let inSendTurn = false, receipt = null, listPeersCalls = 0;
@@ -418,8 +418,11 @@ try {
         const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
         if (hasListPeers) listPeersCalls++;
         if (kind === "recipient" && entry.message?.role === "assistant") {
-          for (const part of entry.message.content ?? [])
+          for (const part of entry.message.content ?? []) {
+            if (part.type === "toolCall" && part.name === "read") artifactReadCount++;
+            if (part.type === "toolCall" && part.name === "message_peer") replyCallCount++;
             if (part.type === "toolCall" && part.name === "message_peer" && typeof part.id === "string") replyCalls.set(part.id, JSON.stringify(part.arguments ?? {}));
+          }
         }
         if (kind === "recipient" && entry.message?.role === "toolResult" && entry.message.toolName === "message_peer") {
           replyResults.push(entry);
@@ -428,6 +431,7 @@ try {
           matchingDeliveryCount++;
           delivered ??= entry;
         }
+        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.content?.includes("PEER_E2E_LEAD_REQUEST")) inboundLeadRequestCount++;
         if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef)
           importedResultBinding ??= entry;
         if (kind === "reply" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id && entry.content?.includes("PEER_E2E_LEAD_REPLY")) {
@@ -438,6 +442,7 @@ try {
       for (const result of replyResults) {
         const call = replyCalls.get(result.message.toolCallId);
         if (call && result.message.isError !== true) {
+          successfulReplyCount++;
           const evidence = call + JSON.stringify(result.message.content ?? []);
           hasLeadReplyRef ||= evidence.includes(ref);
           hasLeadReply ||= evidence.includes("PEER_E2E_LEAD_REPLY");
@@ -463,7 +468,7 @@ try {
         } catch {}
       }
       const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
-      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, artifactReadCount, replyCallCount, successfulReplyCount, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
     `;
     const output = exec(side, [
       "node",
@@ -1671,21 +1676,59 @@ try {
       throw new Error(
         `B's canonical result artifact verification failed: ${JSON.stringify(artifactChecks)}`,
       );
-    herdr("b", [
-      "pane",
-      "wait-output",
-      resources.b.ordinaryLead.pane,
-      "--match",
-      "PEER_E2E_B_LEAD_REPLIED",
-      "--timeout",
-      "60000",
-    ]);
-    const replyEvidence = readOrdinaryLeadSession(
-      "b",
-      "recipient",
-      acceptance.id,
-      resources.evidence.leadResultRef,
-    );
+    let replyEvidence;
+    let replied = false;
+    let terminalMarker = false;
+    const replyDeadline = Date.now() + 60_000;
+    while (Date.now() < replyDeadline) {
+      replyEvidence = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
+      if (
+        replyEvidence.successfulReplyCount > 0 &&
+        replyEvidence.hasLeadReplyRef &&
+        replyEvidence.hasLeadReply &&
+        replyEvidence.hasPortableContent
+      ) {
+        replied = true;
+        break;
+      }
+      try {
+        herdr("b", [
+          "pane",
+          "wait-output",
+          resources.b.ordinaryLead.pane,
+          "--match",
+          "PEER_E2E_B_LEAD_REPLIED",
+          "--timeout",
+          String(Math.max(1, Math.min(250, replyDeadline - Date.now()))),
+        ]);
+        terminalMarker = true;
+      } catch {}
+      if (terminalMarker) break;
+    }
+    if (!replyEvidence)
+      replyEvidence = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
+    if (!replied && !terminalMarker) {
+      const correspondenceCount = Number(
+        exec("b", [
+          "sh",
+          "-c",
+          `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-correspondences -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '`,
+        ]).trim(),
+      );
+      throw new Error(
+        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0 })}`,
+      );
+    }
     if (
       !replyEvidence.hasLeadReplyRef ||
       !replyEvidence.hasLeadReply ||

@@ -803,8 +803,6 @@ export function decide(model, context) {
         throw new Error("managed Lead project assignment failed");
       return fauxAssistantMessage("PEER_E2E_B_MANAGED_ASSIGNED");
     }
-    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION"))
-      return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
     if (
       messages.some(
         (message) =>
@@ -870,6 +868,8 @@ export function decide(model, context) {
         });
       return fauxAssistantMessage("PEER_E2E_B_LEAD_REPLIED");
     }
+    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION"))
+      return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
     if (
       messages.some(
         (message) =>
