@@ -1638,32 +1638,38 @@ try {
     );
     const delivered = bRead.delivered;
     const importedResultBinding = bRead.importedResultBinding;
-    if (
-      !delivered ||
-      bRead.matchingDeliveryCount !== 1 ||
-      delivered.details?.toSessionId !==
-        resources.a.remoteProbe.ordinaryLeadSession ||
-      !importedResultBinding ||
-      importedResultBinding.data?.ref !== leadResult.binding.ref ||
-      importedResultBinding.data?.canonicalRef !==
-        leadResult.binding.canonicalRef ||
-      !JSON.stringify(delivered).includes(leadResult.artifactText) ||
-      !leadResult.artifactText.includes(
+    const checks = {
+      deliveredOnce: bRead.matchingDeliveryCount === 1,
+      correctRecipient:
+        delivered?.details?.toSessionId ===
+        resources.a.remoteProbe.ordinaryLeadSession,
+      bindingPresent:
+        importedResultBinding?.data?.ref === leadResult.binding.ref &&
+        importedResultBinding?.data?.canonicalRef ===
+          leadResult.binding.canonicalRef,
+      artifactIncluded:
+        typeof delivered?.content === "string" &&
+        delivered.content.includes(leadResult.artifactText),
+      markerPresent: leadResult.artifactText.includes(
         "PEER_E2E_PORTABLE_RESULT_CONTENT_V1",
-      ) ||
-      digest(leadResult.artifactText) !== resources.evidence.leadResultSha256
-    )
+      ),
+      digestMatches:
+        digest(leadResult.artifactText) === resources.evidence.leadResultSha256,
+    };
+    if (Object.values(checks).some((passed) => !passed))
       throw new Error(
-        `B's exact ordinary Lead session did not persist the delivered artifact and imported binding for ${acceptance.id}; diagnostics=${JSON.stringify(bRead.diagnostics)}`,
+        `B's ordinary Lead delivery verification failed: ${JSON.stringify(checks)}`,
       );
     const recipientArtifactPath = `${resources.b.runtime.piAgentDir}/pi-herdsman/results/${leadResult.binding.canonicalRef.slice("result:".length)}`;
     const recipientArtifact = exec("b", ["cat", recipientArtifactPath]);
-    if (
-      recipientArtifact !== leadResult.artifactText ||
-      digest(recipientArtifact) !== leadResult.artifactSha256
-    )
+    const artifactChecks = {
+      canonicalArtifactMatches: recipientArtifact === leadResult.artifactText,
+      canonicalArtifactDigestMatches:
+        digest(recipientArtifact) === leadResult.artifactSha256,
+    };
+    if (Object.values(artifactChecks).some((passed) => !passed))
       throw new Error(
-        `B's canonical result artifact differs from A's transferred artifact: ${recipientArtifactPath}`,
+        `B's canonical result artifact verification failed: ${JSON.stringify(artifactChecks)}`,
       );
     herdr("b", [
       "pane",

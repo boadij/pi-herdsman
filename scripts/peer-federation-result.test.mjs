@@ -28,6 +28,13 @@ test("ordinary Lead delivery wait does not accept an initially empty inbox", () 
   );
 });
 
+test("ordinary Lead artifact matching uses delivered content with multiline text", () => {
+  const artifact = "first line\nsecond line";
+  const delivered = { content: `<file>\n${artifact}\n</file>` };
+  assert.equal(delivered.content.includes(artifact), true);
+  assert.equal(JSON.stringify(delivered).includes(artifact), false);
+});
+
 test("live correspondence recipient matches role, session, generation, and Lead eligibility", () => {
   const correspondence = {
     recipientSession: "recipient",
