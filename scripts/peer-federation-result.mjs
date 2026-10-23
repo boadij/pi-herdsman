@@ -44,6 +44,53 @@ export function matchedDelegateResult(entries) {
   return { toolCallId: call.id, message: results[0].message };
 }
 
+export function matchedManagedLeadDenial(entries, assignedLeadSessionId) {
+  const calls = entries
+    .filter(
+      (entry) =>
+        entry.type === "message" && entry.message?.role === "assistant",
+    )
+    .flatMap((entry) => entry.message.content ?? [])
+    .filter(
+      (part) =>
+        part.type === "toolCall" &&
+        part.name === "message_peer" &&
+        part.arguments?.session === assignedLeadSessionId &&
+        typeof part.id === "string",
+    );
+  if (calls.length !== 1)
+    throw new Error(
+      "Lead omitted or duplicated exact managed message_peer call",
+    );
+  const [call] = calls;
+  const results = entries.filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "message_peer" &&
+      entry.message.toolCallId === call.id,
+  );
+  if (results.length !== 1)
+    throw new Error(
+      "Lead omitted or duplicated exact managed message_peer result",
+    );
+  const message = results[0].message;
+  const text = (message.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  if (
+    message.isError !== true ||
+    !/Peer target was not found or is no longer a live same-role peer/u.test(
+      text,
+    )
+  )
+    throw new Error(
+      `Managed Lead denial did not match expected rejection: ${text}`,
+    );
+  return { toolCallId: call.id, message, text };
+}
+
 export function assertPeerInListPeersResult(entries, peerId) {
   const calls = entries
     .filter(

@@ -2,9 +2,67 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertPeerInListPeersResult,
+  matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
 } from "./peer-federation-result.mjs";
+
+test("managed Lead denial requires exact nested call and correlated error result", () => {
+  const call = {
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "message_peer",
+          id: "peer-call",
+          arguments: { session: "assigned-session" },
+        },
+      ],
+    },
+  };
+  const result = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "message_peer",
+      toolCallId: "peer-call",
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "Peer target was not found or is no longer a live same-role peer",
+        },
+      ],
+    },
+  };
+  assert.equal(
+    matchedManagedLeadDenial([call, result], "assigned-session").text,
+    "Peer target was not found or is no longer a live same-role peer",
+  );
+  assert.throws(() =>
+    matchedManagedLeadDenial([call, result], "wrong-session"),
+  );
+  assert.throws(() => matchedManagedLeadDenial([call], "assigned-session"));
+  assert.throws(
+    () =>
+      matchedManagedLeadDenial(
+        [
+          call,
+          {
+            ...result,
+            message: {
+              ...result.message,
+              content: [{ type: "text", text: "unrelated failure" }],
+            },
+          },
+        ],
+        "assigned-session",
+      ),
+    /expected rejection/u,
+  );
+});
 
 test("delegate_project error text is surfaced before JSON parsing", () => {
   const entries = [

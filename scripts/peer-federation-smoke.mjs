@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import {
   assertPeerInListPeersResult,
   delegateResultEvidence,
+  matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
 } from "./peer-federation-result.mjs";
@@ -1063,28 +1064,14 @@ try {
     .split("\n")
     .filter(Boolean)
     .map(JSON.parse);
-  const denialResult = managedDenial.find(
-    (entry) =>
-      entry.type === "toolResult" &&
-      entry.toolName === "message_peer" &&
-      entry.isError &&
-      entry.toolCallId ===
-        managedDenial
-          .flatMap((row) => row.message?.content ?? row.content ?? [])
-          .find(
-            (part) =>
-              part.type === "toolCall" &&
-              part.name === "message_peer" &&
-              part.arguments?.session === assignedLeadSessionId,
-          )?.id,
+  const denialResult = matchedManagedLeadDenial(
+    managedDenial,
+    assignedLeadSessionId,
   );
-  if (!denialResult)
-    throw new Error(
-      "Exact-session message_peer to the assigned Managed Lead was not rejected",
-    );
   stage("assigned-managed-lead-excluded-and-denied", {
     sessionId: assignedLeadSessionId,
     assignmentId: projectAssignment.id,
+    denial: denialResult.text,
   });
   herdr("a", [
     "agent",

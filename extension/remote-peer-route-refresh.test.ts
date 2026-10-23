@@ -496,7 +496,10 @@ test("Manager reply enqueue avoids assignment authority lock while Lead still re
   const leadSending = send(lead.runtime, lead.context, "origin-lead");
   await leadEntered.promise;
   try {
-    await assert.rejects(leadSending);
+    await assert.rejects(
+      leadSending,
+      /Project assignment authority is in progress/u,
+    );
     assert.equal(queuedReplies.length, 0);
   } finally {
     leadLock?.release();
