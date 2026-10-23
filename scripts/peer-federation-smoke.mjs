@@ -3019,7 +3019,7 @@ try {
   if (
     rejectReplacement.status === 0 ||
     !`${rejectReplacement.stderr}${rejectReplacement.stdout}`.includes(
-      "exact destination Manager is not live",
+      "exact correspondence recipient is not live or authorized",
     )
   )
     throw new Error(

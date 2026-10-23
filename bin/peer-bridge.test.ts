@@ -869,6 +869,97 @@ test("Lead correspondence commands reject a recipient transitioned to Manager", 
   }
 });
 
+test("live replacement Manager cannot recover prior Manager correspondence", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(
+    join(tmpdir(), "peer-bridge-manager-replacement-"),
+  );
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const originalSession = id();
+  const replacementSession = id();
+  const originSession = id();
+  const originGeneration = id();
+  const claim = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), replacementSession),
+    { name: "replacement Manager" },
+  );
+  try {
+    writePeerLeadRecord(peerRuntime(), {
+      version: 2,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: replacementSession,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    });
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "7".repeat(64),
+      role: "manager",
+      originSession,
+      originGeneration,
+      recipientSession: originalSession,
+      recipientGeneration: id(),
+      acceptanceId: id(),
+      replies: [],
+    };
+    storePeerCorrespondence(correspondence);
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "recover-recipient"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+          SSH_CONNECTION: "test-ssh-connection",
+        },
+        input: `${JSON.stringify({
+          id: correspondence.id,
+          capability: correspondence.capability,
+          originSession,
+          originGeneration,
+          recipientSession: originalSession,
+          recipientGeneration: correspondence.recipientGeneration,
+          newRecipientGeneration: claim.claim.id,
+          expectedDataRoot: herdsmanDataRoot(),
+        })}\n`,
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.equal(
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)
+        ?.recipientGeneration,
+      correspondence.recipientGeneration,
+    );
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
 test("Lead ACK does not complete after assignment authority changes", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
