@@ -53,6 +53,7 @@ import {
   type ManagedAgentState,
 } from "./mailbox.ts";
 import { chooseLabel } from "./core.ts";
+import { acquireProcessLock } from "./lock.ts";
 
 function assertPosixMode(path: string, expected: number): void {
   const actual = statSync(path).mode & 0o777;
@@ -987,36 +988,46 @@ test("stale recovery cannot remove a replacement owner", () => {
     join(claimDir, `2147483647-${staleId}`),
     JSON.stringify({ pid: 2147483647, id: staleId }),
   );
-  const freshOwner = `${process.pid}-${freshId}`;
-  const freshPayload = { pid: process.pid, id: freshId };
+  let replacement: ReturnType<typeof acquireProcessLock> | undefined;
   let staleObserved = false;
-  assert.throws(
-    () =>
-      claimAgentMailbox(path, {
-        afterStaleOwnerRemoved: () => {
-          assert.equal(existsSync(claimDir), false);
-          staleObserved = true;
-          mkdirSync(claimDir);
-          writeFileSync(
-            join(claimDir, freshOwner),
-            JSON.stringify(freshPayload),
-          );
-        },
-      }),
-    MailboxClaimOccupiedError,
-  );
-  assert.equal(staleObserved, true);
-  assert.deepEqual(readdirSync(claimDir), [freshOwner]);
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(claimDir, freshOwner))),
-    freshPayload,
-  );
-  assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
-  assert.deepEqual(readdirSync(claimDir), [freshOwner]);
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(claimDir, freshOwner))),
-    freshPayload,
-  );
+  try {
+    assert.throws(
+      () =>
+        claimAgentMailbox(path, {
+          afterStaleOwnerRemoved: () => {
+            assert.equal(existsSync(claimDir), false);
+            staleObserved = true;
+            replacement = acquireProcessLock(claimDir);
+          },
+        }),
+      MailboxClaimOccupiedError,
+    );
+    assert.equal(staleObserved, true);
+    const freshOwner = `${replacement!.claim.pid}-${replacement!.claim.id}`;
+    const freshPayload = JSON.parse(
+      readFileSync(join(claimDir, freshOwner), "utf8"),
+    );
+    assert.deepEqual(readdirSync(claimDir), [freshOwner]);
+    assert.deepEqual(
+      { pid: freshPayload.pid, id: freshPayload.id },
+      replacement!.claim,
+    );
+    if (process.platform === "linux") {
+      assert.ok(freshPayload.linuxBirth);
+      assert.deepEqual(Object.keys(freshPayload.linuxBirth).sort(), [
+        "bootId",
+        "startTicks",
+      ]);
+    }
+    assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
+    assert.deepEqual(readdirSync(claimDir), [freshOwner]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(claimDir, freshOwner), "utf8")),
+      freshPayload,
+    );
+  } finally {
+    replacement?.release();
+  }
 });
 test("empty startup claim directories fail closed", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));

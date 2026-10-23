@@ -58,6 +58,9 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type ProcessLockLease = { claim: ProcessLockClaim; release: () => void };
+type LockOwner = ProcessLockClaim & {
+  linuxBirth?: { bootId: string; startTicks: string };
+};
 
 type ProcessLockOptions = {
   afterStaleOwnerRemoved?: () => void;
@@ -81,11 +84,89 @@ export function isProcessLockClaim(value: unknown): value is ProcessLockClaim {
   return true;
 }
 
-function readProcessLockClaim(path: string, owner: string): ProcessLockClaim {
-  const claim: unknown = JSON.parse(fs.readFileSync(join(path, owner), "utf8"));
-  if (!isProcessLockClaim(claim) || owner !== `${claim.pid}-${claim.id}`)
+function readProcessLockOwner(path: string, owner: string): LockOwner {
+  const value: unknown = JSON.parse(fs.readFileSync(join(path, owner), "utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("invalid process lock claim");
+  const record = value as Record<string, unknown>;
+  const claim = { pid: record.pid, id: record.id };
+  if (
+    !isProcessLockClaim(claim) ||
+    owner !== `${claim.pid}-${claim.id}` ||
+    (Object.keys(record).length !== 2 && Object.keys(record).length !== 3) ||
+    (Object.keys(record).length === 3 && !Object.hasOwn(record, "linuxBirth"))
+  )
+    throw new Error("invalid process lock claim");
+  if (Object.hasOwn(record, "linuxBirth")) {
+    const birth = record.linuxBirth;
+    if (
+      !birth ||
+      typeof birth !== "object" ||
+      Array.isArray(birth) ||
+      Object.keys(birth).length !== 2 ||
+      typeof (birth as Record<string, unknown>).bootId !== "string" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        (birth as Record<string, string>).bootId,
+      ) ||
+      typeof (birth as Record<string, unknown>).startTicks !== "string" ||
+      !/^(0|[1-9][0-9]*)$/.test((birth as Record<string, string>).startTicks)
+    )
+      throw new Error("invalid process lock identity");
+    return { ...claim, linuxBirth: birth as LockOwner["linuxBirth"] };
+  }
   return claim;
+}
+
+function readLinuxBirth(
+  pid: number,
+): NonNullable<LockOwner["linuxBirth"]> | undefined {
+  const bootId = fs
+    .readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+    .trim();
+  let stat: string;
+  try {
+    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" &&
+      !processExists(pid)
+    )
+      return undefined;
+    throw error;
+  }
+  const end = stat.lastIndexOf(") ");
+  if (end < 0 || !stat.startsWith(`${pid} (`))
+    throw new Error("Invalid Linux process stat");
+  const fields = stat
+    .slice(end + 2)
+    .trim()
+    .split(/\s+/);
+  const startTicks = fields[19];
+  if (
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootId) ||
+    fields.length < 20 ||
+    !startTicks ||
+    !/^(0|[1-9][0-9]*)$/.test(startTicks)
+  )
+    throw new Error("Invalid Linux process identity");
+  return { bootId, startTicks };
+}
+
+function processOwnerExists(owner: LockOwner): boolean {
+  if (!processExists(owner.pid)) return false;
+  if (process.platform !== "linux") return true;
+  if (!owner.linuxBirth)
+    throw new Error("Linux lock owner identity is unverifiable");
+  const current = readLinuxBirth(owner.pid);
+  if (!current) return false;
+  return (
+    current.bootId === owner.linuxBirth.bootId &&
+    current.startTicks === owner.linuxBirth.startTicks
+  );
+}
+
+function publicClaim(owner: LockOwner): ProcessLockClaim {
+  return { pid: owner.pid, id: owner.id };
 }
 
 function ownerMissing(path: string): boolean {
@@ -175,8 +256,8 @@ export function readProcessLockStatus(
     throw new Error(verifyMessage, { cause: error });
   }
   try {
-    const claim = readProcessLockClaim(path, owner);
-    return { claim, live: processExists(claim.pid) };
+    const record = readProcessLockOwner(path, owner);
+    return { claim: publicClaim(record), live: processOwnerExists(record) };
   } catch (error) {
     throw new Error(verifyMessage, { cause: error });
   }
@@ -197,8 +278,12 @@ export function acquireProcessLock(
   fs.chmodSync(parent, 0o700);
   const claimDir = path;
   const claim: ProcessLockClaim = { pid: process.pid, id: randomUUID() };
+  const lockOwner: LockOwner =
+    process.platform === "linux"
+      ? { ...claim, linuxBirth: readLinuxBirth(process.pid)! }
+      : claim;
   const owner = `${claim.pid}-${claim.id}`;
-  const payload = JSON.stringify(claim);
+  const payload = JSON.stringify(lockOwner);
   const ownerPath = join(claimDir, owner);
 
   // An empty canonical directory is ambiguous and must not be replaced.
@@ -220,17 +305,19 @@ export function acquireProcessLock(
     let observedOwner: string;
     try {
       ({ owner: observedOwner } = lockOwnerEntry(claimDir));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new ProcessLockOccupiedError(occupiedMessage);
+      throw new Error(verifyMessage, { cause: error });
+    }
+    let staleOwner: LockOwner;
+    try {
+      staleOwner = readProcessLockOwner(claimDir, observedOwner);
     } catch {
       throw new Error(verifyMessage);
     }
-    let staleClaim: ProcessLockClaim;
     try {
-      staleClaim = readProcessLockClaim(claimDir, observedOwner);
-    } catch {
-      throw new Error(verifyMessage);
-    }
-    try {
-      if (processExists(staleClaim.pid))
+      if (processOwnerExists(staleOwner))
         throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError) throw error;
@@ -247,11 +334,8 @@ export function acquireProcessLock(
       const { owner: currentOwner } = lockOwnerEntry(claimDir);
       if (currentOwner !== observedOwner)
         throw new ProcessLockOccupiedError(occupiedMessage);
-      const currentClaim = readProcessLockClaim(claimDir, observedOwner);
-      if (
-        currentClaim.pid !== staleClaim.pid ||
-        currentClaim.id !== staleClaim.id
-      )
+      const currentClaim = readProcessLockOwner(claimDir, observedOwner);
+      if (JSON.stringify(currentClaim) !== JSON.stringify(staleOwner))
         throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError) throw error;
@@ -279,11 +363,8 @@ export function acquireProcessLock(
     if (quarantinedOwner !== observedOwner)
       throw new ProcessLockOccupiedError(occupiedMessage);
     try {
-      const quarantinedClaim = readProcessLockClaim(quarantine, observedOwner);
-      if (
-        quarantinedClaim.pid !== staleClaim.pid ||
-        quarantinedClaim.id !== staleClaim.id
-      )
+      const quarantinedClaim = readProcessLockOwner(quarantine, observedOwner);
+      if (JSON.stringify(quarantinedClaim) !== JSON.stringify(staleOwner))
         throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError) throw error;
@@ -349,9 +430,9 @@ function releaseProcessLock(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
     );
   }
-  let current: ProcessLockClaim;
+  let current: LockOwner;
   try {
-    current = readProcessLockClaim(claimDir, basename(ownerPath));
+    current = readProcessLockOwner(claimDir, basename(ownerPath));
   } catch (error) {
     if (
       (error as NodeJS.ErrnoException).code === "ENOENT" &&
@@ -376,7 +457,7 @@ function releaseProcessLock(
     ({ owner: retiredOwner, metadata } = lockOwnerEntry(retired));
     if (retiredOwner !== basename(ownerPath))
       throw new Error("Process lock owner changed");
-    const relocated = readProcessLockClaim(retired, retiredOwner);
+    const relocated = readProcessLockOwner(retired, retiredOwner);
     if (relocated.pid !== claim.pid || relocated.id !== claim.id)
       throw new Error("Process lock generation changed");
   } catch (error) {
