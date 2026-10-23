@@ -11150,6 +11150,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         .filter(
           ([session, correspondence]) =>
             correspondence !== null &&
+            (activeRole() !== "lead" ||
+              (!!own &&
+                assignmentSnapshot !== undefined &&
+                isRemoteOrdinaryLead(own, assignmentSnapshot))) &&
             session !== self &&
             !discovered.has(session) &&
             !remotePeerRoutes.has(session) &&
@@ -11269,17 +11273,42 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             .digest("hex"),
         };
       });
-      queuePeerReply(
-        correspondence,
-        replyId,
-        prepared.transportText ?? prepared.text,
-        {
-          attachments: replyAttachments,
-          ...(prepared.resultBindings.length
-            ? { resultBindings: prepared.resultBindings }
-            : {}),
-        },
-      );
+      withProjectAssignmentAuthority((assignments) => {
+        const currentSender = readPeerLeadRecord(
+          peerRuntime(),
+          sender.piSessionId,
+        );
+        const currentCorrespondence = listPeerCorrespondences().filter(
+          (item) =>
+            item.id === correspondence.id &&
+            !item.finalized &&
+            (item.role ?? "manager") === activeRole() &&
+            item.originSession === correspondence.originSession &&
+            item.originGeneration === correspondence.originGeneration &&
+            item.recipientSession === correspondence.recipientSession &&
+            item.recipientGeneration === correspondence.recipientGeneration,
+        );
+        if (
+          !currentSender ||
+          !samePeerLeadAuthority(currentSender, sender) ||
+          (activeRole() === "lead" &&
+            (!isRemoteOrdinaryLead(currentSender, assignments) ||
+              currentCorrespondence.length !== 1)) ||
+          (activeRole() !== "lead" && currentCorrespondence.length !== 1)
+        )
+          throw new Error("Peer correspondence authority changed");
+        queuePeerReply(
+          correspondence,
+          replyId,
+          prepared.transportText ?? prepared.text,
+          {
+            attachments: replyAttachments,
+            ...(prepared.resultBindings.length
+              ? { resultBindings: prepared.resultBindings }
+              : {}),
+          },
+        );
+      });
       const recipientRole = correspondence.role ?? "manager";
       return {
         content: [

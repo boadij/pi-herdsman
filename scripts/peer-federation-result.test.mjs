@@ -71,3 +71,31 @@ test("list_peers discovery requires the exact result to contain the peer", () =>
     /exact list_peers result omitted/u,
   );
 });
+
+test("list_peers accepts the exact public peer session in its correlated result", () => {
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "list_peers", id: "list-exact" }],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "list_peers",
+        toolCallId: "list-exact",
+        details: { peers: [{ session: "remote-session" }] },
+      },
+    },
+  ];
+  assert.doesNotThrow(() =>
+    assertPeerInListPeersResult(entries, "remote-session"),
+  );
+  assert.throws(
+    () => assertPeerInListPeersResult(entries, "absent-session"),
+    /exact list_peers result omitted/u,
+  );
+});

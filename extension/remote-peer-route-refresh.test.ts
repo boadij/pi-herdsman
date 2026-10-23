@@ -167,7 +167,10 @@ const gate = <T>() => {
   return { promise, resolve };
 };
 
-function fixture(role: "manager" | "lead" = "manager") {
+function fixture(
+  role: "manager" | "lead" = "manager",
+  messageLimits?: () => Promise<any>,
+) {
   const root = mkdtempSync(join(tmpdir(), "peer-route-refresh-"));
   process.env.PI_CODING_AGENT_DIR = root;
   support.setLeadEnvironment();
@@ -264,6 +267,7 @@ function fixture(role: "manager" | "lead" = "manager") {
     requireCompatibleBuild: compatibility.requireCompatibleBuild,
     sameRuntimeBuild: compatibility.sameRuntimeBuild,
     listManagerDescriptors: () => [],
+    ...(messageLimits ? { messageLimits } : {}),
   } as any);
   return {
     context,
@@ -749,6 +753,65 @@ test("ordinary assigned local Leads do not discover or probe remote peers", asyn
     1,
     "ordinary Lead has a nonempty authoritative assignment",
   );
+  correspondences.push({
+    id: "assigned-lead-return",
+    capability: "secret",
+    originSession: "origin-lead",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    role: "lead",
+    finalized: false,
+    replies: [],
+  });
+  await assert.rejects(send(f.runtime, f.context, "origin-lead"));
+  assert.equal(queuedReplies.length, 0);
+});
+
+test("Lead reply is rejected when assignment changes during async preparation", async (t) => {
+  const entered = gate<void>();
+  const preparation = gate<any>();
+  const f = fixture("lead", async () => {
+    entered.resolve();
+    return preparation.promise;
+  });
+  t.after(f.close);
+  f.sender.sessionKind = "ordinary";
+  f.sender.workspaceId = "route-test-workspace";
+  f.sender.socket = "/test-route-refresh.sock";
+  f.sender.group = {
+    repoKey: assignment.repoKey,
+    primaryWorkspaceId: "route-test-workspace",
+  };
+  correspondences.push({
+    id: "ordinary-lead-return",
+    capability: "secret",
+    originSession: "origin-lead",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    role: "lead",
+    finalized: false,
+    replies: [],
+  });
+
+  const replying = send(f.runtime, f.context, "origin-lead");
+  await entered.promise;
+  supervision.writeProjectAssignment(
+    supervision.supervisionRuntime(),
+    assignment,
+  );
+  t.after(() =>
+    supervision.removeProjectAssignment(
+      supervision.supervisionRuntime(),
+      assignment.repoKey,
+      assignment.branch,
+    ),
+  );
+  preparation.resolve({ inline: { bytes: 10000 }, mailbox: { bytes: 10000 } });
+
+  await assert.rejects(replying, /authority changed/);
+  assert.equal(queuedReplies.length, 0);
 });
 
 test("cross-role correspondences cannot recover generations, become reply-only, or poll and ACK", async (t) => {

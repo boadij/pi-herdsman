@@ -70,9 +70,7 @@ export function assertPeerInListPeersResult(entries, peerId) {
   if (results.length !== 1)
     throw new Error("Lead omitted or duplicated exact list_peers tool result");
   if (
-    !results[0].message.details?.peers?.some(
-      (peer) => peer.piSessionId === peerId,
-    )
+    !results[0].message.details?.peers?.some((peer) => peer.session === peerId)
   )
     throw new Error("exact list_peers result omitted the remote ordinary Lead");
 }

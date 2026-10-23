@@ -796,7 +796,7 @@ export function decide(model, context) {
       if (!assignment)
         return call("delegate_project", {
           branch: "herdsman/peer-smoke-managed",
-          task: "PEER_E2E_MANAGED_LEAD_PENDING: remain live until fixture teardown.",
+          task: "PEER_E2E_MANAGED_LEAD_PENDING: confirm the assigned task is complete.",
         });
       if (assignment.result.isError)
         throw new Error("managed Lead project assignment failed");

@@ -1016,21 +1016,26 @@ try {
     throw new Error(
       "Manager delegate_project did not return a successful exact assigned Lead session",
     );
-  const assignmentsDir = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/assignments`;
+  const assignmentsDir = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/supervision-v2`;
   const assignmentFiles = exec("b", [
     "find",
     assignmentsDir,
     "-type",
     "f",
-    "-name",
-    "*.json",
+    "-path",
+    "*/assignments/*/*.json",
   ])
     .trim()
     .split("\n")
     .filter(Boolean);
   const projectAssignment = assignmentFiles
     .map((file) => JSON.parse(exec("b", ["cat", file])))
-    .find((assignment) => assignment.branch === "herdsman/peer-smoke-managed");
+    .find(
+      (assignment) =>
+        assignment.branch === "herdsman/peer-smoke-managed" &&
+        assignment.piSessionFile?.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1] ===
+          assignedLeadSessionId,
+    );
   if (
     !projectAssignment ||
     projectAssignment.piSessionFile?.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1] !==
