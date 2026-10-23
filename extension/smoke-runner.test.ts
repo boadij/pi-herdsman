@@ -2994,6 +2994,26 @@ test("federation Lead handles inbound request after its capture prompt and impor
       canonical.slice("result:".length),
     ),
   );
+
+  const providerProjection = messages.filter(
+    (message) =>
+      message.type !== "custom" ||
+      message.customType !== "pi-herdsman-result-ref",
+  );
+  const contextBindingAnswer = decide("federated-peer-b", {
+    messages: providerProjection,
+    peerImportedBindingVisible: true,
+  });
+  assert.equal(contextBindingAnswer.content[0].name, "read");
+  assert.equal(
+    contextBindingAnswer.content[0].arguments.path,
+    join(
+      process.env.PI_CODING_AGENT_DIR!,
+      "pi-herdsman",
+      "results",
+      canonical.slice("result:".length),
+    ),
+  );
 });
 
 test("core and continuation faux decisions wait for correlated delivered Agent results", () => {

@@ -871,13 +871,15 @@ export function decide(model, context) {
       const canonicalRef = refs.find((ref) =>
         /^result:[0-9a-f-]{36}$/u.test(ref),
       );
-      const imported = messages.some(
-        (message) =>
-          message.type === "custom" &&
-          message.customType === "pi-herdsman-result-ref" &&
-          message.data?.ref === semantic &&
-          message.data?.canonicalRef === canonicalRef,
-      );
+      const imported =
+        context.peerImportedBindingVisible === true ||
+        messages.some(
+          (message) =>
+            message.type === "custom" &&
+            message.customType === "pi-herdsman-result-ref" &&
+            message.data?.ref === semantic &&
+            message.data?.canonicalRef === canonicalRef,
+        );
       if (!imported) {
         logFederatedPeerBDecision({
           inboundRequestPresent,
@@ -1246,6 +1248,7 @@ export function waitForContinuationObservation(directory, signal) {
 export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
+  let peerImportedBindingVisible = false;
   const recordedSessions = new Set();
   if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
     pi.on("before_agent_start", (event, context) => {
@@ -1264,6 +1267,7 @@ export default function install(pi) {
             typeof entry.data?.ref === "string" &&
             typeof entry.data?.canonicalRef === "string",
         );
+      peerImportedBindingVisible = importedBindingVisible;
       logFederatedPeerBDecision({
         inboundRequestPresent,
         importedBindingVisible,
@@ -1343,13 +1347,15 @@ export default function install(pi) {
             (message.role === "user" || message.type === "custom_message") &&
             text(message).includes("PEER_E2E_LEAD_REQUEST"),
         );
-        const importedBindingVisible = context.messages.some(
-          (message) =>
-            message.type === "custom" &&
-            message.customType === "pi-herdsman-result-ref" &&
-            typeof message.data?.ref === "string" &&
-            typeof message.data?.canonicalRef === "string",
-        );
+        const importedBindingVisible =
+          peerImportedBindingVisible ||
+          context.messages.some(
+            (message) =>
+              message.type === "custom" &&
+              message.customType === "pi-herdsman-result-ref" &&
+              typeof message.data?.ref === "string" &&
+              typeof message.data?.canonicalRef === "string",
+          );
         const prompt = text(lastUser(context.messages));
         logFederatedPeerBDecision({
           inboundRequestPresent,
@@ -1363,7 +1369,10 @@ export default function install(pi) {
           modelExpected: model.id === "federated-peer-b",
         });
       }
-      answer = decide(model.id, context);
+      answer = decide(model.id, {
+        ...context,
+        peerImportedBindingVisible,
+      });
     } catch (error) {
       if (
         error instanceof Error &&
