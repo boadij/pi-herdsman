@@ -102,6 +102,10 @@ test("bridge recovers after process death at both durable acceptance cut points"
         recipientSession: sessionId,
         recipientGeneration: manager.claim.id,
         acceptanceId: messageId,
+        originDisplay: {
+          name: "Research Manager",
+          workspaceLabel: "project-alpha/main",
+        },
         replies: [],
       };
       const transfer = {
@@ -348,6 +352,15 @@ test("bridge recovers after process death at both durable acceptance cut points"
       });
       const savedMarker = JSON.parse(readFileSync(marker, "utf8"));
       assert.equal(savedMarker.status, "accepted", cut);
+      assert.deepEqual(
+        listPeerCorrespondences().find((item) => item.id === correspondence.id)
+          ?.originDisplay,
+        {
+          name: "Research Manager",
+          workspaceLabel: "project-alpha/main",
+        },
+        "bridge acceptance persists advisory origin display metadata",
+      );
       assert.equal(
         savedMarker.digest,
         digest,

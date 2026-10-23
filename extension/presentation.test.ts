@@ -1295,6 +1295,26 @@ test("herd run entries render only valid finished durations", () => {
   );
   assert.equal(
     renderedText(
+      renderCoordinationResult(
+        "peer",
+        "list",
+        {
+          details: {
+            ok: true,
+            action: "list",
+            self: "lead-self",
+            peers: [{ session_id: "stale-session" }],
+          },
+        },
+        {},
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "peer · 1 peer",
+  );
+  assert.equal(
+    renderedText(
       renderHerdRunEntry(
         {
           data: {
@@ -2571,6 +2591,21 @@ test("list peers rendering distinguishes self from peers", () => {
           workspace_label: "api",
         },
       ],
+      reply_only: [
+        {
+          session: "origin-manager",
+          name: "Research Manager",
+          workspace_label: "project-alpha/main",
+        },
+        {
+          session: "other-origin-manager",
+          name: "Research Manager",
+        },
+        { session: "workspace-only", workspace_label: "project-beta" },
+        { session: "id-only" },
+        { session: "unnamed-origin-manager" },
+      ],
+      unavailable_machines: ["office"],
     },
   };
 
@@ -2580,7 +2615,7 @@ test("list peers rendering distinguishes self from peers", () => {
         args: { action: "list" },
       }),
     ),
-    "peer · 1 peer",
+    "peer · 1 discovered · 5 reply-only",
   );
 
   assert.equal(
@@ -2594,7 +2629,7 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  workspace/api · session: lead-other · branch: feature/peer",
+    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  project-beta\n  session: workspace-only\n  Reply can be queued; current availability is unverified.\n  id-only\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nunavailable machines office",
   );
 
   assert.equal(
@@ -2615,8 +2650,60 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  session · session: session",
+    "peer\n\nself lead-self\ndiscovered peers 1\n  session · session: session",
   );
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        "message",
+        { details: { remoteSessionId: "origin-manager", queued: true } },
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "message" } },
+      ),
+    ),
+    "reply queued",
+  );
+  for (const [details, status] of [
+    [{ accepted: true }, "accepted remotely"],
+    [{ accepted: false }, "queued for remote retry"],
+    [{ session: "local-peer" }, "peer message queued"],
+  ] as const) {
+    assert.match(
+      renderedText(
+        renderCoordinationResult(
+          "peer",
+          "message",
+          { details },
+          {},
+          presentationTheme,
+          { args: { action: "message" } },
+        ),
+      ),
+      new RegExp(status),
+    );
+  }
+  const longSession = "origin-" + "x".repeat(160);
+  const long = renderedText(
+    renderCoordinationResult(
+      "peer",
+      "list",
+      {
+        details: {
+          self: "self",
+          peers: [],
+          reply_only: [{ session: longSession }],
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "list" } },
+    ),
+    40,
+  );
+  assert.ok(long.split("\n").every((line) => visibleWidth(line) <= 40));
 });
 
 test("widget never exceeds its width", (t) => {

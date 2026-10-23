@@ -65,7 +65,10 @@ Ordinary Leads and active Managers have `list_peers` and `message_peer`.
 {}
 ```
 
-Returns this session separately from other same-role sessions:
+Returns this session separately from independently discovered eligible
+same-role sessions. An active Manager may also receive an optional
+`reply_only` collection for originating Managers with an existing authorized
+return correspondence:
 
 ```json
 {
@@ -79,9 +82,30 @@ Returns this session separately from other same-role sessions:
       "branch": "feature/peer",
       "workspace_label": "api"
     }
+  ],
+  "reply_only": [
+    {
+      "session": "<exact originating Manager session ID>",
+      "name": "Research Manager",
+      "workspace_label": "project-alpha/main"
+    }
   ]
 }
 ```
+
+`reply_only` is omitted when empty. Its targets are not independently
+discovered peers. Optional `name` and `workspace_label` are last-known,
+sender-provided presentation context; they may be absent, non-unique, or stale.
+Older correspondences may remain ID-only until a subsequent accepted exchange
+provides metadata. These labels do not verify identity, availability, machine
+origin, project ownership, or permission to initiate an unrelated conversation.
+Only the exact `session` is a `message_peer` target. The result never exposes
+correspondence capabilities or other private state. `message_peer` revalidates
+identity and authority when sending. Missing reciprocal Herdr/SSH configuration
+does not prevent replies through an existing correspondence; reverse
+connectivity is needed only to independently initiate communication. Therefore,
+an empty `peers` list does not necessarily mean communication with known
+originating Managers is impossible.
 
 `self` is never repeated in `peers`. Each peer has a `session`, `name`, `cwd`,
 `repo`, `branch`, and `workspace_label`; presentation metadata may be empty.
@@ -116,6 +140,11 @@ within both configured byte limits or the handoff is rejected; a reference-only
 attachment is not reported as delivered. The compact physical peer record
 remains bounded by the internal 8 KiB limit, with larger accepted bodies
 stored separately and verified before Pi delivery.
+
+Targets do not all need to be independently discoverable and currently live:
+an active Manager may reply to an exact `reply_only` target through its
+existing return correspondence. This does not grant general initiation
+permission.
 
 Remote Manager sends are retained locally until the remote endpoint confirms
 durable acceptance. Failed sends remain queued and retry automatically while

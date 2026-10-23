@@ -10,6 +10,7 @@ type Machine = realTransport.SavedPeerMachine;
 type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
 const correspondences: any[] = [];
+const queuedReplies: any[] = [];
 const diagnostics: unknown[] = [];
 const deliveredReplies: any[] = [];
 let diagnosticAttempts = 0;
@@ -31,6 +32,7 @@ let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   return snapshot;
 };
 const deliveries: string[] = [];
+let outboundCorrespondence: any;
 mock.module("./peer-transport.ts", {
   namedExports: {
     ...realTransport,
@@ -46,7 +48,10 @@ mock.module("./peer-transport.ts", {
         recipientSession?: string;
         replyId?: string;
         record?: { id?: string };
+        correspondence?: unknown;
       };
+      if (request.correspondence)
+        outboundCorrespondence = request.correspondence;
       endpointCalls.push({
         action,
         recipientSession: request.recipientSession,
@@ -113,6 +118,10 @@ mock.module("./peer-correspondence.ts", {
       else correspondences[index] = item;
     },
     createPeerCorrespondence: (item: unknown) => item,
+    queuePeerReply: (...args: any[]) => {
+      queuedReplies.push(args);
+      return "queued";
+    },
   },
 });
 
@@ -156,6 +165,7 @@ function fixture() {
   support.setLeadEnvironment();
   machines.length = 0;
   correspondences.length = 0;
+  queuedReplies.length = 0;
   diagnostics.length = 0;
   deliveredReplies.length = 0;
   diagnosticAttempts = 0;
@@ -166,6 +176,7 @@ function fixture() {
   cReplyAcknowledged = false;
   nextSnapshots = [];
   deliveries.length = 0;
+  outboundCorrespondence = undefined;
   probeImpl = async () => {
     const value = nextSnapshots.shift();
     if (!value) throw new Error("missing test snapshot");
@@ -188,6 +199,8 @@ function fixture() {
     build: support.HERDSMAN_BUILD,
     sessionKind: "ordinary",
     role: "manager",
+    name: "Local Research Manager",
+    workspaceLabel: "project-alpha/main",
     piSessionId: self,
     claim,
     updatedAt: 1,
@@ -235,6 +248,7 @@ function fixture() {
   return {
     context,
     runtime,
+    sender,
     async close() {
       delete process.env.PI_CODING_AGENT_DIR;
       rmSync(root, { recursive: true, force: true });
@@ -283,6 +297,10 @@ test("published route remains sendable during refresh and a stale discovery cann
   await probeEntered.promise;
   const sent = await send(f.runtime, f.context, "peer-old");
   assert.equal(sent.details?.accepted, true);
+  assert.deepEqual(correspondences[0].originDisplay, {
+    name: "Local Research Manager",
+    workspaceLabel: "project-alpha/main",
+  });
   held.resolve(snapshot([remote("peer-old")]));
   await refreshing;
 
@@ -304,6 +322,128 @@ test("published route remains sendable during refresh and a stale discovery cann
     send(f.runtime, f.context, "peer-stale"),
     /not found|unavailable/,
   );
+});
+
+test("outbound correspondence merges newly captured partial origin metadata", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [
+    snapshot([remote("peer-old")]),
+    snapshot([remote("peer-old")]),
+  ];
+  await list(f.runtime, f.context);
+  const correspondence = realCorrespondence.createPeerCorrespondence({
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-old",
+    recipientGeneration: "peer-old-generation",
+    acceptanceId: "acceptance-existing",
+    originDisplay: { workspaceLabel: "remembered workspace" },
+  });
+  correspondences.push(correspondence);
+  f.sender.workspaceLabel = "";
+  const sent = await send(f.runtime, f.context, "peer-old");
+  assert.equal(sent.details?.accepted, true);
+  assert.deepEqual(outboundCorrespondence.originDisplay, {
+    workspaceLabel: "remembered workspace",
+    name: "Local Research Manager",
+  });
+});
+
+test("list_peers projects exact reply-only correspondence targets without exposing capabilities", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const correspondence = {
+    id: "corr-origin",
+    capability: "secret-capability",
+    originSession: "origin-manager",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    acceptanceId: "acceptance-id",
+    originDisplay: {
+      name: "Research Manager",
+      workspaceLabel: "project-alpha/main",
+    },
+    finalized: false,
+    replies: [],
+  };
+  correspondences.push(correspondence);
+
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(result.details?.peers, []);
+  const expected = [
+    {
+      session: "origin-manager",
+      name: "Research Manager",
+      workspace_label: "project-alpha/main",
+    },
+  ];
+  assert.deepEqual(result.details?.reply_only, expected);
+  assert.deepEqual(JSON.parse(result.content[0].text).reply_only, [
+    ...expected,
+  ]);
+  assert.doesNotMatch(result.content[0].text, /secret-capability|corr-origin/);
+  assert.doesNotMatch(
+    JSON.stringify(result.details),
+    /secret-capability|corr-origin/,
+  );
+
+  const sent = await send(f.runtime, f.context, "origin-manager");
+  assert.equal(sent.details?.remoteSessionId, "origin-manager");
+  assert.equal(sent.details?.queued, true);
+  assert.equal(queuedReplies.length, 1);
+  assert.equal(queuedReplies[0][0].id, "corr-origin");
+
+  for (const invalid of [
+    { ...correspondence, finalized: true },
+    { ...correspondence, recipientSession: "another-manager" },
+    { ...correspondence, id: "corr-duplicate" },
+  ]) {
+    correspondences.length = 0;
+    correspondences.push(
+      invalid,
+      ...(invalid.id === "corr-duplicate" ? [correspondence] : []),
+    );
+    const excluded = await list(f.runtime, f.context);
+    assert.equal(excluded.details?.reply_only, undefined);
+    assert.equal(JSON.parse(excluded.content[0].text).reply_only, undefined);
+  }
+
+  correspondences.length = 0;
+  correspondences.push({
+    ...correspondence,
+    recipientGeneration: "old-generation",
+  });
+  const recovered = await list(f.runtime, f.context);
+  assert.deepEqual(recovered.details?.reply_only, [...expected]);
+  assert.equal(correspondences[0].recipientGeneration, claim.id);
+});
+
+test("a discovered Manager is not duplicated in reply_only", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("origin-manager")])];
+  correspondences.push({
+    id: "corr-discovered-origin",
+    capability: "secret-capability",
+    originSession: "origin-manager",
+    originGeneration: "origin-generation",
+    recipientSession: self,
+    recipientGeneration: claim.id,
+    acceptanceId: "acceptance-id",
+    finalized: false,
+    replies: [],
+  });
+  const result = await list(f.runtime, f.context);
+  assert.ok(
+    result.details?.peers.some(
+      (peer: any) => peer.session === "origin-manager",
+    ),
+  );
+  assert.equal(result.details?.reply_only, undefined);
 });
 
 test("a correspondence failure is isolated, deduplicated, and retried", async (t) => {

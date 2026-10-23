@@ -61,6 +61,7 @@ export type PeerCorrespondence = {
   recipientSession: string;
   recipientGeneration: string;
   acceptanceId: string;
+  originDisplay?: PeerOriginDisplay;
   finalized?: boolean;
   replies: Array<{
     id: string;
@@ -72,6 +73,35 @@ export type PeerCorrespondence = {
     acknowledged: boolean;
   }>;
 };
+
+export type PeerOriginDisplay = {
+  name?: string;
+  workspaceLabel?: string;
+};
+
+export function validPeerDisplayText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= 512 &&
+    !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(
+      value,
+    )
+  );
+}
+
+function validOriginDisplay(value: unknown): value is PeerOriginDisplay {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const fields = Object.entries(value);
+  return (
+    fields.length > 0 &&
+    fields.every(
+      ([key, text]) =>
+        (key === "name" || key === "workspaceLabel") &&
+        validPeerDisplayText(text),
+    )
+  );
+}
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 export function assertPeerDataRoot(actual: string, expected: string): void {
@@ -97,6 +127,7 @@ function valid(value: unknown): value is PeerCorrespondence {
       c.recipientGeneration,
       c.acceptanceId,
     ].every((s) => typeof s === "string" && s.length > 0 && s.length <= 512) &&
+    (c.originDisplay === undefined || validOriginDisplay(c.originDisplay)) &&
     (c.finalized === undefined || typeof c.finalized === "boolean") &&
     Array.isArray(c.replies) &&
     c.replies.every(
@@ -171,6 +202,7 @@ export function createPeerCorrespondence(
     capability: randomBytes(32).toString("hex"),
     replies: [],
   };
+  if (!valid(c)) throw new Error("invalid peer correspondence");
   save(c);
   return c;
 }
@@ -195,6 +227,12 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
       )
         throw new Error("conflicting peer correspondence");
       current.recipientGeneration = c.recipientGeneration;
+      if (c.originDisplay) {
+        current.originDisplay = {
+          ...current.originDisplay,
+          ...c.originDisplay,
+        };
+      }
     });
     return;
   }
