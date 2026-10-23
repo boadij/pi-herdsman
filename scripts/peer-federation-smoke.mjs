@@ -506,12 +506,15 @@ try {
           if (
             typeof value.inboundRequestPresent === "boolean" &&
             typeof value.importedBindingVisible === "boolean" &&
-            ["capture_session", "inbound_lead_request"].includes(
+            ["capture_session", "inbound_lead_request", "other"].includes(
               value.branch,
             ) &&
-            ["assistant_complete", "tool_call", "waiting_for_binding"].includes(
-              value.outcome,
-            ) &&
+            [
+              "assistant_complete",
+              "decision_started",
+              "tool_call",
+              "waiting_for_binding",
+            ].includes(value.outcome) &&
             (value.tool === undefined ||
               ["read", "message_peer"].includes(value.tool))
           )

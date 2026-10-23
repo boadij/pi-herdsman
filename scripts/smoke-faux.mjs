@@ -831,6 +831,16 @@ export function decide(model, context) {
         typeof message.data?.ref === "string" &&
         typeof message.data?.canonicalRef === "string",
     );
+    logFederatedPeerBDecision({
+      inboundRequestPresent,
+      importedBindingVisible,
+      branch: inboundRequestPresent
+        ? "inbound_lead_request"
+        : prompt.includes("PEER_E2E_B_CAPTURE_SESSION")
+          ? "capture_session"
+          : "other",
+      outcome: "decision_started",
+    });
     if (prompt.includes("PEER_E2E_B_ASSIGN_MANAGED")) {
       const assignment = correlatedCall(messages, "delegate_project");
       if (!assignment)
