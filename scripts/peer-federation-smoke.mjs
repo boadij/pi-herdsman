@@ -71,6 +71,17 @@ function command(bin, args, { allowFailure = false, input } = {}) {
   return result.stdout.trim();
 }
 
+function sanitizeStartupDiagnostics(value) {
+  const sanitized = value
+    .replace(/(?:Bearer\s+)[^\s"']+/giu, "Bearer [redacted]")
+    .replace(
+      /((?:token|password|secret|credential|private[_ -]?key)\s*[:=]\s*)[^\s,"']+/giu,
+      "$1[redacted]",
+    )
+    .replace(/(?:\/[\w.@+-]+){2,}/gu, "[path]");
+  return Buffer.from(sanitized).subarray(0, 2048).toString("utf8");
+}
+
 function cleanup() {
   for (const id of resources.containers)
     command("docker", ["rm", "-f", id], { allowFailure: true });
@@ -1295,25 +1306,45 @@ try {
         `${side}: source Lead pane split omitted pane identity: ${JSON.stringify(split)}`,
       );
     save();
-    herdr(side, [
-      "pane",
-      "run",
-      pane,
-      "pi",
-      "--model",
-      "smoke-faux/federated-peer-source",
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
-    ]);
-    herdr(side, [
-      "pane",
-      "wait-output",
-      pane,
-      "--match",
-      "Press ctrl+o",
-      "--timeout",
-      "30000",
-    ]);
+    try {
+      herdr(side, [
+        "agent",
+        "start",
+        `peer-source-${side}`,
+        "--kind",
+        "pi",
+        "--pane",
+        pane,
+        "--timeout",
+        "30000",
+        "--",
+        "--model",
+        "smoke-faux/federated-peer-source",
+        "--extension",
+        `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
+      ]);
+    } catch (error) {
+      let terminal = "terminal diagnostics unavailable";
+      try {
+        terminal = herdr(side, [
+          "pane",
+          "read",
+          pane,
+          "--source",
+          "recent",
+          "--lines",
+          "30",
+        ]);
+      } catch {}
+      resources.sourceStartupFailure = {
+        side,
+        terminal: sanitizeStartupDiagnostics(terminal),
+      };
+      save();
+      throw new Error(`${side}: native source Pi startup failed`, {
+        cause: error,
+      });
+    }
     const submitted = JSON.parse(
       herdr(side, [
         "agent",
