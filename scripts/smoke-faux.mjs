@@ -248,6 +248,7 @@ function logFederatedPeerBDecision({
   modelExpected,
 }) {
   const decision = JSON.stringify({
+    ...(inboundRequestPresent ? { eventId: "peer-fixture-event" } : {}),
     inboundRequestPresent,
     importedBindingVisible,
     branch,
@@ -689,7 +690,7 @@ export function decide(model, context) {
       if (successfulCallCount(messages, "message_peer") === 0)
         return call("message_peer", {
           session: peer.session,
-          message: `PEER_E2E_LEAD_REQUEST: inspect the portable file and use ${semantic}.`,
+          message: `PEER_E2E_CORRELATION_ID PEER_E2E_LEAD_REQUEST: inspect the portable file and use ${semantic}.`,
           files: ["spec.md", semantic],
         });
       return fauxAssistantMessage("PEER_E2E_A_LEAD_SENT");

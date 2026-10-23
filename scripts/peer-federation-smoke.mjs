@@ -504,6 +504,25 @@ try {
         try {
           const value = JSON.parse(line);
           if (
+            value.eventId === "peer-fixture-event" &&
+            ((value.event === "inbound_persisted" &&
+              value.outcome === "persisted") ||
+              (value.event === "send_invoked" &&
+                ["followUp", "busy"].includes(value.outcome) &&
+                typeof value.triggerTurn === "boolean" &&
+                typeof value.idle === "boolean"))
+          )
+            return [
+              {
+                eventId: value.eventId,
+                event: value.event,
+                outcome: value.outcome,
+                ...(value.event === "send_invoked"
+                  ? { triggerTurn: value.triggerTurn, idle: value.idle }
+                  : {}),
+              },
+            ];
+          if (
             typeof value.inboundRequestPresent === "boolean" &&
             typeof value.importedBindingVisible === "boolean" &&
             ["capture_session", "inbound_lead_request", "other"].includes(
@@ -524,6 +543,9 @@ try {
           )
             return [
               {
+                ...(value.eventId === "peer-fixture-event"
+                  ? { eventId: value.eventId }
+                  : {}),
                 inboundRequestPresent: value.inboundRequestPresent,
                 importedBindingVisible: value.importedBindingVisible,
                 branch: value.branch,

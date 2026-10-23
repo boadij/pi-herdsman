@@ -53,6 +53,19 @@ import {
   verifyRemoteChiefAuthority,
   writePeerDeliveryReceipt,
 } from "./supervision.ts";
+
+function peerCorrelationDiagnostic(
+  event: "inbound_persisted" | "send_invoked",
+  fields: Record<string, boolean | string>,
+): void {
+  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS !== "1") return;
+  const diagnostic = JSON.stringify({
+    eventId: "peer-fixture-event",
+    event,
+    ...fields,
+  });
+  console.error(`[peer-correlation] ${diagnostic}`);
+}
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
@@ -12574,6 +12587,24 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
+                  const correlatedFixture =
+                    record.kind === "peer_message" &&
+                    typeof payload === "object" &&
+                    payload !== null &&
+                    "content" in payload &&
+                    typeof payload.content === "string" &&
+                    payload.content.includes("PEER_E2E_CORRELATION_ID");
+                  if (correlatedFixture) {
+                    peerCorrelationDiagnostic("inbound_persisted", {
+                      outcome: "persisted",
+                    });
+                    peerCorrelationDiagnostic("send_invoked", {
+                      outcome:
+                        options?.deliverAs === "followUp" ? "followUp" : "busy",
+                      triggerTurn: options?.triggerTurn === true,
+                      idle: ctx.isIdle(),
+                    });
+                  }
                   submitted = pi.sendMessage(payload, options);
                 };
                 if (
