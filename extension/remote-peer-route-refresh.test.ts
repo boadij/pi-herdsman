@@ -194,6 +194,8 @@ function fixture() {
     build: support.HERDSMAN_BUILD,
     sessionKind: "ordinary",
     role: "manager",
+    name: "Local Research Manager",
+    workspaceLabel: "project-alpha/main",
     piSessionId: self,
     claim,
     updatedAt: 1,
@@ -289,6 +291,10 @@ test("published route remains sendable during refresh and a stale discovery cann
   await probeEntered.promise;
   const sent = await send(f.runtime, f.context, "peer-old");
   assert.equal(sent.details?.accepted, true);
+  assert.deepEqual(correspondences[0].originDisplay, {
+    name: "Local Research Manager",
+    workspaceLabel: "project-alpha/main",
+  });
   held.resolve(snapshot([remote("peer-old")]));
   await refreshing;
 
@@ -323,6 +329,10 @@ test("list_peers projects exact reply-only correspondence targets without exposi
     recipientSession: self,
     recipientGeneration: claim.id,
     acceptanceId: "acceptance-id",
+    originDisplay: {
+      name: "Research Manager",
+      workspaceLabel: "project-alpha/main",
+    },
     finalized: false,
     replies: [],
   };
@@ -330,9 +340,16 @@ test("list_peers projects exact reply-only correspondence targets without exposi
 
   const result = await list(f.runtime, f.context);
   assert.deepEqual(result.details?.peers, []);
-  assert.deepEqual(result.details?.reply_only, [{ session: "origin-manager" }]);
+  const expected = [
+    {
+      session: "origin-manager",
+      name: "Research Manager",
+      workspace_label: "project-alpha/main",
+    },
+  ];
+  assert.deepEqual(result.details?.reply_only, expected);
   assert.deepEqual(JSON.parse(result.content[0].text).reply_only, [
-    { session: "origin-manager" },
+    ...expected,
   ]);
   assert.doesNotMatch(result.content[0].text, /secret-capability|corr-origin/);
   assert.doesNotMatch(
@@ -367,9 +384,7 @@ test("list_peers projects exact reply-only correspondence targets without exposi
     recipientGeneration: "old-generation",
   });
   const recovered = await list(f.runtime, f.context);
-  assert.deepEqual(recovered.details?.reply_only, [
-    { session: "origin-manager" },
-  ]);
+  assert.deepEqual(recovered.details?.reply_only, [...expected]);
   assert.equal(correspondences[0].recipientGeneration, claim.id);
 });
 

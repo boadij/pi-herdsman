@@ -163,6 +163,7 @@ import {
   resolvePeerResultBindings as splitPeerResultBindings,
   updatePeerOriginGeneration,
   updatePeerRecipientGeneration,
+  validPeerDisplayText,
 } from "./peer-correspondence.ts";
 
 type LeadIdentityHost = {
@@ -11086,25 +11087,35 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           ambiguousRemoteSessions.add(session);
       }
       const discovered = new Set(peers.map((peer) => peer.session));
-      const replyCounts = new Map<string, number>();
+      const replyCorrespondences = new Map<string, PeerCorrespondence | null>();
       if (activeRole() === "manager" && own.role === "manager")
         for (const correspondence of correspondences) {
           if (!matchesReturnRecipient(correspondence, own)) continue;
-          replyCounts.set(
+          replyCorrespondences.set(
             correspondence.originSession,
-            (replyCounts.get(correspondence.originSession) ?? 0) + 1,
+            replyCorrespondences.has(correspondence.originSession)
+              ? null
+              : correspondence,
           );
         }
-      const replyOnly = [...replyCounts]
+      const replyOnly = [...replyCorrespondences]
         .filter(
-          ([session, count]) =>
-            count === 1 &&
+          ([session, correspondence]) =>
+            correspondence !== null &&
             session !== self &&
             !discovered.has(session) &&
             !remotePeerRoutes.has(session) &&
             !ambiguousRemoteSessions.has(session),
         )
-        .map(([session]) => ({ session }));
+        .map(([session, correspondence]) => ({
+          session,
+          ...(correspondence!.originDisplay?.name
+            ? { name: correspondence.originDisplay.name }
+            : {}),
+          ...(correspondence!.originDisplay?.workspaceLabel
+            ? { workspace_label: correspondence.originDisplay.workspaceLabel }
+            : {}),
+        }));
       return {
         content: [
           {
@@ -11272,6 +11283,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             .digest("hex"),
         };
       });
+      const originDisplay = {
+        ...(validPeerDisplayText(sender.name) ? { name: sender.name } : {}),
+        ...(validPeerDisplayText(sender.workspaceLabel)
+          ? { workspaceLabel: sender.workspaceLabel }
+          : {}),
+      };
       const correspondence =
         listPeerCorrespondences().find(
           (item) =>
@@ -11285,11 +11302,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           recipientSession: params.session,
           recipientGeneration: remoteRoute.claimId,
           acceptanceId: recordId,
+          ...(Object.keys(originDisplay).length ? { originDisplay } : {}),
         });
-      if (correspondence.recipientGeneration !== remoteRoute.claimId) {
-        correspondence.recipientGeneration = remoteRoute.claimId;
-        storePeerCorrespondence(correspondence);
-      }
+      correspondence.recipientGeneration = remoteRoute.claimId;
+      if (Object.keys(originDisplay).length)
+        correspondence.originDisplay = originDisplay;
+      storePeerCorrespondence(correspondence);
       const envelope = JSON.stringify({
         record,
         expectedDataRoot: remoteRoute.dataRoot,

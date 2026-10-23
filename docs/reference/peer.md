@@ -83,19 +83,29 @@ return correspondence:
       "workspace_label": "api"
     }
   ],
-  "reply_only": [{ "session": "<exact originating Manager session ID>" }]
+  "reply_only": [
+    {
+      "session": "<exact originating Manager session ID>",
+      "name": "Research Manager",
+      "workspace_label": "project-alpha/main"
+    }
+  ]
 }
 ```
 
 `reply_only` is omitted when empty. Its targets are not independently
-discovered peers and their presence does not verify that they are online or
-grant permission to initiate an unrelated conversation. It exposes only the
-exact target session, never correspondence capabilities or other private
-state. `message_peer` revalidates identity and authority when sending. Missing
-reciprocal Herdr/SSH configuration does not prevent replies through an
-existing correspondence; reverse connectivity is needed only to independently
-initiate communication. Therefore, an empty `peers` list does not necessarily
-mean communication with known originating Managers is impossible.
+discovered peers. Optional `name` and `workspace_label` are last-known,
+sender-provided presentation context; they may be absent, non-unique, or stale.
+Older correspondences may remain ID-only until a subsequent accepted exchange
+provides metadata. These labels do not verify identity, availability, machine
+origin, project ownership, or permission to initiate an unrelated conversation.
+Only the exact `session` is a `message_peer` target. The result never exposes
+correspondence capabilities or other private state. `message_peer` revalidates
+identity and authority when sending. Missing reciprocal Herdr/SSH configuration
+does not prevent replies through an existing correspondence; reverse
+connectivity is needed only to independently initiate communication. Therefore,
+an empty `peers` list does not necessarily mean communication with known
+originating Managers is impossible.
 
 `self` is never repeated in `peers`. Each peer has a `session`, `name`, `cwd`,
 `repo`, `branch`, and `workspace_label`; presentation metadata may be empty.

@@ -14,6 +14,7 @@ import {
   peerPayloadDigest,
   queuePeerReply,
   removePeerCorrespondence,
+  storePeerCorrespondence,
   updatePeerOriginGeneration,
 } from "./peer-correspondence.ts";
 
@@ -239,6 +240,66 @@ test("peer correspondence isolates capability, exact sessions and generations, a
       ),
     /authorization/,
   );
+});
+
+test("peer origin display metadata validates, persists, and enriches without breaking ID-only records", () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  assert.equal(c.originDisplay, undefined);
+  assert.throws(
+    () =>
+      createPeerCorrespondence({
+        originSession: randomUUID(),
+        originGeneration: randomUUID(),
+        recipientSession: randomUUID(),
+        recipientGeneration: randomUUID(),
+        acceptanceId: randomUUID(),
+        originDisplay: { name: "bad\nname" },
+      }),
+    /invalid peer correspondence/,
+  );
+  for (const originDisplay of [
+    {},
+    { name: " " },
+    { name: "x".repeat(513) },
+    { name: "valid", cwd: "/private/path" },
+  ])
+    assert.throws(
+      () => storePeerCorrespondence({ ...c, originDisplay } as any),
+      /invalid peer correspondence/,
+    );
+
+  storePeerCorrespondence({
+    ...c,
+    originDisplay: { name: "Research Manager" },
+  });
+  storePeerCorrespondence({
+    ...c,
+    originDisplay: { workspaceLabel: "project-alpha/main" },
+  });
+  assert.deepEqual(
+    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
+    { name: "Research Manager", workspaceLabel: "project-alpha/main" },
+  );
+  storePeerCorrespondence(c);
+  assert.deepEqual(
+    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
+    { name: "Research Manager", workspaceLabel: "project-alpha/main" },
+  );
+  storePeerCorrespondence({
+    ...c,
+    originDisplay: { name: "Updated Manager" },
+  });
+  assert.deepEqual(
+    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
+    { name: "Updated Manager", workspaceLabel: "project-alpha/main" },
+  );
+  removePeerCorrespondence(c.id);
 });
 
 test("same exact session may explicitly recover a changed generation, but mismatched generations cannot poll", () => {

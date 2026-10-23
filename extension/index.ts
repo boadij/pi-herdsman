@@ -1915,7 +1915,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Discover peers and reply through existing correspondences",
         description:
-          "Send to an eligible same-role Lead or Manager by exact session ID; an existing return correspondence may allow a reply-only target without independent discovery or current availability.",
+          "Send to an eligible same-role Lead or Manager by exact session ID; an existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>
@@ -2415,7 +2415,7 @@ function registerExtensionImpl(
           name: "list_peers",
           label: "list peers",
           description:
-            "List independently discovered eligible same-role peers; Managers may also see reply-only originating Managers with existing return correspondences. Reply-only visibility does not prove availability or grant general initiation permission. Do not use for progress polling.",
+            "List independently discovered eligible same-role peers; Managers may also see reply-only originating Managers with existing return correspondences and optional last-known name/workspace display context. Use only the exact session as a target; labels do not verify identity, availability, or permission to initiate unrelated messages. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (

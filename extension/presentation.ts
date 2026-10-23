@@ -2921,7 +2921,12 @@ function expandedResultLines(
           ...replyOnly.flatMap((item: any) =>
             item && typeof item === "object"
               ? [
-                  `  ${value(item.session) || "session"}`,
+                  `  ${value(item.name) || value(item.workspace_label) || value(item.session) || "session"}`,
+                  ...(value(item.workspace_label) &&
+                  value(item.workspace_label) !== value(item.name)
+                    ? [`  ${value(item.workspace_label)}`]
+                    : []),
+                  `  session: ${value(item.session) || "session"}`,
                   "  Reply can be queued; current availability is unverified.",
                 ]
               : [],
