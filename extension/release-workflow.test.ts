@@ -250,3 +250,33 @@ test("an existing preview version cannot be retagged for a different full SHA", 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("publish verifies the tarball's full source SHA before registry operations", () => {
+  const publish = previewWorkflow.slice(
+    previewWorkflow.indexOf("\n  publish:\n"),
+  );
+  const sourceShaCheck = publish.indexOf(
+    'test "$(node -p "require(\'./manifest/package/package.json\').previewSourceSha")" = "$SHA"',
+  );
+  const npmInstall = publish.indexOf("npm install -g npm@11.21.0");
+  const registryLookup = publish.indexOf('npm view "$PACKAGE" versions');
+  const existingVersionLookup = publish.indexOf(
+    'npm view "$PACKAGE@$VERSION" previewSourceSha',
+  );
+  const distTagAdd = publish.indexOf(
+    'npm dist-tag add "$PACKAGE@$VERSION" "$TAG"',
+  );
+  const registryPublish = publish.indexOf('npm publish "${TARBALLS[0]}"');
+
+  assert.notEqual(sourceShaCheck, -1);
+  assert.notEqual(npmInstall, -1);
+  assert.notEqual(registryLookup, -1);
+  assert.notEqual(existingVersionLookup, -1);
+  assert.notEqual(distTagAdd, -1);
+  assert.notEqual(registryPublish, -1);
+  assert.ok(sourceShaCheck < npmInstall);
+  assert.ok(sourceShaCheck < registryLookup);
+  assert.ok(sourceShaCheck < existingVersionLookup);
+  assert.ok(sourceShaCheck < distTagAdd);
+  assert.ok(sourceShaCheck < registryPublish);
+});
