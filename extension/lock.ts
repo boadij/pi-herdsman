@@ -117,11 +117,23 @@ function readProcessLockOwner(path: string, owner: string): LockOwner {
   return claim;
 }
 
-function readLinuxBirth(pid: number): NonNullable<LockOwner["linuxBirth"]> {
+function readLinuxBirth(
+  pid: number,
+): NonNullable<LockOwner["linuxBirth"]> | undefined {
   const bootId = fs
     .readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
     .trim();
-  const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  let stat: string;
+  try {
+    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" &&
+      !processExists(pid)
+    )
+      return undefined;
+    throw error;
+  }
   const end = stat.lastIndexOf(") ");
   if (end < 0 || !stat.startsWith(`${pid} (`))
     throw new Error("Invalid Linux process stat");
@@ -146,6 +158,7 @@ function processOwnerExists(owner: LockOwner): boolean {
   if (!owner.linuxBirth)
     throw new Error("Linux lock owner identity is unverifiable");
   const current = readLinuxBirth(owner.pid);
+  if (!current) return false;
   return (
     current.bootId === owner.linuxBirth.bootId &&
     current.startTicks === owner.linuxBirth.startTicks
@@ -267,7 +280,7 @@ export function acquireProcessLock(
   const claim: ProcessLockClaim = { pid: process.pid, id: randomUUID() };
   const lockOwner: LockOwner =
     process.platform === "linux"
-      ? { ...claim, linuxBirth: readLinuxBirth(process.pid) }
+      ? { ...claim, linuxBirth: readLinuxBirth(process.pid)! }
       : claim;
   const owner = `${claim.pid}-${claim.id}`;
   const payload = JSON.stringify(lockOwner);
@@ -292,8 +305,10 @@ export function acquireProcessLock(
     let observedOwner: string;
     try {
       ({ owner: observedOwner } = lockOwnerEntry(claimDir));
-    } catch {
-      throw new Error(verifyMessage);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new ProcessLockOccupiedError(occupiedMessage);
+      throw new Error(verifyMessage, { cause: error });
     }
     let staleOwner: LockOwner;
     try {

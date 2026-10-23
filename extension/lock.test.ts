@@ -110,6 +110,49 @@ test("acquireProcessLock returns an exact claim", () => {
   }
 });
 
+test("publication collision during release is reported as occupied", (t) => {
+  const path = temporaryPath();
+  const previousLease = acquireProcessLock(path);
+  const originalRename = fs.renameSync;
+  let released = false;
+  t.mock.method(fs, "renameSync", (source: string, destination: string) => {
+    try {
+      return originalRename(source, destination);
+    } catch (error) {
+      if (
+        destination === path &&
+        ["EEXIST", "ENOTEMPTY"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      ) {
+        previousLease.release();
+        released = true;
+      }
+      throw error;
+    }
+  });
+  syncBuiltinESMExports();
+  let replacement: ReturnType<typeof acquireProcessLock> | undefined;
+  try {
+    throws(
+      () => acquireProcessLock(path),
+      (error: unknown) => error instanceof ProcessLockOccupiedError,
+    );
+    equal(released, true);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    replacement = acquireProcessLock(path);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    try {
+      replacement?.release();
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  }
+});
+
 test("Linux reused PID owner is recovered without exposing private identity", (t) => {
   if (process.platform !== "linux") return t.skip("Linux process identity");
   const path = temporaryPath();
