@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -104,6 +105,43 @@ test("acquireProcessLock returns an exact claim", () => {
     deepEqual(lease.claim, { pid: process.pid, id: lease.claim.id });
     assertOccupied(path);
     lease.release();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("Linux reused PID owner is recovered without exposing private identity", (t) => {
+  if (process.platform !== "linux") return t.skip("Linux process identity");
+  const path = temporaryPath();
+  const id = randomUUID();
+  const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  const stat = readFileSync(`/proc/${process.pid}/stat`, "utf8");
+  const fields = stat
+    .slice(stat.lastIndexOf(") ") + 2)
+    .trim()
+    .split(/\s+/);
+  const actualTicks = fields[19]!;
+  const differentTicks = actualTicks === "0" ? "1" : "0";
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, `${process.pid}-${id}`),
+      JSON.stringify({
+        pid: process.pid,
+        id,
+        linuxBirth: { bootId, startTicks: differentTicks },
+      }),
+    );
+    const lease = acquireProcessLock(path);
+    try {
+      deepEqual(lease.claim, { pid: process.pid, id: lease.claim.id });
+      deepEqual(readProcessLockStatus(path), {
+        claim: lease.claim,
+        live: true,
+      });
+    } finally {
+      lease.release();
+    }
   } finally {
     rmSync(path, { recursive: true, force: true });
   }

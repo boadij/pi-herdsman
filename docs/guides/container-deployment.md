@@ -158,6 +158,13 @@ Tools installed with mise persist in the home volume.
 
 Running processes do not survive a container restart.
 
+Run only one active Herdsman runtime against a writable home volume. Linux
+lock recovery verifies process identity within the current PID namespace;
+independent containers sharing that volume are not supported. Existing Linux
+locks without process identity are recovered only when their recorded PID is
+absent; an occupied PID remains ambiguous and must be resolved after its
+original process has exited.
+
 ## Defaults
 
 | Setting            | Default       |
