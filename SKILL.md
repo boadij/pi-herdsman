@@ -70,9 +70,9 @@ Use `list_agents` when fresh agent state or ownership is materially needed for a
 control or recovery decision, or to refresh the definition roster after
 configuration changes. Do not use `list_agents` merely to check progress.
 
-Use `delegate_agent` to start one bounded fresh assignment from an agent definition.
-Use `continue_agent` to start one bounded assignment from an exact historical
-managed-agent Pi session.
+For a new bounded delegated task, prefer `continue_agent` when a known,
+eligible historical managed-Agent Pi session contains substantial context
+relevant to that task. Otherwise use `delegate_agent` for a fresh assignment.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed

@@ -4243,6 +4243,14 @@ test("delegating agents receive only their allowed definition roster", async () 
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
   assert.match(
     sharedGuidance,
+    /prefer continue_agent if a known exact historical managed-Agent Pi session carries substantial context relevant to that task and remains eligible; otherwise use delegate_agent/,
+  );
+  assert.match(
+    sharedGuidance,
+    /Retired sessions cannot be continued while context retirement is enabled/,
+  );
+  assert.match(
+    sharedGuidance,
     /Delegate bounded execution work when an Agent can reasonably own it and delegation is useful/,
   );
   assert.match(

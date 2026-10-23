@@ -126,6 +126,10 @@ explicitly overrides either field. Fresh delegation does not inherit the
 caller's conversation; pass assignment-specific evidence through task text and
 `files`.
 
+Prefer continuing a known, eligible historical session when its established
+context is substantially relevant to the next bounded task. Otherwise use
+fresh delegation, passing relevant earlier results and evidence explicitly.
+
 The identities are therefore:
 
 ```text

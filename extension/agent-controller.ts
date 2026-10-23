@@ -761,8 +761,9 @@ export const AGENT_DELEGATION_GUIDANCE =
   "Keep work local when it is trivial, inseparable from work you must own, " +
   "otherwise unsuitable for an Agent, or delegation would add more coordination than value.";
 export const AGENT_HANDOFF_GUIDANCE =
-  "Use delegate_agent to start a fresh bounded assignment from a definition; " +
-  "use continue_agent for eligible exact historical managed-Agent sessions. " +
+  "When delegating a bounded task, prefer continue_agent if a known exact historical " +
+  "managed-Agent Pi session carries substantial context relevant to that task " +
+  "and remains eligible; otherwise use delegate_agent to start fresh from a definition. " +
   "Retired sessions cannot be continued while context retirement is enabled. " +
   "If further work is needed, delegate a fresh Agent with the prior handoff " +
   "and relevant files. Each live Agent generation exists for one " +
