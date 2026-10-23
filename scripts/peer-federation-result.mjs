@@ -1,5 +1,20 @@
 const MAX_EVIDENCE_LENGTH = 500;
 
+export function isLiveCorrespondenceRecipient(probe, correspondence) {
+  const role = correspondence.role ?? "manager";
+  return (
+    (role === "manager" ||
+      (role === "lead" && probe.ordinaryLeadsComplete === true)) &&
+    probe.peers.some(
+      (peer) =>
+        peer.role === role &&
+        (role !== "lead" || peer.sessionKind === "ordinary") &&
+        peer.piSessionId === correspondence.recipientSession &&
+        peer.claim?.id === correspondence.recipientGeneration,
+    )
+  );
+}
+
 function sanitize(value) {
   return String(value)
     .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/giu, "[session-id]")

@@ -2,10 +2,65 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertPeerInListPeersResult,
+  isLiveCorrespondenceRecipient,
   matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
 } from "./peer-federation-result.mjs";
+
+test("live correspondence recipient matches role, session, generation, and Lead eligibility", () => {
+  const correspondence = {
+    recipientSession: "recipient",
+    recipientGeneration: "generation",
+  };
+  const manager = {
+    peers: [
+      {
+        role: "manager",
+        piSessionId: "recipient",
+        claim: { id: "generation" },
+      },
+    ],
+  };
+  assert.equal(isLiveCorrespondenceRecipient(manager, correspondence), true);
+
+  const lead = {
+    ordinaryLeadsComplete: true,
+    peers: [
+      {
+        role: "lead",
+        sessionKind: "ordinary",
+        piSessionId: "recipient",
+        claim: { id: "generation" },
+      },
+    ],
+  };
+  assert.equal(
+    isLiveCorrespondenceRecipient(lead, { ...correspondence, role: "lead" }),
+    true,
+  );
+  assert.equal(
+    isLiveCorrespondenceRecipient(
+      { ...lead, ordinaryLeadsComplete: false },
+      { ...correspondence, role: "lead" },
+    ),
+    false,
+  );
+  assert.equal(
+    isLiveCorrespondenceRecipient(
+      { ...lead, peers: [{ ...lead.peers[0], piSessionId: "other" }] },
+      { ...correspondence, role: "lead" },
+    ),
+    false,
+  );
+  assert.equal(
+    isLiveCorrespondenceRecipient(
+      { ...lead, peers: [{ ...lead.peers[0], claim: { id: "other" } }] },
+      { ...correspondence, role: "lead" },
+    ),
+    false,
+  );
+});
 
 test("managed Lead denial requires exact nested call and correlated error result", () => {
   const call = {

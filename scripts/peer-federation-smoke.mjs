@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import {
   assertPeerInListPeersResult,
   delegateResultEvidence,
+  isLiveCorrespondenceRecipient,
   matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
@@ -2169,15 +2170,7 @@ try {
         "probe",
       ]),
     );
-    if (
-      !liveRecipientProbe.peers.some(
-        (peer) =>
-          peer.role === "lead" &&
-          peer.sessionKind === "ordinary" &&
-          peer.piSessionId === correspondence.recipientSession &&
-          peer.claim?.id === correspondence.recipientGeneration,
-      )
-    )
+    if (!isLiveCorrespondenceRecipient(liveRecipientProbe, correspondence))
       throw new Error(
         `intended correspondence recipient is not live: ${JSON.stringify({ recipientSession: correspondence.recipientSession, recipientGeneration: correspondence.recipientGeneration, peers: liveRecipientProbe.peers })}`,
       );
