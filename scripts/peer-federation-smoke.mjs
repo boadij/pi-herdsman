@@ -489,6 +489,46 @@ try {
     ]);
     return JSON.parse(output);
   };
+  const readBDecisionDiagnostics = () => {
+    const path = `${resources.b.runtime.piAgentDir}/peer-federation-decisions.jsonl`;
+    const output = exec("b", [
+      "sh",
+      "-c",
+      `test -f '${path}' && tail -c 8192 '${path}' || true`,
+    ]);
+    return output
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const value = JSON.parse(line);
+          if (
+            typeof value.inboundRequestPresent === "boolean" &&
+            typeof value.importedBindingVisible === "boolean" &&
+            ["capture_session", "inbound_lead_request"].includes(
+              value.branch,
+            ) &&
+            ["assistant_complete", "tool_call", "waiting_for_binding"].includes(
+              value.outcome,
+            ) &&
+            (value.tool === undefined ||
+              ["read", "message_peer"].includes(value.tool))
+          )
+            return [
+              {
+                inboundRequestPresent: value.inboundRequestPresent,
+                importedBindingVisible: value.importedBindingVisible,
+                branch: value.branch,
+                outcome: value.outcome,
+                ...(value.tool ? { tool: value.tool } : {}),
+              },
+            ];
+        } catch {}
+        return [];
+      })
+      .slice(-16);
+  };
   const capturePeerDiagnostics = () => {
     if (!resources.diagnosticsEnabled) return undefined;
     const diagnostics = {
@@ -819,6 +859,9 @@ try {
       "pane",
       "run",
       pane,
+      ...(side === "b"
+        ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
+        : []),
       "pi",
       "--model",
       `smoke-faux/federated-peer-${side}`,
@@ -1734,7 +1777,7 @@ try {
         ]).trim(),
       );
       throw new Error(
-        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, modelTurnsBeforeBinding: replyEvidence.modelTurnsBeforeBinding, modelTurnsAfterBinding: replyEvidence.modelTurnsAfterBinding, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0 })}`,
+        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, modelTurnsBeforeBinding: replyEvidence.modelTurnsBeforeBinding, modelTurnsAfterBinding: replyEvidence.modelTurnsAfterBinding, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0, decisions: readBDecisionDiagnostics() })}`,
       );
     }
     if (

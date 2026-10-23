@@ -246,15 +246,23 @@ function logFederatedPeerBDecision({
   outcome,
   tool,
 }) {
-  process.stderr.write(
-    `[peer-faux-decision] ${JSON.stringify({
-      inboundRequestPresent,
-      importedBindingVisible,
-      branch,
-      outcome,
-      ...(tool ? { tool } : {}),
-    })}\n`,
-  );
+  const decision = JSON.stringify({
+    inboundRequestPresent,
+    importedBindingVisible,
+    branch,
+    outcome,
+    ...(tool ? { tool } : {}),
+  });
+  process.stderr.write(`[peer-faux-decision] ${decision}\n`);
+  if (
+    process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1" &&
+    process.env.PI_CODING_AGENT_DIR
+  )
+    appendFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "peer-federation-decisions.jsonl"),
+      `${decision}\n`,
+      { mode: 0o600 },
+    );
 }
 
 function packageRead(messages) {
