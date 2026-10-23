@@ -239,6 +239,24 @@ function waitForResult(message) {
   return fauxAssistantMessage(message);
 }
 
+function logFederatedPeerBDecision({
+  inboundRequestPresent,
+  importedBindingVisible,
+  branch,
+  outcome,
+  tool,
+}) {
+  process.stderr.write(
+    `[peer-faux-decision] ${JSON.stringify({
+      inboundRequestPresent,
+      importedBindingVisible,
+      branch,
+      outcome,
+      ...(tool ? { tool } : {}),
+    })}\n`,
+  );
+}
+
 function packageRead(messages) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -792,6 +810,19 @@ export function decide(model, context) {
     throw new Error("Unexpected federated-peer A transcript");
   }
   if (model === "federated-peer-b") {
+    const inboundMessage = messages.find(
+      (message) =>
+        (message.role === "user" || message.type === "custom_message") &&
+        text(message).includes("PEER_E2E_LEAD_REQUEST"),
+    );
+    const inboundRequestPresent = !!inboundMessage;
+    const importedBindingVisible = messages.some(
+      (message) =>
+        message.type === "custom" &&
+        message.customType === "pi-herdsman-result-ref" &&
+        typeof message.data?.ref === "string" &&
+        typeof message.data?.canonicalRef === "string",
+    );
     if (prompt.includes("PEER_E2E_B_ASSIGN_MANAGED")) {
       const assignment = correlatedCall(messages, "delegate_project");
       if (!assignment)
@@ -803,18 +834,8 @@ export function decide(model, context) {
         throw new Error("managed Lead project assignment failed");
       return fauxAssistantMessage("PEER_E2E_B_MANAGED_ASSIGNED");
     }
-    if (
-      messages.some(
-        (message) =>
-          (message.role === "user" || message.type === "custom_message") &&
-          text(message).includes("PEER_E2E_LEAD_REQUEST"),
-      )
-    ) {
-      const inbound = messages.find(
-        (message) =>
-          (message.role === "user" || message.type === "custom_message") &&
-          text(message).includes("PEER_E2E_LEAD_REQUEST"),
-      );
+    if (inboundRequestPresent) {
+      const inbound = inboundMessage;
       const semantic = text(inbound).match(
         /\bresult:[A-Za-z0-9_-]+#\d+\b/u,
       )?.[0];
@@ -833,10 +854,17 @@ export function decide(model, context) {
           message.data?.ref === semantic &&
           message.data?.canonicalRef === canonicalRef,
       );
-      if (!imported)
+      if (!imported) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "waiting_for_binding",
+        });
         return waitForResult(
           "Waiting for the received result binding to be imported in this Lead session.",
         );
+      }
       const artifactPath = join(
         process.env.PI_CODING_AGENT_DIR,
         "pi-herdsman",
@@ -844,7 +872,16 @@ export function decide(model, context) {
         canonicalRef.slice("result:".length),
       );
       const artifactRead = correlatedCall(messages, "read");
-      if (!artifactRead) return call("read", { path: artifactPath });
+      if (!artifactRead) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "tool_call",
+          tool: "read",
+        });
+        return call("read", { path: artifactPath });
+      }
       if (artifactRead.call.arguments?.path !== artifactPath)
         throw new Error(
           "Lead read a different result artifact than the imported canonical reference",
@@ -861,15 +898,36 @@ export function decide(model, context) {
         /Peer message from ([0-9a-f-]{36}):/u,
       )?.[1];
       if (!origin) throw new Error("Lead request omitted exact origin session");
-      if (successfulCallCount(messages, "message_peer") === 0)
+      if (successfulCallCount(messages, "message_peer") === 0) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "tool_call",
+          tool: "message_peer",
+        });
         return call("message_peer", {
           session: origin,
           message: `PEER_E2E_LEAD_REPLY: used ${semantic} (${canonicalRef}, sha256 ${artifactSha256}) after reading PEER_E2E_PORTABLE_RESULT_CONTENT_V1 from the imported artifact.`,
         });
+      }
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible: imported,
+        branch: "inbound_lead_request",
+        outcome: "assistant_complete",
+      });
       return fauxAssistantMessage("PEER_E2E_B_LEAD_REPLIED");
     }
-    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION"))
+    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION")) {
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible,
+        branch: "capture_session",
+        outcome: "assistant_complete",
+      });
       return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
+    }
     if (
       messages.some(
         (message) =>
