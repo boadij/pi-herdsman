@@ -245,12 +245,14 @@ function logFederatedPeerBDecision({
   branch,
   outcome,
   tool,
+  modelExpected,
 }) {
   const decision = JSON.stringify({
     inboundRequestPresent,
     importedBindingVisible,
     branch,
     outcome,
+    ...(modelExpected === undefined ? {} : { modelExpected }),
     ...(tool ? { tool } : {}),
   });
   process.stderr.write(`[peer-faux-decision] ${decision}\n`);
@@ -1306,6 +1308,32 @@ export default function install(pi) {
     }
     let answer;
     try {
+      if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
+        const inboundRequestPresent = context.messages.some(
+          (message) =>
+            (message.role === "user" || message.type === "custom_message") &&
+            text(message).includes("PEER_E2E_LEAD_REQUEST"),
+        );
+        const importedBindingVisible = context.messages.some(
+          (message) =>
+            message.type === "custom" &&
+            message.customType === "pi-herdsman-result-ref" &&
+            typeof message.data?.ref === "string" &&
+            typeof message.data?.canonicalRef === "string",
+        );
+        const prompt = text(lastUser(context.messages));
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible,
+          branch: inboundRequestPresent
+            ? "inbound_lead_request"
+            : prompt.includes("PEER_E2E_B_CAPTURE_SESSION")
+              ? "capture_session"
+              : "other",
+          outcome: "model_invocation",
+          modelExpected: model.id === "federated-peer-b",
+        });
+      }
       answer = decide(model.id, context);
     } catch (error) {
       if (

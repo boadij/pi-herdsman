@@ -512,9 +512,12 @@ try {
             [
               "assistant_complete",
               "decision_started",
+              "model_invocation",
               "tool_call",
               "waiting_for_binding",
             ].includes(value.outcome) &&
+            (value.modelExpected === undefined ||
+              typeof value.modelExpected === "boolean") &&
             (value.tool === undefined ||
               ["read", "message_peer"].includes(value.tool))
           )
@@ -524,6 +527,9 @@ try {
                 importedBindingVisible: value.importedBindingVisible,
                 branch: value.branch,
                 outcome: value.outcome,
+                ...(value.modelExpected === undefined
+                  ? {}
+                  : { modelExpected: value.modelExpected }),
                 ...(value.tool ? { tool: value.tool } : {}),
               },
             ];
