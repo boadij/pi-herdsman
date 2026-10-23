@@ -1243,6 +1243,31 @@ export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
   const recordedSessions = new Set();
+  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
+    pi.on("before_agent_start", (event, context) => {
+      const message =
+        event.messageType === "custom" ? event.message : undefined;
+      const content = text(message);
+      const inboundRequestPresent =
+        message?.customType === "pi-herdsman-peer_message" &&
+        content.includes("PEER_E2E_LEAD_REQUEST");
+      const importedBindingVisible = context.sessionManager
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-herdsman-result-ref" &&
+            typeof entry.data?.ref === "string" &&
+            typeof entry.data?.canonicalRef === "string",
+        );
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible,
+        branch: inboundRequestPresent ? "inbound_lead_request" : "other",
+        outcome: "before_agent_start",
+      });
+    });
+  }
   const faux = fauxProvider({
     provider: "smoke-faux",
     api: "smoke-faux-api",

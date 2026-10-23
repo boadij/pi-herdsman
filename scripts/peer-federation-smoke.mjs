@@ -511,6 +511,7 @@ try {
             ) &&
             [
               "assistant_complete",
+              "before_agent_start",
               "decision_started",
               "model_invocation",
               "tool_call",
