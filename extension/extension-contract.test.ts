@@ -5074,6 +5074,50 @@ test("rejected held Herdr presentation ignores the invalidated context", async (
   }
 });
 
+test("shutdown aborts session work before draining metadata but stays active", async () => {
+  const { createLeadShutdownRuntime } = await import("./lead-runtime.ts");
+  const metadataStarted = testGate<void>();
+  const releaseMetadata = testGate<void>();
+  const session = new AbortController();
+  let active = true;
+  const noOp = () => {};
+  const runtime = createLeadShutdownRuntime({
+    roleTransitions: {
+      beginShutdownRole: noOp,
+      shutdownRole: noOp,
+      clearLeadContext: noOp,
+    },
+    clearStartupDefinitionRoster: noOp,
+    leadInboxRuntime: { beginShutdown: noOp, shutdown: noOp },
+    drainLeadMetadata: async () => {
+      metadataStarted.resolve();
+      await releaseMetadata.promise;
+    },
+    controller: {
+      abortSession: () => session.abort(),
+      clearPendingStarts: noOp,
+      clearSession: noOp,
+      markSessionInactive: () => {
+        active = false;
+      },
+      stopHealthScanner: noOp,
+      shutdown: noOp,
+    },
+    leadStatusRuntime: { shutdown: noOp },
+    clearSupervisionUI: noOp,
+    isRoot: () => false,
+    herdRun: { shutdown: noOp },
+  } as any);
+
+  const shutdown = runtime.shutdown({} as any);
+  await metadataStarted.promise;
+  assert.equal(session.signal.aborted, true);
+  assert.equal(active, true, "session stays active during metadata grace");
+  releaseMetadata.resolve();
+  await shutdown;
+  assert.equal(active, false, "session becomes inactive after metadata drain");
+});
+
 test("stalled Chief shutdown metadata cannot block shutdown or replacement", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";

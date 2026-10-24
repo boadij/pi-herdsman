@@ -1049,12 +1049,19 @@ export function createLeadShutdownRuntime(host: {
       host.roleTransitions.beginShutdownRole();
       host.clearStartupDefinitionRoster();
       host.leadInboxRuntime.beginShutdown();
-      host.roleTransitions.shutdownRole();
-      await Promise.race([
-        host.drainLeadMetadata(),
-        new Promise<void>((resolve) => setTimeout(resolve, 250)),
-      ]);
       host.controller.abortSession();
+      host.roleTransitions.shutdownRole();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          host.drainLeadMetadata(),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 250);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       host.leadInboxRuntime.shutdown();
       host.controller.clearPendingStarts();
       host.controller.clearSession();
