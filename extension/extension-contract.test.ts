@@ -3414,6 +3414,15 @@ test("lead metadata omits coordination state and follows session names", async (
   await pi.events.get("session_info_changed")![0]({ name: "renamed" }, context);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(pi.calls.some((args) => args.includes("pi_herdsman_name=renamed")));
+  assert.equal(
+    pi.entries.some(
+      (entry: any) =>
+        entry.customType === "pi_herdsman_state_error" &&
+        /reading ['"]paneId['"]/.test(entry.data?.error ?? ""),
+    ),
+    false,
+    "startup must not report the invalid metadata.paneId error",
+  );
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
 });
@@ -3874,12 +3883,14 @@ test("suspended persisted Chief role selects the neutral charter", async () => {
       "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
     );
     assert.deepEqual(pi.pi.getActiveTools(), []);
-    assert.ok(
+    assert.equal(
       pi.entries.some(
         (entry: any) =>
-          entry.customType === "pi_herdsman_state_error" && entry.data?.error,
+          entry.customType === "pi_herdsman_state_error" &&
+          /reading ['"]paneId['"]/.test(entry.data?.error ?? ""),
       ),
-      "the invalid persisted state forces role suspension during startup",
+      false,
+      "suspended Chief startup must not report the invalid metadata.paneId error",
     );
   } finally {
     try {
