@@ -7,17 +7,21 @@ on:
         description: Open same-repository PR number
         required: true
         type: string
+  pull_request_target:
+    types: [closed]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: npm-preview-pr-${{ inputs.pr }}
+  group: npm-preview-pr-${{ inputs.pr || github.event.pull_request.number }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   prepare:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.target.outputs.sha }}
@@ -30,14 +34,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          case "$PR" in
-            ''|*[!0-9]*)
-              echo "PR must be a positive integer" >&2
-              exit 1
-              ;;
-          esac
-
-          [ "$PR" -gt 0 ]
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || {
+            echo "PR must be a positive canonical integer" >&2
+            exit 1
+          }
 
           IFS=$'\t' read -r STATE HEAD_REPO HEAD_SHA < <(
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
@@ -70,11 +70,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION="0.0.0-pr.$PR.g$HEAD_SHA"
+          VERSION="0.0.0-pr.$PR.g${HEAD_SHA:0:12}"
 
           test "$(node -p "require('./package.json').name")" = "pi-herdsman"
 
           npm --no-git-tag-version version "$VERSION"
+          npm pkg set previewSourceSha="$HEAD_SHA"
           npm run release:check -- --tag "pr-$PR"
 
           test "$(node -p "require('./package.json').name")" = "pi-herdsman"
@@ -94,12 +95,14 @@ jobs:
           retention-days: 1
 
   publish:
+    if: github.event_name == 'workflow_dispatch'
     needs: prepare
     runs-on: ubuntu-latest
     environment: npm-preview
 
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
 
     steps:
@@ -109,8 +112,6 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - run: npm install -g npm@11.21.0
-
       - uses: actions/download-artifact@v8
         with:
           name: npm-preview
@@ -118,6 +119,7 @@ jobs:
 
       - name: Publish preview
         env:
+          GH_TOKEN: ${{ github.token }}
           PACKAGE: pi-herdsman
           PR: ${{ inputs.pr }}
           SHA: ${{ needs.prepare.outputs.sha }}
@@ -125,7 +127,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
-          VERSION="0.0.0-pr.$PR.g$SHA"
+          VERSION="0.0.0-pr.$PR.g${SHA:0:12}"
           TAG="pr-$PR"
           REGISTRY="https://registry.npmjs.org"
 
@@ -136,10 +138,32 @@ jobs:
           tar -xzf "${TARBALLS[0]}" -C manifest package/package.json
           test "$(node -p "require('./manifest/package/package.json').name")" = "$PACKAGE"
           test "$(node -p "require('./manifest/package/package.json').version")" = "$VERSION"
+          test "$(node -p "require('./manifest/package/package.json').previewSourceSha")" = "$SHA"
 
-          if npm view "$PACKAGE@$VERSION" version --registry "$REGISTRY" >/dev/null 2>&1; then
-            test "$(npm view "$PACKAGE@$TAG" version --registry "$REGISTRY")" = "$VERSION"
-            echo "$PACKAGE@$VERSION is already published; skipping npm publish"
+          npm install -g npm@11.21.0
+
+          IFS=$'\t' read -r STATE HEAD_REPO CURRENT_SHA < <(
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+              --jq '[.state, .head.repo.full_name, .head.sha] | @tsv'
+          )
+          [ "$STATE" = "open" ]
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]
+          [ "$CURRENT_SHA" = "$SHA" ]
+
+          VERSIONS=$(npm view "$PACKAGE" versions --json --registry "$REGISTRY")
+          jq -e 'type == "array" or type == "string"' <<<"$VERSIONS" >/dev/null
+          if jq -e --arg v "$VERSION" \
+            'if type == "array" then index($v) != null else . == $v end' \
+            <<<"$VERSIONS" >/dev/null; then
+            PUBLISHED_SHA=$(npm view "$PACKAGE@$VERSION" previewSourceSha \
+              --registry "$REGISTRY")
+            [ "$PUBLISHED_SHA" = "$SHA" ] || {
+              echo "Published version does not identify source commit $SHA" >&2
+              exit 1
+            }
+            npm dist-tag add "$PACKAGE@$VERSION" "$TAG" \
+              --registry "$REGISTRY"
+            echo "$PACKAGE@$VERSION is already published; reconciled $TAG"
           else
             npm publish "${TARBALLS[0]}" \
               --registry "$REGISTRY" \
@@ -161,3 +185,54 @@ jobs:
             echo
             echo "\`pi install npm:$PACKAGE@$VERSION\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: npm-preview
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: npm install -g npm@11.21.0
+
+      - name: Remove closed PR preview tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          PACKAGE: pi-herdsman
+        run: |
+          set -euo pipefail
+
+          TAG="pr-$PR"
+          REGISTRY="https://registry.npmjs.org"
+
+          STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.state')
+          case "$STATE" in
+            closed) ;;
+            open) echo "PR #$PR is open; skipping cleanup"; exit 0 ;;
+            *) echo "Unexpected PR state: $STATE" >&2; exit 1 ;;
+          esac
+
+          TAGS=$(npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY")
+          jq -e 'type == "object"' <<<"$TAGS" >/dev/null
+          EXISTING=$(jq -r --arg tag "$TAG" '.[$tag] // empty' <<<"$TAGS")
+
+          if [ -n "$EXISTING" ]; then
+            case "$EXISTING" in
+              "0.0.0-pr.$PR."*) ;;
+              *) echo "Unexpected version associated with PR tag" >&2; exit 1 ;;
+            esac
+            npm dist-tag rm "$PACKAGE" "$TAG" --registry "$REGISTRY"
+          else
+            echo "$TAG is already absent; nothing to remove"
+          fi
