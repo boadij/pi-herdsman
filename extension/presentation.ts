@@ -1326,9 +1326,13 @@ export function formatSupervisionNotification(
     (report) =>
       report.role !== "lead" && report.compatibility !== "incompatible",
   ).length;
-  const incompatible = ordered.filter(
-    (report) => report.compatibility === "incompatible",
-  ).length;
+  const incompatible = ordered.reduce(
+    (count, report) =>
+      count +
+      (report.compatibility === "incompatible" ? 1 : 0) +
+      (report.incompatibleLeadCount ?? 0),
+    0,
+  );
   const leads = ordered.filter(
     (report) =>
       report.role === "lead" && report.compatibility !== "incompatible",
@@ -1339,7 +1343,7 @@ export function formatSupervisionNotification(
       .slice(0, 8)
       .map(
         (lead) =>
-          `${lead.compatibility === "incompatible" ? `incompatible ${lead.role} · ` : `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: `}${lead.displayName}${lead.compatibility === "incompatible" ? " · build mismatch" : `${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`}`,
+          `${lead.compatibility === "incompatible" ? `incompatible ${lead.role} · ` : `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: `}${lead.displayName}${lead.compatibility === "incompatible" ? " · build mismatch" : `${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} compatible lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.incompatibleLeadCount ? ` · ${lead.incompatibleLeadCount} incompatible lead${lead.incompatibleLeadCount === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`}`,
       ),
   ];
   if (ordered.length > 8) lines.push(`… ${ordered.length - 8} more · /chief`);

@@ -510,6 +510,22 @@ test("Chief ambient projection pluralizes counts and handles unavailable state",
   }
 });
 
+test("Chief notification counts incompatible Manager children", () => {
+  const notification = formatSupervisionNotification(
+    [
+      lead({
+        role: "manager",
+        leadCounts: { active: 0, blocked: 0, total: 2 },
+        incompatibleLeadCount: 1,
+      }),
+    ],
+    "fresh",
+  );
+
+  assert.match(notification, /1 manager · 1 incompatible/);
+  assert.match(notification, /2 compatible leads · 1 incompatible lead/);
+});
+
 test("Chief ambient projection preserves branch and hidden-lead rendering", (t) => {
   {
     const rows = renderSupervisionLeads(

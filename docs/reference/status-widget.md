@@ -39,7 +39,7 @@ as:
 
 ```text
 ● chief · 1 manager
-└─ ○ pi-herdsman · 1 lead
+└─ ○ pi-herdsman · 1 compatible lead
    └─ worktree/silver-stone-21b7 · done
 ```
 
