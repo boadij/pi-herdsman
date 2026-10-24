@@ -1256,6 +1256,10 @@ try {
     assignmentId: projectAssignment.id,
     denial: denialResult.text,
   });
+  const ordinaryLeadSession = resources.a.ordinaryLead.sessionPath;
+  const discoveryStartLine = Number(
+    exec("a", ["wc", "-l", ordinaryLeadSession]).trim().split(/\s/u)[0],
+  );
   herdr("a", [
     "agent",
     "prompt",
@@ -1265,15 +1269,76 @@ try {
     "--timeout",
     "60000",
   ]);
-  herdr("a", [
-    "pane",
-    "wait-output",
-    resources.a.ordinaryLeadPaneId,
-    "--match",
-    "PEER_E2E_A_DISCOVERED",
-    "--timeout",
-    "60000",
-  ]);
+  try {
+    herdr("a", [
+      "pane",
+      "wait-output",
+      resources.a.ordinaryLeadPaneId,
+      "--match",
+      "PEER_E2E_A_DISCOVERED",
+      "--timeout",
+      "60000",
+    ]);
+  } catch (error) {
+    const entries = exec("a", ["tail", "-n", "200", ordinaryLeadSession])
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    const endLine = Number(
+      exec("a", ["wc", "-l", ordinaryLeadSession]).trim().split(/\s/u)[0],
+    );
+    const firstTailLine = endLine - entries.length + 1;
+    const turnStart = Math.max(0, discoveryStartLine + 1 - firstTailLine);
+    const turn = entries.slice(turnStart);
+    const promptObserved =
+      turn[0]?.message?.role === "user" &&
+      JSON.stringify(turn[0].message.content).includes("PEER_E2E_A_DISCOVER");
+    const toolCalls = new Map();
+    const toolResults = new Map();
+    const assistantErrors = new Map();
+    for (const { message } of turn) {
+      if (message?.role === "assistant") {
+        const category = message.errorMessage ? "provider_error" : "none";
+        assistantErrors.set(category, (assistantErrors.get(category) ?? 0) + 1);
+        for (const part of message.content ?? [])
+          if (part.type === "toolCall")
+            toolCalls.set(part.name, (toolCalls.get(part.name) ?? 0) + 1);
+      }
+      if (message?.role === "toolResult") {
+        const key = `${message.toolName}:${message.isError ? "error" : "ok"}`;
+        toolResults.set(key, (toolResults.get(key) ?? 0) + 1);
+      }
+    }
+    const pane = herdr("a", [
+      "pane",
+      "read",
+      resources.a.ordinaryLeadPaneId,
+      "--source",
+      "recent",
+      "--lines",
+      "40",
+    ]);
+    stage("ordinary-lead-discovery-prompt-failed", {
+      sessionId: resources.a.ordinaryLead.sessionId,
+      paneId: resources.a.ordinaryLeadPaneId,
+      promptObserved,
+      markerObserved: entries.some((entry) =>
+        JSON.stringify(entry.message?.content ?? "").includes(
+          "PEER_E2E_A_DISCOVERED",
+        ),
+      ),
+      paneHasError: /\b(?:error|failed|crashed)\b/iu.test(pane),
+      paneHasProviderError: /\b(?:provider|model|rate limit|quota)\b/iu.test(
+        pane,
+      ),
+      toolCalls: Object.fromEntries(toolCalls),
+      toolResults: Object.fromEntries(toolResults),
+      assistantErrors: Object.fromEntries(assistantErrors),
+      tailWasCapped: entries.length === 200,
+    });
+    throw error;
+  }
   const ordinaryLeadTranscript = exec("a", [
     "cat",
     resources.a.ordinaryLead.sessionPath,
