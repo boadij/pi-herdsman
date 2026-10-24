@@ -5521,8 +5521,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         .managerSupervisionItems(fresh)
         .filter((item) =>
           item.kind === "lead"
-            ? item.lead.lead === leadId
-            : item.work.status === "active" && item.lead?.lead === leadId,
+            ? item.lead.lead === leadId &&
+              item.lead.compatibility !== "incompatible"
+            : item.work.status === "active" &&
+              item.lead?.lead === leadId &&
+              item.lead.compatibility !== "incompatible",
         ).length !== 1
     )
       throw new Error("Lead is no longer available.");
@@ -5564,7 +5567,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const children = parent?.leads?.filter(
         (candidate: any) => candidate.session === leadId,
       );
-      if (!parent || children?.length !== 1)
+      if (
+        !parent ||
+        parent.compatibility === "incompatible" ||
+        children?.length !== 1
+      )
         throw new Error("Lead changed; reopen staff.");
       lead = { lead: leadId };
     } else {
@@ -5574,6 +5581,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
       lead = matches[0];
     }
+    if (lead.compatibility === "incompatible")
+      throw new Error(
+        "Lead is incompatible; reload the matching Herdsman build.",
+      );
     if (parent || lead.role === "manager") {
       const managerSessionId = parent?.lead ?? lead.lead;
       const report = parent ?? lead;
@@ -5803,7 +5814,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 : leads.map((lead) => ({
                     value: lead.lead,
                     label: lead.displayName,
-                    description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+                    description: `${lead.runtimeState}${lead.compatibility === "incompatible" ? " · build mismatch" : (lead.agentCounts?.total ?? 0) ? ` · ${lead.agentCounts!.total} agent${lead.agentCounts!.total === 1 ? "" : "s"}` : ""}`,
                   }));
             if (!items.some((item) => item.value === selected))
               selected = items[0]?.value;
@@ -5822,6 +5833,18 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             };
             list.onSelect = (item) => {
               if (!item || !isCurrentOverview()) return;
+              if (
+                host
+                  .presentationReports(snapshot)
+                  .find(
+                    (candidate) =>
+                      candidate.lead ===
+                      (item.value.startsWith("lead:")
+                        ? item.value.slice("lead:".length)
+                        : item.value),
+                  )?.compatibility === "incompatible"
+              )
+                return;
               if (item.value.startsWith("work:")) {
                 const branch = item.value.slice("work:".length);
                 const entry = work.find(
@@ -5834,7 +5857,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                     (candidate) =>
                       candidate.kind === "work" &&
                       candidate.work.branch === branch &&
-                      !!candidate.lead,
+                      !!candidate.lead &&
+                      candidate.lead.compatibility !== "incompatible",
                   );
                 finish({
                   kind: "project",
@@ -5884,7 +5908,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               ),
               ...leads.map(
                 (lead) =>
-                  `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
+                  `${lead.lead}:${lead.runtimeState}:${lead.agentCounts?.total ?? ""}:${lead.compatibility ?? ""}`,
               ),
             ].join("\0");
           };
@@ -5925,7 +5949,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   : []),
                 ...leads.map(
                   (lead) =>
-                    `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
+                    `${lead.lead}:${lead.runtimeState}:${lead.agentCounts?.total ?? ""}:${lead.compatibility ?? ""}`,
                 ),
               ].join("\0");
               if (!list || key !== renderedLeads) showOverview();
@@ -5964,7 +5988,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 const lead = host
                   .presentationReports(snapshot)
                   .find((item) => item.lead === leadId);
-                if (!lead) return;
+                if (!lead || lead.compatibility === "incompatible") return;
                 const request = ++peekRequest;
                 peekLead = lead;
                 peekEvidence = {

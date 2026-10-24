@@ -1487,6 +1487,28 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
   assert.equal(snapshot.incompatible?.[0]?.build.sha256, differentSha.sha256);
 });
 
+test("Lead without legacy coordination build is not actionable when build verification is requested", () => {
+  const sessionId = id();
+  const legacyState = state(sessionId, { role: "lead" }) as any;
+  delete legacyState.build;
+  const snapshot = projectSupervision({
+    agents: [
+      {
+        sessionId,
+        sessionKind: "id",
+        workspaceId: "workspace-legacy",
+        paneId: "pane-legacy",
+        tabId: "tab-legacy",
+      },
+    ],
+    managedAgents: [],
+    coordinationStates: [legacyState],
+    localBuild: BUILD,
+  });
+  assert.deepEqual(snapshot.leads, []);
+  assert.equal(snapshot.incompatible?.length ?? 0, 0);
+});
+
 test("Manager supervision snapshot carries only its derived open workspaces", () => {
   const openWorkspaces: OpenProjectWorkspace[] = [
     {

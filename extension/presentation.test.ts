@@ -5872,6 +5872,48 @@ test("Manager standalone Lead rows expose their exact click target", () => {
   ]);
 });
 
+test("incompatible Manager Leads have no standalone or assigned-work click target", () => {
+  const incompatible = {
+    ...lead({ lead: "incompatible-lead", branch: "feat/older" }),
+    compatibility: "incompatible" as const,
+    availableActions: [] as const,
+  };
+  for (const snapshot of [
+    { project: "project", work: [], leads: [incompatible] },
+    {
+      project: "project",
+      work: [
+        {
+          branch: "feat/older",
+          session: incompatible.lead,
+          status: "active" as const,
+        },
+      ],
+      leads: [incompatible],
+    },
+  ]) {
+    const focused: unknown[] = [];
+    const widget = createSupervisionWidget(
+      () => snapshot,
+      () => "fresh",
+      "manager",
+      undefined,
+      (intent) => focused.push(intent),
+    );
+    assert.equal(
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 4,
+        y: 1,
+        width: 120,
+      }),
+      undefined,
+    );
+    assert.deepEqual(focused, []);
+  }
+});
+
 test("truncated supervision rows are not clickable when their name is hidden", () => {
   const focused: unknown[] = [];
   const widget = createSupervisionWidget(

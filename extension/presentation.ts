@@ -1155,7 +1155,7 @@ function renderSupervisionRows(
               `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
               width,
             ),
-            ...(status === "fresh"
+            ...(status === "fresh" && item.lead.compatibility !== "incompatible"
               ? {
                   label: item.lead.branch ?? item.lead.displayName,
                   intent: {
@@ -1204,6 +1204,7 @@ function renderSupervisionRows(
           ...(status === "fresh" &&
           item.work.status === "active" &&
           lead &&
+          lead.compatibility !== "incompatible" &&
           displayedBranch === item.work.branch
             ? {
                 label: item.work.branch,

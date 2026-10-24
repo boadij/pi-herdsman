@@ -11995,6 +11995,7 @@ async function openChiefOverview(
     failRender?: boolean;
     failRefresh?: boolean;
     openOverview?: boolean;
+    incompatibleBuild?: { version: string; sha256: string };
   } = {},
 ) {
   setLeadEnvironment();
@@ -12118,6 +12119,9 @@ async function openChiefOverview(
   if (populated)
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
+      ...(options.incompatibleBuild
+        ? { build: options.incompatibleBuild }
+        : {}),
       instanceId: randomUUID(),
       piSessionId: PARENT_SESSION_ID,
       updatedAt: Date.now(),
@@ -12211,6 +12215,23 @@ test("Chief overview reports unavailable when its first refresh fails", async ()
     const output = harness.component.render(120).join("\n");
     assert.match(output, /Pi Herdsman · unavailable/);
     assert.doesNotMatch(output, /0 herds/);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("Chief overview renders incompatible staff without counts or selection actions", async () => {
+  const harness = await openChiefOverview(true, {
+    incompatibleBuild: { version: "older", sha256: "a".repeat(64) },
+  });
+  try {
+    const output = harness.component.render(120).join("\n");
+    assert.match(output, /1 herd/);
+    assert.match(output, /build mismatch/);
+    assert.doesNotMatch(output, /0 agents/);
+    harness.component.handleInput(" ");
+    harness.component.handleInput("\r");
+    assert.equal(harness.doneCalls, 0);
   } finally {
     await harness.cleanup();
   }

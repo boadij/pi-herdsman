@@ -3742,9 +3742,9 @@ export function projectSupervision(options: {
       )
     )
       continue;
+    if (options.localBuild && !isRuntimeBuild(state.build)) continue;
     if (
       options.localBuild &&
-      isRuntimeBuild(state.build) &&
       !sameRuntimeBuild(options.localBuild, state.build)
     ) {
       incompatible.push({
