@@ -6059,6 +6059,39 @@ test("incompatible Lead nested under a Manager is visibly observation-only", () 
   assert.match(context, /lead_counts \(compatible reports\):/);
 });
 
+test("supervision context counts nested incompatible observations", () => {
+  const context = formatSupervisionContext(
+    {
+      managers: [
+        {
+          session: "manager",
+          displayName: "Project A",
+          project: "Project A",
+          workspaceId: "workspace-a",
+          runtimeState: "working",
+          agentCounts: { active: 0, blocked: 0, total: 0 },
+          leadCounts: { active: 0, blocked: 0, total: 0 },
+          incompatibleLeadCount: 1,
+          leads: [
+            {
+              session: "old-lead",
+              displayName: "Old Lead",
+              runtimeState: "idle",
+              compatibility: "incompatible",
+            },
+          ],
+          availableActions: ["inspect"],
+        },
+      ],
+      leads: [],
+      incompatible: [],
+    },
+    { status: "fresh" },
+  );
+
+  assert.match(context, /incompatible_staff_observations: 1/);
+});
+
 test("Manager widget reports incompatible child totals beyond the displayed cap", () => {
   const widget = createSupervisionWidget(
     () => ({

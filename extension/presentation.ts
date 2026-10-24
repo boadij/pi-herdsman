@@ -1428,7 +1428,7 @@ export function formatSupervisionContext(
       ? [
           `managers: ${reports.filter((report) => report.role === "manager" && report.compatibility !== "incompatible").length}`,
           `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,
-          `incompatible_staff: ${reports.filter((report) => report.compatibility === "incompatible").length}`,
+          `incompatible_staff_observations: ${reports.filter((report) => report.compatibility === "incompatible").length + (snapshot?.managers?.reduce((total, manager) => total + (manager.incompatibleLeadCount ?? 0), 0) ?? 0)}`,
         ]
       : [
           `direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,

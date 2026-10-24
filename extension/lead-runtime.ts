@@ -5401,7 +5401,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             compatibility: "incompatible" as const,
             build: lead.build,
           })),
-        ].slice(0, 32),
+        ],
         availableActions: [
           "inspect",
           "message",
@@ -9785,7 +9785,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ...current.leads.map((item: any) => ({ ...item, role: "lead" })),
       ];
       incompatibleReports = current.incompatible ?? [];
-      if (incompatibleReports.length)
+      if (
+        incompatibleReports.length ||
+        (current.managers ?? []).some(
+          (manager: any) => manager.incompatibleLeadCount > 0,
+        )
+      )
         discoveryWarning =
           "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
     } else {

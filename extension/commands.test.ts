@@ -8170,6 +8170,27 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     text: "assigned work",
   });
   const liveAgents = [managerAgent, assignedLead, ordinaryLead];
+  const manyCompatibleLeads = Array.from({ length: 33 }, (_, index) => {
+    const session = randomUUID();
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: session,
+      updatedAt: Date.now(),
+    });
+    return {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: session,
+      },
+      workspace_id: WORKSPACE,
+      pane_id: `many-compatible-${index}`,
+      tab_id: `many-compatible-${index}`,
+    };
+  });
   let revokeOrdinaryDuringRead = false;
   let delayOrdinaryRead = false;
   let finishDelayedRead: (() => void) | undefined;
@@ -8513,7 +8534,12 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
         JSON.stringify(contextMessage?.message).includes(ordinaryLeadSession),
         JSON.stringify(contextMessage?.message),
       );
-      liveAgents.push(incompatibleManager, nestedLead, incompatibleChild);
+      liveAgents.push(
+        ...manyCompatibleLeads,
+        incompatibleManager,
+        nestedLead,
+        incompatibleChild,
+      );
       const staff = chief.tools.find((tool) => tool.name === "list_staff")!;
       const listed = await staff.execute(
         "list",
@@ -8537,10 +8563,11 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       assert.ok(
         listed.details.reports[0].available_tools.includes("message_staff"),
       );
-      assert.deepEqual(
-        listed.details.reports[0].leads.map((lead: any) => lead.session),
-        [assignedLeadSession, ordinaryLeadSession, incompatibleChildSession],
+      const nestedSessions = listed.details.reports[0].leads.map(
+        (lead: any) => lead.session,
       );
+      assert.equal(nestedSessions.length, 36);
+      assert.ok(nestedSessions.includes(incompatibleChildSession));
       const nestedIncompatible = listed.details.reports[0].leads.find(
         (lead: any) => lead.session === incompatibleChildSession,
       );
@@ -8550,7 +8577,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       assert.deepEqual(listed.details.reports[0].lead_counts, {
         active: 0,
         blocked: 0,
-        total: 2,
+        total: 35,
       });
       const incompatibleEntry = listed.details.reports.find(
         (report: any) => report.session === incompatibleManagerSession,
@@ -8625,6 +8652,38 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
         ),
         false,
         "a fresh matching-build observation clears the warning",
+      );
+      const nestedOnlyList = await staff.execute(
+        "list",
+        {},
+        undefined,
+        undefined,
+        chiefCtx,
+      );
+      assert.equal(
+        nestedOnlyList.details.reports.some(
+          (report: any) => report.compatibility === "incompatible",
+        ),
+        false,
+        "the compatible Manager leaves no top-level incompatible report",
+      );
+      assert.match(
+        nestedOnlyList.details.warning,
+        /incompatible Herdsman build.*reload those Pi sessions/,
+        "a nested-only mismatch still provides reload guidance",
+      );
+      await chief.events.get("before_agent_start")![0](
+        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+        chiefCtx,
+      );
+      const nestedOnlyContext = chief.sentMessageCalls.findLast(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
+      assert.match(
+        JSON.stringify(nestedOnlyContext?.message),
+        /incompatible_staff_observations: 1/,
+        "the model-facing aggregate includes the nested incompatible Lead",
       );
       await assert.rejects(
         chief.tools
