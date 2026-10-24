@@ -143,24 +143,6 @@ function cleanup() {
     removeResource,
     removeRoot: (path) => rmSync(path, { recursive: true, force: true }),
   });
-  const remains = (args) =>
-    spawnSync("docker", args, { stdio: "ignore" }).status === 0;
-  const leftovers = [
-    ...resources.containers.filter((id) =>
-      remains(["container", "inspect", id]),
-    ),
-    ...resources.volumes.filter((id) => remains(["volume", "inspect", id])),
-    ...(resources.network && remains(["network", "inspect", resources.network])
-      ? [resources.network]
-      : []),
-    ...(resources.imageTag && remains(["image", "inspect", resources.imageTag])
-      ? [resources.imageTag]
-      : []),
-  ];
-  if (leftovers.length)
-    throw new Error(
-      `fixture cleanup left exact resources: ${leftovers.join(", ")}`,
-    );
   console.log(
     `Verified fixture cleanup: ${JSON.stringify({ runId: resources.runId, containers: resources.containers, volumes: resources.volumes, network: resources.network, image: resources.imageTag })}`,
   );
@@ -3281,5 +3263,6 @@ try {
   if (process.env.PEER_SMOKE_KEEP === "1")
     console.log(`Retained exact resource manifest: ${manifestPath}`);
 } finally {
-  if (process.env.PEER_SMOKE_KEEP !== "1") cleanup();
+  if (process.argv[2] !== "--cleanup" && process.env.PEER_SMOKE_KEEP !== "1")
+    cleanup();
 }

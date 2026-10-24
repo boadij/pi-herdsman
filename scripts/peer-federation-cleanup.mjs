@@ -82,6 +82,11 @@ export function cleanupSmokeFixture(resources, manifestPath, options) {
   }
 
   for (const [kind, id] of verifiedResources) removeResource(kind, id);
+  const leftovers = [];
+  for (const [kind, id] of verifiedResources)
+    if (inspectResource(kind, id)) leftovers.push(kind);
+  if (leftovers.length)
+    throw new Error(`fixture cleanup left exact ${leftovers.join(", ")}`);
   removeRoot(root);
   return root;
 }

@@ -34,12 +34,19 @@ function fixture(t) {
     imageTag: `${runId}:fixture`,
     image: `sha256:${"d".repeat(64)}`,
   };
+  const active = new Set([
+    ...resources.containers.map((id) => `container:${id}`),
+    ...resources.volumes.map((id) => `volume:${id}`),
+    `network:${resources.network}`,
+    `image:${resources.imageTag}`,
+  ]);
   const events = [];
   const options = {
     fixtureBase: directory,
     canonicalize: realpathSync,
     inspectResource(kind, id) {
       events.push(["inspect", kind, id]);
+      if (!active.has(`${kind}:${id}`)) return undefined;
       return {
         id: kind === "image" ? resources.image : undefined,
         labels: {
@@ -52,12 +59,13 @@ function fixture(t) {
     },
     removeResource(kind, id) {
       events.push(["remove", kind, id]);
+      active.delete(`${kind}:${id}`);
     },
     removeRoot(path) {
       events.push(["removeRoot", path]);
     },
   };
-  return { directory, root, manifestPath, resources, events, options };
+  return { directory, root, manifestPath, resources, active, events, options };
 }
 
 test("untrusted cleanup root cannot remove outside the expected smoke fixture", (t) => {
@@ -104,26 +112,28 @@ test("untrusted Docker IDs and unowned valid IDs are rejected before deletion", 
 test("cleanup preflights all fixture resources before deleting the owned set", (t) => {
   const f = fixture(t);
   cleanupSmokeFixture(f.resources, f.manifestPath, f.options);
-  assert.equal(f.events.filter(([event]) => event === "inspect").length, 8);
-  assert.deepEqual(
+  const firstRemoval = f.events.findIndex(([event]) => event === "remove");
+  assert.equal(firstRemoval, 8);
+  assert.equal(
     f.events
-      .slice(-9)
-      .map(([event, kind]) => [
-        event,
-        event === "removeRoot" ? undefined : kind,
-      ]),
+      .slice(firstRemoval + 8, -1)
+      .filter(([event]) => event === "inspect").length,
+    8,
+  );
+  assert.deepEqual(
+    f.events.filter(([event]) => event === "remove").map(([, kind]) => kind),
     [
-      ["remove", "container"],
-      ["remove", "container"],
-      ["remove", "volume"],
-      ["remove", "volume"],
-      ["remove", "volume"],
-      ["remove", "volume"],
-      ["remove", "network"],
-      ["remove", "image"],
-      ["removeRoot", undefined],
+      "container",
+      "container",
+      "volume",
+      "volume",
+      "volume",
+      "volume",
+      "network",
+      "image",
     ],
   );
+  assert.equal(f.events.at(-1)[0], "removeRoot");
   assert.equal(f.events.at(-1)[1], realpathSync(f.root));
   assert.deepEqual(
     f.events.findLast(
@@ -131,4 +141,50 @@ test("cleanup preflights all fixture resources before deleting the owned set", (
     ),
     ["remove", "image", f.resources.imageTag],
   );
+});
+
+test("failed removal preserves the recovery manifest and fixture root", (t) => {
+  const f = fixture(t);
+  const remainingVolume = f.resources.volumes[0];
+  f.options.removeResource = (kind, id) => {
+    f.events.push(["remove", kind, id]);
+    if (kind !== "volume" || id !== remainingVolume)
+      f.active.delete(`${kind}:${id}`);
+  };
+
+  assert.throws(
+    () => cleanupSmokeFixture(f.resources, f.manifestPath, f.options),
+    /cleanup left exact volume/u,
+  );
+  assert.equal(f.events.filter(([event]) => event === "inspect").length, 16);
+  assert.equal(
+    f.events.some(([event]) => event === "removeRoot"),
+    false,
+  );
+  assert.equal(readFileSync(f.manifestPath, "utf8"), "{}");
+});
+
+test("inspection failure preserves the recovery manifest and fixture root", (t) => {
+  const f = fixture(t);
+  const inspectBeforeRemoval = f.options.inspectResource;
+  let removalStarted = false;
+  f.options.removeResource = (kind, id) => {
+    removalStarted = true;
+    f.events.push(["remove", kind, id]);
+    f.active.delete(`${kind}:${id}`);
+  };
+  f.options.inspectResource = (...args) => {
+    if (removalStarted) throw new Error("inspection unavailable");
+    return inspectBeforeRemoval(...args);
+  };
+
+  assert.throws(
+    () => cleanupSmokeFixture(f.resources, f.manifestPath, f.options),
+    /inspection unavailable/u,
+  );
+  assert.equal(
+    f.events.some(([event]) => event === "removeRoot"),
+    false,
+  );
+  assert.equal(readFileSync(f.manifestPath, "utf8"), "{}");
 });
