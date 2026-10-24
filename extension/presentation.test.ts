@@ -5900,6 +5900,10 @@ test("incompatible Manager Leads have no standalone or assigned-work click targe
       undefined,
       (intent) => focused.push(intent),
     );
+    assert.match(
+      stripVTControlCharacters(widget.render(120)[1]!),
+      /build mismatch/,
+    );
     assert.equal(
       widget.handleMouse({
         type: "click",
@@ -5974,6 +5978,52 @@ test("incompatible staff rows are bounded, counted, and never focusable", () => 
   const context = formatSupervisionContext(snapshot, { status: "fresh" });
   assert.match(context, /observed; no available staff tools/);
   assert.match(context, /incompatible \(observed; no available staff tools\)/);
+});
+
+test("incompatible Lead nested under a Manager is visibly observation-only", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      managers: [
+        {
+          session: "manager",
+          displayName: "Project A",
+          project: "Project A",
+          workspaceId: "workspace-a",
+          runtimeState: "working" as const,
+          agentCounts: { active: 0, blocked: 0, total: 0 },
+          leadCounts: { active: 0, blocked: 0, total: 0 },
+          leads: [
+            {
+              session: "old-lead",
+              displayName: "Old Lead",
+              runtimeState: "idle" as const,
+              compatibility: "incompatible" as const,
+              build: { version: "old", sha256: "a".repeat(64) },
+            },
+          ],
+          availableActions: ["inspect" as const],
+        },
+      ],
+    }),
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  const rows = widget.render(120).map(stripVTControlCharacters);
+  assert.match(rows[2]!, /Old Lead · build mismatch/);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 2,
+      width: 120,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
 });
 
 test("truncated Manager branch is not clickable when it matches row status", () => {

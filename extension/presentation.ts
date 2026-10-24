@@ -705,7 +705,9 @@ export type SupervisedLeadSnapshot = Readonly<{
     branch?: string;
     display_name: string;
     runtime_state: LifecyclePresentationState;
-    agent_counts: Readonly<{ active: number; blocked: number; total: number }>;
+    agent_counts?: Readonly<{ active: number; blocked: number; total: number }>;
+    compatibility?: "incompatible";
+    build?: import("./compatibility.ts").RuntimeBuild;
   }>[];
   workspaceLabel?: string;
   runtimeState: LifecyclePresentationState;
@@ -741,7 +743,10 @@ function managerPresentationSnapshot(
       branch: "branch" in lead ? lead.branch : undefined,
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
-      agent_counts: lead.agentCounts,
+      ...(lead.agentCounts ? { agent_counts: lead.agentCounts } : {}),
+      ...(lead.compatibility === "incompatible"
+        ? { compatibility: lead.compatibility, build: lead.build }
+        : {}),
     })),
   };
 }
@@ -1122,11 +1127,17 @@ function renderSupervisionRows(
           const branch =
             index === visible.length - 1 && !remaining ? "└─" : "├─";
           const marker =
-            item.work.status === "active" && item.lead
-              ? `${item.lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(item.lead)}`
-              : workMarkers[item.work.status];
+            item.lead?.compatibility === "incompatible"
+              ? "!"
+              : item.work.status === "active" && item.lead
+                ? `${item.lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(item.lead)}`
+                : workMarkers[item.work.status];
           const prefixWidth = visibleWidth(`${branch}  ${marker} `);
-          const suffixWidth = visibleWidth(` · ${item.work.status}`);
+          const suffixWidth = visibleWidth(
+            item.lead?.compatibility === "incompatible"
+              ? " · build mismatch"
+              : ` · ${item.work.status}`,
+          );
           const telemetryWidth =
             (candidate.elapsed && metadata[index]!.elapsed
               ? visibleWidth(metadata[index]!.elapsed) + 2
@@ -1152,7 +1163,7 @@ function renderSupervisionRows(
         if (item.kind === "lead")
           return {
             text: safeLine(
-              `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
+              `${themed(options.theme, item.lead.compatibility === "incompatible" ? "warning" : lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${item.lead.compatibility === "incompatible" ? "!" : supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead${item.lead.compatibility === "incompatible" ? " · build mismatch" : ""}`)}`,
               width,
             ),
             ...(status === "fresh" && item.lead.compatibility !== "incompatible"
@@ -1166,11 +1177,16 @@ function renderSupervisionRows(
               : {}),
           };
         const marker =
-          item.work.status === "active" && lead
-            ? `${lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(lead)}`
-            : workMarkers[item.work.status];
+          lead?.compatibility === "incompatible"
+            ? "!"
+            : item.work.status === "active" && lead
+              ? `${lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(lead)}`
+              : workMarkers[item.work.status];
         const prefix = `${branch} ${navigation}${marker} `;
-        const suffix = ` · ${item.work.status}`;
+        const suffix =
+          lead?.compatibility === "incompatible"
+            ? " · build mismatch"
+            : ` · ${item.work.status}`;
         const telemetry = [
           ...(layout.elapsed && metadata[index]!.elapsed
             ? [metadata[index]!.elapsed]
@@ -1184,13 +1200,15 @@ function renderSupervisionRows(
           0,
         );
         const markerColor =
-          item.work.status === "active" && lead
-            ? lifecycleColor(lead.runtimeState)
-            : item.work.status === "active"
-              ? "success"
-              : item.work.status === "conflict"
-                ? "warning"
-                : "muted";
+          lead?.compatibility === "incompatible"
+            ? "warning"
+            : item.work.status === "active" && lead
+              ? lifecycleColor(lead.runtimeState)
+              : item.work.status === "active"
+                ? "success"
+                : item.work.status === "conflict"
+                  ? "warning"
+                  : "muted";
         const markerText = themed(options.theme, markerColor, marker);
         const branchWidth =
           width - visibleWidth(prefix) - visibleWidth(suffix) - telemetryWidth;
@@ -1248,10 +1266,12 @@ function renderSupervisionRows(
           const childBranch = childIndex === children.length - 1 ? "└─" : "├─";
           return {
             text: safeLine(
-              `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
+              child.compatibility === "incompatible"
+                ? `${themed(options.theme, "warning", `${childIndent}${childBranch} !`)} ${themed(options.theme, "muted", `${child.branch ?? child.display_name} · build mismatch`)}`
+                : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
               width,
             ),
-            ...(status === "fresh"
+            ...(status === "fresh" && child.compatibility !== "incompatible"
               ? {
                   label: child.branch ?? child.display_name,
                   intent: {

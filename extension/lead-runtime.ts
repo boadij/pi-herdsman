@@ -5181,6 +5181,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       true,
     );
     const allLeads = allLeadSnapshot.leads;
+    const incompatibleLeadParents = new Map<string, string>();
     const managedAgents = (
       suppliedAgents ??
       (await host.managedAgentSnapshots(
@@ -5229,7 +5230,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           lead.workspaceId,
           scope,
         );
-        if (supervisor.kind !== "chief") managerLeadSessions.add(lead.session);
+        if (supervisor.kind === "manager") {
+          managerLeadSessions.add(lead.session);
+          incompatibleLeadParents.set(
+            lead.session,
+            supervisor.manager.piSessionId,
+          );
+        } else if (supervisor.kind !== "chief")
+          managerLeadSessions.add(lead.session);
       } catch {
         managerLeadSessions.add(lead.session);
       }
@@ -5370,13 +5378,30 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             .length,
           total: leads.length,
         },
-        leads: leads.slice(0, 32).map((lead) => ({
-          session: lead.lead,
-          displayName: lead.displayName,
-          ...(lead.branch ? { branch: lead.branch } : {}),
-          runtimeState: lead.runtimeState,
-          agentCounts: lead.agentCounts,
-        })),
+        leads: [
+          ...leads.map((lead) => ({
+            session: lead.lead,
+            displayName: lead.displayName,
+            ...(lead.branch ? { branch: lead.branch } : {}),
+            runtimeState: lead.runtimeState,
+            agentCounts: lead.agentCounts,
+          })),
+          ...(allLeadSnapshot.incompatible ?? [])
+            .filter(
+              (lead) =>
+                lead.role === "lead" &&
+                incompatibleLeadParents.get(lead.session) ===
+                  descriptor.piSessionId &&
+                scope.workspaceIds.includes(lead.workspaceId),
+            )
+            .map((lead) => ({
+              session: lead.session,
+              displayName: lead.displayName,
+              runtimeState: lead.runtimeState,
+              compatibility: "incompatible" as const,
+              build: lead.build,
+            })),
+        ].slice(0, 32),
         availableActions: [
           "inspect",
           "message",
@@ -9806,7 +9831,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   project: "project" in report ? report.project : "",
                   lead_counts:
                     "leadCounts" in report ? report.leadCounts : undefined,
-                  leads: "leads" in report ? report.leads : [],
+                  leads:
+                    "leads" in report
+                      ? report.leads.map((lead: any) => ({
+                          ...lead,
+                          ...(lead.compatibility === "incompatible"
+                            ? { available_tools: [] }
+                            : {}),
+                        }))
+                      : [],
                 }
               : {}),
             available_tools: report.availableActions.map(staffToolName),

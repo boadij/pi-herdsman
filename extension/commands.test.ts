@@ -8056,6 +8056,26 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     piSessionId: nestedLeadSession,
     updatedAt: Date.now(),
   });
+  const incompatibleChildSession = randomUUID();
+  const incompatibleChild = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: incompatibleChildSession,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "incompatible-compatible-manager-child-pane",
+    tab_id: "incompatible-compatible-manager-child-tab",
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    build: OTHER_HERDSMAN_BUILD,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: incompatibleChildSession,
+    updatedAt: Date.now(),
+  });
   const assignedLeadSession = randomUUID();
   const assignedWorkspace = `workspace-${randomUUID()}`;
   const assignedLead = {
@@ -8434,7 +8454,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
         JSON.stringify(contextMessage?.message).includes(ordinaryLeadSession),
         JSON.stringify(contextMessage?.message),
       );
-      liveAgents.push(incompatibleManager, nestedLead);
+      liveAgents.push(incompatibleManager, nestedLead, incompatibleChild);
       const staff = chief.tools.find((tool) => tool.name === "list_staff")!;
       const listed = await staff.execute(
         "list",
@@ -8460,8 +8480,14 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       );
       assert.deepEqual(
         listed.details.reports[0].leads.map((lead: any) => lead.session),
-        [assignedLeadSession, ordinaryLeadSession],
+        [assignedLeadSession, ordinaryLeadSession, incompatibleChildSession],
       );
+      const nestedIncompatible = listed.details.reports[0].leads.find(
+        (lead: any) => lead.session === incompatibleChildSession,
+      );
+      assert.equal(nestedIncompatible.compatibility, "incompatible");
+      assert.deepEqual(nestedIncompatible.available_tools, []);
+      assert.equal("agentCounts" in nestedIncompatible, false);
       assert.deepEqual(listed.details.reports[0].lead_counts, {
         active: 0,
         blocked: 0,

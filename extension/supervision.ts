@@ -3413,7 +3413,9 @@ export type SupervisedManager = {
     session: string;
     displayName: string;
     runtimeState: RuntimeState;
-    agentCounts: { active: number; blocked: number; total: number };
+    agentCounts?: { active: number; blocked: number; total: number };
+    compatibility?: "incompatible";
+    build?: RuntimeBuild;
   }>;
   availableActions: Array<"inspect" | "transcript" | "message">;
 };
