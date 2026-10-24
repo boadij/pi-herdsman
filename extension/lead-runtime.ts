@@ -1050,7 +1050,10 @@ export function createLeadShutdownRuntime(host: {
       host.clearStartupDefinitionRoster();
       host.leadInboxRuntime.beginShutdown();
       host.roleTransitions.shutdownRole();
-      await host.drainLeadMetadata();
+      await Promise.race([
+        host.drainLeadMetadata(),
+        new Promise<void>((resolve) => setTimeout(resolve, 250)),
+      ]);
       host.controller.abortSession();
       host.leadInboxRuntime.shutdown();
       host.controller.clearPendingStarts();

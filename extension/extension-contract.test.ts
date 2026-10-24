@@ -4871,20 +4871,26 @@ test("lead metadata reports preserve session event order", async () => {
 test("superseded presentation work never uses an invalidated context", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `stale-context-${randomUUID()}.sock`,
+  );
   const paneGetStarted = testGate<void>();
   const releasePaneGet = testGate<void>();
-  const pi = fakePi({
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-role",
-        data: {
-          sessionId: LEAD_SESSION_ID,
-          role: "chief",
-          leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
-        },
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
       },
-    ],
+    },
+  ];
+  const pi = fakePi({
+    entries,
     exec: async (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (args[0] === "pane" && args[1] === "get") {
@@ -4911,20 +4917,31 @@ test("superseded presentation work never uses an invalidated context", async (t)
   const onUnhandled = (reason: unknown) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(entries) as any;
   const sessionManager = context.sessionManager;
-  const getSessionId = sessionManager.getSessionId;
+  let invalidated = false;
+  Object.defineProperty(context, "sessionManager", {
+    configurable: true,
+    get() {
+      if (invalidated)
+        throw new Error("invalidated extension context accessed");
+      return sessionManager;
+    },
+  });
   try {
     const starting = pi.events.get("session_start")![0](undefined, context);
     await paneGetStarted.promise;
     await starting;
+    const chiefPrompt = await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    assert.match(chiefPrompt?.systemPrompt ?? "", /Chief/);
     await pi.events.get("session_shutdown")![0]();
     const errorsAfterShutdown = pi.entries.filter(
       (entry: any) => entry?.customType === "pi_herdsman_state_error",
     ).length;
-    sessionManager.getSessionId = () => {
-      throw new Error("invalidated session context accessed");
-    };
+    invalidated = true;
     releasePaneGet.resolve();
     await t.waitFor(() =>
       assert.ok(
@@ -4982,8 +4999,185 @@ test("superseded presentation work never uses an invalidated context", async (t)
     await replacement.events.get("session_shutdown")![0]();
   } finally {
     releasePaneGet.resolve();
-    sessionManager.getSessionId = getSessionId;
+    invalidated = false;
     process.removeListener("unhandledRejection", onUnhandled);
+    await pi.events.get("session_shutdown")![0]();
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("rejected held Herdr presentation ignores the invalidated context", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const started = testGate<void>();
+  const release = testGate<void>();
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  const pi = fakePi({
+    entries,
+    activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: async (command, args) => {
+      if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
+        started.resolve();
+        await release.promise;
+        throw new Error("held Herdr operation rejected");
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  const manager = context.sessionManager;
+  let invalidated = false;
+  Object.defineProperty(context, "sessionManager", {
+    configurable: true,
+    get() {
+      if (invalidated)
+        throw new Error("invalidated extension context accessed");
+      return manager;
+    },
+  });
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await started.promise;
+    await pi.events.get("session_shutdown")![0]();
+    invalidated = true;
+    release.resolve();
+    await t.waitFor(() =>
+      assert.ok(
+        pi.calls.some((args) => args[0] === "pane" && args[1] === "get"),
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    invalidated = false;
+    release.resolve();
+    process.removeListener("unhandledRejection", onUnhandled);
+    await pi.events.get("session_shutdown")![0]();
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("stalled Chief shutdown metadata cannot block shutdown or replacement", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `stalled-metadata-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  const metadataStarted = testGate<void>();
+  const releaseMetadata = testGate<void>();
+  const pi = fakePi({
+    entries,
+    activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: async (command, args) => {
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "report-metadata"
+      ) {
+        metadataStarted.resolve();
+        await releaseMetadata.promise;
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const prompt = await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    assert.match(prompt?.systemPrompt ?? "", /Chief/);
+    const shutdown = pi.events.get("session_shutdown")![0]();
+    await metadataStarted.promise;
+    const shutdownResult = await Promise.race([
+      shutdown.then(() => "done"),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("stalled"), 1000),
+      ),
+    ]);
+    assert.equal(shutdownResult, "done");
+    const replacement = fakePi({
+      exec: async (command, args) => {
+        if (
+          command === "herdr" &&
+          args[0] === "pane" &&
+          args[1] === "report-metadata"
+        )
+          return { stdout: "{}", stderr: "", code: 0 };
+        return { stdout: "{}", stderr: "", code: 0 };
+      },
+    });
+    registerExtension!(replacement.pi as never);
+    await replacement.events.get("session_start")![0](
+      undefined,
+      fakeContext() as any,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        replacement.calls.some(
+          (args) => args[0] === "pane" && args[1] === "report-metadata",
+        ),
+      ),
+    );
+    await replacement.events.get("session_shutdown")![0]();
+    releaseMetadata.resolve();
+
+    const cleanChief = fakePi({
+      entries,
+      activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
+    registerExtension!(cleanChief.pi as never);
+    await cleanChief.events.get("session_start")![0](
+      undefined,
+      fakeContext(entries) as any,
+    );
+    await cleanChief.events.get("session_shutdown")![0]();
+    assert.ok(
+      cleanChief.calls.some(
+        (args) =>
+          args[0] === "pane" &&
+          args[1] === "report-metadata" &&
+          args.includes("--clear-token") &&
+          args.includes("pi_herdsman_role"),
+      ),
+      "successful Chief shutdown should clear its role token",
+    );
+  } finally {
+    releaseMetadata.resolve();
     await pi.events.get("session_shutdown")![0]();
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
