@@ -3409,6 +3409,7 @@ export type SupervisedManager = {
   runtimeState: RuntimeState;
   agentCounts: { active: number; blocked: number; total: number };
   leadCounts: { active: number; blocked: number; total: number };
+  incompatibleLeadCount?: number;
   leads: Array<{
     session: string;
     displayName: string;

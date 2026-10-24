@@ -5317,6 +5317,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const leads = allLeads.filter((lead) =>
         scope.workspaceIds.includes(lead.workspaceId),
       );
+      const incompatibleLeads = (allLeadSnapshot.incompatible ?? []).filter(
+        (lead) =>
+          lead.role === "lead" &&
+          incompatibleLeadParents.get(lead.session) ===
+            descriptor.piSessionId &&
+          scope.workspaceIds.includes(lead.workspaceId),
+      );
       for (const lead of leads) managerLeadSessions.add(lead.lead);
       const ownerSessions = new Set([descriptor.piSessionId]);
       const ownedAgents = [] as typeof managedAgents;
@@ -5378,6 +5385,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             .length,
           total: leads.length,
         },
+        incompatibleLeadCount: incompatibleLeads.length,
         leads: [
           ...leads.map((lead) => ({
             session: lead.lead,
@@ -5386,21 +5394,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             runtimeState: lead.runtimeState,
             agentCounts: lead.agentCounts,
           })),
-          ...(allLeadSnapshot.incompatible ?? [])
-            .filter(
-              (lead) =>
-                lead.role === "lead" &&
-                incompatibleLeadParents.get(lead.session) ===
-                  descriptor.piSessionId &&
-                scope.workspaceIds.includes(lead.workspaceId),
-            )
-            .map((lead) => ({
-              session: lead.session,
-              displayName: lead.displayName,
-              runtimeState: lead.runtimeState,
-              compatibility: "incompatible" as const,
-              build: lead.build,
-            })),
+          ...incompatibleLeads.map((lead) => ({
+            session: lead.session,
+            displayName: lead.displayName,
+            runtimeState: lead.runtimeState,
+            compatibility: "incompatible" as const,
+            build: lead.build,
+          })),
         ].slice(0, 32),
         availableActions: [
           "inspect",
@@ -5592,12 +5592,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const children = parent?.leads?.filter(
         (candidate: any) => candidate.session === leadId,
       );
+      const child = children?.length === 1 ? children[0] : undefined;
       if (
         !parent ||
         parent.compatibility === "incompatible" ||
-        children?.length !== 1
+        !child ||
+        child.compatibility === "incompatible"
       )
-        throw new Error("Lead changed; reopen staff.");
+        throw new Error("Lead changed or is incompatible; reopen staff.");
       lead = { lead: leadId };
     } else {
       const matches = host
@@ -5820,6 +5822,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                             entry.work.status,
                             entry.work.runtimeState,
                             entry.work.issue,
+                            entry.lead?.compatibility === "incompatible"
+                              ? "build mismatch · reload Pi session"
+                              : undefined,
                           ]
                             .filter(Boolean)
                             .join(" · "),
@@ -5830,10 +5835,16 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                             entry.lead.relationship === "supervised"
                               ? entry.lead.displayName
                               : (entry.lead.branch ?? entry.lead.displayName),
-                          description:
+                          description: [
                             entry.lead.relationship === "supervised"
                               ? `${entry.lead.runtimeState} · supervised`
                               : entry.lead.runtimeState,
+                            entry.lead.compatibility === "incompatible"
+                              ? "build mismatch · reload Pi session"
+                              : undefined,
+                          ]
+                            .filter(Boolean)
+                            .join(" · "),
                         },
                   )
                 : leads.map((lead) => ({
@@ -5875,16 +5886,20 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 const entry = work.find(
                   (candidate) => candidate.branch === branch,
                 );
-                if (!entry) return;
-                const liveLead = host
+                const workItem = host
                   .managerSupervisionItems(snapshot)
-                  .some(
+                  .find(
                     (candidate) =>
                       candidate.kind === "work" &&
-                      candidate.work.branch === branch &&
-                      !!candidate.lead &&
-                      candidate.lead.compatibility !== "incompatible",
+                      candidate.work.branch === branch,
                   );
+                if (
+                  !entry ||
+                  workItem?.kind !== "work" ||
+                  workItem.lead?.compatibility === "incompatible"
+                )
+                  return;
+                const liveLead = !!workItem.lead;
                 finish({
                   kind: "project",
                   branch,

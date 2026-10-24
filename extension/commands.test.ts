@@ -8173,7 +8173,10 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   let revokeOrdinaryDuringRead = false;
   let delayOrdinaryRead = false;
   let finishDelayedRead: (() => void) | undefined;
+  const focusCalls: string[] = [];
   const exec = (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "agent" && args[1] === "focus")
+      focusCalls.push(args[2]!);
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace:
@@ -8404,6 +8407,62 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       /Multiple project assignments match a Lead session/,
     );
     rmSync(duplicatePath, { force: true });
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      build: OTHER_HERDSMAN_BUILD,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: assignedLeadSession,
+      updatedAt: Date.now(),
+    });
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      build: OTHER_HERDSMAN_BUILD,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: ordinaryLeadSession,
+      updatedAt: Date.now(),
+    });
+    await manager.commandOptions.get("manager").handler("", managerCtx);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const overviewLines = overview.render(120).join("\n");
+    assert.match(overviewLines, /build mismatch · reload Pi session/);
+    assert.match(
+      overviewLines,
+      /assigned-branch.*build mismatch · reload Pi session/,
+    );
+    assert.match(overviewLines, /unknown · build mismatch · reload Pi session/);
+    overview.handleInput("\r");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      focusCalls,
+      [],
+      "incompatible overview selection sends no focus",
+    );
+    overview.handleInput("\u001b[B");
+    overview.handleInput("\r");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      focusCalls,
+      [],
+      "incompatible standalone selection sends no focus",
+    );
+    overview.handleInput("\u001b");
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: assignedLeadSession,
+      updatedAt: Date.now(),
+    });
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: ordinaryLeadSession,
+      updatedAt: Date.now(),
+    });
     process.env.HERDR_WORKSPACE_ID = "chief-workspace";
     process.env.HERDR_PANE_ID = "chief-pane";
     process.env.HERDR_TAB_ID = "chief-tab";
@@ -11862,7 +11921,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await runtime.refresh(ctx);
   assert.deepEqual(widget.render(120), [
     "● chief · 1 manager",
-    "└─ ● project-manager · 1 lead",
+    "└─ ● project-manager · 1 compatible lead",
     "   └─ feat/nested · working",
   ]);
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
@@ -11875,6 +11934,15 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     focused,
     [paneId, assignedPaneId, managerPaneId, paneId],
     focusNotices.join(" | "),
+  );
+  currentSnapshot.managers[0].leads[0].compatibility = "incompatible";
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    [paneId, assignedPaneId, managerPaneId, paneId],
+    "a stale clickable nested Lead row must not focus after fresh discovery finds a build mismatch",
   );
   assert.equal(currentRole, "chief", "nested navigation remains observational");
   runtime.stopPeriodic();

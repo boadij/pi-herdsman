@@ -700,6 +700,7 @@ export type SupervisedLeadSnapshot = Readonly<{
   tabId?: string;
   workspaceId?: string;
   leadCounts?: Readonly<{ active: number; blocked: number; total: number }>;
+  incompatibleLeadCount?: number;
   leads?: readonly Readonly<{
     session: string;
     branch?: string;
@@ -737,6 +738,7 @@ function managerPresentationSnapshot(
     runtimeState: manager.runtimeState,
     agentCounts: manager.agentCounts,
     leadCounts: manager.leadCounts,
+    incompatibleLeadCount: manager.incompatibleLeadCount,
     availableActions: manager.availableActions,
     leads: manager.leads.map((lead) => ({
       session: lead.session,
@@ -1246,13 +1248,18 @@ function renderSupervisionRows(
         !isIncompatible && lead.lead === selectedLead ? ">" : "";
       const indicators = navigation;
       const counts = lead.leadCounts;
+      const incompatibleLeads =
+        lead.incompatibleLeadCount ??
+        lead.leads?.filter((child) => child.compatibility === "incompatible")
+          .length ??
+        0;
       const intent =
         status === "fresh" && !isIncompatible
           ? { kind: "session" as const, sessionId: lead.lead }
           : undefined;
       const row = {
         text: safeLine(
-          `${themed(options.theme, isIncompatible ? "warning" : lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${isIncompatible ? " · build mismatch" : `${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`}`)}`,
+          `${themed(options.theme, isIncompatible ? "warning" : lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${isIncompatible ? " · build mismatch" : `${counts?.total ? ` · ${counts.total} compatible lead${counts.total === 1 ? "" : "s"}` : ""}${incompatibleLeads ? ` · ${incompatibleLeads} incompatible` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`}`)}`,
           width,
         ),
         ...(intent ? { intent } : {}),
@@ -1508,13 +1515,14 @@ export function formatSupervisionContext(
     );
     if (lead.leadCounts)
       lines.push(
-        `  lead_counts: active=${lead.leadCounts.active} blocked=${lead.leadCounts.blocked} total=${lead.leadCounts.total}`,
+        `  lead_counts (compatible reports): active=${lead.leadCounts.active} blocked=${lead.leadCounts.blocked} total=${lead.leadCounts.total}`,
       );
     if (lead.leads?.length) {
       lines.push("  descendant_leads (observation only; no staff actions):");
       for (const child of lead.leads.slice(0, 32))
         lines.push(
-          `    ${supervisionValue(child.display_name)} · ${supervisionValue(child.runtime_state)} · session=${supervisionValue(child.session)} · agents=${supervisionValue(child.agent_counts.total)}`,
+          `    ${supervisionValue(child.display_name)} · ${child.compatibility === "incompatible" ? "incompatible (build mismatch)" : supervisionValue(child.runtime_state)} · session=${supervisionValue(child.session)}` +
+            `${child.agent_counts ? ` · agents=${child.agent_counts.total}` : ""}`,
         );
     }
     sections.push(lines.join("\n"));
