@@ -248,10 +248,7 @@ function logFederatedPeerBDecision({
   modelExpected,
 }) {
   const decision = JSON.stringify({
-    ...(inboundRequestPresent ||
-    process.env.PEER_FEDERATION_CORRELATION_ACTIVE === "1"
-      ? { eventId: "peer-fixture-event" }
-      : {}),
+    ...(inboundRequestPresent ? { eventId: "peer-fixture-event" } : {}),
     inboundRequestPresent,
     importedBindingVisible,
     branch,

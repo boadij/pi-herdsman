@@ -138,7 +138,7 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
@@ -167,40 +167,6 @@ import {
   updatePeerRecipientGeneration,
   validPeerDisplayText,
 } from "./peer-correspondence.ts";
-
-export function peerCorrelationDiagnostic(
-  event: "inbound_persisted" | "send_invoked",
-  fields:
-    | { outcome: "persisted" }
-    | {
-        outcome: "followUp" | "busy";
-        triggerTurn: boolean;
-        idle: boolean;
-      },
-): void {
-  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS !== "1") return;
-  const diagnostic = JSON.stringify({
-    eventId: "peer-fixture-event",
-    event,
-    ...fields,
-  });
-  if (event === "send_invoked")
-    process.env.PEER_FEDERATION_CORRELATION_ACTIVE = "1";
-  console.error(`[peer-correlation] ${diagnostic}`);
-  try {
-    const directory = process.env.PI_CODING_AGENT_DIR;
-    if (!directory) throw new Error("diagnostic directory unavailable");
-    appendFileSync(
-      join(directory, "peer-federation-decisions.jsonl"),
-      `${diagnostic}\n`,
-      { mode: 0o600 },
-    );
-  } catch {
-    console.error(
-      '[peer-correlation] {"eventId":"peer-fixture-event","event":"diagnostic_emit_failure","outcome":"append_failed"}',
-    );
-  }
-}
 
 type LeadIdentityHost = {
   expectedSession(id: string, path?: string): ExpectedSession;
@@ -12609,26 +12575,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
-                  const peerMessage = record.kind === "peer_message";
-                  if (peerMessage) {
-                    peerCorrelationDiagnostic("inbound_persisted", {
-                      outcome: "persisted",
-                    });
-                  }
-                  const idle = ctx.isIdle();
-                  try {
-                    submitted = pi.sendMessage(payload, options);
-                  } finally {
-                    if (peerMessage)
-                      peerCorrelationDiagnostic("send_invoked", {
-                        outcome:
-                          options?.deliverAs === "followUp"
-                            ? "followUp"
-                            : "busy",
-                        triggerTurn: options?.triggerTurn === true,
-                        idle,
-                      });
-                  }
+                  submitted = pi.sendMessage(payload, options);
                 };
                 if (
                   source.role === "manager" &&

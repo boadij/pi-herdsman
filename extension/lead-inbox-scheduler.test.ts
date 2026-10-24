@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import {
-  createLeadInboxRuntime,
-  peerCorrelationDiagnostic,
-} from "./lead-runtime.ts";
+import { createLeadInboxRuntime } from "./lead-runtime.ts";
 import { fakeContext } from "./support.ts";
 
 const deferred = <T>() => {
@@ -22,49 +16,6 @@ const deferred = <T>() => {
 const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
-
-test("peer correlation diagnostics persist only the gated fixture projection", (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "peer-correlation-test-"));
-  const priorDirectory = process.env.PI_CODING_AGENT_DIR;
-  const priorGate = process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS;
-  const priorCorrelation = process.env.PEER_FEDERATION_CORRELATION_ACTIVE;
-  process.env.PI_CODING_AGENT_DIR = directory;
-  process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS = "1";
-  t.mock.method(console, "error", () => {});
-  try {
-    peerCorrelationDiagnostic("send_invoked", {
-      outcome: "followUp",
-      triggerTurn: true,
-      idle: true,
-    });
-    assert.equal(process.env.PEER_FEDERATION_CORRELATION_ACTIVE, "1");
-    assert.deepEqual(
-      JSON.parse(
-        readFileSync(
-          join(directory, "peer-federation-decisions.jsonl"),
-          "utf8",
-        ),
-      ),
-      {
-        eventId: "peer-fixture-event",
-        event: "send_invoked",
-        outcome: "followUp",
-        triggerTurn: true,
-        idle: true,
-      },
-    );
-  } finally {
-    if (priorDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = priorDirectory;
-    if (priorGate === undefined)
-      delete process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS;
-    else process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS = priorGate;
-    if (priorCorrelation === undefined)
-      delete process.env.PEER_FEDERATION_CORRELATION_ACTIVE;
-    else process.env.PEER_FEDERATION_CORRELATION_ACTIVE = priorCorrelation;
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
 
 test("ordinary Lead peer reconciliation starts automatically", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
