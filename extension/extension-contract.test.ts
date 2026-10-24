@@ -3418,7 +3418,7 @@ test("lead metadata omits coordination state and follows session names", async (
     pi.entries.some(
       (entry: any) =>
         entry.customType === "pi_herdsman_state_error" &&
-        /reading ['"]paneId['"]/.test(entry.data?.error ?? ""),
+        /paneId/.test(entry.data?.error ?? ""),
     ),
     false,
     "startup must not report the invalid metadata.paneId error",
@@ -3887,7 +3887,7 @@ test("suspended persisted Chief role selects the neutral charter", async () => {
       pi.entries.some(
         (entry: any) =>
           entry.customType === "pi_herdsman_state_error" &&
-          /reading ['"]paneId['"]/.test(entry.data?.error ?? ""),
+          /paneId/.test(entry.data?.error ?? ""),
       ),
       false,
       "suspended Chief startup must not report the invalid metadata.paneId error",
