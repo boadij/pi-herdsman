@@ -1492,6 +1492,7 @@ export function createLeadAgentEventRuntime(host: {
   >;
   definitionRoster():
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  isRoleSuspended(): boolean;
   consumeChiefStartPreflight(ctx: ExtensionContext): void;
   herdRun: Pick<
     LeadHerdRunRuntime,
@@ -1536,12 +1537,13 @@ export function createLeadAgentEventRuntime(host: {
         await host.drainRetirementNotices(ctx, true);
         return;
       }
+      const activeLead = host.isActiveLead() && !host.isRoleSuspended();
       const supervisorStateMessage = host.isActiveLead()
         ? await host.prepareLeadSupervisorStateMessage(ctx)
         : undefined;
       if (supervisorStateMessage) host.sendMessage(supervisorStateMessage);
-      const roster = host.definitionRoster();
-      const prompt = host.isActiveLead() ? host.executionPrompt() : undefined;
+      const roster = activeLead ? host.definitionRoster() : undefined;
+      const prompt = activeLead ? host.executionPrompt() : undefined;
       if (prompt) sections.pi_herdsman_lead_execution = prompt;
       else delete sections.pi_herdsman_lead_execution;
       if (roster && roster.sessionId === ctx.sessionManager.getSessionId())

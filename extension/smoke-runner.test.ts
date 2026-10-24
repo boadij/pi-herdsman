@@ -3248,11 +3248,15 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     );
     const model = (id: string) =>
       provider.getModels().find((item: any) => item.id === id);
-    const context = (prompt: string, sections = {}) => ({
+    const context = (
+      prompt: string,
+      sections = {},
+      systemPrompt = "You are the Lead for this Pi session.",
+    ) => ({
       messages: [
         {
           role: "system",
-          content: "You are a helpful assistant.",
+          content: systemPrompt,
           sections,
           timestamp: Date.now(),
         },
@@ -3276,8 +3280,19 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         context("Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP."),
       ),
     );
+    const chief = await collect(
+      provider.streamSimple(
+        model("chief-tree"),
+        context(
+          "Reply exactly PI_HERDSMAN_CHIEF_TREE_POST_CHIEF.",
+          {},
+          "You are the verified workspace-neutral Chief for this Pi session.",
+        ),
+      ),
+    );
     assert.ok(first.some((event: any) => event.type === "text_delta"));
     assert.ok(second.some((event: any) => event.type === "text_delta"));
+    assert.ok(chief.some((event: any) => event.type === "text_delta"));
     const failure = await collect(
       provider.streamSimple(
         model("terminal-error"),
@@ -3337,6 +3352,10 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         piVersion: piPackage.version,
         model: "chief-tree",
         hasAgentDefinitions: false,
+        hasLeadIdentity: true,
+        hasManagerIdentity: false,
+        hasChiefIdentity: false,
+        hasRoleSection: false,
       },
     ]);
     assert.equal(handlers.has("agent_settled"), true);

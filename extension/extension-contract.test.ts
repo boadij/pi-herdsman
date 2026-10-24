@@ -4049,6 +4049,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /You are the Lead for this Pi session\./,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
   );
   assert.match(
@@ -4424,6 +4428,7 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
     await pi.events.get("before_agent_start")![0](event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(prompt, /verified Manager for this Pi session/);
+    assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
     assert.doesNotMatch(

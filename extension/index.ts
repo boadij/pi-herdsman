@@ -367,6 +367,7 @@ const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
   "Use message_supervisor for material nonblocking coordination with your direct supervisor. Use list_peers/message_peer for peer coordination.";
 const LEAD_ROLE_CHARTER = `## Lead role
+You are the Lead for this Pi session.
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
@@ -1438,10 +1439,18 @@ function registerExtensionImpl(
       sendMessage: (message: any) =>
         pi.sendMessage(message, { triggerTurn: false }),
       chiefSystemPrompt,
-      roleCharter: (ctx: ExtensionContext) =>
-        activeRole() === "manager" && !leadRuntime.roleSuspended
+      roleCharter: (ctx: ExtensionContext) => {
+        const role = activeRole();
+        if (
+          leadRuntime.roleSuspended ||
+          (role === "chief" && !isCurrentChief(ctx)) ||
+          (role === "manager" && !leadRuntime.managerLease)
+        )
+          return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
+        return role === "manager"
           ? `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`
-          : LEAD_ROLE_CHARTER,
+          : LEAD_ROLE_CHARTER;
+      },
       supervisoryProfileBody: (
         ctx: ExtensionContext,
         role: "manager" | "chief",
@@ -1456,6 +1465,7 @@ function registerExtensionImpl(
           ctx,
         ),
       definitionRoster: () => startupDefinitionRoster,
+      isRoleSuspended: () => leadRuntime.roleSuspended,
     };
     const initialStatusBreadcrumb =
       controllerScope.kind === "root"
