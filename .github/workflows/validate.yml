@@ -20,6 +20,8 @@ jobs:
       package: ${{ steps.scope.outputs.package }}
       container: ${{ steps.scope.outputs.container }}
       smoke: ${{ steps.scope.outputs.smoke }}
+      bootstrap: ${{ steps.scope.outputs.bootstrap }}
+      peer: ${{ steps.scope.outputs.peer }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,7 +83,7 @@ jobs:
   windows-bootstrap:
     name: Windows bootstrap acceptance
     needs: scope
-    if: ${{ needs.scope.outputs.tests == 'true' }}
+    if: ${{ needs.scope.outputs.bootstrap == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -251,21 +253,72 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  peer-federation:
+    name: Peer federation (${{ matrix.phase }})
+    needs: scope
+    if: ${{ needs.scope.outputs.peer == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - phase: Manager
+            smoke_phase: ""
+            diagnostics: "0"
+          - phase: Ordinary Lead
+            smoke_phase: delivery
+            diagnostics: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          package-manager-cache: false
+      - name: Verify checkout SHA
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - run: npm ci
+      - name: Federation acceptance
+        env:
+          PEER_SMOKE_PHASE: ${{ matrix.smoke_phase }}
+          PEER_SMOKE_DIAGNOSTICS: ${{ matrix.diagnostics }}
+        run: node scripts/peer-federation-smoke.mjs
+
   ci:
     name: CI
     if: ${{ always() }}
     needs:
-      [scope, format, validate, package, container, smoke, windows-bootstrap]
+      [
+        scope,
+        format,
+        validate,
+        package,
+        container,
+        smoke,
+        windows-bootstrap,
+        peer-federation,
+      ]
     runs-on: ubuntu-latest
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       FORMAT_RESULT: ${{ needs.format.result }}
       VALIDATE_RESULT: ${{ needs.validate.result }}
+      TESTS_REQUIRED: ${{ needs.scope.outputs.tests }}
       PACKAGE_RESULT: ${{ needs.package.result }}
+      PACKAGE_REQUIRED: ${{ needs.scope.outputs.package }}
       CONTAINER_RESULT: ${{ needs.container.result }}
+      CONTAINER_REQUIRED: ${{ needs.scope.outputs.container != 'none' }}
       SMOKE_REQUIRED: ${{ needs.scope.outputs.smoke }}
       SMOKE_RESULT: ${{ needs.smoke.result }}
+      BOOTSTRAP_REQUIRED: ${{ needs.scope.outputs.bootstrap }}
       WINDOWS_BOOTSTRAP_RESULT: ${{ needs.windows-bootstrap.result }}
+      PEER_REQUIRED: ${{ needs.scope.outputs.peer }}
+      PEER_RESULT: ${{ needs.peer-federation.result }}
     steps:
       - run: |
           set -euo pipefail
@@ -273,22 +326,19 @@ jobs:
           [ "$SCOPE_RESULT" = "success" ]
           [ "$FORMAT_RESULT" = "success" ]
 
-          for result in \
-            "$VALIDATE_RESULT" \
-            "$PACKAGE_RESULT" \
-            "$CONTAINER_RESULT"
-          do
-            [ "$result" = "success" ] || [ "$result" = "skipped" ]
-          done
+          required_result() {
+            case "$1:$2" in
+              true:success|false:skipped) ;;
+              *)
+                echo "Invalid $3 outcome: required=$1 result=$2" >&2
+                exit 1
+                ;;
+            esac
+          }
 
-          [ "$WINDOWS_BOOTSTRAP_RESULT" = "success" ] || \
-            [ "$WINDOWS_BOOTSTRAP_RESULT" = "skipped" ]
-
-          case "$SMOKE_REQUIRED:$SMOKE_RESULT" in
-            true:success|false:skipped)
-              ;;
-            *)
-              echo "Invalid simulated smoke outcome: required=$SMOKE_REQUIRED result=$SMOKE_RESULT" >&2
-              exit 1
-              ;;
-          esac
+          required_result "$TESTS_REQUIRED" "$VALIDATE_RESULT" "Node tests"
+          required_result "$PACKAGE_REQUIRED" "$PACKAGE_RESULT" "Package"
+          required_result "$CONTAINER_REQUIRED" "$CONTAINER_RESULT" "Container"
+          required_result "$SMOKE_REQUIRED" "$SMOKE_RESULT" "Simulated smoke"
+          required_result "$BOOTSTRAP_REQUIRED" "$WINDOWS_BOOTSTRAP_RESULT" "Windows bootstrap"
+          required_result "$PEER_REQUIRED" "$PEER_RESULT" "Peer federation"

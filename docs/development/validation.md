@@ -184,6 +184,15 @@ validation workflow. The existing required `CI` check fails when required
 smoke does not succeed. Documentation-only and test-only changes normally skip
 it.
 
+The `Validate` workflow classifies Node tests, package, container, simulated
+smoke, peer federation, and Windows bootstrap acceptance independently.
+Federation acceptance exercises the actual containerized Pi/Herdr integration
+in separate Manager and ordinary Lead phases. Unknown changes select
+conservative checks. A skipped conditional job is valid only when the
+classifier says it is not required; the aggregate `CI` check fails closed for
+missing or unsuccessful required jobs. Local `npm run validate` remains
+unchanged and does not replace hosted integration acceptance.
+
 Simulated acceptance uses real Pi, Herdsman, and Herdr processes without model
 credentials. It does not verify real-model decisions. The supported simulated
 scenarios include `core`, `continuation`, `chief-tree`, `supervisor-agent`,

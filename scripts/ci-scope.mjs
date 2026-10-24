@@ -6,6 +6,8 @@ function classify(paths) {
   let packageCheck = false;
   let container = "none";
   let runtimeSmoke = false;
+  let bootstrap = false;
+  let peer = false;
 
   const smoke = () => {
     container = "smoke";
@@ -20,6 +22,12 @@ function classify(paths) {
     packageCheck = true;
     smoke();
     runtimeSmoke = true;
+    peer = true;
+  };
+
+  const all = () => {
+    full();
+    bootstrap = true;
   };
 
   for (const path of paths) {
@@ -47,8 +55,30 @@ function classify(paths) {
       continue;
     }
 
-    if (path === "package.json" || path === "package-lock.json") {
+    if (path === "install.ps1") {
+      bootstrap = true;
+      continue;
+    }
+
+    if (path === "package.json") {
       full();
+      bootstrap = true;
+      continue;
+    }
+
+    if (path === "package-lock.json") {
+      full();
+      continue;
+    }
+
+    if (/^scripts\/peer-federation.*\.test\.mjs$/u.test(path)) {
+      tests = true;
+      continue;
+    }
+
+    if (path.startsWith("scripts/peer-federation-")) {
+      tests = true;
+      peer = true;
       continue;
     }
 
@@ -66,20 +96,27 @@ function classify(paths) {
       packageCheck = true;
       smoke();
       runtimeSmoke = true;
+      peer = true;
       continue;
     }
 
     if (path === "scripts/package-audit.mjs") {
       packageCheck = true;
+      peer = true;
       continue;
     }
 
     if (
       path === "Dockerfile" ||
       path === ".dockerignore" ||
-      path === "scripts/container-smoke.sh" ||
       path.startsWith("docker/")
     ) {
+      smoke();
+      peer = true;
+      continue;
+    }
+
+    if (path === "scripts/container-smoke.sh") {
       smoke();
       continue;
     }
@@ -93,15 +130,22 @@ function classify(paths) {
       path === ".github/workflows/validate.yml" ||
       path === "scripts/ci-scope.mjs"
     ) {
-      full();
+      all();
       continue;
     }
 
     // ponytail: unknown paths fail toward more validation; narrow only when repeated CI cost proves useful.
-    full();
+    all();
   }
 
-  return { tests, package: packageCheck, container, smoke: runtimeSmoke };
+  return {
+    tests,
+    package: packageCheck,
+    container,
+    smoke: runtimeSmoke,
+    bootstrap,
+    peer,
+  };
 }
 
 if (process.argv[2] === "--self-test") {
@@ -110,6 +154,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify([".github/ISSUE_TEMPLATE/01-bug.yml"]), {
@@ -117,6 +163,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify(["extension/core.test.ts"]), {
@@ -124,6 +172,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify(["extension/index.ts"]), {
@@ -131,6 +181,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "smoke",
     smoke: true,
+    bootstrap: false,
+    peer: true,
   });
 
   assert.deepEqual(classify(["compose.yaml"]), {
@@ -138,6 +190,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "config",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify([".github/workflows/release.yml"]), {
@@ -145,6 +199,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify(["docs/README.md", "extension/config.test.ts"]), {
@@ -152,6 +208,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify(["some-new-runtime-surface/file"]), {
@@ -159,6 +217,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "smoke",
     smoke: true,
+    bootstrap: true,
+    peer: true,
   });
 
   assert.deepEqual(classify(["scripts/build.mjs"]), {
@@ -166,6 +226,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "smoke",
     smoke: true,
+    bootstrap: false,
+    peer: true,
   });
 
   assert.deepEqual(classify(["scripts/smoke.mjs"]), {
@@ -173,6 +235,8 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "smoke",
     smoke: true,
+    bootstrap: true,
+    peer: true,
   });
 
   assert.deepEqual(classify(["Dockerfile"]), {
@@ -180,6 +244,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "smoke",
     smoke: false,
+    bootstrap: false,
+    peer: true,
   });
 
   assert.deepEqual(classify(["scripts/check.mjs"]), {
@@ -187,6 +253,8 @@ if (process.argv[2] === "--self-test") {
     package: false,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   assert.deepEqual(classify(["extension/core.test.ts", "docs/README.md"]), {
@@ -194,6 +262,26 @@ if (process.argv[2] === "--self-test") {
     package: true,
     container: "none",
     smoke: false,
+    bootstrap: false,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["install.ps1"]), {
+    tests: false,
+    package: false,
+    container: "none",
+    smoke: false,
+    bootstrap: true,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["scripts/peer-federation-result.test.mjs"]), {
+    tests: true,
+    package: false,
+    container: "none",
+    smoke: false,
+    bootstrap: false,
+    peer: false,
   });
 
   process.exit(0);
