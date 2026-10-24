@@ -4310,7 +4310,6 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, []);
     }
     managedLifecycle = assignment ? "assigned" : "unavailable";
-    queueLeadMetadata(ctx);
   };
   const currentProjectAssignment = async (
     ctx: ExtensionContext,
