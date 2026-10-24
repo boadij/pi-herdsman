@@ -5667,7 +5667,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Required evidence was retained, but the staff handoff failed:.*mismatch/i,
+        /build mismatch/i,
       );
       const afterFailure = listProjectAssignments(
         supervisionRuntime(),
@@ -5677,11 +5677,8 @@ async function runManagerStartupScenario(
         afterFailure.requiredEvidence?.map((entry) =>
           readRequiredEvidenceSnapshot(afterFailure.id, entry),
         ),
-        [
-          "deliver the fresh assignment",
-          "external review finding",
-          "MISMATCH_MUST_NOT_PUBLISH",
-        ],
+        ["deliver the fresh assignment"],
+        "an incompatible target is rejected before retaining evidence",
       );
       assert.equal(
         listChiefMessagePaths(supervisionRuntime(), childSession)

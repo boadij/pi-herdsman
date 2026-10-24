@@ -36,7 +36,11 @@ import {
   type RequiredEvidence,
   type ResultBinding,
 } from "./storage.ts";
-import { isRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
+import {
+  isRuntimeBuild,
+  sameRuntimeBuild,
+  type RuntimeBuild,
+} from "./compatibility.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
@@ -3416,10 +3420,22 @@ export type SupervisedManager = {
 /** A Chief snapshot has Managers as its only actionable reports. */
 export type ChiefManagerReportSnapshot = {
   managers: SupervisedManager[];
+  leads?: SupervisedLead[];
+  incompatible?: IncompatibleStaff[];
   diagnostics?: string[];
 };
+export type IncompatibleStaff = Readonly<{
+  role: "manager" | "lead";
+  session: string;
+  displayName: string;
+  workspaceId: string;
+  runtimeState: RuntimeState;
+  build: RuntimeBuild;
+  reason: "incompatible_build";
+}>;
 export type SupervisionSnapshot = {
   leads: SupervisedLead[];
+  incompatible?: IncompatibleStaff[];
   project?: string;
   work?: ProjectWorkSnapshot[];
   openWorkspaces?: readonly OpenProjectWorkspace[];
@@ -3674,6 +3690,7 @@ export function projectSupervision(options: {
   excludedSessionIds?: ReadonlySet<string>;
   /** Leads already reported to an active Manager must not also report to Chief. */
   managerSupervisedLeadSessionIds?: ReadonlySet<string>;
+  localBuild?: RuntimeBuild;
   managedAgentSessionIds?: Set<string>;
 }): SupervisionSnapshot {
   const states = new Map<string, LeadCoordinationState>();
@@ -3683,6 +3700,7 @@ export function projectSupervision(options: {
     else states.set(state.piSessionId, state);
   }
   const leads: SupervisedLead[] = [];
+  const incompatible: IncompatibleStaff[] = [];
   const validAgents = options.agents.filter(
     (agent) =>
       agent.sessionKind === "id" &&
@@ -3724,6 +3742,22 @@ export function projectSupervision(options: {
       )
     )
       continue;
+    if (
+      options.localBuild &&
+      isRuntimeBuild(state.build) &&
+      !sameRuntimeBuild(options.localBuild, state.build)
+    ) {
+      incompatible.push({
+        role: "lead",
+        session: agent.sessionId,
+        displayName: `${agent.workspaceId}/lead-${agent.sessionId.slice(0, 8)}`,
+        workspaceId: agent.workspaceId,
+        runtimeState: agent.runtimeState ?? "unknown",
+        build: state.build,
+        reason: "incompatible_build",
+      });
+      continue;
+    }
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =
       options.workspaceProvenance?.get(agent.workspaceId) ??
@@ -3827,6 +3861,7 @@ export function projectSupervision(options: {
   );
   return {
     leads,
+    ...(incompatible.length ? { incompatible } : {}),
     ...(options.openWorkspaces
       ? { openWorkspaces: options.openWorkspaces }
       : {}),

@@ -46,6 +46,7 @@ import type {
   SupervisedManager,
   WorkspaceProvenance,
 } from "./supervision.ts";
+import { formatRuntimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 
 export function populateMenuFrame(
@@ -711,6 +712,8 @@ export type SupervisedLeadSnapshot = Readonly<{
   herdRunStartedAt?: number;
   contextPercent?: number;
   availableActions?: readonly string[];
+  compatibility?: "incompatible";
+  build?: import("./compatibility.ts").RuntimeBuild;
   agentCounts?: Readonly<{
     active?: number;
     blocked?: number;
@@ -752,9 +755,31 @@ export function supervisionPresentationReports(
     return [
       ...snapshot.managers.map(managerPresentationSnapshot),
       ...directLeads.map((lead) => ({ ...lead, role: "lead" as const })),
+      ...(snapshot.incompatible ?? []).map((staff) => ({
+        lead: staff.session,
+        role: staff.role,
+        displayName: staff.displayName,
+        workspaceId: staff.workspaceId,
+        runtimeState: staff.runtimeState,
+        availableActions: [],
+        compatibility: "incompatible" as const,
+        build: staff.build,
+      })),
     ];
   }
-  return snapshot.leads.map((lead) => ({ ...lead, role: "lead" as const }));
+  return [
+    ...snapshot.leads.map((lead) => ({ ...lead, role: "lead" as const })),
+    ...(snapshot.incompatible ?? []).map((staff) => ({
+      lead: staff.session,
+      role: staff.role,
+      displayName: staff.displayName,
+      workspaceId: staff.workspaceId,
+      runtimeState: staff.runtimeState,
+      availableActions: [],
+      compatibility: "incompatible" as const,
+      build: staff.build,
+    })),
+  ];
 }
 
 function presentationReports(
@@ -1038,8 +1063,17 @@ function renderSupervisionRows(
   const cap = options.ordinaryCap ?? 6;
   const shown = ordinary.slice(0, Math.max(0, cap));
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
-  const managers = displays.filter((report) => report.role !== "lead").length;
-  const leads = displays.length - managers;
+  const incompatible = displays.filter(
+    (report) => report.compatibility === "incompatible",
+  ).length;
+  const managers = displays.filter(
+    (report) =>
+      report.role !== "lead" && report.compatibility !== "incompatible",
+  ).length;
+  const leads = displays.filter(
+    (report) =>
+      report.role === "lead" && report.compatibility !== "incompatible",
+  ).length;
   const managerSnapshot =
     role === "manager" && !Array.isArray(reports)
       ? (reports as SupervisionPresentationSnapshot)
@@ -1053,7 +1087,7 @@ function renderSupervisionRows(
     "muted",
     role === "manager"
       ? `manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
-      : `chief · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`,
+      : `chief · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}${status === "stale" ? " · stale" : ""}`,
   )}`;
   if (
     managerSnapshot &&
@@ -1187,23 +1221,25 @@ function renderSupervisionRows(
     { text: safeLine(header, width) },
     ...shown.flatMap((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-      const marker = supervisionLeadMarker(lead);
-      const navigation = lead.lead === selectedLead ? ">" : "";
+      const isIncompatible = lead.compatibility === "incompatible";
+      const marker = isIncompatible ? "!" : supervisionLeadMarker(lead);
+      const navigation =
+        !isIncompatible && lead.lead === selectedLead ? ">" : "";
       const indicators = navigation;
       const counts = lead.leadCounts;
       const intent =
-        status === "fresh"
+        status === "fresh" && !isIncompatible
           ? { kind: "session" as const, sessionId: lead.lead }
           : undefined;
       const row = {
         text: safeLine(
-          `${themed(options.theme, lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`,
+          `${themed(options.theme, isIncompatible ? "warning" : lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${isIncompatible ? " · build mismatch" : `${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`}`)}`,
           width,
         ),
         ...(intent ? { intent } : {}),
         ...(intent ? { label: lead.displayName } : {}),
       };
-      const children = (lead.leads ?? []).slice(0, 3);
+      const children = isIncompatible ? [] : (lead.leads ?? []).slice(0, 3);
       const childIndent = branch === "└─" ? "   " : "│  ";
       return [
         row,
@@ -1258,15 +1294,24 @@ export function formatSupervisionNotification(
 ): string {
   if (status === "unavailable") return "Pi Herdsman · unavailable";
   const ordered = orderedSupervisionLeads(presentationReports(reports));
-  const managers = ordered.filter((report) => report.role !== "lead").length;
-  const leads = ordered.length - managers;
+  const managers = ordered.filter(
+    (report) =>
+      report.role !== "lead" && report.compatibility !== "incompatible",
+  ).length;
+  const incompatible = ordered.filter(
+    (report) => report.compatibility === "incompatible",
+  ).length;
+  const leads = ordered.filter(
+    (report) =>
+      report.role === "lead" && report.compatibility !== "incompatible",
+  ).length;
   const lines = [
-    `Pi Herdsman · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`,
+    `Pi Herdsman · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}${status === "stale" ? " · stale" : ""}`,
     ...ordered
       .slice(0, 8)
       .map(
         (lead) =>
-          `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: ${lead.displayName}${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`,
+          `${lead.compatibility === "incompatible" ? `incompatible ${lead.role} · ` : `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: `}${lead.displayName}${lead.compatibility === "incompatible" ? " · build mismatch" : `${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`}`,
       ),
   ];
   if (ordered.length > 8) lines.push(`… ${ordered.length - 8} more · /chief`);
@@ -1353,11 +1398,12 @@ export function formatSupervisionContext(
       : []),
     ...(role === "chief"
       ? [
-          `managers: ${reports.filter((report) => report.role === "manager").length}`,
-          `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead").length}`,
+          `managers: ${reports.filter((report) => report.role === "manager" && report.compatibility !== "incompatible").length}`,
+          `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,
+          `incompatible_staff: ${reports.filter((report) => report.compatibility === "incompatible").length}`,
         ]
       : [
-          `direct_leads: ${reports.filter((report) => report.role === "lead").length}`,
+          `direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,
         ]),
   ];
   const sections: string[] = [];
@@ -1414,6 +1460,18 @@ export function formatSupervisionContext(
       `display_name: ${supervisionValue(displayed.displayName)}`,
     ];
     lines.push(`  session: ${supervisionValue(lead.lead)}`);
+    if (displayed.compatibility === "incompatible") {
+      lines.push(
+        "  compatibility: incompatible (observed; no available staff tools)",
+      );
+      if (displayed.build)
+        lines.push(
+          `  build: ${supervisionValue(formatRuntimeBuild(displayed.build))}`,
+        );
+      lines.push("  available_tools: ");
+      sections.push(lines.join("\n"));
+      continue;
+    }
     lines.push(
       `  workspace: ${supervisionValue(lead.workspaceLabel ?? lead.workspaceId)}`,
     );

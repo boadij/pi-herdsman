@@ -5891,6 +5891,49 @@ test("truncated supervision rows are not clickable when their name is hidden", (
   assert.deepEqual(focused, []);
 });
 
+test("incompatible staff rows are bounded, counted, and never focusable", () => {
+  const snapshot = {
+    managers: [],
+    incompatible: [
+      {
+        role: "manager" as const,
+        session: "incompatible-manager",
+        displayName: "Project B",
+        workspaceId: "workspace-b",
+        runtimeState: "idle" as const,
+        build: { version: "0.31.1", sha256: "a".repeat(64) },
+        reason: "incompatible_build" as const,
+      },
+    ],
+  };
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  const rows = widget.render(120).map(stripVTControlCharacters);
+  assert.match(rows[0]!, /1 incompatible/);
+  assert.match(rows[1]!, /! Project B · build mismatch/);
+  assert.ok(rows.every((row) => visibleWidth(row) <= 120));
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 1,
+      width: 120,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+  const context = formatSupervisionContext(snapshot, { status: "fresh" });
+  assert.match(context, /observed; no available staff tools/);
+  assert.match(context, /incompatible \(observed; no available staff tools\)/);
+});
+
 test("truncated Manager branch is not clickable when it matches row status", () => {
   const focused: unknown[] = [];
   const widget = createSupervisionWidget(

@@ -100,7 +100,11 @@ import type {
   RemovedHerdrWorktree,
   WorktreeGroupScope,
 } from "./herdr.ts";
-import type { RuntimeBuild } from "./compatibility.ts";
+import {
+  isRuntimeBuild,
+  sameRuntimeBuild,
+  type RuntimeBuild,
+} from "./compatibility.ts";
 import type { PeerCorrespondence } from "./peer-correspondence.ts";
 import {
   AGENT_COORDINATION_TOOLS,
@@ -790,6 +794,7 @@ type LeadInboxHost = LeadInboxBaseHost & {
 
 type LeadSupervisionHost = {
   activeRole(): SessionRole;
+  build: RuntimeBuild;
   appendDurableError(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
@@ -3100,6 +3105,7 @@ export function registerLeadRuntime(
   });
   const supervisionUiRuntime = createLeadSupervisionRuntime({
     ...options.supervisionHost,
+    build: options.build,
     state: options.leadRuntime,
     activeRole: () => activeLeadRole(options.leadRuntime),
     pi,
@@ -4923,12 +4929,15 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     suppliedInventory?: HerdrSessionSnapshot,
     suppliedAgents?: ManagedAgentSnapshotCollection,
     includeAll = false,
+    classifyBuilds = false,
   ) => {
     if (host.activeRole() === "chief" && !includeAll) {
+      const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
       const reports = await directReports(
         ctx,
         suppliedInventory,
         suppliedAgents,
+        incompatible,
       );
       const managers = reports.filter(
         (report: any) => report.role === "manager",
@@ -4936,6 +4945,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       return {
         managers,
         leads: reports.filter((report: any) => report.role === "lead"),
+        ...(incompatible.length ? { incompatible } : {}),
       };
     }
     if (host.activeRole() === "manager" && !includeAll) {
@@ -4952,8 +4962,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         group.primaryWorkspaceId !== manager.workspaceId
       )
         throw new Error("Manager workspace is not the assigned project");
+      const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
       const [leads, topology] = await Promise.all([
-        directReports(ctx, suppliedInventory, suppliedAgents),
+        directReports(ctx, suppliedInventory, suppliedAgents, incompatible),
         host.runHerdr(
           host.pi,
           ctx,
@@ -5002,6 +5013,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         }),
         openWorkspaces,
         leads,
+        ...(incompatible.length ? { incompatible } : {}),
       };
     }
     const inventory =
@@ -5094,6 +5106,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       agents,
       managedAgents: agentEvidence,
       coordinationStates,
+      ...(classifyBuilds ? { localBuild: host.build } : {}),
       workspaceProvenance,
       excludedSessionIds: new Set([
         ...host
@@ -5109,6 +5122,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     ctx: ExtensionContext,
     suppliedInventory?: HerdrSessionSnapshot,
     suppliedAgents?: ManagedAgentSnapshotCollection,
+    incompatible?: import("./supervision.ts").IncompatibleStaff[],
   ) => {
     if (host.activeRole() === "manager" && !host.state.roleSuspended) {
       const manager = await host.currentManager(ctx);
@@ -5129,7 +5143,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         suppliedInventory,
         suppliedAgents,
         true,
+        true,
       );
+      for (const report of snapshot.incompatible ?? [])
+        if (
+          report.role === "lead" &&
+          scope.workspaceIds.includes(report.workspaceId)
+        )
+          incompatible?.push(report);
       const assignments = host.listProjectAssignments(
         host.supervisionRuntime(),
         manager.repoKey,
@@ -5152,14 +5173,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     if (!chiefAuthority)
       throw new Error("Staff is available only to an active supervisor");
     const managers = [];
-    const allLeads = (
-      await loadSupervisionSnapshot(
-        ctx,
-        suppliedInventory,
-        suppliedAgents,
-        true,
-      )
-    ).leads;
+    const allLeadSnapshot = await loadSupervisionSnapshot(
+      ctx,
+      suppliedInventory,
+      suppliedAgents,
+      true,
+      true,
+    );
+    const allLeads = allLeadSnapshot.leads;
     const managedAgents = (
       suppliedAgents ??
       (await host.managedAgentSnapshots(
@@ -5191,6 +5212,26 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       } catch {
         // Unverifiable worktree scope cannot produce Chief direct authority.
         managerLeadSessions.add(lead.lead);
+      }
+    }
+    for (const lead of allLeadSnapshot.incompatible ?? []) {
+      if (lead.role !== "lead") continue;
+      try {
+        const scope = await host.worktreeGroupScope(
+          host.pi,
+          ctx,
+          lead.workspaceId,
+          ctx.signal,
+        );
+        const supervisor = await host.resolveEffectiveSupervisor(
+          ctx,
+          lead.session,
+          lead.workspaceId,
+          scope,
+        );
+        if (supervisor.kind !== "chief") managerLeadSessions.add(lead.session);
+      } catch {
+        managerLeadSessions.add(lead.session);
       }
     }
     for (const descriptor of descriptors) {
@@ -5229,7 +5270,37 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         scope.primaryWorkspaceId !== descriptor.workspaceId
       )
         continue;
-      const effectiveManager = await host.currentManager(ctx, scope);
+      let effectiveManager: ManagerDescriptor | undefined;
+      try {
+        effectiveManager = await host.currentManager(ctx, scope);
+      } catch (error) {
+        const remoteBuild = descriptor.build;
+        const stateBuild = state.build;
+        if (
+          error instanceof OperationError &&
+          error.detail.category === "incompatible_build" &&
+          state.piSessionId === descriptor.piSessionId &&
+          state.role === "manager" &&
+          scope.repoKey === descriptor.repoKey &&
+          scope.primaryWorkspaceId === descriptor.workspaceId &&
+          isRuntimeBuild(remoteBuild) &&
+          isRuntimeBuild(stateBuild) &&
+          sameRuntimeBuild(remoteBuild, stateBuild) &&
+          !sameRuntimeBuild(remoteBuild, host.build)
+        ) {
+          incompatible?.push({
+            role: "manager",
+            session: descriptor.piSessionId,
+            displayName: scope.repoName,
+            workspaceId: descriptor.workspaceId,
+            runtimeState: host.normalizeHerdrLifecycleState(live),
+            build: remoteBuild,
+            reason: "incompatible_build",
+          });
+          continue;
+        }
+        throw error;
+      }
       if (
         !effectiveManager ||
         !host.sameManagerDescriptor(effectiveManager, descriptor)
@@ -5325,6 +5396,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     const unclaimedLeads = allLeads.filter(
       (lead) => !managerLeadSessions.has(lead.lead),
     );
+    for (const report of allLeadSnapshot.incompatible ?? [])
+      if (report.role === "lead" && !managerLeadSessions.has(report.session))
+        incompatible?.push(report);
     return [
       ...managers.map((manager: any) => ({
         ...manager,
@@ -9633,7 +9707,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     };
-    const reports = await refresh();
+    let reports: any[];
+    let incompatibleReports: import("./supervision.ts").IncompatibleStaff[] =
+      [];
+    let discoveryWarning: string | undefined;
+    if (params.action === "list") {
+      const current = await loadSupervisionSnapshot(ctx);
+      reports = [
+        ...(current.managers ?? []).map((item: any) => ({
+          ...item,
+          role: "manager",
+        })),
+        ...current.leads.map((item: any) => ({ ...item, role: "lead" })),
+      ];
+      incompatibleReports = current.incompatible ?? [];
+      if (incompatibleReports.length)
+        discoveryWarning =
+          "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
+    } else {
+      reports = await refresh();
+    }
     const reportSession = (report: any): string =>
       report.session ?? report.lead;
     if (params.action === "list") {
@@ -9674,34 +9767,58 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 })) ?? [],
             }
           : {}),
-        reports: reports.map((report: any) => ({
-          role: activeRole() === "chief" ? report.role : "lead",
-          session: reportSession(report),
-          ...(activeRole() === "manager"
-            ? { relationship: report.relationship ?? "assigned" }
-            : {}),
-          display_name: report.displayName,
-          runtime_state: report.runtimeState,
-          agent_counts: report.agentCounts,
-          ...(activeRole() === "chief"
-            ? {
-                project: "project" in report ? report.project : "",
-                lead_counts:
-                  "leadCounts" in report ? report.leadCounts : undefined,
-                leads: "leads" in report ? report.leads : [],
-              }
-            : {}),
-          available_tools: report.availableActions.map(staffToolName),
-        })),
+        reports: reports
+          .map((report: any) => ({
+            role: activeRole() === "chief" ? report.role : "lead",
+            session: reportSession(report),
+            ...(activeRole() === "manager"
+              ? { relationship: report.relationship ?? "assigned" }
+              : {}),
+            display_name: report.displayName,
+            runtime_state: report.runtimeState,
+            agent_counts: report.agentCounts,
+            ...(activeRole() === "chief"
+              ? {
+                  project: "project" in report ? report.project : "",
+                  lead_counts:
+                    "leadCounts" in report ? report.leadCounts : undefined,
+                  leads: "leads" in report ? report.leads : [],
+                }
+              : {}),
+            available_tools: report.availableActions.map(staffToolName),
+          }))
+          .concat(
+            incompatibleReports.map((report) => ({
+              role: report.role,
+              session: report.session,
+              display_name: report.displayName,
+              compatibility: "incompatible",
+              build: report.build,
+              available_tools: [],
+            })),
+          ),
+        ...(discoveryWarning ? { warning: discoveryWarning } : {}),
       });
     }
     const lead = reports.find(
       (candidate: any) => reportSession(candidate) === params.session,
     );
-    if (!lead)
+    if (!lead) {
+      const observation = await loadSupervisionSnapshot(ctx);
+      const incompatibleTarget = observation.incompatible?.find(
+        (report) => report.session === params.session,
+      );
+      if (incompatibleTarget)
+        host.requireCompatibleBuild(
+          host.HERDSMAN_BUILD,
+          incompatibleTarget.build,
+          "staff action",
+          `${incompatibleTarget.role} ${incompatibleTarget.session}`,
+        );
       throw new Error(
         "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by list_staff; never use display_name.",
       );
+    }
     const sameLeadIdentity = (
       candidate: typeof lead,
       expected: typeof lead,

@@ -57,6 +57,15 @@ For Manager, `open_workspaces` separately reports current Herdr topology. It is
 not assignment ownership. A branch is the project-work handle; a report's
 `session` is the handle for live Lead actions.
 
+When a live staff session is independently identified but its validated
+Herdsman build differs from the local build, `list_staff` includes an
+observation with `compatibility: "incompatible"`, its validated build, and an
+empty `available_tools` list. Such rows are not eligible for staff actions.
+The result warns that the affected Pi session must reload a matching
+Herdsman build. The warning clears after a successful fresh observation
+verifies matching builds; uncertain identity or conflicting build evidence
+does not produce a confidently identified mismatch row.
+
 Do not call `list_staff` merely to poll progress.
 
 ## `inspect_staff`
