@@ -4,6 +4,15 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const DOCKER_ID = /^[0-9a-f]{64}$/u;
 const IMAGE_ID = /^sha256:[0-9a-f]{64}$/u;
 
+export function isMissingDockerResource(kind, id, stderr) {
+  return (
+    (kind === "container" && stderr.includes(`No such object: ${id}`)) ||
+    (kind === "network" && stderr.includes(`network ${id} not found`)) ||
+    (kind === "volume" && stderr.includes(`get ${id}: no such volume`)) ||
+    (kind === "image" && stderr.includes(`No such image: ${id}`))
+  );
+}
+
 export function cleanupSmokeFixture(resources, manifestPath, options) {
   const {
     canonicalize,

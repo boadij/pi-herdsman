@@ -14,7 +14,10 @@ import {
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { cleanupSmokeFixture } from "./peer-federation-cleanup.mjs";
+import {
+  cleanupSmokeFixture,
+  isMissingDockerResource,
+} from "./peer-federation-cleanup.mjs";
 import {
   assertPeerInListPeersResult,
   delegateResultEvidence,
@@ -93,12 +96,7 @@ function cleanup() {
       if (result.error)
         throw new Error(`unable to inspect smoke fixture ${kind}`);
       if (result.status !== 0) {
-        if (
-          /no such (?:object|container|network|volume|image)|not found/iu.test(
-            result.stderr,
-          )
-        )
-          return undefined;
+        if (isMissingDockerResource(kind, id, result.stderr)) return undefined;
         throw new Error(`unable to inspect smoke fixture ${kind}`);
       }
       return result.stdout.trim();

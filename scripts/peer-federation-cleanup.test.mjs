@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cleanupSmokeFixture } from "./peer-federation-cleanup.mjs";
+import {
+  cleanupSmokeFixture,
+  isMissingDockerResource,
+} from "./peer-federation-cleanup.mjs";
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), "peer-cleanup-test-"));
@@ -187,4 +190,51 @@ test("inspection failure preserves the recovery manifest and fixture root", (t) 
     false,
   );
   assert.equal(readFileSync(f.manifestPath, "utf8"), "{}");
+});
+
+test("misleading not found inspection error preserves the recovery manifest and fixture root", (t) => {
+  const f = fixture(t);
+  const inspectBeforeRemoval = f.options.inspectResource;
+  let removalStarted = false;
+  const remainingVolume = f.resources.volumes[0];
+  f.options.removeResource = (kind, id) => {
+    removalStarted = true;
+    f.events.push(["remove", kind, id]);
+    if (kind !== "volume" || id !== remainingVolume)
+      f.active.delete(`${kind}:${id}`);
+  };
+  f.options.inspectResource = (kind, id) => {
+    if (removalStarted && kind === "volume" && id === remainingVolume) {
+      const stderr = "daemon plugin not found";
+      if (isMissingDockerResource(kind, id, stderr)) return undefined;
+      throw new Error(`unable to inspect smoke fixture ${kind}`);
+    }
+    return inspectBeforeRemoval(kind, id);
+  };
+
+  assert.throws(
+    () => cleanupSmokeFixture(f.resources, f.manifestPath, f.options),
+    /unable to inspect smoke fixture volume/u,
+  );
+  assert.equal(f.active.has(`volume:${remainingVolume}`), true);
+  assert.equal(
+    f.events.some(([event]) => event === "removeRoot"),
+    false,
+  );
+  assert.equal(readFileSync(f.manifestPath, "utf8"), "{}");
+});
+
+test("missing-resource diagnostics require the exact resource type and ID", () => {
+  assert.equal(
+    isMissingDockerResource("volume", "target-volume", "resource not found"),
+    false,
+  );
+  assert.equal(
+    isMissingDockerResource(
+      "volume",
+      "target-volume",
+      "Error response from daemon: get target-volume: no such volume",
+    ),
+    true,
+  );
 });
