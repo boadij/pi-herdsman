@@ -4869,6 +4869,7 @@ test("lead metadata reports preserve session event order", async () => {
 });
 
 test("superseded presentation work never uses an invalidated context", async (t) => {
+  const previousTabId = process.env.HERDR_TAB_ID;
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -5004,6 +5005,8 @@ test("superseded presentation work never uses an invalidated context", async (t)
     await pi.events.get("session_shutdown")![0]();
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
+    if (previousTabId === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTabId;
   }
 });
 
@@ -5119,6 +5122,7 @@ test("shutdown aborts session work before draining metadata but stays active", a
 });
 
 test("stalled Chief shutdown metadata cannot block shutdown or replacement", async (t) => {
+  const previousTabId = process.env.HERDR_TAB_ID;
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -5225,6 +5229,8 @@ test("stalled Chief shutdown metadata cannot block shutdown or replacement", asy
     await pi.events.get("session_shutdown")![0]();
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
+    if (previousTabId === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTabId;
   }
 });
 
