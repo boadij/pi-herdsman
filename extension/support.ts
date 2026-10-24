@@ -790,6 +790,32 @@ export function fakeContext(
     },
   };
 }
+export function seedLeadRole(
+  context: ReturnType<typeof fakeContext>,
+  ordinaryExecution = true,
+): void {
+  const entries = context.sessionManager.getEntries() as any[];
+  entries.push({
+    type: "custom",
+    customType: "pi-herdsman-role",
+    data: {
+      sessionId: context.sessionManager.getSessionId(),
+      role: "lead",
+      leadTools: ["read"],
+    },
+  });
+  if (ordinaryExecution)
+    entries.push({
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: {
+        sessionId: context.sessionManager.getSessionId(),
+        mode: "orchestrate",
+        leadTools: ["read"],
+      },
+    });
+}
+
 export function fakeAgentContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
