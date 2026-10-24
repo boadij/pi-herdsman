@@ -6,7 +6,7 @@ import {
   watch,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -94,7 +94,8 @@ function correlatedCall(messages, name, identity) {
     if (
       identity &&
       call.arguments?.label !== identity &&
-      call.arguments?.agent !== identity
+      call.arguments?.agent !== identity &&
+      call.arguments?.branch !== identity
     )
       continue;
     const result = messages.find(
@@ -238,6 +239,35 @@ export function managerHandoffSupervisorToolAvailable(messages) {
 
 function waitForResult(message) {
   return fauxAssistantMessage(message);
+}
+
+function logFederatedPeerBDecision({
+  inboundRequestPresent,
+  importedBindingVisible,
+  branch,
+  outcome,
+  tool,
+  modelExpected,
+}) {
+  const decision = JSON.stringify({
+    ...(inboundRequestPresent ? { eventId: "peer-fixture-event" } : {}),
+    inboundRequestPresent,
+    importedBindingVisible,
+    branch,
+    outcome,
+    ...(modelExpected === undefined ? {} : { modelExpected }),
+    ...(tool ? { tool } : {}),
+  });
+  process.stderr.write(`[peer-faux-decision] ${decision}\n`);
+  if (
+    process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1" &&
+    process.env.PI_CODING_AGENT_DIR
+  )
+    appendFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "peer-federation-decisions.jsonl"),
+      `${decision}\n`,
+      { mode: 0o600 },
+    );
 }
 
 function packageRead(messages) {
@@ -692,6 +722,66 @@ export function decide(model, context) {
     );
   }
   if (model === "federated-peer-a") {
+    const managedSession = prompt.match(
+      /PEER_E2E_A_TEST_MANAGED ([0-9a-f-]{36})/u,
+    )?.[1];
+    if (managedSession) {
+      const listed = correlatedCall(messages, "list_peers");
+      if (!listed) return call("list_peers", {});
+      if (text(listed.result).includes(managedSession))
+        throw new Error("managed Lead appeared in ordinary peer listing");
+      const rejected = messages.find(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === "message_peer" &&
+          message.isError,
+      );
+      if (rejected) return fauxAssistantMessage("PEER_E2E_A_MANAGED_REJECTED");
+      if (successfulCallCount(messages, "message_peer"))
+        throw new Error("managed Lead message unexpectedly succeeded");
+      return call("message_peer", {
+        session: managedSession,
+        message: "must be rejected",
+      });
+    }
+    if (prompt.includes("PEER_E2E_A_LEAD_WAIT_REPLY")) {
+      if (
+        messages.some(
+          (message) =>
+            message.type === "custom_message" &&
+            message.customType === "pi-herdsman-peer_message" &&
+            text(message).includes("PEER_E2E_LEAD_REPLY"),
+        )
+      )
+        return fauxAssistantMessage("PEER_E2E_A_LEAD_REPLY_RECEIVED");
+      return waitForResult("Waiting for background Lead reply reconciliation.");
+    }
+    if (prompt.includes("PEER_E2E_A_LEAD_SEND")) {
+      const listed = correlatedCall(messages, "list_peers");
+      if (!listed) return call("list_peers", {});
+      const peers = JSON.parse(text(listed.result));
+      const peer = peers.peers?.find((candidate) => candidate.machine);
+      if (!peer) throw new Error("ordinary Lead send found no remote Lead");
+      const semantic = prompt.match(/\bresult:[A-Za-z0-9_-]+#\d+\b/u)?.[0];
+      if (!semantic)
+        throw new Error("ordinary Lead request omitted its result reference");
+      if (successfulCallCount(messages, "message_peer") === 0)
+        return call("message_peer", {
+          session: peer.session,
+          message: `PEER_E2E_CORRELATION_ID PEER_E2E_LEAD_REQUEST: inspect the portable file and use ${semantic}.`,
+          files: ["spec.md", semantic],
+        });
+      return fauxAssistantMessage("PEER_E2E_A_LEAD_SENT");
+    }
+    if (
+      messages.some(
+        (message) =>
+          message.type === "custom_message" &&
+          message.customType === "pi-herdsman-peer_message" &&
+          text(message).includes("PEER_E2E_LEAD_REPLY"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_A_LEAD_REPLY_RECEIVED");
     if (prompt.includes("PEER_E2E_A_SINGLE_SEND")) {
       const listed = correlatedCall(messages, "list_peers");
       if (!listed) return call("list_peers", {});
@@ -734,8 +824,8 @@ export function decide(model, context) {
       return call("message_peer", {
         session: peer.session,
         message:
-          "PEER_E2E_REQUEST: delegate the attached spec and report the result.",
-        files: ["spec.md", "escaped.txt", semantic],
+          "PEER_E2E_REQUEST: delegate the attached Manager spec and report the result.",
+        files: ["manager-spec.md", semantic],
       });
     }
     if (send && successfulCallCount(messages, "message_peer") === 1) {
@@ -809,8 +899,136 @@ export function decide(model, context) {
     throw new Error("Unexpected federated-peer A transcript");
   }
   if (model === "federated-peer-b") {
-    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION"))
+    const inboundMessage = messages.find(
+      (message) =>
+        (message.role === "user" || message.type === "custom_message") &&
+        text(message).includes("PEER_E2E_LEAD_REQUEST"),
+    );
+    const inboundRequestPresent = !!inboundMessage;
+    const importedBindingVisible = messages.some(
+      (message) =>
+        message.type === "custom" &&
+        message.customType === "pi-herdsman-result-ref" &&
+        typeof message.data?.ref === "string" &&
+        typeof message.data?.canonicalRef === "string",
+    );
+    logFederatedPeerBDecision({
+      inboundRequestPresent,
+      importedBindingVisible,
+      branch: inboundRequestPresent
+        ? "inbound_lead_request"
+        : prompt.includes("PEER_E2E_B_CAPTURE_SESSION")
+          ? "capture_session"
+          : "other",
+      outcome: "decision_started",
+    });
+    if (prompt.includes("PEER_E2E_B_ASSIGN_MANAGED")) {
+      const assignment = correlatedCall(messages, "delegate_project");
+      if (!assignment)
+        return call("delegate_project", {
+          branch: "herdsman/peer-smoke-managed",
+          task: "Confirm the assigned task is complete and report PEER_E2E_MANAGED_LEAD_COMPLETE.",
+        });
+      if (assignment.result.isError)
+        throw new Error("managed Lead project assignment failed");
+      return fauxAssistantMessage("PEER_E2E_B_MANAGED_ASSIGNED");
+    }
+    if (inboundRequestPresent) {
+      const inbound = inboundMessage;
+      const semantic = text(inbound).match(
+        /\bresult:[A-Za-z0-9_-]+#\d+\b/u,
+      )?.[0];
+      const refs = forwardableRefs(inbound);
+      if (!semantic || !refs.some((ref) => /^result:[0-9a-f-]{36}$/u.test(ref)))
+        throw new Error(
+          "Lead recipient did not receive usable result-reference and artifact-content evidence",
+        );
+      const canonicalRef = refs.find((ref) =>
+        /^result:[0-9a-f-]{36}$/u.test(ref),
+      );
+      const imported =
+        context.peerImportedBindingVisible === true ||
+        messages.some(
+          (message) =>
+            message.type === "custom" &&
+            message.customType === "pi-herdsman-result-ref" &&
+            message.data?.ref === semantic &&
+            message.data?.canonicalRef === canonicalRef,
+        );
+      if (!imported) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "waiting_for_binding",
+        });
+        return waitForResult(
+          "Waiting for the received result binding to be imported in this Lead session.",
+        );
+      }
+      const artifactPath = join(
+        process.env.PI_CODING_AGENT_DIR,
+        "pi-herdsman",
+        "results",
+        canonicalRef.slice("result:".length),
+      );
+      const artifactRead = correlatedCall(messages, "read");
+      if (!artifactRead) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "tool_call",
+          tool: "read",
+        });
+        return call("read", { path: artifactPath });
+      }
+      if (artifactRead.call.arguments?.path !== artifactPath)
+        throw new Error(
+          "Lead read a different result artifact than the imported canonical reference",
+        );
+      const artifact = text(artifactRead.result);
+      if (!artifact.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1"))
+        throw new Error(
+          "Imported canonical result artifact omitted expected portable content",
+        );
+      const artifactSha256 = createHash("sha256")
+        .update(artifact)
+        .digest("hex");
+      const origin = text(inbound).match(
+        /Peer message from ([0-9a-f-]{36}):/u,
+      )?.[1];
+      if (!origin) throw new Error("Lead request omitted exact origin session");
+      if (successfulCallCount(messages, "message_peer") === 0) {
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible: imported,
+          branch: "inbound_lead_request",
+          outcome: "tool_call",
+          tool: "message_peer",
+        });
+        return call("message_peer", {
+          session: origin,
+          message: `PEER_E2E_LEAD_REPLY: used ${semantic} (${canonicalRef}, sha256 ${artifactSha256}) after reading PEER_E2E_PORTABLE_RESULT_CONTENT_V1 from the imported artifact.`,
+        });
+      }
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible: imported,
+        branch: "inbound_lead_request",
+        outcome: "assistant_complete",
+      });
+      return fauxAssistantMessage("PEER_E2E_B_LEAD_REPLIED");
+    }
+    if (prompt.includes("PEER_E2E_B_CAPTURE_SESSION")) {
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible,
+        branch: "capture_session",
+        outcome: "assistant_complete",
+      });
       return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
+    }
     if (
       messages.some(
         (message) =>
@@ -825,7 +1043,7 @@ export function decide(model, context) {
         text(message).includes("PEER_E2E_REQUEST"),
     );
     const inbound =
-      inbounds.find((message) => forwardableRefs(message).length >= 3) ??
+      inbounds.find((message) => forwardableRefs(message).length >= 2) ??
       inbounds[0];
     if (
       inbounds.some((message) =>
@@ -845,17 +1063,18 @@ export function decide(model, context) {
       return waitForResult(
         "Waiting for both requests on the Manager pair route.",
       );
-    const assignment = correlatedCall(messages, "delegate_project");
+    const branch = `herdsman/federation-smoke-${origin.slice(0, 8)}`;
+    const assignment = correlatedCall(messages, "delegate_project", branch);
     if (!assignment) {
       const forwardable =
         text(inbound).split("Forwardable received files:\n")[1] ?? "";
       const refs = forwardableRefs(inbound);
-      if (refs.length < 3)
+      if (refs.length < 2)
         throw new Error(
           "federation smoke did not receive forwardable evidence",
         );
       return call("delegate_project", {
-        branch: `herdsman/federation-smoke-${origin.slice(0, 8)}`,
+        branch,
         task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
         files: refs,
       });
@@ -885,6 +1104,8 @@ export function decide(model, context) {
   }
   if (model === "federated-peer-lead") {
     const promptMessage = text(lastUser(messages));
+    if (promptMessage.includes("PEER_E2E_MANAGED_LEAD_COMPLETE"))
+      return fauxAssistantMessage("PEER_E2E_MANAGED_LEAD_COMPLETE");
     const isBTask = promptMessage.includes("PEER_E2E_LOCAL_TASK");
     const isATask = promptMessage.includes("PEER_E2E_A_FORWARD_TASK");
     if (!isBTask && !isATask)
@@ -892,7 +1113,7 @@ export function decide(model, context) {
     const paths = [
       ...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu),
     ].map((match) => match[1]);
-    if (paths.length < (isBTask ? 3 : 2))
+    if (paths.length < 2)
       throw new Error("federation Lead did not receive both evidence refs");
     const successfulReads = messages
       .filter((message) => message.role === "assistant")
@@ -933,7 +1154,7 @@ export function decide(model, context) {
     if (!assignment)
       return call("delegate_agent", {
         definition: "researcher",
-        task: `Create a concise completed test-owned result artifact for federation evidence seeding on machine ${side}; include that machine identity in the result.`,
+        task: `Create a concise completed test-owned result artifact for federation evidence seeding on machine ${side}; include that machine identity and the exact text PEER_E2E_PORTABLE_RESULT_CONTENT_V1 in the result.`,
       });
     return assignment.result && !assignment.result.isError
       ? fauxAssistantMessage("PEER_E2E_SOURCE_RESULT_COMPLETE")
@@ -1102,7 +1323,34 @@ export function waitForContinuationObservation(directory, signal) {
 export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
+  let peerImportedBindingVisible = false;
   const recordedSessions = new Set();
+  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
+    pi.on("before_agent_start", (event, context) => {
+      const message =
+        event.messageType === "custom" ? event.message : undefined;
+      const content = text(message);
+      const inboundRequestPresent =
+        message?.customType === "pi-herdsman-peer_message" &&
+        content.includes("PEER_E2E_LEAD_REQUEST");
+      const importedBindingVisible = context.sessionManager
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-herdsman-result-ref" &&
+            typeof entry.data?.ref === "string" &&
+            typeof entry.data?.canonicalRef === "string",
+        );
+      peerImportedBindingVisible = importedBindingVisible;
+      logFederatedPeerBDecision({
+        inboundRequestPresent,
+        importedBindingVisible,
+        branch: inboundRequestPresent ? "inbound_lead_request" : "other",
+        outcome: "before_agent_start",
+      });
+    });
+  }
   const faux = fauxProvider({
     provider: "smoke-faux",
     api: "smoke-faux-api",
@@ -1194,7 +1442,38 @@ export default function install(pi) {
     }
     let answer;
     try {
-      answer = decide(model.id, context);
+      if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
+        const inboundRequestPresent = context.messages.some(
+          (message) =>
+            (message.role === "user" || message.type === "custom_message") &&
+            text(message).includes("PEER_E2E_LEAD_REQUEST"),
+        );
+        const importedBindingVisible =
+          peerImportedBindingVisible ||
+          context.messages.some(
+            (message) =>
+              message.type === "custom" &&
+              message.customType === "pi-herdsman-result-ref" &&
+              typeof message.data?.ref === "string" &&
+              typeof message.data?.canonicalRef === "string",
+          );
+        const prompt = text(lastUser(context.messages));
+        logFederatedPeerBDecision({
+          inboundRequestPresent,
+          importedBindingVisible,
+          branch: inboundRequestPresent
+            ? "inbound_lead_request"
+            : prompt.includes("PEER_E2E_B_CAPTURE_SESSION")
+              ? "capture_session"
+              : "other",
+          outcome: "model_invocation",
+          modelExpected: model.id === "federated-peer-b",
+        });
+      }
+      answer = decide(model.id, {
+        ...context,
+        peerImportedBindingVisible,
+      });
     } catch (error) {
       if (
         error instanceof Error &&

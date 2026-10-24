@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -24,12 +25,15 @@ import {
   writeCoordinationMessage,
   writePeerDeliveryReceipt,
   writePeerLeadRecord,
+  writeProjectAssignment,
+  supervisionRuntime,
   peerLeadLockPath,
   removePeerLeadRecord,
 } from "../extension/supervision.ts";
 import {
   listPeerCorrespondences,
   peerPayloadDigest,
+  storePeerCorrespondence,
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
 
@@ -525,6 +529,530 @@ test("partial pending-marker write leaves no final marker and identical retry su
     });
     assert.notEqual(conflicting.status, 0);
     assert.match(conflicting.stderr, /conflicting peer message identity/);
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("bridge accepts a directly addressed ordinary Lead and rejects role-transition transfers", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-ordinary-lead-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const sessionId = id();
+  const originSession = id();
+  const leaseId = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
+    name: "test ordinary Lead peer presence",
+  });
+  try {
+    const runtime = peerRuntime();
+    const lead = {
+      version: 2 as const,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "lead" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: sessionId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, lead);
+    const record = {
+      version: 2 as const,
+      build: lead.build,
+      id: id(),
+      leaseId,
+      kind: "peer_message" as const,
+      fromSessionId: originSession,
+      toSessionId: sessionId,
+      leadSessionId: sessionId,
+      text: "ordinary Lead acceptance",
+      peerSource: { role: "lead" as const, remoteOrdinary: true as const },
+      createdAt: Date.now(),
+    };
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "c".repeat(64),
+      role: "lead",
+      originSession,
+      originGeneration: leaseId,
+      recipientSession: sessionId,
+      recipientGeneration: lead.claim.id,
+      acceptanceId: record.id,
+      replies: [],
+    };
+    const transfer = {
+      record,
+      attachments: [],
+      correspondence,
+      recipientClaimId: lead.claim.id,
+      expectedDataRoot: herdsmanDataRoot(),
+    };
+    const run = (payload: typeof transfer, hook?: string) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          ...(hook
+            ? [`--import=data:text/javascript,${encodeURIComponent(hook)}`]
+            : []),
+          "bin/peer-bridge.ts",
+          "accept",
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify(payload)}\n`,
+          encoding: "utf8",
+        },
+      );
+    const accepted = run(transfer);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.deepEqual(JSON.parse(accepted.stdout), {
+      accepted: true,
+      id: record.id,
+    });
+    assert.deepEqual(
+      readCoordinationMessage(chiefMessagePath(runtime, sessionId, record.id)),
+      record,
+    );
+
+    const assignmentHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writeProjectAssignment, supervisionRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writeProjectAssignment(supervisionRuntime(), { version: 2, id: ${JSON.stringify(sessionId)}, repoKey: "race-repo", branch: "assigned-after-discovery", text: "assignment changed before publication" }); });`;
+    const racedRecord = { ...record, id: id() };
+    const raced = run(
+      {
+        ...transfer,
+        record: racedRecord,
+        correspondence: {
+          ...correspondence,
+          id: id(),
+          acceptanceId: racedRecord.id,
+        },
+      },
+      assignmentHook,
+    );
+    assert.notEqual(raced.status, 0);
+    assert.match(
+      raced.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.throws(
+      () =>
+        readCoordinationMessage(
+          chiefMessagePath(runtime, sessionId, racedRecord.id),
+        ),
+      /Unable to read Chief message/,
+      "assignment added after discovery must reject before inbox publication",
+    );
+    rmSync(supervisionRuntime().assignments, { recursive: true, force: true });
+
+    const assignments = supervisionRuntime().assignments;
+    const hook = `import { mkdirSync } from 'node:fs'; import { setPendingMarkerPublishHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; setPendingMarkerPublishHookForTests(() => mkdirSync(${JSON.stringify(join(assignments, "unexpected"))}, { recursive: true }));`;
+    const changed = run(
+      {
+        ...transfer,
+        record: { ...record, id: id() },
+        correspondence: { ...correspondence, id: id(), acceptanceId: id() },
+      },
+      hook,
+    );
+    assert.notEqual(changed.status, 0);
+    assert.match(
+      changed.stderr,
+      /Unexpected project assignment repository entry/,
+    );
+
+    const transition = run({
+      ...transfer,
+      record: { ...record, id: id(), peerSource: { role: "manager" as const } },
+      correspondence: { ...correspondence, id: id(), acceptanceId: id() },
+    });
+    assert.notEqual(transition.status, 0);
+    assert.match(
+      transition.stderr,
+      /peer source role does not match correspondence role/,
+    );
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("probe preserves Manager results and marks failed Lead assignment scans incomplete", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-probe-scan-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  const managerId = id();
+  const leadId = id();
+  const managerClaim = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), managerId),
+    { name: "probe Manager" },
+  );
+  const leadClaim = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), leadId),
+    { name: "probe Lead" },
+  );
+  try {
+    const build = { version: "0.18.0", sha256: "a".repeat(64) };
+    for (const [session, role, claim] of [
+      [managerId, "manager", managerClaim],
+      [leadId, "lead", leadClaim],
+    ] as const)
+      writePeerLeadRecord(peerRuntime(), {
+        version: 2,
+        build,
+        role,
+        sessionKind: "ordinary",
+        piSessionId: session,
+        paneId: "pane",
+        tabId: "tab",
+        workspaceId: "workspace",
+        socket,
+        claim: claim.claim,
+        updatedAt: Date.now(),
+      });
+    const assignments = supervisionRuntime().assignments;
+    mkdirSync(assignments, { recursive: true });
+    mkdirSync(join(assignments, "unexpected"));
+    const probe = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "probe"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(probe.status, 0, probe.stderr);
+    const result = JSON.parse(probe.stdout);
+    assert.equal(result.ordinaryLeadsComplete, false);
+    assert.deepEqual(
+      result.peers.map((peer: { piSessionId: string }) => peer.piSessionId),
+      [managerId],
+    );
+  } finally {
+    managerClaim.release();
+    leadClaim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("Lead correspondence commands reject a recipient transitioned to Manager", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-role-transition-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const recipient = id();
+  const origin = id();
+  const originGeneration = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), recipient), {
+    name: "transitioned Manager",
+  });
+  try {
+    const manager = {
+      version: 2 as const,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "manager" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: recipient,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(peerRuntime(), manager);
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "d".repeat(64),
+      role: "lead",
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      acceptanceId: id(),
+      replies: [],
+    };
+    storePeerCorrespondence(correspondence);
+    const payload = {
+      id: correspondence.id,
+      capability: correspondence.capability,
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      expectedDataRoot: herdsmanDataRoot(),
+      previousOriginGeneration: originGeneration,
+      newRecipientGeneration: claim.claim.id,
+      replyId: id(),
+    };
+    for (const action of [
+      "poll",
+      "ack",
+      "recover",
+      "recover-recipient",
+      "finalize",
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", action],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify(payload)}\n`,
+          encoding: "utf8",
+        },
+      );
+      assert.notEqual(result.status, 0, action);
+      assert.match(
+        result.stderr,
+        /exact correspondence recipient is not live or authorized/,
+        action,
+      );
+    }
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("live replacement Manager cannot recover prior Manager correspondence", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(
+    join(tmpdir(), "peer-bridge-manager-replacement-"),
+  );
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const originalSession = id();
+  const replacementSession = id();
+  const originSession = id();
+  const originGeneration = id();
+  const claim = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), replacementSession),
+    { name: "replacement Manager" },
+  );
+  try {
+    writePeerLeadRecord(peerRuntime(), {
+      version: 2,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: replacementSession,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    });
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "7".repeat(64),
+      role: "manager",
+      originSession,
+      originGeneration,
+      recipientSession: originalSession,
+      recipientGeneration: id(),
+      acceptanceId: id(),
+      replies: [],
+    };
+    storePeerCorrespondence(correspondence);
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "recover-recipient"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+          SSH_CONNECTION: "test-ssh-connection",
+        },
+        input: `${JSON.stringify({
+          id: correspondence.id,
+          capability: correspondence.capability,
+          originSession,
+          originGeneration,
+          recipientSession: originalSession,
+          recipientGeneration: correspondence.recipientGeneration,
+          newRecipientGeneration: claim.claim.id,
+          expectedDataRoot: herdsmanDataRoot(),
+        })}\n`,
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.equal(
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)
+        ?.recipientGeneration,
+      correspondence.recipientGeneration,
+    );
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("Lead ACK does not complete after assignment authority changes", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-ack-assignment-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const recipient = id();
+  const origin = id();
+  const generation = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), recipient), {
+    name: "ordinary Lead ACK recipient",
+  });
+  try {
+    const lead = {
+      version: 2 as const,
+      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      role: "lead" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: recipient,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(peerRuntime(), lead);
+    const replyId = id();
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "e".repeat(64),
+      role: "lead",
+      originSession: origin,
+      originGeneration: generation,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      acceptanceId: id(),
+      replies: [
+        {
+          id: replyId,
+          digest: "f".repeat(64),
+          text: "reply",
+          createdAt: Date.now(),
+          acknowledged: false,
+        },
+      ],
+    };
+    storePeerCorrespondence(correspondence);
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: recipient,
+      repoKey: "ack-race",
+      branch: "assigned-before-ack",
+      text: "authority changed after discovery",
+    });
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "ack"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+          SSH_CONNECTION: "test-ssh-connection",
+        },
+        input: `${JSON.stringify({
+          id: correspondence.id,
+          capability: correspondence.capability,
+          originSession: origin,
+          originGeneration: generation,
+          recipientSession: recipient,
+          recipientGeneration: claim.claim.id,
+          replyId,
+          expectedDataRoot: herdsmanDataRoot(),
+        })}\n`,
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.doesNotMatch(result.stdout, /"acknowledged":true/);
+    assert.equal(
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)
+        ?.replies[0]?.acknowledged,
+      false,
+    );
   } finally {
     claim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;

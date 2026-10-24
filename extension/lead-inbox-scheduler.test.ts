@@ -17,6 +17,50 @@ const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 
+test("ordinary Lead peer reconciliation starts automatically", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/unused-scheduler-test-socket";
+
+  let attempts = 0;
+  const context = fakeContext();
+  const runtime = createLeadInboxRuntime({
+    leadRuntime: {
+      chiefMode: "inactive",
+      sessionGeneration: 0,
+      chiefModeGeneration: 0,
+    },
+    activeRole: () => "lead",
+    controllerScope: { kind: "root" },
+    supervisionRuntime: () => ({}),
+    peerRuntime: () => ({}),
+    pi: {},
+    managerDiagnostic: () => {},
+    managerDiagnosticEvents: new Set(),
+    listChiefMessagePaths: () => [],
+    drainCoordinationInbox: async () => 0,
+    currentPeerPresenceValid: async () => false,
+    drainProjectMessages: async () => 0,
+    reconcileRemotePeers: () => {
+      attempts++;
+    },
+  } as any);
+
+  try {
+    runtime.beginSession();
+    runtime.start(context as any);
+    await flush();
+    t.mock.timers.tick(500);
+    await flush();
+    assert.equal(attempts, 1, "Lead starts reconciliation without list_peers");
+  } finally {
+    runtime.beginShutdown();
+    runtime.shutdown();
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
+
 test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const previousSocket = process.env.HERDR_SOCKET_PATH;

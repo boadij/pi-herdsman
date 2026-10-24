@@ -212,10 +212,12 @@ export type PeerGroup = Readonly<{
   repoKey: string;
   primaryWorkspaceId: string;
 }>;
-export type PeerSource =
+type LocalPeerSource =
   | { role: "manager" }
   | { role: "lead"; socket: string; group: PeerGroup | null; managed: boolean };
-export type PeerContext = PeerSource;
+export type PeerSource =
+  LocalPeerSource | { role: "lead"; remoteOrdinary: true };
+export type PeerContext = LocalPeerSource;
 
 export function canMessagePeer(a: PeerContext, b: PeerContext): boolean {
   if (a.role !== b.role) return false;
@@ -228,6 +230,17 @@ export function canMessagePeer(a: PeerContext, b: PeerContext): boolean {
     a.socket === b.socket &&
     a.group.repoKey === b.group.repoKey &&
     a.group.primaryWorkspaceId === b.group.primaryWorkspaceId
+  );
+}
+
+export function isRemoteOrdinaryLead(
+  peer: PeerLeadRecord,
+  assignments: Map<string, GlobalProjectAssignment[]>,
+): boolean {
+  return (
+    peer.role === "lead" &&
+    peer.sessionKind === "ordinary" &&
+    (assignments.get(peer.piSessionId)?.length ?? 0) === 0
   );
 }
 
@@ -344,22 +357,23 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     (source.role === "manager"
       ? Object.keys(source).length === 1
       : source.role === "lead" &&
-        Object.keys(source).length === 4 &&
-        typeof source.socket === "string" &&
-        source.socket.length > 0 &&
-        source.socket.length <= 4096 &&
-        typeof source.managed === "boolean" &&
-        (source.group === null
-          ? !source.managed
-          : !!source.group &&
-            typeof source.group === "object" &&
-            Object.keys(source.group).length === 2 &&
-            validNativeIdentity(
-              (source.group as Record<string, unknown>).repoKey,
-            ) &&
-            validNativeIdentity(
-              (source.group as Record<string, unknown>).primaryWorkspaceId,
-            )));
+        ((Object.keys(source).length === 2 && source.remoteOrdinary === true) ||
+          (Object.keys(source).length === 4 &&
+            typeof source.socket === "string" &&
+            source.socket.length > 0 &&
+            source.socket.length <= 4096 &&
+            typeof source.managed === "boolean" &&
+            (source.group === null
+              ? !source.managed
+              : !!source.group &&
+                typeof source.group === "object" &&
+                Object.keys(source.group).length === 2 &&
+                validNativeIdentity(
+                  (source.group as Record<string, unknown>).repoKey,
+                ) &&
+                validNativeIdentity(
+                  (source.group as Record<string, unknown>).primaryWorkspaceId,
+                )))));
   if (
     projectMessage
       ? !validNativeIdentity(record.branch)

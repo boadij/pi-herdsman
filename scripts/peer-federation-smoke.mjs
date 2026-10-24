@@ -7,12 +7,26 @@ import {
   chmodSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import {
+  cleanupSmokeFixture,
+  isMissingDockerResource,
+} from "./peer-federation-cleanup.mjs";
+import {
+  assertPeerInListPeersResult,
+  delegateResultEvidence,
+  isLiveCorrespondenceRecipient,
+  matchedManagedLeadDenial,
+  matchedDelegateResult,
+  parseDelegateResult,
+  ordinaryLeadDeliveryReady,
+} from "./peer-federation-result.mjs";
 
 let runId = `peer474-${randomUUID()}`;
 let root = join(tmpdir(), runId);
@@ -64,38 +78,69 @@ function command(bin, args, { allowFailure = false, input } = {}) {
   return result.stdout.trim();
 }
 
+function sanitizeStartupDiagnostics(value) {
+  const sanitized = value
+    .replace(/(?:Bearer\s+)[^\s"']+/giu, "Bearer [redacted]")
+    .replace(
+      /((?:token|password|secret|credential|private[_ -]?key)\s*[:=]\s*)[^\s,"']+/giu,
+      "$1[redacted]",
+    )
+    .replace(/(?:\/[\w.@+-]+){2,}/gu, "[path]");
+  return Buffer.from(sanitized).subarray(0, 2048).toString("utf8");
+}
+
 function cleanup() {
-  for (const id of resources.containers)
-    command("docker", ["rm", "-f", id], { allowFailure: true });
-  for (const id of resources.volumes)
-    command("docker", ["volume", "rm", id], { allowFailure: true });
-  if (resources.network)
-    command("docker", ["network", "rm", resources.network], {
-      allowFailure: true,
-    });
-  if (resources.imageTag)
-    command("docker", ["image", "rm", resources.imageTag], {
-      allowFailure: true,
-    });
-  const remains = (args) =>
-    spawnSync("docker", args, { stdio: "ignore" }).status === 0;
-  const leftovers = [
-    ...resources.containers.filter((id) =>
-      remains(["container", "inspect", id]),
-    ),
-    ...resources.volumes.filter((id) => remains(["volume", "inspect", id])),
-    ...(resources.network && remains(["network", "inspect", resources.network])
-      ? [resources.network]
-      : []),
-    ...(resources.imageTag && remains(["image", "inspect", resources.imageTag])
-      ? [resources.imageTag]
-      : []),
-  ];
-  rmSync(root, { recursive: true, force: true });
-  if (leftovers.length)
-    throw new Error(
-      `fixture cleanup left exact resources: ${leftovers.join(", ")}`,
-    );
+  const inspectResource = (kind, id) => {
+    const inspect = (args) => {
+      const result = spawnSync("docker", args, { encoding: "utf8" });
+      if (result.error)
+        throw new Error(`unable to inspect smoke fixture ${kind}`);
+      if (result.status !== 0) {
+        if (isMissingDockerResource(kind, id, result.stderr)) return undefined;
+        throw new Error(`unable to inspect smoke fixture ${kind}`);
+      }
+      return result.stdout.trim();
+    };
+    let args;
+    if (kind === "container")
+      args = ["inspect", "--format", "{{json .Config.Labels}}", id];
+    else if (kind === "network")
+      args = ["network", "inspect", "--format", "{{json .Labels}}", id];
+    else if (kind === "volume")
+      args = ["volume", "inspect", "--format", "{{json .Labels}}", id];
+    else args = ["image", "inspect", "--format", "{{.Id}}", id];
+    const first = inspect(args);
+    if (first === undefined) return undefined;
+    if (kind === "image") {
+      const labels = inspect([
+        "image",
+        "inspect",
+        "--format",
+        "{{json .Config.Labels}}",
+        id,
+      ]);
+      return labels === undefined
+        ? undefined
+        : { id: first, labels: JSON.parse(labels || "null") };
+    }
+    return { labels: JSON.parse(first || "null") };
+  };
+  const removeResource = (kind, id) => {
+    const args =
+      kind === "container"
+        ? ["rm", "-f", id]
+        : kind === "image"
+          ? ["image", "rm", id]
+          : [kind, "rm", id];
+    command("docker", args, { allowFailure: true });
+  };
+  cleanupSmokeFixture(resources, manifestPath, {
+    canonicalize: realpathSync,
+    fixtureBase: tmpdir(),
+    inspectResource,
+    removeResource,
+    removeRoot: (path) => rmSync(path, { recursive: true, force: true }),
+  });
   console.log(
     `Verified fixture cleanup: ${JSON.stringify({ runId: resources.runId, containers: resources.containers, volumes: resources.volumes, network: resources.network, image: resources.imageTag })}`,
   );
@@ -125,13 +170,6 @@ if (process.argv[2] !== "--cleanup") {
 
 try {
   if (process.argv[2] === "--cleanup") {
-    if (
-      !resources.runId?.startsWith("peer474-") ||
-      !resources.root ||
-      !Array.isArray(resources.containers) ||
-      !Array.isArray(resources.volumes)
-    )
-      throw new Error("refusing malformed/non-fixture resource manifest");
     cleanup();
     console.log(`Removed and verified exact resources for ${resources.runId}`);
     process.exit(0);
@@ -139,7 +177,14 @@ try {
   const imageTag = `${runId}:fixture`;
   resources.imageTag = imageTag;
   save();
-  command("docker", ["build", "--tag", imageTag, "."]);
+  command("docker", [
+    "build",
+    "--label",
+    `pi-herdsman.run=${runId}`,
+    "--tag",
+    imageTag,
+    ".",
+  ]);
   resources.image = command("docker", [
     "image",
     "inspect",
@@ -374,6 +419,173 @@ try {
           return { malformed: line.slice(0, 200) };
         }
       });
+  const readOrdinaryLeadSession = (side, kind, id, ref) => {
+    const script = `
+      const fs = require("node:fs");
+      const path = process.argv[1], kind = process.argv[2], id = process.argv[3], ref = process.argv[4];
+      const text = fs.readFileSync(path, "utf8");
+      const lines = text.split("\\n");
+      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, modelTurnsAfterInbound = 0, modelTurnsBeforeBinding = 0, modelTurnsAfterBinding = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
+      let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
+      const replyCalls = new Map(), replyResults = [];
+      let inSendTurn = false, receipt = null, listPeersCalls = 0, inboundSeen = false, bindingSeen = false;
+      for (const line of lines) {
+        if (!line) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry.message?.role === "user") {
+          inSendTurn = entry.message.content?.some?.(part => part.type === "text" && part.text?.startsWith("PEER_E2E_A_LEAD_SEND ")) ?? false;
+          if (inSendTurn) receipt = null;
+        }
+        const details = entry.message?.details ?? entry.details;
+        if (inSendTurn && details?.queued === true && typeof details.id === "string")
+          receipt = { id: details.id, fromSessionId: details.fromSessionId, remoteSessionId: details.remoteSessionId };
+        const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
+        if (hasListPeers) listPeersCalls++;
+        if (kind === "recipient" && entry.message?.role === "assistant") {
+          if (inboundSeen) {
+            modelTurnsAfterInbound++;
+            if (bindingSeen) modelTurnsAfterBinding++;
+            else modelTurnsBeforeBinding++;
+          }
+          for (const part of entry.message.content ?? []) {
+            if (part.type === "toolCall" && part.name === "read") artifactReadCount++;
+            if (part.type === "toolCall" && part.name === "message_peer") replyCallCount++;
+            if (part.type === "toolCall" && part.name === "message_peer" && typeof part.id === "string") replyCalls.set(part.id, JSON.stringify(part.arguments ?? {}));
+          }
+        }
+        if (kind === "recipient" && entry.message?.role === "toolResult" && entry.message.toolName === "message_peer") {
+          replyResults.push(entry);
+        }
+        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id) {
+          matchingDeliveryCount++;
+          delivered ??= entry;
+        }
+        if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.content?.includes("PEER_E2E_LEAD_REQUEST")) {
+          inboundLeadRequestCount++;
+          inboundSeen = true;
+        }
+        if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef)
+          importedResultBinding ??= entry, bindingSeen = true;
+        if (kind === "reply" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id && entry.content?.includes("PEER_E2E_LEAD_REPLY")) {
+          matchingReplyCount++;
+          delivered ??= entry;
+        }
+      }
+      for (const result of replyResults) {
+        const call = replyCalls.get(result.message.toolCallId);
+        if (call && result.message.isError !== true) {
+          successfulReplyCount++;
+          const evidence = call + JSON.stringify(result.message.content ?? []);
+          hasLeadReplyRef ||= evidence.includes(ref);
+          hasLeadReply ||= evidence.includes("PEER_E2E_LEAD_REPLY");
+          hasPortableContent ||= evidence.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
+        }
+      }
+      const tail = Buffer.from(text).subarray(-2048).toString("utf8");
+      const recentTools = [];
+      for (const line of tail.split("\\n")) {
+        try {
+          const entry = JSON.parse(line);
+          for (const part of entry.message?.content ?? []) if (part.type === "toolCall" && typeof part.name === "string") recentTools.push({ id: part.id, name: part.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40), outcome: "called" });
+          if (entry.message?.role === "toolResult") {
+            const call = recentTools.findLast(item => item.id === entry.message.toolCallId);
+            if (call) {
+              call.outcome = entry.message.isError ? "error" : "result";
+              if (call.name === "message_peer" && entry.message.isError) {
+                const errorText = (entry.message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" ");
+                call.errorCategory = errorText.includes("not available on the current branch") ? "missing-result-binding" : errorText.includes("same-role peer") ? "peer-authorization" : "other";
+              }
+            }
+          }
+        } catch {}
+      }
+      const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
+      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, modelTurnsBeforeBinding, modelTurnsAfterBinding, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent: !!importedResultBinding, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+    `;
+    const output = exec(side, [
+      "node",
+      "-e",
+      script,
+      resources[side].ordinaryLead.sessionPath,
+      kind,
+      id ?? "",
+      ref ?? "",
+    ]);
+    return JSON.parse(output);
+  };
+  const readBDecisionDiagnostics = () => {
+    const path = `${resources.b.runtime.piAgentDir}/peer-federation-decisions.jsonl`;
+    const output = exec("b", [
+      "sh",
+      "-c",
+      `test -f '${path}' && tail -c 8192 '${path}' || true`,
+    ]);
+    return output
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const value = JSON.parse(line);
+          if (
+            value.eventId === "peer-fixture-event" &&
+            ((value.event === "inbound_persisted" &&
+              value.outcome === "persisted") ||
+              (value.event === "send_invoked" &&
+                ["followUp", "busy"].includes(value.outcome) &&
+                typeof value.triggerTurn === "boolean" &&
+                typeof value.idle === "boolean"))
+          )
+            return [
+              {
+                eventId: value.eventId,
+                event: value.event,
+                outcome: value.outcome,
+                ...(value.event === "send_invoked"
+                  ? { triggerTurn: value.triggerTurn, idle: value.idle }
+                  : {}),
+              },
+            ];
+          if (
+            typeof value.inboundRequestPresent === "boolean" &&
+            typeof value.importedBindingVisible === "boolean" &&
+            ["capture_session", "inbound_lead_request", "other"].includes(
+              value.branch,
+            ) &&
+            [
+              "assistant_complete",
+              "before_agent_start",
+              "decision_started",
+              "model_invocation",
+              "tool_call",
+              "waiting_for_binding",
+            ].includes(value.outcome) &&
+            (value.modelExpected === undefined ||
+              typeof value.modelExpected === "boolean") &&
+            (value.tool === undefined ||
+              ["read", "message_peer"].includes(value.tool))
+          )
+            return [
+              {
+                ...(value.eventId === "peer-fixture-event"
+                  ? { eventId: value.eventId }
+                  : {}),
+                inboundRequestPresent: value.inboundRequestPresent,
+                importedBindingVisible: value.importedBindingVisible,
+                branch: value.branch,
+                outcome: value.outcome,
+                ...(value.modelExpected === undefined
+                  ? {}
+                  : { modelExpected: value.modelExpected }),
+                ...(value.tool ? { tool: value.tool } : {}),
+              },
+            ];
+        } catch {}
+        return [];
+      })
+      .slice(-16);
+  };
   const capturePeerDiagnostics = () => {
     if (!resources.diagnosticsEnabled) return undefined;
     const diagnostics = {
@@ -509,8 +721,8 @@ try {
       [
         "#!/bin/sh",
         'case "$*" in',
-        `  *'pi-herdsman-peer accept'*) umask 077; cat > ${base}/last-accept.json; test -f ${base}/first-accept.json || cp ${base}/last-accept.json ${base}/first-accept.json; if test -f ${base}/tracked-outbound-id && grep -Fq "$(cat ${base}/tracked-outbound-id)" ${base}/last-accept.json; then echo "$(cat ${base}/tracked-outbound-id)" >> ${base}/accept-attempts; fi; test ! -f ${base}/block-accept || exit 255; if test -f ${base}/drop-accept-ack; then rm ${base}/drop-accept-ack; /usr/bin/ssh "$@" < ${base}/last-accept.json >/dev/null 2> ${base}/last-accept.stderr; exit $?; fi; exec /usr/bin/ssh "$@" < ${base}/last-accept.json 2> ${base}/last-accept.stderr ;;`,
-        `  *'pi-herdsman-peer status'*) umask 077; cat > ${base}/last-status-request.json; /usr/bin/ssh "$@" < ${base}/last-status-request.json > ${base}/last-status-response.json 2> ${base}/last-status.stderr; rc=$?; cat ${base}/last-status-response.json; exit $rc ;;`,
+        `  *'pi-herdsman-peer accept'*) umask 077; cat > ${base}/last-accept.json; test -f ${base}/first-accept.json || cp ${base}/last-accept.json ${base}/first-accept.json; node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(r.record?.id ?? r.id ?? "")' ${base}/last-accept.json >> ${base}/accept-attempts; test ! -f ${base}/block-accept || exit 255; if test -f ${base}/drop-accept-ack; then rm ${base}/drop-accept-ack; /usr/bin/ssh "$@" < ${base}/last-accept.json >/dev/null 2> ${base}/last-accept.stderr; exit $?; fi; exec /usr/bin/ssh "$@" < ${base}/last-accept.json 2> ${base}/last-accept.stderr ;;`,
+        `  *'pi-herdsman-peer status'*) umask 077; cat > ${base}/last-status-request.json; /usr/bin/ssh "$@" < ${base}/last-status-request.json > ${base}/last-status-response.json 2> ${base}/last-status.stderr; rc=$?; if test -s ${base}/last-status-request.json; then node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(r.id)' ${base}/last-status-request.json >> ${base}/status-attempts; fi; if test -s ${base}/last-status-response.json; then node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(JSON.stringify({id:r.id,status:r.status}))' ${base}/last-status-response.json >> ${base}/status-responses; fi; cat ${base}/last-status-response.json; exit $rc ;;`,
         `  *'pi-herdsman-peer recover-recipient'*) umask 077; cat > ${base}/last-recipient-recovery.json; exec /usr/bin/ssh "$@" < ${base}/last-recipient-recovery.json ;;`,
         `  *'pi-herdsman-peer poll'*) test ! -f ${base}/block-poll || { cat > /dev/null; exit 255; }; exec /usr/bin/ssh "$@" ;;`,
         '  *) exec /usr/bin/ssh "$@" ;;',
@@ -763,13 +975,83 @@ try {
     save();
   }
 
+  // Keep the existing Manager pair alive while adding a separate ordinary
+  // Lead on each machine. This makes the probe prove role isolation rather
+  // than relying on a Manager session being reinterpreted as a Lead.
+  const startOrdinaryLead = (side) => {
+    const split = JSON.parse(
+      herdr(side, [
+        "pane",
+        "split",
+        resources[side].paneId,
+        "--direction",
+        "down",
+        "--ratio",
+        "0.5",
+        "--cwd",
+        resources[side].runtime.workspace,
+      ]),
+    );
+    const pane = split.result?.pane?.pane_id;
+    if (!pane)
+      throw new Error(
+        `${side}: ordinary Lead pane split omitted pane identity`,
+      );
+    resources[side].ordinaryLeadPaneId = pane;
+    herdr(side, [
+      "pane",
+      "run",
+      pane,
+      ...(side === "b" && resources.diagnosticsEnabled
+        ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
+        : []),
+      "pi",
+      "--model",
+      `smoke-faux/federated-peer-${side}`,
+      "--extension",
+      `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
+      "--extension",
+      `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
+    ]);
+    herdr(side, [
+      "pane",
+      "wait-output",
+      pane,
+      "--match",
+      "Press ctrl+o",
+      "--timeout",
+      "30000",
+    ]);
+    // New sessions start as ordinary Leads; unlike Managers they need no role
+    // activation command.
+    const output = herdr(side, [
+      "agent",
+      "prompt",
+      pane,
+      "PEER_E2E_B_CAPTURE_SESSION",
+      "--wait",
+      "--timeout",
+      "60000",
+    ]);
+    const sessionPath = JSON.parse(output).result.agent.agent_session.value;
+    const sessionId = sessionPath.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1];
+    if (!sessionId)
+      throw new Error(`${side}: ordinary Lead omitted its exact session ID`);
+    resources[side].ordinaryLead = { pane, sessionPath, sessionId };
+    save();
+  };
+  startOrdinaryLead("b");
+
   // Create test-owned ordinary files. Result references are created below by
   // each live Manager's actual local project-delegation/result-import path.
   const specText = `# Federation smoke ${runId}\n\nRead this exact specification and report the supplied canonical artifact digest.\n`;
+  const managerSpecText = `# Manager federation smoke ${runId}\n\nPEER_E2E_MANAGER_FILE_CONTENT_V1\n`;
   const escapedText = `${"é".repeat(39_000)}${'"\\\n\u0001'.repeat(3_500)}`;
   const specHostPath = join(root, "spec.md");
+  const managerSpecHostPath = join(root, "manager-spec.md");
   const escapedHostPath = join(root, "escaped.txt");
   writeFileSync(specHostPath, specText, { mode: 0o600 });
+  writeFileSync(managerSpecHostPath, managerSpecText, { mode: 0o600 });
   writeFileSync(escapedHostPath, escapedText, { mode: 0o600 });
   command("docker", [
     "cp",
@@ -780,6 +1062,16 @@ try {
     "chown",
     "herdsman:herdsman",
     `${resources.a.runtime.workspace}/spec.md`,
+  ]);
+  command("docker", [
+    "cp",
+    managerSpecHostPath,
+    `${resources.a.container}:${resources.a.runtime.workspace}/manager-spec.md`,
+  ]);
+  exec("a", [
+    "chown",
+    "herdsman:herdsman",
+    `${resources.a.runtime.workspace}/manager-spec.md`,
   ]);
   command("docker", [
     "cp",
@@ -820,6 +1112,7 @@ try {
   resources.evidence = {
     ...resources.evidence,
     specSha256: digest(specText),
+    managerSpecSha256: digest(managerSpecText),
     escapedSha256: digest(escapedText),
     escapedBytes: Buffer.byteLength(escapedText),
   };
@@ -876,6 +1169,216 @@ try {
       `Herdr did not report the created isolated machine ID: ${addedMachine}`,
     );
   resources.a.savedPeer = { id: addedMachineId, output: addedMachine };
+  startOrdinaryLead("a");
+  const managedAssignmentOutput = herdr("b", [
+    "agent",
+    "prompt",
+    resources.b.paneId,
+    "PEER_E2E_B_ASSIGN_MANAGED",
+    "--wait",
+    "--timeout",
+    "60000",
+  ]);
+  const managedManagerSessionPath = JSON.parse(managedAssignmentOutput).result
+    .agent.agent_session.value;
+  const managedManagerSessionId = managedManagerSessionPath.match(
+    /_([0-9a-f-]{36})\.jsonl$/u,
+  )?.[1];
+  if (!managedManagerSessionId)
+    throw new Error(
+      "B Manager omitted exact session identity for managed Lead assignment",
+    );
+  const managedManagerEntries = exec("b", ["cat", managedManagerSessionPath])
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  const { toolCallId, message: managedResult } = matchedDelegateResult(
+    managedManagerEntries,
+  );
+  resources.evidence.managedDelegateResult = delegateResultEvidence(
+    toolCallId,
+    managedResult,
+  );
+  save();
+  let resultData;
+  try {
+    resultData = parseDelegateResult(managedResult);
+  } catch (error) {
+    if (managedResult.isError) throw error;
+    throw new Error(
+      `Manager delegate_project returned an invalid JSON result: ${error.message}`,
+    );
+  }
+  const assignedLeadSessionId =
+    resultData &&
+    typeof resultData === "object" &&
+    !Array.isArray(resultData) &&
+    resultData.ok === true &&
+    resultData.action === "delegate" &&
+    typeof resultData.session === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      resultData.session,
+    )
+      ? resultData.session
+      : undefined;
+  if (!assignedLeadSessionId)
+    throw new Error(
+      "Manager delegate_project did not return a successful exact assigned Lead session",
+    );
+  const assignmentsDir = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/supervision-v2`;
+  const assignmentFiles = exec("b", [
+    "find",
+    assignmentsDir,
+    "-type",
+    "f",
+    "-path",
+    "*/assignments/*/*.json",
+  ])
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  const projectAssignment = assignmentFiles
+    .map((file) => JSON.parse(exec("b", ["cat", file])))
+    .find(
+      (assignment) =>
+        assignment.branch === "herdsman/peer-smoke-managed" &&
+        assignment.piSessionFile?.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1] ===
+          assignedLeadSessionId,
+    );
+  if (
+    !projectAssignment ||
+    projectAssignment.piSessionFile?.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1] !==
+      assignedLeadSessionId
+  )
+    throw new Error(
+      `Authoritative ProjectAssignment did not bind the exact assigned Lead session ${assignedLeadSessionId}`,
+    );
+  resources.b.managedLead = {
+    sessionId: assignedLeadSessionId,
+    assignmentId: projectAssignment.id,
+    managerSessionId: managedManagerSessionId,
+  };
+  save();
+  herdr("a", [
+    "agent",
+    "prompt",
+    resources.a.ordinaryLead.pane,
+    `PEER_E2E_A_TEST_MANAGED ${assignedLeadSessionId}`,
+    "--wait",
+    "--timeout",
+    "60000",
+  ]);
+  const managedDenial = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  const denialResult = matchedManagedLeadDenial(
+    managedDenial,
+    assignedLeadSessionId,
+  );
+  stage("assigned-managed-lead-excluded-and-denied", {
+    sessionId: assignedLeadSessionId,
+    assignmentId: projectAssignment.id,
+    denial: denialResult.text,
+  });
+  const ordinaryLeadSession = resources.a.ordinaryLead.sessionPath;
+  const discoveryStartLine = Number(
+    exec("a", ["wc", "-l", ordinaryLeadSession]).trim().split(/\s/u)[0],
+  );
+  herdr("a", [
+    "agent",
+    "prompt",
+    resources.a.ordinaryLead.pane,
+    "PEER_E2E_A_DISCOVER",
+    "--wait",
+    "--timeout",
+    "60000",
+  ]);
+  try {
+    herdr("a", [
+      "pane",
+      "wait-output",
+      resources.a.ordinaryLeadPaneId,
+      "--match",
+      "PEER_E2E_A_DISCOVERED",
+      "--timeout",
+      "60000",
+    ]);
+  } catch (error) {
+    const entries = exec("a", ["tail", "-n", "200", ordinaryLeadSession])
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    const endLine = Number(
+      exec("a", ["wc", "-l", ordinaryLeadSession]).trim().split(/\s/u)[0],
+    );
+    const firstTailLine = endLine - entries.length + 1;
+    const turnStart = Math.max(0, discoveryStartLine + 1 - firstTailLine);
+    const turn = entries.slice(turnStart);
+    const promptObserved =
+      turn[0]?.message?.role === "user" &&
+      JSON.stringify(turn[0].message.content).includes("PEER_E2E_A_DISCOVER");
+    const toolCalls = new Map();
+    const toolResults = new Map();
+    const assistantErrors = new Map();
+    for (const { message } of turn) {
+      if (message?.role === "assistant") {
+        const category = message.errorMessage ? "provider_error" : "none";
+        assistantErrors.set(category, (assistantErrors.get(category) ?? 0) + 1);
+        for (const part of message.content ?? [])
+          if (part.type === "toolCall")
+            toolCalls.set(part.name, (toolCalls.get(part.name) ?? 0) + 1);
+      }
+      if (message?.role === "toolResult") {
+        const key = `${message.toolName}:${message.isError ? "error" : "ok"}`;
+        toolResults.set(key, (toolResults.get(key) ?? 0) + 1);
+      }
+    }
+    const pane = herdr("a", [
+      "pane",
+      "read",
+      resources.a.ordinaryLeadPaneId,
+      "--source",
+      "recent",
+      "--lines",
+      "40",
+    ]);
+    stage("ordinary-lead-discovery-prompt-failed", {
+      sessionId: resources.a.ordinaryLead.sessionId,
+      paneId: resources.a.ordinaryLeadPaneId,
+      promptObserved,
+      markerObserved: entries.some((entry) =>
+        JSON.stringify(entry.message?.content ?? "").includes(
+          "PEER_E2E_A_DISCOVERED",
+        ),
+      ),
+      paneHasError: /\b(?:error|failed|crashed)\b/iu.test(pane),
+      paneHasProviderError: /\b(?:provider|model|rate limit|quota)\b/iu.test(
+        pane,
+      ),
+      toolCalls: Object.fromEntries(toolCalls),
+      toolResults: Object.fromEntries(toolResults),
+      assistantErrors: Object.fromEntries(assistantErrors),
+      tailWasCapped: entries.length === 200,
+    });
+    throw error;
+  }
+  const ordinaryLeadTranscript = exec("a", [
+    "cat",
+    resources.a.ordinaryLead.sessionPath,
+  ])
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  assertPeerInListPeersResult(
+    ordinaryLeadTranscript,
+    resources.b.ordinaryLead.sessionId,
+  );
+  stage("ordinary-lead-discovery-confirmed", {
+    senderSession: resources.a.ordinaryLead.sessionId,
+    remoteSession: resources.b.ordinaryLead.sessionId,
+  });
   stage("saved-machine-added", {
     machineId: addedMachineId,
     output: addedMachine,
@@ -917,14 +1420,40 @@ try {
     const probe = JSON.parse(result);
     const expectedRoot = `${resources[other].runtime.piAgentDir}/pi-herdsman`;
     const remoteManager = probe.peers.find((peer) => peer.role === "manager");
-    if (probe.dataRoot !== expectedRoot || !remoteManager)
+    const remoteLead = probe.peers.find(
+      (peer) =>
+        peer.role === "lead" &&
+        peer.sessionKind === "ordinary" &&
+        peer.piSessionId === resources[other].ordinaryLead.sessionId,
+    );
+    const managedLeadExposed = probe.peers.some(
+      (peer) => peer.piSessionId === resources[other].managedLead?.sessionId,
+    );
+    if (
+      probe.dataRoot !== expectedRoot ||
+      !remoteManager ||
+      !remoteLead ||
+      managedLeadExposed
+    )
       throw new Error(
-        `${side}->${other}: SSH endpoint did not observe the live Manager at expected root ${expectedRoot}; got ${result}`,
+        `${side}->${other}: SSH endpoint did not independently observe the exact live Manager and ordinary Lead at expected root ${expectedRoot}; got ${result}`,
+      );
+    if (
+      probe.peers.some(
+        (peer) =>
+          peer.piSessionId === resources[other].ordinaryLead.sessionId &&
+          peer.role !== "lead",
+      )
+    )
+      throw new Error(
+        `${side}->${other}: ordinary Lead was exposed under another role`,
       );
     resources[side].remoteProbe = {
       dataRoot: probe.dataRoot,
       session: remoteManager.piSessionId,
       generation: remoteManager.claim?.id,
+      ordinaryLeadSession: remoteLead.piSessionId,
+      ordinaryLeadGeneration: remoteLead.claim?.id,
     };
     save();
   }
@@ -1019,93 +1548,6 @@ try {
   stage("acceptance-status-stdout-round-trip", {
     status: statusRoundTrip.status,
   });
-  if (process.env.PEER_SMOKE_PHASE === "delivery") {
-    herdr("a", [
-      "agent",
-      "prompt",
-      resources.a.paneId,
-      "PEER_E2E_A_SINGLE_SEND",
-      "--wait",
-      "--timeout",
-      "60000",
-    ]);
-    const aEntries = exec("a", ["cat", aSession.sessionPath])
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse);
-    const acceptance = aEntries
-      .map((entry) => entry.message?.details ?? entry.details)
-      .find(
-        (details) =>
-          details?.accepted === true && typeof details.id === "string",
-      );
-    if (!acceptance)
-      throw new Error(
-        "A's Pi session has no successful remote peer acceptance receipt",
-      );
-    resources.acceptanceMessageId = acceptance.id;
-    stage("peer-message-accepted", {
-      id: acceptance.id,
-      from: acceptance.fromSessionId,
-      to: acceptance.remoteSessionId,
-      bSession: resources.a.remoteProbe.session,
-      bGeneration: resources.a.remoteProbe.generation,
-    });
-    herdr("b", [
-      "pane",
-      "wait-output",
-      resources.b.paneId,
-      "--match",
-      "PEER_E2E_B_SINGLE_RECEIVED",
-      "--timeout",
-      "60000",
-    ]);
-    let inbox = "";
-    for (let attempt = 0; attempt < 80; attempt++) {
-      inbox = exec(
-        "b",
-        [
-          "sh",
-          "-c",
-          `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/inbox -type f -name '*.json' -print`,
-        ],
-        ["--user", "herdsman"],
-      );
-      if (!inbox.trim()) break;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-    }
-    if (inbox.trim())
-      throw new Error(
-        `B observed the single peer message but its inbox record remains: ${inbox}`,
-      );
-    const bEntries = exec("b", ["cat", resources.b.managerSessionFile])
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse);
-    const delivered = bEntries.find(
-      (entry) =>
-        entry.type === "custom_message" &&
-        entry.customType === "pi-herdsman-peer_message" &&
-        entry.details?.id === acceptance.id,
-    );
-    if (
-      !delivered ||
-      delivered.details?.toSessionId !== resources.a.remoteProbe.session
-    )
-      throw new Error(
-        `B's exact Manager session did not persist accepted record ${acceptance.id}`,
-      );
-    stage("single-peer-message-delivered", {
-      id: acceptance.id,
-      bSession: resources.a.remoteProbe.session,
-      bGeneration: resources.a.remoteProbe.generation,
-      inbox,
-    });
-    if (process.env.PEER_SMOKE_KEEP === "1")
-      console.log(`Retained exact resource manifest: ${manifestPath}`);
-    else cleanup();
-    process.exit(0);
-  }
   const sourceResult = (side) => {
     const split = JSON.parse(
       herdr(side, [
@@ -1125,26 +1567,46 @@ try {
       throw new Error(
         `${side}: source Lead pane split omitted pane identity: ${JSON.stringify(split)}`,
       );
-    resources[side].sourcePaneId = pane;
-    herdr(side, [
-      "pane",
-      "run",
-      pane,
-      "pi",
-      "--model",
-      "smoke-faux/federated-peer-source",
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
-    ]);
-    herdr(side, [
-      "pane",
-      "wait-output",
-      pane,
-      "--match",
-      "Press ctrl+o",
-      "--timeout",
-      "30000",
-    ]);
+    save();
+    try {
+      herdr(side, [
+        "agent",
+        "start",
+        `peer-source-${side}`,
+        "--kind",
+        "pi",
+        "--pane",
+        pane,
+        "--timeout",
+        "30000",
+        "--",
+        "--model",
+        "smoke-faux/federated-peer-source",
+        "--extension",
+        `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
+      ]);
+    } catch (error) {
+      let terminal = "terminal diagnostics unavailable";
+      try {
+        terminal = herdr(side, [
+          "pane",
+          "read",
+          pane,
+          "--source",
+          "recent",
+          "--lines",
+          "30",
+        ]);
+      } catch {}
+      resources.sourceStartupFailure = {
+        side,
+        terminal: sanitizeStartupDiagnostics(terminal),
+      };
+      save();
+      throw new Error(`${side}: native source Pi startup failed`, {
+        cause: error,
+      });
+    }
     const submitted = JSON.parse(
       herdr(side, [
         "agent",
@@ -1209,6 +1671,426 @@ try {
       artifactSha256,
     };
   };
+
+  if (process.env.PEER_SMOKE_PHASE === "delivery") {
+    const leadResult = sourceResult("a");
+    resources.evidence.leadResultRef = leadResult.semanticRef;
+    resources.evidence.leadResultSha256 = leadResult.artifactSha256;
+    save();
+    const bindingHost = join(root, "peer-result-binding-lead-a.json");
+    writeFileSync(bindingHost, `${JSON.stringify(leadResult.binding)}\n`, {
+      mode: 0o600,
+    });
+    command("docker", [
+      "cp",
+      bindingHost,
+      `${resources.a.container}:${resources.a.runtime.piAgentDir}/peer-result-binding.json`,
+    ]);
+    exec("a", [
+      "chown",
+      "herdsman:herdsman",
+      `${resources.a.runtime.piAgentDir}/peer-result-binding.json`,
+    ]);
+    herdr("a", [
+      "pane",
+      "send-text",
+      resources.a.ordinaryLead.pane,
+      "/peer-import-result",
+    ]);
+    herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
+    const leadImportMarker = `${resources.a.runtime.piAgentDir}/peer-result-import.done`;
+    let leadImported;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const result = spawnSync(
+        "docker",
+        [
+          "exec",
+          "--user",
+          "herdsman",
+          ...herdrEnv("a"),
+          resources.a.container,
+          "cat",
+          leadImportMarker,
+        ],
+        { encoding: "utf8" },
+      );
+      if (result.status === 0) {
+        leadImported = JSON.parse(result.stdout);
+        break;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (
+      leadImported?.ref !== leadResult.binding.ref ||
+      leadImported?.canonicalRef !== leadResult.binding.canonicalRef
+    )
+      throw new Error(
+        "A ordinary Lead did not import its result binding before sending",
+      );
+    if (
+      readOrdinaryLeadSession("b", "recipient", "", leadResult.binding.ref)
+        .importedResultBinding
+    )
+      throw new Error(
+        "B ordinary Lead was pre-seeded with A's result binding before delivery",
+      );
+    exec("a", [
+      "rm",
+      "-f",
+      `${fixturePath("a")}/status-attempts`,
+      `${fixturePath("a")}/status-responses`,
+    ]);
+    // Drop the first SSH acceptance response after B durably accepts it. A's
+    // retry must resolve the same transfer without duplicate delivery.
+    exec("a", ["touch", `${resources.a.runtime.home}/drop-accept-ack`]);
+    herdr("a", [
+      "pane",
+      "send-text",
+      resources.a.ordinaryLead.pane,
+      `PEER_E2E_A_LEAD_SEND ${leadResult.semanticRef}`,
+    ]);
+    herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
+    let acceptance;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const sendRead = readOrdinaryLeadSession("a", "send");
+      acceptance = sendRead.receipt;
+      if (acceptance) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (!acceptance) {
+      const diagnostics = readOrdinaryLeadSession("a", "send").diagnostics;
+      throw new Error(
+        `A ordinary Lead's Pi session has no durable remote peer queue receipt; diagnostics=${JSON.stringify(diagnostics)}`,
+      );
+    }
+    resources.acceptanceMessageId = acceptance.id;
+    exec("a", [
+      "sh",
+      "-c",
+      `printf '%s' ${acceptance.id} > ${fixturePath("a")}/tracked-outbound-id`,
+    ]);
+    stage("peer-message-queued", {
+      id: acceptance.id,
+      from: acceptance.fromSessionId,
+      to: acceptance.remoteSessionId,
+      bSession: resources.a.remoteProbe.ordinaryLeadSession,
+      bGeneration: resources.a.remoteProbe.ordinaryLeadGeneration,
+    });
+    stage("lead-outbound-retry-released", { id: acceptance.id });
+    let inbox = "";
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const bRead = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
+      inbox = exec(
+        "b",
+        [
+          "sh",
+          "-c",
+          `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/inbox -type f -name '*.json' -print`,
+        ],
+        ["--user", "herdsman"],
+      );
+      if (
+        ordinaryLeadDeliveryReady(
+          bRead.matchingDeliveryCount === 1 ? [bRead.delivered] : [],
+          acceptance.id,
+          inbox,
+        )
+      )
+        break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (inbox.trim())
+      throw new Error(
+        `B observed the single peer message but its inbox record remains: ${inbox}`,
+      );
+    const bRead = readOrdinaryLeadSession(
+      "b",
+      "recipient",
+      acceptance.id,
+      resources.evidence.leadResultRef,
+    );
+    if (resources.diagnosticsEnabled)
+      stage("peer-correlation", { events: readBDecisionDiagnostics() });
+    const delivered = bRead.delivered;
+    const importedResultBinding = bRead.importedResultBinding;
+    const checks = {
+      deliveredOnce: bRead.matchingDeliveryCount === 1,
+      correctRecipient:
+        delivered?.details?.toSessionId ===
+        resources.a.remoteProbe.ordinaryLeadSession,
+      bindingPresent:
+        importedResultBinding?.data?.ref === leadResult.binding.ref &&
+        importedResultBinding?.data?.canonicalRef ===
+          leadResult.binding.canonicalRef,
+      artifactIncluded:
+        typeof delivered?.content === "string" &&
+        delivered.content.includes(leadResult.artifactText),
+      markerPresent: leadResult.artifactText.includes(
+        "PEER_E2E_PORTABLE_RESULT_CONTENT_V1",
+      ),
+      digestMatches:
+        digest(leadResult.artifactText) === resources.evidence.leadResultSha256,
+    };
+    if (Object.values(checks).some((passed) => !passed))
+      throw new Error(
+        `B's ordinary Lead delivery verification failed: ${JSON.stringify(checks)}`,
+      );
+    const recipientArtifactPath = `${resources.b.runtime.piAgentDir}/pi-herdsman/results/${leadResult.binding.canonicalRef.slice("result:".length)}`;
+    const recipientArtifact = exec("b", ["cat", recipientArtifactPath]);
+    const artifactChecks = {
+      canonicalArtifactMatches: recipientArtifact === leadResult.artifactText,
+      canonicalArtifactDigestMatches:
+        digest(recipientArtifact) === leadResult.artifactSha256,
+    };
+    if (Object.values(artifactChecks).some((passed) => !passed))
+      throw new Error(
+        `B's canonical result artifact verification failed: ${JSON.stringify(artifactChecks)}`,
+      );
+    let replyEvidence;
+    let replied = false;
+    let terminalMarker = false;
+    const replyDeadline = Date.now() + 60_000;
+    while (Date.now() < replyDeadline) {
+      replyEvidence = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
+      if (
+        replyEvidence.successfulReplyCount > 0 &&
+        replyEvidence.hasLeadReplyRef &&
+        replyEvidence.hasLeadReply &&
+        replyEvidence.hasPortableContent
+      ) {
+        replied = true;
+        break;
+      }
+      try {
+        herdr("b", [
+          "pane",
+          "wait-output",
+          resources.b.ordinaryLead.pane,
+          "--match",
+          "PEER_E2E_B_LEAD_REPLIED",
+          "--timeout",
+          String(Math.max(1, Math.min(250, replyDeadline - Date.now()))),
+        ]);
+        terminalMarker = true;
+      } catch {}
+      if (terminalMarker) break;
+    }
+    if (!replyEvidence)
+      replyEvidence = readOrdinaryLeadSession(
+        "b",
+        "recipient",
+        acceptance.id,
+        resources.evidence.leadResultRef,
+      );
+    if (!replied && !terminalMarker) {
+      const correspondenceCount = Number(
+        exec("b", [
+          "sh",
+          "-c",
+          `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-correspondences -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '`,
+        ]).trim(),
+      );
+      throw new Error(
+        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, modelTurnsBeforeBinding: replyEvidence.modelTurnsBeforeBinding, modelTurnsAfterBinding: replyEvidence.modelTurnsAfterBinding, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0, decisions: readBDecisionDiagnostics() })}`,
+      );
+    }
+    if (
+      !replyEvidence.hasLeadReplyRef ||
+      !replyEvidence.hasLeadReply ||
+      !replyEvidence.hasPortableContent
+    )
+      throw new Error(
+        "B ordinary Lead did not use the received result in its correlated message_peer reply",
+      );
+    let resolvedStatus;
+    let leadAcceptAttempts = [];
+    let leadStatusAttempts = [];
+    let leadStatusResponses = [];
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const request = exec("a", [
+        "sh",
+        "-c",
+        `test ! -f ${fixturePath("a")}/last-status-request.json || cat ${fixturePath("a")}/last-status-request.json`,
+      ]);
+      const response = exec("a", [
+        "sh",
+        "-c",
+        `test ! -f ${fixturePath("a")}/last-status-response.json || cat ${fixturePath("a")}/last-status-response.json`,
+      ]);
+      leadAcceptAttempts = exec("a", [
+        "sh",
+        "-c",
+        `test ! -f ${fixturePath("a")}/accept-attempts || cat ${fixturePath("a")}/accept-attempts`,
+      ])
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      leadStatusAttempts = exec("a", [
+        "sh",
+        "-c",
+        `test ! -f ${fixturePath("a")}/status-attempts || cat ${fixturePath("a")}/status-attempts`,
+      ])
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      leadStatusResponses = exec("a", [
+        "sh",
+        "-c",
+        `test ! -f ${fixturePath("a")}/status-responses || cat ${fixturePath("a")}/status-responses`,
+      ])
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map(JSON.parse);
+      const parsedRequest = request ? JSON.parse(request) : undefined;
+      const parsedResponse = response ? JSON.parse(response) : undefined;
+      if (
+        parsedRequest?.id === acceptance.id &&
+        parsedResponse?.id === acceptance.id &&
+        parsedResponse?.status === "accepted" &&
+        leadStatusAttempts.includes(acceptance.id) &&
+        leadStatusResponses.some(
+          (response) =>
+            response.id === acceptance.id && response.status === "accepted",
+        )
+      ) {
+        resolvedStatus = parsedResponse;
+        break;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (
+      !resolvedStatus ||
+      leadAcceptAttempts.filter((id) => id === acceptance.id).length !== 1 ||
+      !leadStatusAttempts.includes(acceptance.id)
+    )
+      throw new Error(
+        `Lead lost-acceptance recovery did not resolve exact message ${acceptance.id} by accepted status without resubmission: status=${JSON.stringify(resolvedStatus)}, attempts=${JSON.stringify(leadAcceptAttempts)}`,
+      );
+    const outboundPath = `${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/remote-outbound/${acceptance.id}.json`;
+    exec("a", ["test", "!", "-f", outboundPath], ["--user", "herdsman"]);
+    stage("lead-lost-acceptance-resolved-by-status", {
+      id: acceptance.id,
+      status: resolvedStatus.status,
+      acceptAttempts: 1,
+      statusAttempts: leadStatusAttempts.filter((id) => id === acceptance.id)
+        .length,
+      outboundResolved: true,
+    });
+    stage("peer-message-accepted-and-delivered", { id: acceptance.id });
+    stage("single-peer-message-delivered", {
+      id: acceptance.id,
+      bSession: resources.a.remoteProbe.ordinaryLeadSession,
+      bGeneration: resources.a.remoteProbe.ordinaryLeadGeneration,
+      inbox,
+    });
+    const leadEvidenceDir = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/received-evidence`;
+    const leadEvidence = exec("b", [
+      "sh",
+      "-c",
+      `find ${leadEvidenceDir} -maxdepth 1 -type f -name '*-spec.md' -print`,
+    ]).trim();
+    const leadEvidenceSha256 = leadEvidence
+      ? exec("b", ["sha256sum", leadEvidence]).split(/\s+/u)[0]
+      : undefined;
+    if (!leadEvidence || leadEvidenceSha256 !== resources.evidence.specSha256)
+      throw new Error(
+        `B's ordinary Lead did not receive the exact portable file: ${leadEvidence}`,
+      );
+    stage("ordinary-lead-file-evidence-verified", {
+      path: leadEvidence,
+      sha256: resources.evidence.specSha256,
+    });
+    stage("ordinary-lead-result-reference-used", {
+      ref: resources.evidence.leadResultRef,
+      canonicalRef: leadResult.binding.canonicalRef,
+      artifactSha256: resources.evidence.leadResultSha256,
+      artifactContentVerified: true,
+      bindingImportedOnRecipient: true,
+    });
+    const replyFiles = exec("b", [
+      "sh",
+      "-c",
+      `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-correspondences -maxdepth 1 -type f -name '*.json' -print`,
+    ])
+      .split("\n")
+      .filter(Boolean);
+    if (replyFiles.length !== 1)
+      throw new Error(
+        `expected one Lead reply correspondence, got ${replyFiles.length}`,
+      );
+    const replyCorrespondence = JSON.parse(exec("b", ["cat", replyFiles[0]]));
+    if (
+      replyCorrespondence.role !== "lead" ||
+      replyCorrespondence.replies?.length !== 1
+    )
+      throw new Error(
+        `B did not create a Lead-bound reply: ${JSON.stringify(replyCorrespondence)}`,
+      );
+    if (resources.b.savedPeer)
+      throw new Error("B unexpectedly has a reverse SSH peer route");
+    stage("lead-reply-queued-without-reverse-route", {
+      correspondenceId: replyCorrespondence.id,
+      replyId: replyCorrespondence.replies[0].id,
+      reverseRoute: false,
+    });
+    const listPeersBeforeReply = readOrdinaryLeadSession(
+      "a",
+      "reply",
+    ).listPeersCalls;
+    herdr("a", [
+      "agent",
+      "prompt",
+      resources.a.ordinaryLead.pane,
+      "PEER_E2E_A_LEAD_WAIT_REPLY",
+      "--wait",
+      "--timeout",
+      "60000",
+    ]);
+    let aReplyRead;
+    let receivedReplies = [];
+    let acknowledged;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      aReplyRead = readOrdinaryLeadSession(
+        "a",
+        "reply",
+        replyCorrespondence.replies[0].id,
+      );
+      receivedReplies = aReplyRead.matchingReplyCount;
+      acknowledged = JSON.parse(exec("b", ["cat", replyFiles[0]]));
+      if (receivedReplies === 1 && acknowledged.replies?.[0]?.acknowledged)
+        break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    const listPeersAfterReply = aReplyRead.listPeersCalls;
+    if (receivedReplies !== 1 || listPeersAfterReply !== listPeersBeforeReply)
+      throw new Error(
+        `A did not retrieve exactly one Lead correspondence reply unattended: replies=${receivedReplies}, list_peers before=${listPeersBeforeReply}, after=${listPeersAfterReply}`,
+      );
+    stage("lead-reply-retrieved-and-acked-unattended", {
+      correspondenceId: replyCorrespondence.id,
+      replyId: replyCorrespondence.replies[0].id,
+      aSession: resources.a.ordinaryLead.sessionId,
+      deliveredExactlyOnce: receivedReplies === 1,
+      modelListPeersCallsAdded: listPeersAfterReply - listPeersBeforeReply,
+      acknowledged: acknowledged.replies[0].acknowledged,
+      reverseRoute: false,
+    });
+    if (process.env.PEER_SMOKE_KEEP === "1")
+      console.log(`Retained exact resource manifest: ${manifestPath}`);
+    else cleanup();
+    process.exit(0);
+  }
   const importResultIntoManager = (side, source) => {
     const bindingHost = join(root, `peer-result-binding-${side}.json`);
     writeFileSync(bindingHost, `${JSON.stringify(source.binding)}\n`, {
@@ -1484,9 +2366,41 @@ try {
       `repeated reply poll changed/lost the pending reply: ${JSON.stringify({ firstPoll, repeatedPoll })}`,
     );
   for (const tamper of [
-    { originSession: randomUUID() },
-    { originGeneration: randomUUID() },
+    {
+      change: { originSession: randomUUID() },
+      expectedError: "exact correspondence recipient is not live or authorized",
+    },
+    {
+      change: { originGeneration: randomUUID() },
+      expectedError: "peer correspondence authorization failed",
+    },
   ]) {
+    const liveRecipientProbe = JSON.parse(
+      command("docker", [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv("a"),
+        resources.a.container,
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        `UserKnownHostsFile=${resources.a.runtime.home}/.ssh/known_hosts`,
+        "-i",
+        `${resources.a.runtime.home}/.ssh/id_ed25519`,
+        "herdsman@peer-b",
+        "pi-herdsman-peer",
+        "probe",
+      ]),
+    );
+    if (!isLiveCorrespondenceRecipient(liveRecipientProbe, correspondence))
+      throw new Error(
+        `intended correspondence recipient is not live: ${JSON.stringify({ recipientSession: correspondence.recipientSession, recipientGeneration: correspondence.recipientGeneration, peers: liveRecipientProbe.peers })}`,
+      );
     const rejected = spawnSync(
       "docker",
       [
@@ -1500,18 +2414,16 @@ try {
         ...pollArgs,
       ],
       {
-        input: JSON.stringify({ ...pollRequest, ...tamper }),
+        input: JSON.stringify({ ...pollRequest, ...tamper.change }),
         encoding: "utf8",
       },
     );
     if (
       rejected.status === 0 ||
-      !`${rejected.stderr}${rejected.stdout}`.includes(
-        "peer correspondence authorization failed",
-      )
+      !`${rejected.stderr}${rejected.stdout}`.includes(tamper.expectedError)
     )
       throw new Error(
-        `stale/replaced origin identity was not rejected: ${rejected.stderr}${rejected.stdout}`,
+        `stale/replaced origin identity did not fail with ${tamper.expectedError}: ${rejected.stderr}${rejected.stdout}`,
       );
   }
   resources.replyId = finalReply.id;
@@ -1605,19 +2517,20 @@ try {
   const resultArtifact = `${resources.b.runtime.piAgentDir}/pi-herdsman/results/${resultRef.slice("result:".length)}`;
   const digestOutput = exec("b", [
     "sha256sum",
-    `${receivedDir}/${resources.evidence.specSha256}-spec.md`,
+    `${receivedDir}/${resources.evidence.managerSpecSha256}-manager-spec.md`,
     resultArtifact,
-    `${receivedDir}/${resources.evidence.escapedSha256}-escaped.txt`,
   ]);
   const receivedDigests = digestOutput
     .split("\n")
     .map((line) => line.split(/\s+/u)[0]);
   if (
-    receivedDigests[0] !== resources.evidence.specSha256 ||
-    receivedDigests[1] !== resources.evidence.artifactSha256 ||
-    receivedDigests[2] !== resources.evidence.escapedSha256
+    receivedDigests.length !== 2 ||
+    receivedDigests[0] !== resources.evidence.managerSpecSha256 ||
+    receivedDigests[1] !== resources.evidence.artifactSha256
   )
-    throw new Error(`forwarded evidence digest mismatch: ${digestOutput}`);
+    throw new Error(
+      `Manager federation evidence digest mismatch: ${digestOutput}`,
+    );
   const evidenceSnapshots = exec("b", [
     "sh",
     "-c",
@@ -1627,18 +2540,15 @@ try {
     .split("\n")
     .map((line) => line.split(/\s+/u)[0]);
   if (
-    !snapshotDigests.includes(resources.evidence.specSha256) ||
-    !snapshotDigests.includes(resources.evidence.artifactSha256) ||
-    !snapshotDigests.includes(resources.evidence.escapedSha256)
+    !snapshotDigests.includes(resources.evidence.managerSpecSha256) ||
+    !snapshotDigests.includes(resources.evidence.artifactSha256)
   )
     throw new Error(
-      `B's local assignment snapshots did not preserve both forwarded digests: ${evidenceSnapshots}`,
+      `B's local assignment snapshots did not preserve both Manager evidence digests: ${evidenceSnapshots}`,
     );
-  resources.evidence.receivedSpecSha256 = receivedDigests[0];
+  resources.evidence.receivedManagerSpecSha256 = receivedDigests[0];
   resources.evidence.receivedResultSha256 = receivedDigests[1];
-  resources.evidence.receivedEscapedSha256 = receivedDigests[2];
   resources.evidence.assignmentSnapshotDigests = snapshotDigests;
-  resources.evidence.bLocalEvidenceReads = 2;
   save();
   const originalSession = resources.a.remoteProbe.session;
   const originalGeneration = resources.a.remoteProbe.generation;
@@ -2336,7 +3246,7 @@ try {
   if (
     rejectReplacement.status === 0 ||
     !`${rejectReplacement.stderr}${rejectReplacement.stdout}`.includes(
-      "exact destination Manager is not live",
+      "exact correspondence recipient is not live or authorized",
     )
   )
     throw new Error(
@@ -2346,10 +3256,11 @@ try {
   save();
 
   console.log(
-    `Fixture acceptance evidence: ${JSON.stringify({ runId, image: resources.image, network: resources.network, containers: resources.containers, volumes: resources.volumes, messageId: resources.acceptanceMessageId, replyId: resources.replyId, managers: { recipientBeforeRestart: resources.a.remoteProbe, recipientRecoveredSession: resources.b.recoveredSession, recipientRecoveredGeneration: resources.b.recoveredGeneration, originBeforeRestart: resources.b.remoteProbe, originRecoveredSession: resources.a.recoveredOriginSession, originRecoveredGeneration: resources.a.recoveredOriginGeneration }, evidence: resources.evidence, assertions: { duplicateAcceptance: resources.duplicateAcceptance, replyRetries: resources.replyRetryAssertions, sameExactSessionRecovery: resources.b.recoveredSession === resources.a.remoteProbe.session, generationChanged: resources.b.recoveredGeneration !== resources.a.remoteProbe.generation, finalReplyCompletion: resources.exchange.replyCompletionMarker, disconnectedAndReconnected: resources.exchange.interruptedAndReconnected, replacementRejected: resources.b.replacementRejected !== undefined }, replyCompletion: replyCompletion.slice(-300) })}`,
+    `Fixture acceptance evidence: ${JSON.stringify({ runId, image: resources.image, network: resources.network, containers: resources.containers, volumes: resources.volumes, messageId: resources.acceptanceMessageId, replyId: resources.replyId, managers: { recipientBeforeRestart: resources.a.remoteProbe, recipientRecoveredSession: resources.b.recoveredSession, recipientRecoveredGeneration: resources.b.recoveredGeneration, originBeforeRestart: resources.b.remoteProbe, originRecoveredSession: resources.a.recoveredOriginSession, originRecoveredGeneration: resources.a.recoveredOriginGeneration }, evidence: resources.evidence, assertions: { duplicateAcceptance: resources.duplicateAcceptance, replyRetries: resources.replyRetryAssertions, sameExactSessionRecovery: resources.b.recoveredSession === resources.a.remoteProbe.session, generationChanged: resources.b.recoveredGeneration !== resources.a.remoteProbe.generation, finalReplyCompletion: resources.exchange.replyCompletionMarker, disconnectedAndReconnected: resources.exchange.disconnectedAndReconnected, replacementRejected: resources.b.replacementRejected !== undefined }, replyCompletion: replyCompletion.slice(-300) })}`,
   );
   if (process.env.PEER_SMOKE_KEEP === "1")
     console.log(`Retained exact resource manifest: ${manifestPath}`);
 } finally {
-  if (process.env.PEER_SMOKE_KEEP !== "1") cleanup();
+  if (process.argv[2] !== "--cleanup" && process.env.PEER_SMOKE_KEEP !== "1")
+    cleanup();
 }

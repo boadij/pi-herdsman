@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "./peer-transport.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 import {
@@ -240,6 +242,55 @@ test("peer correspondence isolates capability, exact sessions and generations, a
       ),
     /authorization/,
   );
+});
+
+test("correspondence role is validated and immutable with legacy Manager default", () => {
+  const manager = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  assert.equal(manager.role, "manager");
+  const legacyPath = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "peer-correspondences",
+    `${manager.id}.json`,
+  );
+  const legacy = JSON.parse(readFileSync(legacyPath, "utf8"));
+  delete legacy.role;
+  writeFileSync(legacyPath, `${JSON.stringify(legacy)}\n`);
+  assert.equal(
+    listPeerCorrespondences().find((item) => item.id === manager.id)?.role,
+    undefined,
+  );
+  assert.throws(
+    () => storePeerCorrespondence({ ...manager, role: "lead" }),
+    /conflicting peer correspondence role/,
+  );
+  assert.doesNotThrow(() => storePeerCorrespondence(manager));
+
+  const lead = createPeerCorrespondence({
+    role: "lead",
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  assert.equal(lead.role, "lead");
+  assert.throws(
+    () => storePeerCorrespondence({ ...lead, role: "manager" }),
+    /conflicting peer correspondence role/,
+  );
+  assert.throws(
+    () => storePeerCorrespondence({ ...lead, role: "chief" } as any),
+    /invalid peer correspondence/,
+  );
+  removePeerCorrespondence(manager.id);
+  removePeerCorrespondence(lead.id);
 });
 
 test("peer origin display metadata validates, persists, and enriches without breaking ID-only records", () => {

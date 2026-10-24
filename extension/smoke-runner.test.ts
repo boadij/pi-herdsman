@@ -2929,6 +2929,93 @@ test("simulated Manager decision only delegates the exact requested project work
   );
 });
 
+test("federation Manager starts its branch after an earlier completed managed assignment", () => {
+  const origin = "12345678-1234-1234-1234-123456789abc";
+  const branch = "herdsman/federation-smoke-12345678";
+  const messages = [
+    {
+      role: "user",
+      content: `Peer message from ${origin}: PEER_E2E_REQUEST; Forwardable received files:\nspec: manager-spec.md\nresult: result:abc#1`,
+    },
+    { role: "user", content: `Peer message from ${origin}: PEER_E2E_REQUEST` },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "managed-call",
+          name: "delegate_project",
+          arguments: { branch: "herdsman/peer-smoke-managed" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "delegate_project",
+      toolCallId: "managed-call",
+      content: [{ type: "text", text: "Session: managed-session" }],
+    },
+  ];
+
+  const answer = decide("federated-peer-b", { messages });
+
+  assert.equal(answer.stopReason, "toolUse");
+  assert.equal(answer.content[0].name, "delegate_project");
+  assert.equal(answer.content[0].arguments.branch, branch);
+});
+
+test("federation Lead handles inbound request after its capture prompt and imported binding", () => {
+  const origin = "12345678-1234-1234-1234-123456789abc";
+  const canonical = "result:abcdefab-cdef-abcd-efab-cdefabcdefab";
+  const messages = [
+    { role: "user", content: "PEER_E2E_B_CAPTURE_SESSION" },
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-peer_message",
+      content: `Peer message from ${origin}: PEER_E2E_LEAD_REQUEST; result:researcher#1\n\nForwardable received files:\nartifact: ${canonical}`,
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: { ref: "result:researcher#1", canonicalRef: canonical },
+    },
+  ];
+
+  const answer = decide("federated-peer-b", { messages });
+
+  assert.equal(answer.stopReason, "toolUse");
+  assert.equal(answer.content[0].name, "read");
+  assert.equal(
+    answer.content[0].arguments.path,
+    join(
+      process.env.PI_CODING_AGENT_DIR!,
+      "pi-herdsman",
+      "results",
+      canonical.slice("result:".length),
+    ),
+  );
+
+  const providerProjection = messages.filter(
+    (message) =>
+      message.type !== "custom" ||
+      message.customType !== "pi-herdsman-result-ref",
+  );
+  const contextBindingAnswer = decide("federated-peer-b", {
+    messages: providerProjection,
+    peerImportedBindingVisible: true,
+  });
+  assert.equal(contextBindingAnswer.content[0].name, "read");
+  assert.equal(
+    contextBindingAnswer.content[0].arguments.path,
+    join(
+      process.env.PI_CODING_AGENT_DIR!,
+      "pi-herdsman",
+      "results",
+      canonical.slice("result:".length),
+    ),
+  );
+});
+
 test("core and continuation faux decisions wait for correlated delivered Agent results", () => {
   const call = (name: string, arguments_: object, id = "call") => ({
     role: "assistant",

@@ -45,6 +45,7 @@ import {
   samePeerLeadGeneration,
   samePeerLeadAuthority,
   canMessagePeer,
+  isRemoteOrdinaryLead,
   staffToolName,
   supervisorStateMessage,
   coordinationMessageDelivered,
@@ -52,6 +53,7 @@ import {
   verifyRemoteChiefAuthority,
   writePeerDeliveryReceipt,
 } from "./supervision.ts";
+
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
@@ -139,7 +141,7 @@ import {
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
   listSavedPeerMachines,
@@ -3710,7 +3712,8 @@ export function registerLeadRuntime(
             count + (await coordinationRuntime.drainProjectMessages(ctx)),
         ),
     reconcileRemotePeers: (ctx: ExtensionContext, signal?: AbortSignal) => {
-      return activeLeadRole(options.leadRuntime) === "manager"
+      return activeLeadRole(options.leadRuntime) === "manager" ||
+        activeLeadRole(options.leadRuntime) === "lead"
         ? coordinationRuntime.peerMessage(
             "remote-reconciliation",
             { action: "list" },
@@ -10868,6 +10871,18 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     )
       return false;
     const source = record.peerSource;
+    if (
+      source?.role === "lead" &&
+      "remoteOrdinary" in source &&
+      source.remoteOrdinary === true
+    ) {
+      if (activeRole() !== "lead") return false;
+      const assignments = globalProjectAssignmentSnapshot();
+      return (
+        isRemoteOrdinaryLead(target, assignments) &&
+        target.piSessionId === ctx.sessionManager.getSessionId()
+      );
+    }
     const assignmentSnapshot =
       source?.role === "lead" ? globalProjectAssignmentSnapshot() : undefined;
     const sourceAssignments =
@@ -11189,6 +11204,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       dataRoot: string;
       claimId: string;
       build?: unknown;
+      role: "manager" | "lead";
     }
   >();
   const ambiguousRemoteSessions = new Set<string>();
@@ -11480,9 +11496,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         throw new Error(
           "Peer eligibility could not be verified; retry list_peers.",
         );
+      const remoteDiscoveryEligible =
+        activeRole() === "manager" ||
+        (activeRole() === "lead" &&
+          !!own &&
+          assignmentSnapshot !== undefined &&
+          isRemoteOrdinaryLead(own, assignmentSnapshot));
       const correspondences =
-        activeRole() === "manager" && own.role === "manager"
-          ? listPeerCorrespondences()
+        (activeRole() === "manager" || activeRole() === "lead") &&
+        own.role === activeRole()
+          ? listPeerCorrespondences().filter(
+              (correspondence) =>
+                (correspondence.role ?? "manager") === activeRole(),
+            )
           : [];
       for (const correspondence of correspondences) {
         if (
@@ -11541,7 +11567,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const discoveredRemotePeerRoutes = new Map(remotePeerRoutes);
       const previousAmbiguousSessions = new Set(ambiguousRemoteSessions);
       const discoveredAmbiguousSessions = new Set<string>();
-      if (activeRole() === "manager") {
+      if (remoteDiscoveryEligible) {
         let machines: SavedPeerMachine[];
         let machineListingSucceeded = false;
         try {
@@ -11581,8 +11607,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               if (route.machine.id === machine.id)
                 discoveredRemotePeerRoutes.delete(session);
             for (const remote of snapshot.peers) {
+              const remoteRole = activeRole();
               if (
-                remote.role !== "manager" ||
+                remote.role !== remoteRole ||
+                (remoteRole === "lead" &&
+                  (snapshot.ordinaryLeadsComplete !== true ||
+                    remote.sessionKind !== "ordinary")) ||
                 remote.piSessionId === self ||
                 localPeerSessions.has(remote.piSessionId) ||
                 !remote.claim?.id ||
@@ -11595,7 +11625,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     HERDSMAN_BUILD,
                     remote.build as RuntimeBuild,
                     "peer_message",
-                    `remote Manager ${remote.piSessionId}`,
+                    `remote ${remoteRole} ${remote.piSessionId}`,
                   );
                 } catch {
                   continue;
@@ -11612,6 +11642,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 dataRoot: snapshot.dataRoot,
                 claimId: remote.claim.id,
                 build: remote.build,
+                role: remoteRole,
               });
               peers.push({
                 session: remote.piSessionId,
@@ -11624,7 +11655,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 workspace_label: remote.workspaceLabel ?? "",
               });
             }
-            if (activeRole() === "manager") {
+            if (activeRole() === "manager" || activeRole() === "lead") {
               for (const outbound of listRemotePeerOutbounds()) {
                 if (
                   outbound.machine.id !== machine.id ||
@@ -11691,10 +11722,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 }
               }
               for (const correspondence of listPeerCorrespondences()) {
-                if (correspondence.originSession !== self) continue;
+                if (
+                  correspondence.originSession !== self ||
+                  (correspondence.role ?? "manager") !== activeRole()
+                )
+                  continue;
                 const remote = snapshot.peers.find(
                   (peer) =>
-                    peer.role === "manager" &&
+                    peer.role === (correspondence.role ?? "manager") &&
+                    ((correspondence.role ?? "manager") !== "lead" ||
+                      (snapshot.ordinaryLeadsComplete === true &&
+                        peer.sessionKind === "ordinary")) &&
                     peer.piSessionId === correspondence.recipientSession,
                 );
                 if (!remote) continue;
@@ -11890,7 +11928,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                       fromSessionId: correspondence.recipientSession,
                       toSessionId: self,
                       leadSessionId: correspondence.recipientSession,
-                      peerSource: { role: "manager" },
+                      peerSource:
+                        (correspondence.role ?? "manager") === "lead"
+                          ? { role: "lead", remoteOrdinary: true }
+                          : { role: "manager" },
                       text: `${replyText}${receivedRefs.length ? `\n\nForwardable received files:\n${receivedRefs.join("\n")}` : ""}`,
                       ...(resolution.bindings.length
                         ? { resultBindings: resolution.bindings }
@@ -11984,7 +12025,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       }
       if (
-        activeRole() === "manager" &&
+        (activeRole() === "manager" || activeRole() === "lead") &&
         discovery === latestPeerDiscovery &&
         !signal?.aborted &&
         !unavailableMachines.includes("saved machines")
@@ -11996,9 +12037,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         for (const session of discoveredAmbiguousSessions)
           ambiguousRemoteSessions.add(session);
       }
+      if (activeRole() === "lead" && !remoteDiscoveryEligible) {
+        for (const [session, route] of remotePeerRoutes)
+          if (route.role === "lead") remotePeerRoutes.delete(session);
+        ambiguousRemoteSessions.clear();
+      }
       const discovered = new Set(peers.map((peer) => peer.session));
       const replyCorrespondences = new Map<string, PeerCorrespondence | null>();
-      if (activeRole() === "manager" && own.role === "manager")
+      if (
+        (activeRole() === "manager" || activeRole() === "lead") &&
+        own.role === activeRole()
+      )
         for (const correspondence of correspondences) {
           if (!matchesReturnRecipient(correspondence, own)) continue;
           replyCorrespondences.set(
@@ -12012,6 +12061,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         .filter(
           ([session, correspondence]) =>
             correspondence !== null &&
+            (activeRole() !== "lead" ||
+              (!!own &&
+                assignmentSnapshot !== undefined &&
+                isRemoteOrdinaryLead(own, assignmentSnapshot))) &&
             session !== self &&
             !discovered.has(session) &&
             !remotePeerRoutes.has(session) &&
@@ -12055,9 +12108,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
     const remoteRoute = remotePeerRoutes.get(params.session);
     const returnCorrespondences =
-      sender && activeRole() === "manager" && !remoteRoute
+      sender &&
+      (activeRole() === "manager" || activeRole() === "lead") &&
+      !remoteRoute
         ? listPeerCorrespondences().filter(
             (item) =>
+              (item.role ?? "manager") === activeRole() &&
               matchesReturnRecipient(item, sender) &&
               item.originSession === params.session,
           )
@@ -12069,7 +12125,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !sender ||
       (sender.role ?? "lead") !== activeRole() ||
       (remoteRoute
-        ? activeRole() !== "manager" ||
+        ? remoteRoute.role !== activeRole() ||
           ambiguousRemoteSessions.has(params.session)
         : (!target || (target.role ?? "lead") !== activeRole()) &&
           returnCorrespondences.length !== 1)
@@ -12099,7 +12155,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         fromSessionId: sender.piSessionId,
         toSessionId: target?.piSessionId ?? params.session,
         leadSessionId: sender.piSessionId,
-        peerSource: submissionSource,
+        peerSource:
+          remoteRoute && activeRole() === "lead"
+            ? { role: "lead", remoteOrdinary: true }
+            : submissionSource,
         text: candidate,
         ...(resultBindings.length
           ? { resultBindings: [...resultBindings] }
@@ -12125,22 +12184,56 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             .digest("hex"),
         };
       });
-      queuePeerReply(
-        correspondence,
-        replyId,
-        prepared.transportText ?? prepared.text,
-        {
-          attachments: replyAttachments,
-          ...(prepared.resultBindings.length
-            ? { resultBindings: prepared.resultBindings }
-            : {}),
-        },
-      );
+      const enqueueReply = (
+        assignments?: Map<
+          string,
+          import("./supervision.ts").GlobalProjectAssignment[]
+        >,
+      ) => {
+        const currentSender = readPeerLeadRecord(
+          peerRuntime(),
+          sender.piSessionId,
+        );
+        const currentCorrespondence = listPeerCorrespondences().filter(
+          (item) =>
+            item.id === correspondence.id &&
+            !item.finalized &&
+            (item.role ?? "manager") === activeRole() &&
+            item.originSession === correspondence.originSession &&
+            item.originGeneration === correspondence.originGeneration &&
+            item.recipientSession === correspondence.recipientSession &&
+            item.recipientGeneration === correspondence.recipientGeneration,
+        );
+        if (
+          !currentSender ||
+          !samePeerLeadAuthority(currentSender, sender) ||
+          (activeRole() === "lead" &&
+            (!assignments ||
+              !isRemoteOrdinaryLead(currentSender, assignments) ||
+              currentCorrespondence.length !== 1)) ||
+          (activeRole() !== "lead" && currentCorrespondence.length !== 1)
+        )
+          throw new Error("Peer correspondence authority changed");
+        queuePeerReply(
+          correspondence,
+          replyId,
+          prepared.transportText ?? prepared.text,
+          {
+            attachments: replyAttachments,
+            ...(prepared.resultBindings.length
+              ? { resultBindings: prepared.resultBindings }
+              : {}),
+          },
+        );
+      };
+      if (activeRole() === "lead") withProjectAssignmentAuthority(enqueueReply);
+      else enqueueReply();
+      const recipientRole = correspondence.role ?? "manager";
       return {
         content: [
           {
             type: "text",
-            text: `Reply queued for originating Manager ${params.session} (${replyId}).`,
+            text: `Reply queued for originating ${recipientRole === "lead" ? "Lead" : "Manager"} ${params.session} (${replyId}).`,
           },
         ],
         details: { id: replyId, remoteSessionId: params.session, queued: true },
@@ -12150,9 +12243,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const current = await probePeerEndpoint(remoteRoute.machine, signal);
       const currentTarget = current.peers.find(
         (peer) =>
-          peer.role === "manager" &&
+          peer.role === remoteRoute.role &&
           peer.piSessionId === params.session &&
-          peer.claim.id === remoteRoute.claimId,
+          peer.claim.id === remoteRoute.claimId &&
+          (remoteRoute.role !== "lead" ||
+            (current.ordinaryLeadsComplete === true &&
+              peer.sessionKind === "ordinary")),
       );
       if (!currentTarget || current.dataRoot !== remoteRoute.dataRoot)
         throw new Error("Remote Manager changed; run `list_peers` again.");
@@ -12160,7 +12256,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         HERDSMAN_BUILD,
         currentTarget.build as RuntimeBuild,
         "peer_message",
-        `remote Manager ${params.session}`,
+        `remote ${remoteRoute.role} ${params.session}`,
       );
       const record: ChiefMessageRecord = {
         version: 2,
@@ -12171,7 +12267,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         fromSessionId: sender.piSessionId,
         toSessionId: params.session,
         leadSessionId: sender.piSessionId,
-        peerSource: { role: "manager" },
+        peerSource:
+          remoteRoute.role === "lead"
+            ? { role: "lead", remoteOrdinary: true }
+            : { role: "manager" },
         text: prepared.transportText ?? prepared.text,
         ...(prepared.resultBindings.length
           ? { resultBindings: [...prepared.resultBindings] }
@@ -12199,46 +12298,73 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           ? { workspaceLabel: sender.workspaceLabel }
           : {}),
       };
-      const correspondence =
-        listPeerCorrespondences().find(
-          (item) =>
-            !item.finalized &&
-            item.originSession === sender.piSessionId &&
-            item.recipientSession === params.session,
-        ) ??
-        createPeerCorrespondence({
-          originSession: sender.piSessionId,
-          originGeneration: sender.claim.id,
-          recipientSession: params.session,
-          recipientGeneration: remoteRoute.claimId,
-          acceptanceId: recordId,
-          ...(Object.keys(originDisplay).length ? { originDisplay } : {}),
+      const commitOutbound = (
+        assignments?: Map<
+          string,
+          import("./supervision.ts").GlobalProjectAssignment[]
+        >,
+      ) => {
+        if (remoteRoute.role === "lead") {
+          const currentSender = readPeerLeadRecord(
+            peerRuntime(),
+            sender.piSessionId,
+          );
+          if (
+            !currentSender ||
+            !samePeerLeadAuthority(currentSender, sender) ||
+            !assignments ||
+            !isRemoteOrdinaryLead(currentSender, assignments)
+          )
+            throw new Error("Remote Lead sender authority changed");
+        }
+        const correspondence =
+          listPeerCorrespondences().find(
+            (item) =>
+              !item.finalized &&
+              (item.role ?? "manager") === remoteRoute.role &&
+              item.originSession === sender.piSessionId &&
+              item.recipientSession === params.session,
+          ) ??
+          createPeerCorrespondence({
+            originSession: sender.piSessionId,
+            originGeneration: sender.claim.id,
+            recipientSession: params.session,
+            recipientGeneration: remoteRoute.claimId,
+            acceptanceId: recordId,
+            role: remoteRoute.role,
+            ...(Object.keys(originDisplay).length ? { originDisplay } : {}),
+          });
+        correspondence.recipientGeneration = remoteRoute.claimId;
+        if (Object.keys(originDisplay).length)
+          correspondence.originDisplay = {
+            ...correspondence.originDisplay,
+            ...originDisplay,
+          };
+        storePeerCorrespondence(correspondence);
+        const envelope = JSON.stringify({
+          record,
+          expectedDataRoot: remoteRoute.dataRoot,
+          recipientClaimId: remoteRoute.claimId,
+          attachments,
+          correspondence,
         });
-      correspondence.recipientGeneration = remoteRoute.claimId;
-      if (Object.keys(originDisplay).length)
-        correspondence.originDisplay = {
-          ...correspondence.originDisplay,
-          ...originDisplay,
-        };
-      storePeerCorrespondence(correspondence);
-      const envelope = JSON.stringify({
-        record,
-        expectedDataRoot: remoteRoute.dataRoot,
-        recipientClaimId: remoteRoute.claimId,
-        attachments,
-        correspondence,
-      });
-      const transferDigest = peerPayloadDigest({ record, attachments });
-      persistRemotePeerOutbound({
-        id: recordId,
-        machine: remoteRoute.machine,
-        dataRoot: remoteRoute.dataRoot,
-        session: sender.piSessionId,
-        claimId: sender.claim.id,
-        recipientSession: params.session,
-        digest: transferDigest,
-        envelope,
-      });
+        const transferDigest = peerPayloadDigest({ record, attachments });
+        persistRemotePeerOutbound({
+          id: recordId,
+          machine: remoteRoute.machine,
+          dataRoot: remoteRoute.dataRoot,
+          session: sender.piSessionId,
+          claimId: sender.claim.id,
+          recipientSession: params.session,
+          digest: transferDigest,
+          envelope,
+        });
+        return envelope;
+      };
+      const envelope =
+        remoteRoute.role === "lead"
+          ? withProjectAssignmentAuthority(commitOutbound)
+          : commitOutbound();
       const releaseOutbound = tryClaimRemotePeerOutbound(recordId);
       let accepted = false;
       if (releaseOutbound) {
@@ -12258,8 +12384,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           {
             type: "text",
             text: accepted
-              ? `Message accepted by remote Manager ${params.session} (${recordId}).`
-              : `Message queued locally for remote Manager ${params.session} (${recordId}); remote acceptance is still pending.`,
+              ? `Message accepted by remote ${remoteRoute.role} ${params.session} (${recordId}).`
+              : `Message queued locally for remote ${remoteRoute.role} ${params.session} (${recordId}); remote acceptance is still pending.`,
           },
         ],
         details: {
@@ -13266,6 +13392,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 const source = record.peerSource;
                 if (!recipient || !source)
                   throw new Error("Peer eligibility changed before delivery");
+                const remoteOrdinarySource =
+                  source.role === "lead" &&
+                  "remoteOrdinary" in source &&
+                  source.remoteOrdinary === true;
                 const assignmentSnapshot =
                   source.role === "lead"
                     ? globalProjectAssignmentSnapshot()
@@ -13282,7 +13412,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 );
                 if (
                   !recipientContext ||
-                  !canMessagePeer(source, recipientContext)
+                  (remoteOrdinarySource
+                    ? recipientContext.role !== "lead" ||
+                      !isRemoteOrdinaryLead(recipient, assignmentSnapshot!)
+                    : !canMessagePeer(source, recipientContext))
                 )
                   throw new Error("Peer eligibility changed before delivery");
                 const peerBindings = resolvePeerResultBindings(
@@ -13344,7 +13477,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     current.group?.primaryWorkspaceId !==
                       recipient.group?.primaryWorkspaceId ||
                     !contextCurrent ||
-                    !canMessagePeer(source, recipientContext)
+                    (remoteOrdinarySource
+                      ? recipientContext.role !== "lead" ||
+                        !snapshot ||
+                        !isRemoteOrdinaryLead(current, snapshot)
+                      : !canMessagePeer(source, recipientContext))
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
@@ -13544,7 +13681,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           .then(() => {
             if (!isCurrent()) return;
             if (
-              activeRole() === "manager" &&
+              (activeRole() === "manager" || activeRole() === "lead") &&
               Date.now() >= nextRemoteReconciliation &&
               !remoteReconciliationInFlight
             ) {
