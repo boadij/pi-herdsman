@@ -3844,7 +3844,7 @@ test("unrestorable persisted Chief role selects the neutral charter", async () =
   }
 });
 
-test("suspended persisted Chief role selects the neutral charter", async () => {
+test("malformed Chief coordination emits its diagnostic and suspends the role", async () => {
   let pi: ReturnType<typeof fakePi> | undefined;
   try {
     setLeadEnvironment();
@@ -3857,7 +3857,7 @@ test("suspended persisted Chief role selects the neutral charter", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-role",
-        data: { sessionId: LEAD_SESSION_ID, role: "chief" },
+        data: { sessionId: LEAD_SESSION_ID, role: "chief", leadTools: [] },
       },
       {
         type: "custom",
@@ -3883,6 +3883,14 @@ test("suspended persisted Chief role selects the neutral charter", async () => {
       "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
     );
     assert.deepEqual(pi.pi.getActiveTools(), []);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_state_error" &&
+          entry.data?.error === "Error: invalid pi-herdsman-lead-state entry",
+      ),
+      "malformed coordination must produce its own durable diagnostic",
+    );
     assert.equal(
       pi.entries.some(
         (entry: any) =>
