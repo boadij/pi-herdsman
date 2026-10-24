@@ -4350,6 +4350,7 @@ test("direct assigned Lead success records and replays a failed handoff", async 
     executionPrompt: () => undefined,
     prepareLeadSupervisorStateMessage: async () => undefined,
     definitionRoster: () => undefined,
+    isRoleSuspended: () => false,
     consumeChiefStartPreflight: () => {},
     herdRun,
     controller: {
@@ -4817,6 +4818,7 @@ test("supervisor turns do not enter Lead herd-run tracking", async () => {
     executionPrompt: () => undefined,
     prepareLeadSupervisorStateMessage: async () => undefined,
     definitionRoster: () => undefined,
+    isRoleSuspended: () => false,
     consumeChiefStartPreflight: () => {},
     herdRun: {
       agentStarted: () => herdEvents++,
@@ -4844,6 +4846,72 @@ test("supervisor turns do not enter Lead herd-run tracking", async () => {
   await events.agentSettled(context, false);
   assert.equal(herdEvents, 0);
   assert.equal(settledResults, 1);
+});
+
+test("suspended and unverified sessions do not receive Lead execution sections", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+  for (const state of [
+    { activeLead: true, suspended: true },
+    { activeLead: false, suspended: false },
+  ]) {
+    let supervisorStatePreparations = 0;
+    const sentMessages: string[] = [];
+    const roster = {
+      sessionId: "session",
+      definitions: [{ name: "lead-only" }],
+    };
+    const events = createLeadAgentEventRuntime({
+      isCurrentChief: () => false,
+      setActiveTools: () => {},
+      chiefTools: [],
+      leadInboxRuntime: {
+        holdStartPreflight: () => {},
+        agentSettled: () => {},
+      },
+      prepareSupervisionMessage: async () => undefined,
+      sendMessage: (message: string) => sentMessages.push(message),
+      chiefSystemPrompt: (_options, body) => body,
+      isActiveManager: () => false,
+      roleCharter: () => "neutral",
+      currentChiefAllowedTools: () => undefined,
+      supervisoryProfileBody: () => "",
+      isActiveLead: () => state.activeLead,
+      isRoleSuspended: () => state.suspended,
+      executionPrompt: () => "Lead execution instructions",
+      prepareLeadSupervisorStateMessage: async () => {
+        supervisorStatePreparations++;
+        return "<supervisor_state>private guidance</supervisor_state>";
+      },
+      definitionRoster: () => roster,
+      consumeChiefStartPreflight: () => {},
+      herdRun: {
+        agentStarted: () => {},
+        agentSettled: async () => {},
+        turnEnd: () => {},
+        beforeSettle: () => {},
+        hasActiveTurn: () => false,
+      },
+      controller: {
+        settleAsks: () => {},
+        sessionSignal: () => new AbortController().signal,
+        settleResults: async () => {},
+      },
+    } as any);
+    const event: any = { systemPromptOptions: { sections: {} } };
+    await events.beforeAgentStart(event, {
+      sessionManager: { getSessionId: () => "session" },
+    } as any);
+    assert.equal(
+      "agent_definitions" in event.systemPromptOptions.sections,
+      false,
+    );
+    assert.equal(
+      "pi_herdsman_lead_execution" in event.systemPromptOptions.sections,
+      false,
+    );
+    assert.equal(supervisorStatePreparations, 0);
+    assert.deepEqual(sentMessages, []);
+  }
 });
 
 test("cancellation report failure is diagnosed before result reconciliation", async () => {
@@ -4891,6 +4959,7 @@ test("cancellation report failure is diagnosed before result reconciliation", as
     executionPrompt: () => undefined,
     prepareLeadSupervisorStateMessage: async () => undefined,
     definitionRoster: () => undefined,
+    isRoleSuspended: () => false,
     consumeChiefStartPreflight: () => {},
     herdRun,
     controller: {

@@ -1030,6 +1030,7 @@ export function createLeadShutdownRuntime(host: {
   >;
   clearStartupDefinitionRoster(): void;
   leadInboxRuntime: Pick<LeadInboxRuntime, "beginShutdown" | "shutdown">;
+  drainLeadMetadata(): Promise<void>;
   controller: Pick<
     LeadController,
     | "abortSession"
@@ -1047,14 +1048,25 @@ export function createLeadShutdownRuntime(host: {
   const isRoot = () => host.isRoot();
   let shutDown = false;
   return {
-    shutdown(_ctx: ExtensionContext): void {
+    async shutdown(_ctx: ExtensionContext): Promise<void> {
       if (shutDown) return;
       shutDown = true;
       host.roleTransitions.beginShutdownRole();
       host.clearStartupDefinitionRoster();
       host.leadInboxRuntime.beginShutdown();
-      host.roleTransitions.shutdownRole();
       host.controller.abortSession();
+      host.roleTransitions.shutdownRole();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          host.drainLeadMetadata(),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 250);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       host.leadInboxRuntime.shutdown();
       host.controller.clearPendingStarts();
       host.controller.clearSession();
@@ -1497,6 +1509,7 @@ export function createLeadAgentEventRuntime(host: {
   >;
   definitionRoster():
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  isRoleSuspended(): boolean;
   consumeChiefStartPreflight(ctx: ExtensionContext): void;
   herdRun: Pick<
     LeadHerdRunRuntime,
@@ -1541,12 +1554,13 @@ export function createLeadAgentEventRuntime(host: {
         await host.drainRetirementNotices(ctx, true);
         return;
       }
-      const supervisorStateMessage = host.isActiveLead()
+      const activeLead = host.isActiveLead() && !host.isRoleSuspended();
+      const supervisorStateMessage = activeLead
         ? await host.prepareLeadSupervisorStateMessage(ctx)
         : undefined;
       if (supervisorStateMessage) host.sendMessage(supervisorStateMessage);
-      const roster = host.definitionRoster();
-      const prompt = host.isActiveLead() ? host.executionPrompt() : undefined;
+      const roster = activeLead ? host.definitionRoster() : undefined;
+      const prompt = activeLead ? host.executionPrompt() : undefined;
       if (prompt) sections.pi_herdsman_lead_execution = prompt;
       else delete sections.pi_herdsman_lead_execution;
       if (roster && roster.sessionId === ctx.sessionManager.getSessionId())
@@ -3227,23 +3241,24 @@ export function registerLeadRuntime(
   let ownedTab: { tabId: string; label: string } | undefined;
   let reportedTabRenameFailure: string | undefined;
   let reportedRoleMetadataFailure: string | undefined;
+  const presentationCurrent = (generation: number) =>
+    controller.sessionActive() && generation === leadRuntime.sessionGeneration;
   const publishLeadRole = (
     ctx: ExtensionContext,
     _mode: "inactive" | "active" | "suspended",
     generation: number,
   ): Promise<void> => {
+    if (!controller.sessionActive()) return Promise.resolve();
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionGeneration = leadRuntime.sessionGeneration;
     const failureKey = `${sessionId}:${sessionGeneration}:${generation}`;
+    const current = () =>
+      presentationCurrent(sessionGeneration) &&
+      generation === leadRuntime.chiefModeGeneration;
     leadMetadataQueue = leadMetadataQueue
       .catch(() => {})
       .then(async () => {
-        if (
-          generation !== leadRuntime.chiefModeGeneration ||
-          sessionGeneration !== leadRuntime.sessionGeneration ||
-          sessionId !== ctx.sessionManager.getSessionId()
-        )
-          return;
+        if (!current()) return;
         const paneId = roleHost.paneId();
         if (!paneId) return;
         const role = effectiveLeadRole();
@@ -3288,14 +3303,11 @@ export function registerLeadRuntime(
           noResult: true,
           timeout: 10_000,
         });
+        if (!current()) return;
         reportedRoleMetadataFailure = undefined;
       })
       .catch((error) => {
-        if (
-          sessionGeneration !== leadRuntime.sessionGeneration ||
-          sessionId !== ctx.sessionManager.getSessionId()
-        )
-          return;
+        if (!current()) return;
         if (reportedRoleMetadataFailure === failureKey) return;
         reportedRoleMetadataFailure = failureKey;
         try {
@@ -3320,9 +3332,7 @@ export function registerLeadRuntime(
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionGeneration = leadRuntime.sessionGeneration;
     const current = () =>
-      revision === tabRenameRevision &&
-      sessionGeneration === leadRuntime.sessionGeneration &&
-      sessionId === ctx.sessionManager.getSessionId();
+      revision === tabRenameRevision && presentationCurrent(sessionGeneration);
     tabRenameQueue = tabRenameQueue
       .catch(() => {})
       .then(async () => {
@@ -3339,6 +3349,7 @@ export function registerLeadRuntime(
             label = sessionKind?.kind === "managed" ? "Managed Lead" : "Lead";
           } catch (error) {
             // A verified assignment is required to claim Managed Lead.
+            if (!current()) return;
             options.sessionStartOptions.appendRoleError(ctx, error);
             label = sessionKind?.kind === "managed" ? "Managed Lead" : "Lead";
           }
@@ -3409,8 +3420,9 @@ export function registerLeadRuntime(
           noResult: true,
           timeout: 10_000,
         });
+        if (!presentationCurrent(sessionGeneration)) return;
         ownedTab = { tabId: tab.tab_id, label };
-        reportedTabRenameFailure = undefined;
+        if (current()) reportedTabRenameFailure = undefined;
       })
       .catch((error) => {
         if (!current()) return;
@@ -3438,6 +3450,7 @@ export function registerLeadRuntime(
       contextPercent?: number;
     },
   ): void => {
+    if (!controller.sessionActive()) return;
     if (leadRuntime.controllerRole === "manager") {
       void publishLeadRole(
         ctx,
@@ -3448,26 +3461,23 @@ export function registerLeadRuntime(
     }
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionGeneration = leadRuntime.sessionGeneration;
+    const current = () => presentationCurrent(sessionGeneration);
     leadMetadataQueue = leadMetadataQueue
       .catch(() => {})
       .then(() => {
         if (
-          sessionGeneration !== leadRuntime.sessionGeneration ||
-          sessionId !== ctx.sessionManager.getSessionId() ||
+          !current() ||
           leadRuntime.controllerRole !== "lead" ||
           leadRuntime.roleSuspended
         )
           return;
         return roleHost.reportLeadMetadata(pi, ctx, metadata).then(() => {
+          if (!current()) return;
           reportedRoleMetadataFailure = undefined;
         });
       })
       .catch((error) => {
-        if (
-          sessionGeneration !== leadRuntime.sessionGeneration ||
-          sessionId !== ctx.sessionManager.getSessionId()
-        )
-          return;
+        if (!current()) return;
         const failureKey = `${sessionId}:${sessionGeneration}:${leadRuntime.chiefModeGeneration}`;
         if (reportedRoleMetadataFailure === failureKey) return;
         reportedRoleMetadataFailure = failureKey;
@@ -4774,6 +4784,7 @@ export function registerLeadRuntime(
     controller,
     leadStatusRuntime: statusRuntime,
     leadInboxRuntime: inboxRuntime,
+    drainLeadMetadata: () => leadMetadataQueue,
     herdRun: herdRunRuntime,
   });
   pi.on("turn_start", () => controller.resetAssignmentGuidance());

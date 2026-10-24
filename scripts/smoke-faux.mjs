@@ -1410,7 +1410,60 @@ export default function install(pi) {
         piVersion: piPackage.version,
         model: model.id,
         hasAgentDefinitions: systemPrompt.includes("<agent_definitions>"),
+        hasLeadIdentity: systemPrompt.includes(
+          "You are the Lead for this Pi session.",
+        ),
+        hasManagerIdentity: systemPrompt.includes(
+          "You are the verified Manager for this Pi session.",
+        ),
+        hasChiefIdentity: systemPrompt.includes(
+          "You are the verified workspace-neutral Chief",
+        ),
+        hasRoleSection: systemPrompt.includes("<pi_herdsman_role>"),
       };
+      if (
+        provenance.hasRoleSection &&
+        provenance.hasLeadIdentity &&
+        (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
+      )
+        throw new Error(
+          "Provider request contains contradictory role identities",
+        );
+      if (model.id === "core" && !process.env.PI_HERDSMAN_AGENT_DEFINITION) {
+        if (!provenance.hasRoleSection || !provenance.hasLeadIdentity)
+          throw new Error("Provider request omitted the Lead role contract");
+        if (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
+          throw new Error(
+            "Provider request contains a contradictory role identity",
+          );
+      }
+      const expectedRole =
+        model.id.startsWith("manager-") && !model.id.endsWith("-lead")
+          ? "manager"
+          : undefined;
+      if (expectedRole) {
+        if (!provenance.hasRoleSection)
+          throw new Error(
+            `Provider request omitted the ${expectedRole} role section`,
+          );
+        const identity = {
+          lead: provenance.hasLeadIdentity,
+          manager: provenance.hasManagerIdentity,
+          chief: provenance.hasChiefIdentity,
+        };
+        if (!identity[expectedRole])
+          throw new Error(
+            `Provider request omitted the ${expectedRole} role contract`,
+          );
+        if (
+          Object.entries(identity).some(
+            ([role, present]) => role !== expectedRole && present,
+          )
+        )
+          throw new Error(
+            `Provider request contains an identity other than ${expectedRole}`,
+          );
+      }
       const evidenceDir = join(
         process.env.PI_CODING_AGENT_DIR,
         "pi-herdsman",
@@ -1421,6 +1474,39 @@ export default function install(pi) {
         `${JSON.stringify(provenance)}\n`,
       );
       recordedSessions.add(currentSessionId);
+    }
+    if (model.id === "chief-tree") {
+      const systemPrompt = getCurrentSystemPrompt(context.messages);
+      const request = text(lastUser(context.messages));
+      const expectedRole = request.includes("PI_HERDSMAN_CHIEF_TREE_POST_CHIEF")
+        ? "chief"
+        : request.includes("PI_HERDSMAN_CHIEF_TREE_STARTUP") ||
+            request.includes("PI_HERDSMAN_CHIEF_TREE_FOLLOWUP")
+          ? "lead"
+          : undefined;
+      if (expectedRole) {
+        const identity = {
+          lead: systemPrompt.includes("You are the Lead for this Pi session."),
+          manager: systemPrompt.includes(
+            "You are the verified Manager for this Pi session.",
+          ),
+          chief: systemPrompt.includes(
+            "You are the verified workspace-neutral Chief",
+          ),
+        };
+        if (!identity[expectedRole])
+          throw new Error(
+            `Provider request omitted the ${expectedRole} identity`,
+          );
+        if (
+          Object.entries(identity).some(
+            ([role, present]) => role !== expectedRole && present,
+          )
+        )
+          throw new Error(
+            `Provider request contains an identity other than ${expectedRole}`,
+          );
+      }
     }
     if (model.id === "terminal-error" || model.id === "terminal-agent-error") {
       const first = terminalErrorRequests++ === 0;
