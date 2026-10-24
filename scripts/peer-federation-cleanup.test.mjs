@@ -238,3 +238,27 @@ test("missing-resource diagnostics require the exact resource type and ID", () =
     true,
   );
 });
+
+test("lowercase missing-container diagnostics require the exact container ID", () => {
+  const id = "a".repeat(64);
+  assert.equal(
+    isMissingDockerResource("container", id, `error: no such object: ${id}`),
+    true,
+  );
+  assert.equal(
+    isMissingDockerResource(
+      "container",
+      id,
+      `error: no such object: ${"b".repeat(64)}`,
+    ),
+    false,
+  );
+  assert.equal(
+    isMissingDockerResource(
+      "container",
+      id,
+      `error: no such object: ${id}extra`,
+    ),
+    false,
+  );
+});

@@ -12325,17 +12325,23 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const target = remoteRoute
       ? undefined
       : await livePeerLead(ctx, params.session);
-    if (
-      !sender ||
-      (sender.role ?? "lead") !== activeRole() ||
-      (remoteRoute
-        ? remoteRoute.role !== activeRole() ||
-          ambiguousRemoteSessions.has(params.session)
-        : (!target || (target.role ?? "lead") !== activeRole()) &&
-          returnCorrespondences.length !== 1)
-    )
+    const rejection = !sender
+      ? "sender_unavailable"
+      : (sender.role ?? "lead") !== activeRole()
+        ? "sender_role_changed"
+        : remoteRoute
+          ? remoteRoute.role !== activeRole()
+            ? "route_role_mismatch"
+            : ambiguousRemoteSessions.has(params.session)
+              ? "route_ambiguous"
+              : undefined
+          : (!target || (target.role ?? "lead") !== activeRole()) &&
+              returnCorrespondences.length !== 1
+            ? "no_authorized_target"
+            : undefined;
+    if (rejection)
       throw new Error(
-        "Peer target was not found or is no longer a live same-role peer",
+        `Peer target was not found or is no longer a live same-role peer [${rejection}]`,
       );
     const recordId = randomUUID();
     const createdAt = Date.now();

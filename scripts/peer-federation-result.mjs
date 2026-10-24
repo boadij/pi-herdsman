@@ -12,6 +12,67 @@ export function ordinaryLeadDeliveryReady(entries, messageId, inbox) {
   );
 }
 
+export function currentSendDiagnostics(calls, results, resultCounts, receipt) {
+  const callIds = [...calls.keys()];
+  const callId = callIds.length === 1 ? callIds[0] : undefined;
+  const resultCount = callId ? (resultCounts.get(callId) ?? 0) : 0;
+  const result = resultCount === 1 ? results.get(callId) : undefined;
+  let outcome = "unknown";
+  if (callId && resultCount === 0) outcome = "pending";
+  else if (result) outcome = result.isError === true ? "error" : "success";
+  const text = (result?.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  const authorizationReason =
+    outcome === "error"
+      ? (text.match(
+          /\[(sender_unavailable|sender_role_changed|route_role_mismatch|route_ambiguous|no_authorized_target)\]/,
+        )?.[1] ?? "unknown")
+      : "unknown";
+  const resultReceipt = result?.details;
+  const durableQueueReceipt = Boolean(
+    resultReceipt?.queued === true &&
+    typeof resultReceipt.id === "string" &&
+    receipt?.id === resultReceipt.id,
+  );
+  return {
+    messagePeerOutcome: outcome,
+    authorizationReason,
+    durableQueueReceipt,
+  };
+}
+
+export function assertOrdinaryLeadSendAcceptance(diagnostics) {
+  const failed = [
+    diagnostics.freshListPeersCalls !== 1 && "freshListPeersCalls",
+    diagnostics.freshDiscoveryMatched !== true && "freshDiscoveryMatched",
+    diagnostics.messagePeerCalls !== 1 && "messagePeerCalls",
+    diagnostics.messagePeerOutcome !== "success" && "messagePeerOutcome",
+    diagnostics.durableQueueReceipt !== true && "durableQueueReceipt",
+  ].filter(Boolean);
+  if (failed.length)
+    throw new Error(
+      `A ordinary Lead send phase failed exact correlated acceptance checks: ${failed.join(", ")}`,
+    );
+}
+
+export function currentSendDiscoveryMatched(
+  calls,
+  results,
+  resultCounts,
+  peerSession,
+) {
+  if (calls.size !== 1) return false;
+  const [callId] = calls.keys();
+  return (
+    resultCounts.get(callId) === 1 &&
+    results
+      .get(callId)
+      ?.details?.peers?.some((peer) => peer.session === peerSession) === true
+  );
+}
+
 export function isLiveCorrespondenceRecipient(probe, correspondence) {
   const role = correspondence.role ?? "manager";
   return (

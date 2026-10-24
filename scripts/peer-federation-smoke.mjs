@@ -19,7 +19,10 @@ import {
   isMissingDockerResource,
 } from "./peer-federation-cleanup.mjs";
 import {
+  assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
+  currentSendDiscoveryMatched,
+  currentSendDiagnostics,
   delegateResultEvidence,
   isLiveCorrespondenceRecipient,
   matchedManagedLeadDenial,
@@ -428,7 +431,8 @@ try {
       let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, modelTurnsAfterInbound = 0, modelTurnsBeforeBinding = 0, modelTurnsAfterBinding = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
       let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
       const replyCalls = new Map(), replyResults = [];
-      let inSendTurn = false, receipt = null, listPeersCalls = 0, inboundSeen = false, bindingSeen = false;
+      let inSendTurn = false, receipt = null, listPeersCalls = 0, freshListPeersCalls = 0, inboundSeen = false, bindingSeen = false;
+      const sendCalls = new Map(), sendResults = new Map(), sendResultCounts = new Map(), freshListCalls = new Map(), freshListResults = new Map(), freshListResultCounts = new Map();
       for (const line of lines) {
         if (!line) continue;
         let entry;
@@ -437,9 +441,28 @@ try {
           inSendTurn = entry.message.content?.some?.(part => part.type === "text" && part.text?.startsWith("PEER_E2E_A_LEAD_SEND ")) ?? false;
           if (inSendTurn) receipt = null;
         }
-        const details = entry.message?.details ?? entry.details;
-        if (inSendTurn && details?.queued === true && typeof details.id === "string")
-          receipt = { id: details.id, fromSessionId: details.fromSessionId, remoteSessionId: details.remoteSessionId };
+        if (inSendTurn && entry.message?.role === "assistant") for (const part of entry.message.content ?? []) {
+          if (part.type === "toolCall" && part.name === "message_peer") sendCalls.set(part.id, part);
+          if (part.type === "toolCall" && part.name === "list_peers") {
+            freshListPeersCalls++;
+            freshListCalls.set(part.id, part);
+          }
+        }
+        if (inSendTurn && entry.message?.role === "toolResult") {
+          if (sendCalls.has(entry.message.toolCallId)) {
+            const callId = entry.message.toolCallId;
+            const resultDetails = entry.message.details ?? entry.details;
+            sendResults.set(callId, { ...entry.message, details: resultDetails });
+            sendResultCounts.set(callId, (sendResultCounts.get(callId) ?? 0) + 1);
+            if (resultDetails?.queued === true && typeof resultDetails.id === "string")
+              receipt = { id: resultDetails.id, fromSessionId: resultDetails.fromSessionId, remoteSessionId: resultDetails.remoteSessionId };
+          }
+          if (freshListCalls.has(entry.message.toolCallId)) {
+            const callId = entry.message.toolCallId;
+            freshListResultCounts.set(callId, (freshListResultCounts.get(callId) ?? 0) + 1);
+            freshListResults.set(callId, { ...entry.message, details: entry.message.details ?? entry.details });
+          }
+        }
         const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
         if (hasListPeers) listPeersCalls++;
         if (kind === "recipient" && entry.message?.role === "assistant") {
@@ -482,26 +505,9 @@ try {
           hasPortableContent ||= evidence.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
         }
       }
-      const tail = Buffer.from(text).subarray(-2048).toString("utf8");
-      const recentTools = [];
-      for (const line of tail.split("\\n")) {
-        try {
-          const entry = JSON.parse(line);
-          for (const part of entry.message?.content ?? []) if (part.type === "toolCall" && typeof part.name === "string") recentTools.push({ id: part.id, name: part.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40), outcome: "called" });
-          if (entry.message?.role === "toolResult") {
-            const call = recentTools.findLast(item => item.id === entry.message.toolCallId);
-            if (call) {
-              call.outcome = entry.message.isError ? "error" : "result";
-              if (call.name === "message_peer" && entry.message.isError) {
-                const errorText = (entry.message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" ");
-                call.errorCategory = errorText.includes("not available on the current branch") ? "missing-result-binding" : errorText.includes("same-role peer") ? "peer-authorization" : "other";
-              }
-            }
-          }
-        } catch {}
-      }
-      const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
-      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, modelTurnsBeforeBinding, modelTurnsAfterBinding, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent: !!importedResultBinding, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+      const freshDiscoveryMatched = freshListPeersCalls === 1 && currentSendDiscoveryMatched(freshListCalls, freshListResults, freshListResultCounts, process.argv[5]);
+      const sendDiagnostics = currentSendDiagnostics(sendCalls, sendResults, sendResultCounts, receipt);
+      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, modelTurnsBeforeBinding, modelTurnsAfterBinding, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent: !!importedResultBinding, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { freshListPeersCalls, freshDiscoveryMatched, messagePeerCalls: sendCalls.size, ...sendDiagnostics } }));
     `;
     const output = exec(side, [
       "node",
@@ -511,6 +517,7 @@ try {
       kind,
       id ?? "",
       ref ?? "",
+      resources.b.ordinaryLead.sessionId,
     ]);
     return JSON.parse(output);
   };
@@ -1372,7 +1379,7 @@ try {
     .filter(Boolean)
     .map(JSON.parse);
   assertPeerInListPeersResult(
-    ordinaryLeadTranscript,
+    ordinaryLeadTranscript.slice(discoveryStartLine),
     resources.b.ordinaryLead.sessionId,
   );
   stage("ordinary-lead-discovery-confirmed", {
@@ -1750,10 +1757,11 @@ try {
       `PEER_E2E_A_LEAD_SEND ${leadResult.semanticRef}`,
     ]);
     herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
-    let acceptance;
+    let acceptance, sendDiagnostics;
     for (let attempt = 0; attempt < 120; attempt++) {
       const sendRead = readOrdinaryLeadSession("a", "send");
       acceptance = sendRead.receipt;
+      sendDiagnostics = sendRead.diagnostics;
       if (acceptance) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
@@ -1763,6 +1771,7 @@ try {
         `A ordinary Lead's Pi session has no durable remote peer queue receipt; diagnostics=${JSON.stringify(diagnostics)}`,
       );
     }
+    assertOrdinaryLeadSendAcceptance(sendDiagnostics);
     resources.acceptanceMessageId = acceptance.id;
     exec("a", [
       "sh",

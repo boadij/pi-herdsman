@@ -1,13 +1,141 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
+  currentSendDiagnostics,
+  currentSendDiscoveryMatched,
   isLiveCorrespondenceRecipient,
   matchedManagedLeadDenial,
   matchedDelegateResult,
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+
+test("ordinary Lead send acceptance requires one fresh discovery, one send, and its exact receipt", () => {
+  const diagnostics = {
+    freshListPeersCalls: 1,
+    freshDiscoveryMatched: true,
+    messagePeerCalls: 1,
+    messagePeerOutcome: "success",
+    durableQueueReceipt: true,
+  };
+  assert.doesNotThrow(() => assertOrdinaryLeadSendAcceptance(diagnostics));
+  for (const [field, value] of Object.entries({
+    freshListPeersCalls: 0,
+    freshDiscoveryMatched: false,
+    messagePeerCalls: 2,
+    messagePeerOutcome: "unknown",
+    durableQueueReceipt: false,
+  }))
+    assert.throws(
+      () =>
+        assertOrdinaryLeadSendAcceptance({ ...diagnostics, [field]: value }),
+      new RegExp(field),
+    );
+});
+
+test("send-turn discovery requires exactly one correlated result containing the peer", () => {
+  const calls = new Map([["list-call", {}]]);
+  const results = new Map([
+    ["list-call", { details: { peers: [{ session: "expected-peer" }] } }],
+  ]);
+  assert.equal(
+    currentSendDiscoveryMatched(
+      calls,
+      results,
+      new Map([["list-call", 1]]),
+      "expected-peer",
+    ),
+    true,
+  );
+  assert.equal(
+    currentSendDiscoveryMatched(calls, results, new Map(), "expected-peer"),
+    false,
+  );
+  assert.equal(
+    currentSendDiscoveryMatched(
+      calls,
+      results,
+      new Map([["list-call", 2]]),
+      "expected-peer",
+    ),
+    false,
+  );
+  assert.equal(
+    currentSendDiscoveryMatched(
+      calls,
+      results,
+      new Map([["list-call", 1]]),
+      "other-peer",
+    ),
+    false,
+  );
+});
+
+test("current send diagnostics keep authorization and receipt tied to one exact result", () => {
+  const earlierError = {
+    isError: true,
+    content: [{ type: "text", text: "denied [route_ambiguous]" }],
+  };
+  const laterSuccess = {
+    isError: false,
+    details: { queued: true, id: "receipt-2" },
+  };
+  const multipleCalls = new Map([
+    ["call-1", {}],
+    ["call-2", {}],
+  ]);
+  const multipleResults = new Map([
+    ["call-1", earlierError],
+    ["call-2", laterSuccess],
+  ]);
+  const counts = new Map([
+    ["call-1", 1],
+    ["call-2", 1],
+  ]);
+  assert.deepEqual(
+    currentSendDiagnostics(multipleCalls, multipleResults, counts, {
+      id: "receipt-2",
+    }),
+    {
+      messagePeerOutcome: "unknown",
+      authorizationReason: "unknown",
+      durableQueueReceipt: false,
+    },
+  );
+
+  const call = new Map([["call-2", {}]]);
+  assert.deepEqual(
+    currentSendDiagnostics(call, multipleResults, counts, { id: "receipt-2" }),
+    {
+      messagePeerOutcome: "success",
+      authorizationReason: "unknown",
+      durableQueueReceipt: true,
+    },
+  );
+  assert.equal(
+    currentSendDiagnostics(call, multipleResults, counts, {
+      id: "other-receipt",
+    }).durableQueueReceipt,
+    false,
+  );
+  assert.equal(
+    currentSendDiagnostics(call, multipleResults, new Map([["call-2", 2]]), {
+      id: "receipt-2",
+    }).messagePeerOutcome,
+    "unknown",
+  );
+  assert.equal(
+    currentSendDiagnostics(
+      new Map([["call-1", {}]]),
+      multipleResults,
+      counts,
+      null,
+    ).authorizationReason,
+    "route_ambiguous",
+  );
+});
 
 test("ordinary Lead delivery wait does not accept an initially empty inbox", () => {
   const messageId = "expected-message";

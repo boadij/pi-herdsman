@@ -5,8 +5,16 @@ const DOCKER_ID = /^[0-9a-f]{64}$/u;
 const IMAGE_ID = /^sha256:[0-9a-f]{64}$/u;
 
 export function isMissingDockerResource(kind, id, stderr) {
+  const lowercaseContainerMarker = `no such object: ${id}`;
+  const lowercaseContainerIndex = stderr.indexOf(lowercaseContainerMarker);
+  const lowercaseContainerMatch =
+    lowercaseContainerIndex !== -1 &&
+    !/[A-Za-z0-9_-]/u.test(
+      stderr[lowercaseContainerIndex + lowercaseContainerMarker.length] ?? "",
+    );
   return (
-    (kind === "container" && stderr.includes(`No such object: ${id}`)) ||
+    (kind === "container" &&
+      (stderr.includes(`No such object: ${id}`) || lowercaseContainerMatch)) ||
     (kind === "network" && stderr.includes(`network ${id} not found`)) ||
     (kind === "volume" && stderr.includes(`get ${id}: no such volume`)) ||
     (kind === "image" && stderr.includes(`No such image: ${id}`))

@@ -301,6 +301,41 @@ const send = (
     context,
   );
 
+test("Lead send reports failed authorization predicates without rejecting a valid route", async (t) => {
+  const unauthorized = fixture("lead");
+  t.after(unauthorized.close);
+  await assert.rejects(
+    send(unauthorized.runtime, unauthorized.context, "missing-peer"),
+    /\[no_authorized_target\]$/u,
+  );
+
+  const changed = fixture("lead");
+  t.after(changed.close);
+  changed.sender.role = "manager";
+  await assert.rejects(
+    send(changed.runtime, changed.context, "missing-peer"),
+    /\[sender_role_changed\]$/u,
+  );
+
+  const valid = fixture("lead");
+  t.after(valid.close);
+  machines.push(machine("one"));
+  const remoteLead = {
+    ...remote("remote-lead"),
+    role: "lead",
+    sessionKind: "ordinary",
+  };
+  nextSnapshots = [
+    { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
+    { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
+  ];
+  await list(valid.runtime, valid.context);
+  assert.equal(
+    (await send(valid.runtime, valid.context, "remote-lead")).details?.accepted,
+    true,
+  );
+});
+
 test("published route remains sendable during refresh and a stale discovery cannot overwrite newer routes", async (t) => {
   const f = fixture();
   t.after(f.close);
