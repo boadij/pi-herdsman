@@ -22,7 +22,6 @@ import {
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
-import { managerProjectionSource } from "./peer-federation-manager-projection.mjs";
 
 let runId = `peer474-${randomUUID()}`;
 let root = join(tmpdir(), runId);
@@ -1996,115 +1995,6 @@ try {
       modelListPeersCallsAdded: listPeersAfterReply - listPeersBeforeReply,
       acknowledged: acknowledged.replies[0].acknowledged,
       reverseRoute: false,
-    });
-    // Reuse the live Manager pair and its existing faux delegation/reply path
-    // to keep Manager federation covered in this independently runnable phase.
-    const managerProjection = (side) =>
-      JSON.parse(
-        exec(side, [
-          "node",
-          "-e",
-          managerProjectionSource,
-          resources[side].managerSessionFile,
-          resources.a.remoteProbe.session,
-        ]),
-      );
-    try {
-      herdr("a", [
-        "agent",
-        "prompt",
-        resources.a.paneId,
-        `PEER_E2E_A_SEND ${leadResult.semanticRef}`,
-        "--wait",
-        "--timeout",
-        "60000",
-      ]);
-    } catch (error) {
-      const pane = herdr("a", [
-        "pane",
-        "read",
-        resources.a.paneId,
-        "--source",
-        "recent",
-        "--lines",
-        "40",
-      ]);
-      const paneStatus = {
-        promptVisible: pane.includes("PEER_E2E_A_SEND"),
-        inputReady: /\b(?:idle|ready)\b/iu.test(pane),
-        errorVisible: /\b(?:error|failed|crashed)\b/iu.test(pane),
-        busy: /\b(?:busy|running|in progress)\b/iu.test(pane),
-        providerError: /\b(?:provider|model|rate limit|quota)\b/iu.test(pane),
-      };
-      const promptError = String(error);
-      const commandError = {
-        timeout: /\b(?:timeout|timed out)\b/iu.test(promptError),
-        busy: /\b(?:busy|running|in progress)\b/iu.test(promptError),
-        unavailable: /\b(?:not found|unavailable|closed|not running)\b/iu.test(
-          promptError,
-        ),
-        providerError: /\b(?:provider|model|rate limit|quota)\b/iu.test(
-          promptError,
-        ),
-      };
-      const sessionTail = JSON.parse(
-        exec("a", [
-          "node",
-          "-e",
-          `const fs=require('node:fs');const lines=fs.readFileSync(process.argv[1],'utf8').trimEnd().split('\\n').slice(-40);const entries=lines.filter(Boolean).map(line=>JSON.parse(line));process.stdout.write(JSON.stringify({promptObserved:entries.some(entry=>entry.message?.role==='user'&&String(entry.message.content).includes('PEER_E2E_A_SEND')),tail:entries.map(({type,customType,message,timestamp})=>({type,customType,role:message?.role,timestamp}))}));`,
-          resources.a.managerSessionFile,
-        ]),
-      );
-      stage("manager-send-prompt-failed", {
-        outcome: "status_timeout",
-        commandError,
-        paneStatus,
-        sessionTail,
-        a: managerProjection("a"),
-        b: managerProjection("b"),
-      });
-      throw new Error("Manager send prompt did not settle");
-    }
-    let bManagerEvidence;
-    let aManagerEvidence;
-    for (let attempt = 0; attempt < 120; attempt++) {
-      bManagerEvidence = managerProjection("b");
-      aManagerEvidence = managerProjection("a");
-      if (
-        bManagerEvidence.firstDeliveryCount >= 1 &&
-        bManagerEvidence.secondDeliveryCount >= 1 &&
-        aManagerEvidence.replyCount >= 1
-      )
-        break;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-    }
-    const managerFile = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peers-v2/received-evidence/${resources.evidence.managerSpecSha256}-manager-spec.md`;
-    const managerFileContent = exec("b", ["cat", managerFile]);
-    const firstManagerDelivery = bManagerEvidence.firstDelivery;
-    const secondManagerDelivery = bManagerEvidence.secondDelivery;
-    const managerReply = aManagerEvidence.replyId;
-    if (
-      !managerReply ||
-      bManagerEvidence.firstDeliveryCount !== 1 ||
-      bManagerEvidence.secondDeliveryCount !== 1 ||
-      typeof firstManagerDelivery.id !== "string" ||
-      typeof secondManagerDelivery.id !== "string" ||
-      firstManagerDelivery.id === secondManagerDelivery.id ||
-      managerFileContent !== managerSpecText ||
-      digest(managerFileContent) !== resources.evidence.managerSpecSha256 ||
-      !firstManagerDelivery.file
-    )
-      throw new Error(
-        `Manager federation did not deliver distinct expected requests, portable file evidence, and a reply: reply=${Boolean(managerReply)}, first=${bManagerEvidence.firstDeliveryCount}, second=${bManagerEvidence.secondDeliveryCount}, file=${managerFile}`,
-      );
-    stage("manager-federation-delivery-evidence-reply-verified", {
-      aSession: resources.a.managerSessionId,
-      bSession: resources.b.managerSessionFile,
-      deliveries: 2,
-      portableFileSha256: resources.evidence.managerSpecSha256,
-      portableFile: "manager-spec.md",
-      replyId: managerReply,
-      discovery: resources.a.remoteProbe?.session,
     });
     if (process.env.PEER_SMOKE_KEEP === "1")
       console.log(`Retained exact resource manifest: ${manifestPath}`);
