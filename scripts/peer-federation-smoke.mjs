@@ -7,12 +7,14 @@ import {
   chmodSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { cleanupSmokeFixture } from "./peer-federation-cleanup.mjs";
 import {
   assertPeerInListPeersResult,
   delegateResultEvidence,
@@ -85,18 +87,62 @@ function sanitizeStartupDiagnostics(value) {
 }
 
 function cleanup() {
-  for (const id of resources.containers)
-    command("docker", ["rm", "-f", id], { allowFailure: true });
-  for (const id of resources.volumes)
-    command("docker", ["volume", "rm", id], { allowFailure: true });
-  if (resources.network)
-    command("docker", ["network", "rm", resources.network], {
-      allowFailure: true,
-    });
-  if (resources.imageTag)
-    command("docker", ["image", "rm", resources.imageTag], {
-      allowFailure: true,
-    });
+  const inspectResource = (kind, id) => {
+    const inspect = (args) => {
+      const result = spawnSync("docker", args, { encoding: "utf8" });
+      if (result.error)
+        throw new Error(`unable to inspect smoke fixture ${kind}`);
+      if (result.status !== 0) {
+        if (
+          /no such (?:object|container|network|volume|image)|not found/iu.test(
+            result.stderr,
+          )
+        )
+          return undefined;
+        throw new Error(`unable to inspect smoke fixture ${kind}`);
+      }
+      return result.stdout.trim();
+    };
+    let args;
+    if (kind === "container")
+      args = ["inspect", "--format", "{{json .Config.Labels}}", id];
+    else if (kind === "network")
+      args = ["network", "inspect", "--format", "{{json .Labels}}", id];
+    else if (kind === "volume")
+      args = ["volume", "inspect", "--format", "{{json .Labels}}", id];
+    else args = ["image", "inspect", "--format", "{{.Id}}", id];
+    const first = inspect(args);
+    if (first === undefined) return undefined;
+    if (kind === "image") {
+      const labels = inspect([
+        "image",
+        "inspect",
+        "--format",
+        "{{json .Config.Labels}}",
+        id,
+      ]);
+      return labels === undefined
+        ? undefined
+        : { id: first, labels: JSON.parse(labels || "null") };
+    }
+    return { labels: JSON.parse(first || "null") };
+  };
+  const removeResource = (kind, id) => {
+    const args =
+      kind === "container"
+        ? ["rm", "-f", id]
+        : kind === "image"
+          ? ["image", "rm", id]
+          : [kind, "rm", id];
+    command("docker", args, { allowFailure: true });
+  };
+  cleanupSmokeFixture(resources, manifestPath, {
+    canonicalize: realpathSync,
+    fixtureBase: tmpdir(),
+    inspectResource,
+    removeResource,
+    removeRoot: (path) => rmSync(path, { recursive: true, force: true }),
+  });
   const remains = (args) =>
     spawnSync("docker", args, { stdio: "ignore" }).status === 0;
   const leftovers = [
@@ -111,7 +157,6 @@ function cleanup() {
       ? [resources.imageTag]
       : []),
   ];
-  rmSync(root, { recursive: true, force: true });
   if (leftovers.length)
     throw new Error(
       `fixture cleanup left exact resources: ${leftovers.join(", ")}`,
@@ -145,13 +190,6 @@ if (process.argv[2] !== "--cleanup") {
 
 try {
   if (process.argv[2] === "--cleanup") {
-    if (
-      !resources.runId?.startsWith("peer474-") ||
-      !resources.root ||
-      !Array.isArray(resources.containers) ||
-      !Array.isArray(resources.volumes)
-    )
-      throw new Error("refusing malformed/non-fixture resource manifest");
     cleanup();
     console.log(`Removed and verified exact resources for ${resources.runId}`);
     process.exit(0);
@@ -159,7 +197,14 @@ try {
   const imageTag = `${runId}:fixture`;
   resources.imageTag = imageTag;
   save();
-  command("docker", ["build", "--tag", imageTag, "."]);
+  command("docker", [
+    "build",
+    "--label",
+    `pi-herdsman.run=${runId}`,
+    "--tag",
+    imageTag,
+    ".",
+  ]);
   resources.image = command("docker", [
     "image",
     "inspect",
