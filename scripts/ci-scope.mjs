@@ -121,16 +121,6 @@ function classify(paths) {
       continue;
     }
 
-    if (
-      path === "Dockerfile" ||
-      path === ".dockerignore" ||
-      path === "scripts/container-smoke.sh" ||
-      path.startsWith("docker/")
-    ) {
-      smoke();
-      continue;
-    }
-
     if (path === "compose.yaml" || path === "compose.tailscale.yaml") {
       config();
       continue;
