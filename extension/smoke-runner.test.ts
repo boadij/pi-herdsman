@@ -3222,10 +3222,12 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-herdsman-faux-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousAgentDefinition = process.env.PI_HERDSMAN_AGENT_DEFINITION;
   const previousEntryPoint = process.argv[1];
   const evidenceDir = join(agentDir, "pi-herdsman", "runtime");
   await mkdir(evidenceDir, { recursive: true });
   process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
   process.argv[1] = resolve(
     "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
   );
@@ -3400,6 +3402,9 @@ test("installed faux provider requeues decisions and emits its terminal failure 
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousAgentDefinition === undefined)
+      delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
+    else process.env.PI_HERDSMAN_AGENT_DEFINITION = previousAgentDefinition;
     process.argv[1] = previousEntryPoint;
     await rm(agentDir, { recursive: true, force: true });
   }

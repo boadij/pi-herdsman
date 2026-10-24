@@ -1429,7 +1429,7 @@ export default function install(pi) {
         throw new Error(
           "Provider request contains contradictory role identities",
         );
-      if (model.id === "core") {
+      if (model.id === "core" && !process.env.PI_HERDSMAN_AGENT_DEFINITION) {
         if (!provenance.hasRoleSection || !provenance.hasLeadIdentity)
           throw new Error("Provider request omitted the Lead role contract");
         if (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
