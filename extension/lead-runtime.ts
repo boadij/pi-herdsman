@@ -1538,7 +1538,7 @@ export function createLeadAgentEventRuntime(host: {
         return;
       }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
-      const supervisorStateMessage = host.isActiveLead()
+      const supervisorStateMessage = activeLead
         ? await host.prepareLeadSupervisorStateMessage(ctx)
         : undefined;
       if (supervisorStateMessage) host.sendMessage(supervisorStateMessage);

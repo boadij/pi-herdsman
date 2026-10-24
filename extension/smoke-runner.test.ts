@@ -3358,6 +3358,44 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         hasRoleSection: false,
       },
     ]);
+    handlers.get("session_start")?.(
+      {},
+      { sessionManager: { getSessionId: () => "faux-missing-role-section" } },
+    );
+    const missingRoleSection = await collect(
+      provider.streamSimple(
+        model("core"),
+        context("Reply exactly CORE_SMOKE_READY.", {}, "Base system prompt."),
+      ),
+    );
+    assert.equal(
+      missingRoleSection.find((event: any) => event.type === "error")?.error
+        .errorMessage,
+      "Provider request omitted the Lead role contract",
+    );
+    handlers.get("session_start")?.(
+      {},
+      {
+        sessionManager: {
+          getSessionId: () => "faux-missing-manager-role-section",
+        },
+      },
+    );
+    const missingManagerRoleSection = await collect(
+      provider.streamSimple(
+        model("manager-handoff"),
+        context(
+          "Reply exactly MANAGER_HANDOFF_ROOT_READY.",
+          {},
+          "Base system prompt.",
+        ),
+      ),
+    );
+    assert.equal(
+      missingManagerRoleSection.find((event: any) => event.type === "error")
+        ?.error.errorMessage,
+      "Provider request omitted the manager role section",
+    );
     assert.equal(handlers.has("agent_settled"), true);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

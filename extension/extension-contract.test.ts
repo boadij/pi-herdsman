@@ -3764,6 +3764,15 @@ test("malformed persisted role fails closed without authoritative lead state", a
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  assert.equal(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+  );
   assert.deepEqual(pi.pi.getActiveTools(), []);
   assert.equal(
     readLeadCoordinationState(
@@ -3777,6 +3786,91 @@ test("malformed persisted role fails closed without authoritative lead state", a
       (entry: any) =>
         entry.customType === "pi_herdsman_role_error" && entry.data?.error,
     ),
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_SOCKET_PATH;
+});
+
+test("unrestorable persisted Chief role selects the neutral charter", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-unrestorable-chief-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { sessionId: LEAD_SESSION_ID, role: "chief" },
+    },
+  ];
+  const pi = fakePi({
+    entries,
+    activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  await pi.events.get("session_start")![0](undefined, context);
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  assert.equal(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_SOCKET_PATH;
+});
+
+test("suspended persisted Chief role selects the neutral charter", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-suspended-chief-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { sessionId: LEAD_SESSION_ID, role: "chief" },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-state",
+      data: { unexpected: true },
+    },
+  ];
+  const pi = fakePi({
+    entries,
+    activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  await pi.events.get("session_start")![0](undefined, context);
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  assert.equal(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+  );
+  assert.deepEqual(pi.pi.getActiveTools(), []);
+  assert.ok(
+    pi.entries.some(
+      (entry: any) =>
+        entry.customType === "pi_herdsman_state_error" && entry.data?.error,
+    ),
+    "the invalid persisted state forces role suspension during startup",
   );
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;

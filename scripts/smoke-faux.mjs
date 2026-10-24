@@ -1429,17 +1429,23 @@ export default function install(pi) {
         throw new Error(
           "Provider request contains contradictory role identities",
         );
-      if (
-        model.id === "core" &&
-        provenance.hasRoleSection &&
-        !provenance.hasLeadIdentity
-      )
-        throw new Error("Provider request omitted the Lead identity");
+      if (model.id === "core") {
+        if (!provenance.hasRoleSection || !provenance.hasLeadIdentity)
+          throw new Error("Provider request omitted the Lead role contract");
+        if (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
+          throw new Error(
+            "Provider request contains a contradictory role identity",
+          );
+      }
       const expectedRole =
         model.id.startsWith("manager-") && !model.id.endsWith("-lead")
           ? "manager"
           : undefined;
-      if (expectedRole && provenance.hasRoleSection) {
+      if (expectedRole) {
+        if (!provenance.hasRoleSection)
+          throw new Error(
+            `Provider request omitted the ${expectedRole} role section`,
+          );
         const identity = {
           lead: provenance.hasLeadIdentity,
           manager: provenance.hasManagerIdentity,
@@ -1447,7 +1453,7 @@ export default function install(pi) {
         };
         if (!identity[expectedRole])
           throw new Error(
-            `Provider request omitted the ${expectedRole} identity`,
+            `Provider request omitted the ${expectedRole} role contract`,
           );
         if (
           Object.entries(identity).some(

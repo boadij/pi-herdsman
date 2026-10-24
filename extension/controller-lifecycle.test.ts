@@ -4854,6 +4854,8 @@ test("suspended and unverified sessions do not receive Lead execution sections",
     { activeLead: true, suspended: true },
     { activeLead: false, suspended: false },
   ]) {
+    let supervisorStatePreparations = 0;
+    const sentMessages: string[] = [];
     const roster = {
       sessionId: "session",
       definitions: [{ name: "lead-only" }],
@@ -4867,7 +4869,7 @@ test("suspended and unverified sessions do not receive Lead execution sections",
         agentSettled: () => {},
       },
       prepareSupervisionMessage: async () => undefined,
-      sendMessage: () => {},
+      sendMessage: (message: string) => sentMessages.push(message),
       chiefSystemPrompt: (_options, body) => body,
       isActiveManager: () => false,
       roleCharter: () => "neutral",
@@ -4876,7 +4878,10 @@ test("suspended and unverified sessions do not receive Lead execution sections",
       isActiveLead: () => state.activeLead,
       isRoleSuspended: () => state.suspended,
       executionPrompt: () => "Lead execution instructions",
-      prepareLeadSupervisorStateMessage: async () => undefined,
+      prepareLeadSupervisorStateMessage: async () => {
+        supervisorStatePreparations++;
+        return "<supervisor_state>private guidance</supervisor_state>";
+      },
       definitionRoster: () => roster,
       consumeChiefStartPreflight: () => {},
       herdRun: {
@@ -4904,6 +4909,8 @@ test("suspended and unverified sessions do not receive Lead execution sections",
       "pi_herdsman_lead_execution" in event.systemPromptOptions.sections,
       false,
     );
+    assert.equal(supervisorStatePreparations, 0);
+    assert.deepEqual(sentMessages, []);
   }
 });
 
