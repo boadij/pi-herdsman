@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.33.0](https://github.com/boadij/pi-herdsman/compare/v0.32.1...v0.33.0) (2026-10-24)
+
+
+### Features
+
+* **agent:** prefer context-relevant session continuation ([#569](https://github.com/boadij/pi-herdsman/issues/569)) ([00f8b86](https://github.com/boadij/pi-herdsman/commit/00f8b867408173b47aaa094f2f06d51d469bca76)), closes [#568](https://github.com/boadij/pi-herdsman/issues/568)
+* **manager:** integrate managed branches and finalize worktrees ([#575](https://github.com/boadij/pi-herdsman/issues/575)) ([21cb133](https://github.com/boadij/pi-herdsman/commit/21cb1336cab7a140b82bf7e8ff34f28a649640e3))
+* **peer:** coordinate Managers across Herdr machines ([#508](https://github.com/boadij/pi-herdsman/issues/508)) ([75924b3](https://github.com/boadij/pi-herdsman/commit/75924b3b1634a8f56a46def0273bf84d66003741))
+* **peer:** federate ordinary Leads across Herdr machines ([#573](https://github.com/boadij/pi-herdsman/issues/573)) ([4bba4c7](https://github.com/boadij/pi-herdsman/commit/4bba4c7b24e35e9be072dc8d370a1669f51c4bca))
+* **peer:** show reply-only Managers in peer discovery ([#562](https://github.com/boadij/pi-herdsman/issues/562)) ([49b348d](https://github.com/boadij/pi-herdsman/commit/49b348d69ef7ad12d8f67c2e310b713c17177424)), closes [#561](https://github.com/boadij/pi-herdsman/issues/561) [#474](https://github.com/boadij/pi-herdsman/issues/474) [#508](https://github.com/boadij/pi-herdsman/issues/508) [#547](https://github.com/boadij/pi-herdsman/issues/547) [#549](https://github.com/boadij/pi-herdsman/issues/549) [#203](https://github.com/boadij/pi-herdsman/issues/203)
+
+
+### Fixes
+
+* **agent:** avoid futile continuation of retired sessions ([#553](https://github.com/boadij/pi-herdsman/issues/553)) ([c6e7c23](https://github.com/boadij/pi-herdsman/commit/c6e7c23fd00d5530d9419f612b47c121702bd583))
+* **ci:** reconcile npm PR preview lifecycle ([#572](https://github.com/boadij/pi-herdsman/issues/572)) ([b7b29e7](https://github.com/boadij/pi-herdsman/commit/b7b29e7a6396b31948f6c119b241a314e36bf817))
+* **ci:** recover incomplete release publication ([#551](https://github.com/boadij/pi-herdsman/issues/551)) ([cdca764](https://github.com/boadij/pi-herdsman/commit/cdca76435106be69b71bb78d979b6a2675ee6977))
+* **instructions:** expose the verified active role to the model ([#581](https://github.com/boadij/pi-herdsman/issues/581)) ([073e265](https://github.com/boadij/pi-herdsman/commit/073e2653c6343ffc3492a4e5d9d9fc8b6fa02e08))
+* **lock:** prevent false liveness after PID reuse ([#567](https://github.com/boadij/pi-herdsman/issues/567)) ([f5ec2c3](https://github.com/boadij/pi-herdsman/commit/f5ec2c307c919231a43116db368cb3608a33118e))
+* **onboarding:** simplify first use and reconcile existing installations ([#558](https://github.com/boadij/pi-herdsman/issues/558)) ([6a946fb](https://github.com/boadij/pi-herdsman/commit/6a946fb6c7cb2a8d4e70726580c06f68e5bbef46))
+* **peer:** restore timely unattended Manager replies ([#549](https://github.com/boadij/pi-herdsman/issues/549)) ([893962e](https://github.com/boadij/pi-herdsman/commit/893962e837aa8b066a8830f5515914ba8986d4ea))
+* **peer:** show origin identity for reply-only Managers ([#565](https://github.com/boadij/pi-herdsman/issues/565)) ([3435e2f](https://github.com/boadij/pi-herdsman/commit/3435e2f64a0589c66dfa2767ed674aff6c006d68))
+* **runtime:** prevent stale presentation callbacks after session replacement ([#580](https://github.com/boadij/pi-herdsman/issues/580)) ([a31b790](https://github.com/boadij/pi-herdsman/commit/a31b79088f70c88cc49accb40e499e3297db33e1))
+* **runtime:** remove invalid startup metadata publication ([#585](https://github.com/boadij/pi-herdsman/issues/585)) ([ca2a0a9](https://github.com/boadij/pi-herdsman/commit/ca2a0a9905e451483454ee602aa007a8b9b78175))
+* **supervision:** avoid redundant managed Lead completion announcements ([#556](https://github.com/boadij/pi-herdsman/issues/556)) ([cd700af](https://github.com/boadij/pi-herdsman/commit/cd700af1443629b31d8fb584c17db8904fb739df))
+* **supervision:** preserve ordinary Lead reporting guidance ([#557](https://github.com/boadij/pi-herdsman/issues/557)) ([12b861c](https://github.com/boadij/pi-herdsman/commit/12b861c3efa9c722c90bd1d7506459b271c0a647))
+* **supervision:** surface incompatible staff without granting actions ([#582](https://github.com/boadij/pi-herdsman/issues/582)) ([0e2203d](https://github.com/boadij/pi-herdsman/commit/0e2203d47eb7ec59b2c51289d087a79a8ad8e07a))
+
+
+### Performance
+
+* **ci:** scope expensive acceptance and consolidate validation ([#592](https://github.com/boadij/pi-herdsman/issues/592)) ([5efdcf5](https://github.com/boadij/pi-herdsman/commit/5efdcf5548cf6de72d47337507805487e276311b)), closes [#590](https://github.com/boadij/pi-herdsman/issues/590)
+* **test:** isolate slow startup diagnostics for parallel execution ([#593](https://github.com/boadij/pi-herdsman/issues/593)) ([486d154](https://github.com/boadij/pi-herdsman/commit/486d154f68fd97e2cd2c2668d2c76b475b7f0584))
+
+
+### Documentation
+
+* protect privacy while preserving attribution ([#554](https://github.com/boadij/pi-herdsman/issues/554)) ([d0135e1](https://github.com/boadij/pi-herdsman/commit/d0135e1c37a667405035191d1f41a963e7c63928))
+* require sensitive-data review before publication ([#550](https://github.com/boadij/pi-herdsman/issues/550)) ([d7190bd](https://github.com/boadij/pi-herdsman/commit/d7190bd077429f792c7bd7158c6bdce7a4207bd8))
+
+
+### Tests
+
+* **ci:** diagnose Windows peer correspondence worker failures ([#560](https://github.com/boadij/pi-herdsman/issues/560)) ([5b95fbc](https://github.com/boadij/pi-herdsman/commit/5b95fbcae48204a92f45f92f45e85b11d8421b32))
+* **ci:** stabilize peer authorization checks on Windows ([#546](https://github.com/boadij/pi-herdsman/issues/546)) ([c8a7a5a](https://github.com/boadij/pi-herdsman/commit/c8a7a5ab0d6aad582644b5d182e4cc06aca3cc1e))
+* **runtime:** verify malformed Chief coordination diagnostics ([#586](https://github.com/boadij/pi-herdsman/issues/586)) ([0804c3c](https://github.com/boadij/pi-herdsman/commit/0804c3c1d47b14a0fa964f581e20aee21701e3e2)), closes [#584](https://github.com/boadij/pi-herdsman/issues/584)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.18 ([#570](https://github.com/boadij/pi-herdsman/issues/570)) ([a056e64](https://github.com/boadij/pi-herdsman/commit/a056e64b43169c8c2e2dc96c48804fc294f74b8c))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.19 ([#589](https://github.com/boadij/pi-herdsman/issues/589)) ([62af5d2](https://github.com/boadij/pi-herdsman/commit/62af5d250a89e3c3841d4488b416d0ed047399ad))
+
 ## [0.32.1](https://github.com/boadij/pi-herdsman/compare/v0.32.0...v0.32.1) (2026-10-22)
 
 
