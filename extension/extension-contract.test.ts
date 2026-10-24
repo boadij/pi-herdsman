@@ -3764,6 +3764,15 @@ test("malformed persisted role fails closed without authoritative lead state", a
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  assert.equal(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+  );
   assert.deepEqual(pi.pi.getActiveTools(), []);
   assert.equal(
     readLeadCoordinationState(
@@ -3781,6 +3790,105 @@ test("malformed persisted role fails closed without authoritative lead state", a
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_SOCKET_PATH;
+});
+
+test("unrestorable persisted Chief role selects the neutral charter", async () => {
+  let pi: ReturnType<typeof fakePi> | undefined;
+  try {
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = "lead-pane";
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `supervision-unrestorable-chief-${randomUUID()}.sock`,
+    );
+    const entries = [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { sessionId: LEAD_SESSION_ID, role: "chief" },
+      },
+    ];
+    pi = fakePi({
+      entries,
+      activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
+    registerExtension!(pi.pi as never);
+    const context = fakeContext(entries) as any;
+    await pi.events.get("session_start")![0](undefined, context);
+    const promptEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](promptEvent, context);
+    assert.equal(
+      promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+      "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+    );
+  } finally {
+    try {
+      await pi?.events.get("session_shutdown")?.[0]();
+    } finally {
+      delete process.env.HERDR_PANE_ID;
+      delete process.env.HERDR_SOCKET_PATH;
+    }
+  }
+});
+
+test("suspended persisted Chief role selects the neutral charter", async () => {
+  let pi: ReturnType<typeof fakePi> | undefined;
+  try {
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = "lead-pane";
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `supervision-suspended-chief-${randomUUID()}.sock`,
+    );
+    const entries = [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { sessionId: LEAD_SESSION_ID, role: "chief" },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-lead-state",
+        data: { unexpected: true },
+      },
+    ];
+    pi = fakePi({
+      entries,
+      activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
+    registerExtension!(pi.pi as never);
+    const context = fakeContext(entries) as any;
+    await pi.events.get("session_start")![0](undefined, context);
+    const promptEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](promptEvent, context);
+    assert.equal(
+      promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+      "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), []);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_state_error" && entry.data?.error,
+      ),
+      "the invalid persisted state forces role suspension during startup",
+    );
+  } finally {
+    try {
+      await pi?.events.get("session_shutdown")?.[0]();
+    } finally {
+      delete process.env.HERDR_PANE_ID;
+      delete process.env.HERDR_SOCKET_PATH;
+    }
+  }
 });
 
 test("malformed definitions do not abort ordinary lead startup", async () => {
@@ -4046,6 +4154,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /Use message_supervisor for material nonblocking coordination with your direct supervisor\./,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /You are the Lead for this Pi session\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -4424,6 +4536,7 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
     await pi.events.get("before_agent_start")![0](event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(prompt, /verified Manager for this Pi session/);
+    assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
     assert.doesNotMatch(

@@ -3222,10 +3222,12 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-herdsman-faux-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousAgentDefinition = process.env.PI_HERDSMAN_AGENT_DEFINITION;
   const previousEntryPoint = process.argv[1];
   const evidenceDir = join(agentDir, "pi-herdsman", "runtime");
   await mkdir(evidenceDir, { recursive: true });
   process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
   process.argv[1] = resolve(
     "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
   );
@@ -3248,11 +3250,15 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     );
     const model = (id: string) =>
       provider.getModels().find((item: any) => item.id === id);
-    const context = (prompt: string, sections = {}) => ({
+    const context = (
+      prompt: string,
+      sections = {},
+      systemPrompt = "You are the Lead for this Pi session.",
+    ) => ({
       messages: [
         {
           role: "system",
-          content: "You are a helpful assistant.",
+          content: systemPrompt,
           sections,
           timestamp: Date.now(),
         },
@@ -3276,8 +3282,19 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         context("Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP."),
       ),
     );
+    const chief = await collect(
+      provider.streamSimple(
+        model("chief-tree"),
+        context(
+          "Reply exactly PI_HERDSMAN_CHIEF_TREE_POST_CHIEF.",
+          {},
+          "You are the verified workspace-neutral Chief for this Pi session.",
+        ),
+      ),
+    );
     assert.ok(first.some((event: any) => event.type === "text_delta"));
     assert.ok(second.some((event: any) => event.type === "text_delta"));
+    assert.ok(chief.some((event: any) => event.type === "text_delta"));
     const failure = await collect(
       provider.streamSimple(
         model("terminal-error"),
@@ -3337,12 +3354,57 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         piVersion: piPackage.version,
         model: "chief-tree",
         hasAgentDefinitions: false,
+        hasLeadIdentity: true,
+        hasManagerIdentity: false,
+        hasChiefIdentity: false,
+        hasRoleSection: false,
       },
     ]);
+    handlers.get("session_start")?.(
+      {},
+      { sessionManager: { getSessionId: () => "faux-missing-role-section" } },
+    );
+    const missingRoleSection = await collect(
+      provider.streamSimple(
+        model("core"),
+        context("Reply exactly CORE_SMOKE_READY.", {}, "Base system prompt."),
+      ),
+    );
+    assert.equal(
+      missingRoleSection.find((event: any) => event.type === "error")?.error
+        .errorMessage,
+      "Provider request omitted the Lead role contract",
+    );
+    handlers.get("session_start")?.(
+      {},
+      {
+        sessionManager: {
+          getSessionId: () => "faux-missing-manager-role-section",
+        },
+      },
+    );
+    const missingManagerRoleSection = await collect(
+      provider.streamSimple(
+        model("manager-handoff"),
+        context(
+          "Reply exactly MANAGER_HANDOFF_ROOT_READY.",
+          {},
+          "Base system prompt.",
+        ),
+      ),
+    );
+    assert.equal(
+      missingManagerRoleSection.find((event: any) => event.type === "error")
+        ?.error.errorMessage,
+      "Provider request omitted the manager role section",
+    );
     assert.equal(handlers.has("agent_settled"), true);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousAgentDefinition === undefined)
+      delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
+    else process.env.PI_HERDSMAN_AGENT_DEFINITION = previousAgentDefinition;
     process.argv[1] = previousEntryPoint;
     await rm(agentDir, { recursive: true, force: true });
   }
