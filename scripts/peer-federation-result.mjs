@@ -1,5 +1,13 @@
 const MAX_EVIDENCE_LENGTH = 500;
 
+function isBoundedId(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= 128
+  );
+}
+
 export function ordinaryLeadDeliveryReady(entries, messageId, inbox) {
   return (
     !inbox.trim() &&
@@ -33,8 +41,9 @@ export function currentSendDiagnostics(calls, results, resultCounts, receipt) {
   const resultReceipt = result?.details;
   const durableQueueReceipt = Boolean(
     resultReceipt?.queued === true &&
-    typeof resultReceipt.id === "string" &&
-    receipt?.id === resultReceipt.id,
+    isBoundedId(resultReceipt.id) &&
+    isBoundedId(receipt?.id) &&
+    receipt.id === resultReceipt.id,
   );
   return {
     messagePeerOutcome: outcome,
@@ -65,12 +74,109 @@ export function currentSendDiscoveryMatched(
 ) {
   if (calls.size !== 1) return false;
   const [callId] = calls.keys();
+  const result = results.get(callId);
   return (
     resultCounts.get(callId) === 1 &&
-    results
-      .get(callId)
-      ?.details?.peers?.some((peer) => peer.session === peerSession) === true
+    (result?.details?.expectedPeerMatched === true ||
+      result?.details?.peers?.some((peer) => peer.session === peerSession) ===
+        true)
   );
+}
+
+export function classifyCurrentSendEvidence(evidence, peerSession, receipt) {
+  const boundedResults = (results, validate) =>
+    Array.isArray(results) &&
+    results.length <= 64 &&
+    results.every(
+      (result) =>
+        isBoundedId(result?.toolCallId) &&
+        Number.isSafeInteger(result.resultCount) &&
+        result.resultCount >= 0 &&
+        validate(result),
+    );
+  if (
+    !evidence ||
+    !Array.isArray(evidence.freshListCallIds) ||
+    evidence.freshListCallIds.length > 64 ||
+    !evidence.freshListCallIds.every(isBoundedId) ||
+    !Array.isArray(evidence.freshListResults) ||
+    !boundedResults(
+      evidence.freshListResults,
+      (result) => typeof result.expectedPeerMatched === "boolean",
+    ) ||
+    !Array.isArray(evidence.sendCallIds) ||
+    evidence.sendCallIds.length > 64 ||
+    !evidence.sendCallIds.every(isBoundedId) ||
+    !boundedResults(
+      evidence.sendResults,
+      (result) =>
+        typeof result.isError === "boolean" &&
+        typeof result.queued === "boolean" &&
+        (result.reasonCode === undefined ||
+          [
+            "sender_unavailable",
+            "sender_role_changed",
+            "route_role_mismatch",
+            "route_ambiguous",
+            "no_authorized_target",
+          ].includes(result.reasonCode)) &&
+        (result.receiptId === undefined || isBoundedId(result.receiptId)),
+    ) ||
+    !Number.isSafeInteger(evidence.freshListPeersCalls) ||
+    !Number.isSafeInteger(evidence.messagePeerCalls) ||
+    Buffer.byteLength(JSON.stringify(evidence), "utf8") > 16384
+  )
+    return {
+      freshListPeersCalls: 0,
+      freshDiscoveryMatched: false,
+      messagePeerCalls: 0,
+      messagePeerOutcome: "unknown",
+      authorizationReason: "unknown",
+      durableQueueReceipt: false,
+    };
+
+  const listCalls = new Map(evidence.freshListCallIds.map((id) => [id, {}]));
+  const listResults = new Map();
+  const listResultCounts = new Map();
+  for (const result of evidence.freshListResults) {
+    listResults.set(result.toolCallId, {
+      details: { expectedPeerMatched: result.expectedPeerMatched === true },
+    });
+    listResultCounts.set(result.toolCallId, result.resultCount);
+  }
+
+  const sendCalls = new Map(evidence.sendCallIds.map((id) => [id, {}]));
+  const sendResults = new Map();
+  const sendResultCounts = new Map();
+  for (const result of evidence.sendResults) {
+    sendResults.set(result.toolCallId, {
+      isError: result.isError,
+      content: result.reasonCode
+        ? [{ type: "text", text: `[${result.reasonCode}]` }]
+        : [],
+      details: { queued: result.queued, id: result.receiptId },
+    });
+    sendResultCounts.set(result.toolCallId, result.resultCount);
+  }
+
+  return {
+    freshListPeersCalls: evidence.freshListPeersCalls,
+    freshDiscoveryMatched:
+      evidence.freshListPeersCalls === 1 &&
+      currentSendDiscoveryMatched(
+        listCalls,
+        listResults,
+        listResultCounts,
+        peerSession,
+      ),
+    messagePeerCalls: evidence.messagePeerCalls,
+    ...currentSendDiagnostics(
+      sendCalls,
+      sendResults,
+      sendResultCounts,
+      receipt,
+    ),
+  };
 }
 
 export function isLiveCorrespondenceRecipient(probe, correspondence) {

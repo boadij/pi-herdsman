@@ -12325,6 +12325,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const target = remoteRoute
       ? undefined
       : await livePeerLead(ctx, params.session);
+    const noAuthorizedLocalTarget =
+      (!target || (target.role ?? "lead") !== activeRole()) &&
+      returnCorrespondences.length !== 1;
     const rejection = !sender
       ? "sender_unavailable"
       : (sender.role ?? "lead") !== activeRole()
@@ -12335,9 +12338,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             : ambiguousRemoteSessions.has(params.session)
               ? "route_ambiguous"
               : undefined
-          : (!target || (target.role ?? "lead") !== activeRole()) &&
-              returnCorrespondences.length !== 1
-            ? "no_authorized_target"
+          : noAuthorizedLocalTarget
+            ? ambiguousRemoteSessions.has(params.session)
+              ? "route_ambiguous"
+              : "no_authorized_target"
             : undefined;
     if (rejection)
       throw new Error(

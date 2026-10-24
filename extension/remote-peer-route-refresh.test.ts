@@ -336,6 +336,29 @@ test("Lead send reports failed authorization predicates without rejecting a vali
   );
 });
 
+test("ambiguous remote routes are excluded and report route_ambiguous", async (t) => {
+  const f = fixture("lead");
+  t.after(f.close);
+  machines.push(machine("one"), machine("two"));
+  const remoteLead = {
+    ...remote("ambiguous-peer"),
+    role: "lead",
+    sessionKind: "ordinary",
+  };
+  nextSnapshots = [
+    { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
+    { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
+  ];
+
+  const peers = await list(f.runtime, f.context);
+  assert.deepEqual(peers.details?.peers, []);
+  assert.doesNotMatch(peers.content[0].text, /ambiguous-peer/u);
+  await assert.rejects(
+    send(f.runtime, f.context, "ambiguous-peer"),
+    /\[route_ambiguous\]$/u,
+  );
+});
+
 test("published route remains sendable during refresh and a stale discovery cannot overwrite newer routes", async (t) => {
   const f = fixture();
   t.after(f.close);
