@@ -4868,6 +4868,128 @@ test("lead metadata reports preserve session event order", async () => {
   delete process.env.HERDR_PANE_ID;
 });
 
+test("superseded presentation work never uses an invalidated context", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const paneGetStarted = testGate<void>();
+  const releasePaneGet = testGate<void>();
+  const pi = fakePi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: {
+          sessionId: LEAD_SESSION_ID,
+          role: "chief",
+          leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+        },
+      },
+    ],
+    exec: async (command, args) => {
+      if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "pane" && args[1] === "get") {
+        paneGetStarted.resolve();
+        await releasePaneGet.promise;
+      }
+      return {
+        stdout: JSON.stringify({
+          id: "ok",
+          result: {
+            pane: {
+              pane_id: "lead-pane",
+              workspace_id: "workspace-1",
+              tab_id: "current-tab",
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  const sessionManager = context.sessionManager;
+  const getSessionId = sessionManager.getSessionId;
+  try {
+    const starting = pi.events.get("session_start")![0](undefined, context);
+    await paneGetStarted.promise;
+    await starting;
+    await pi.events.get("session_shutdown")![0]();
+    const errorsAfterShutdown = pi.entries.filter(
+      (entry: any) => entry?.customType === "pi_herdsman_state_error",
+    ).length;
+    sessionManager.getSessionId = () => {
+      throw new Error("invalidated session context accessed");
+    };
+    releasePaneGet.resolve();
+    await t.waitFor(() =>
+      assert.ok(
+        pi.calls.some((args) => args[0] === "pane" && args[1] === "get"),
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      pi.calls.some((args) => args[0] === "tab" && args[1] === "list"),
+      false,
+    );
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) => entry?.customType === "pi_herdsman_state_error",
+      ).length,
+      errorsAfterShutdown,
+    );
+    assert.deepEqual(unhandled, []);
+
+    const replacement = fakePi({
+      exec: async (command, args) => {
+        if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+        const result =
+          args[0] === "pane" && args[1] === "get"
+            ? {
+                pane: {
+                  pane_id: "lead-pane",
+                  workspace_id: "workspace-1",
+                  tab_id: "current-tab",
+                },
+              }
+            : args[0] === "tab" && args[1] === "list"
+              ? { tabs: [{ tab_id: "current-tab", label: "1" }] }
+              : {};
+        return {
+          stdout: JSON.stringify({ id: "ok", result }),
+          stderr: "",
+          code: 0,
+        };
+      },
+    });
+    registerExtension!(replacement.pi as never);
+    await replacement.events.get("session_start")![0](
+      undefined,
+      fakeContext() as any,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        replacement.calls.some(
+          (args) =>
+            args[0] === "tab" && args[1] === "rename" && args[3] === "Lead",
+        ),
+      ),
+    );
+    await replacement.events.get("session_shutdown")![0]();
+  } finally {
+    releasePaneGet.resolve();
+    sessionManager.getSessionId = getSessionId;
+    process.removeListener("unhandledRejection", onUnhandled);
+    await pi.events.get("session_shutdown")![0]();
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("lead metadata failures do not escape the serialized queue", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
