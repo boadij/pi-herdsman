@@ -163,9 +163,11 @@ test("embedded reader returns only bounded delivery and binding projections", ()
     new URL("./peer-federation-smoke.mjs", import.meta.url),
     "utf8",
   );
-  const readerWrapper = smokeSource.match(
-    /const readOrdinaryLeadSession = \([\s\S]*?\n  \};\n  const readBDecisionDiagnostics/u,
-  )?.[0];
+  const readerPattern =
+    /const readOrdinaryLeadSession = \([\s\S]*?\r?\n  \};\r?\n  const readBDecisionDiagnostics/u;
+  for (const source of [smokeSource, smokeSource.replace(/\r?\n/gu, "\r\n")])
+    assert.ok(source.match(readerPattern), "reader wrapper exists");
+  const readerWrapper = smokeSource.match(readerPattern)?.[0];
   assert.ok(readerWrapper, "reader wrapper exists");
   assert.match(readerWrapper, /const output = exec\([\s\S]*?herdrEnv\(side\)/u);
   assert.match(
