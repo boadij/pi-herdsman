@@ -79,7 +79,7 @@ to contact Chief. An assigned Lead never falls back to Chief.
 
 ## Same-role peers
 
-Ordinary Leads and active Managers can discover and message live peers of the
+Leads and active Managers can discover and message eligible peers of the
 same role through [Peer tools](reference/peer.md):
 
 ```text

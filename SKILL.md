@@ -58,7 +58,8 @@ Use these high-salience rules for the model-facing agent boundary:
   requests, steering, sleep, or
   other waiting mechanisms, and do not invent work merely to remain active.
 
-Ordinary Leads use `list_peers` and `message_peer` for other ordinary Lead sessions;
+Leads use `list_peers` and `message_peer` for eligible same-role peers.
+Managed Leads are limited to their verified project worktree group and socket;
 managed agents are not peers. `list_peers` identifies this Lead as `self` and
 returns other live Leads as `peers` with exact session IDs. Incoming peer messages are already
 addressed to this Lead; `Peer message from <sender lead ID>: <body>` identifies
