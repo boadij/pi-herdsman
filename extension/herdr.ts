@@ -67,6 +67,7 @@ export type HerdrRecord = Record<string, any>;
 export type HerdrSessionSnapshot = {
   panes: HerdrRecord[];
   agents: HerdrRecord[];
+  workspaces: HerdrRecord[];
 };
 export async function verifiedHerdrAgent(
   descriptor: {
@@ -879,9 +880,17 @@ export async function herdrSessionSnapshot(
 ): Promise<HerdrSessionSnapshot> {
   const result = await runHerdr(pi, ctx, ["api", "snapshot"], { signal });
   const snapshot = result?.snapshot;
-  if (!Array.isArray(snapshot?.panes) || !Array.isArray(snapshot?.agents))
+  if (
+    !Array.isArray(snapshot?.panes) ||
+    !Array.isArray(snapshot?.agents) ||
+    !Array.isArray(snapshot?.workspaces)
+  )
     error("session snapshot", "Herdr session inventory is unavailable");
-  return { panes: snapshot.panes, agents: snapshot.agents };
+  return {
+    panes: snapshot.panes,
+    agents: snapshot.agents,
+    workspaces: snapshot.workspaces,
+  };
 }
 
 export function watchHerdrLifecycle(

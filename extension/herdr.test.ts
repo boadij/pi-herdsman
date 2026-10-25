@@ -160,9 +160,13 @@ test("list agents fails closed when the native agents array is absent", async ()
   }
 });
 
-test("session snapshot accepts only coherent pane and agent inventories", async () => {
+test("session snapshot accepts only coherent pane, agent, and workspace inventories", async () => {
   for (const snapshot of [
-    { panes: [{ pane_id: "pane" }], agents: [{ name: "agent" }] },
+    {
+      panes: [{ pane_id: "pane" }],
+      agents: [{ name: "agent" }],
+      workspaces: [{ workspace_id: "workspace" }],
+    },
   ]) {
     const pi = {
       exec: async () => ({
@@ -178,8 +182,9 @@ test("session snapshot accepts only coherent pane and agent inventories", async 
   }
   for (const snapshot of [
     {},
-    { panes: [], agents: null },
+    { panes: [], workspaces: [], agents: null },
     { panes: {}, agents: [] },
+    { panes: [], agents: [], workspaces: null },
   ]) {
     const pi = {
       exec: async () => ({

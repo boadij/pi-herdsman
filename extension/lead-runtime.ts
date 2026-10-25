@@ -648,6 +648,7 @@ type LeadCoordinationBaseHost = {
     workspaceIds: readonly string[],
     workspaceCwds: ReadonlyMap<string, string>,
     signal?: AbortSignal,
+    workspaces?: readonly HerdrRecord[],
   ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
   basename: typeof import("node:path").basename;
   readPeerLeadRecord: typeof import("./supervision.ts").readPeerLeadRecord;
@@ -875,6 +876,7 @@ type LeadSupervisionHost = {
     workspaceIds: readonly string[],
     workspaceCwds: ReadonlyMap<string, string>,
     signal?: AbortSignal,
+    workspaces?: readonly HerdrRecord[],
   ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
   worktreeGroupScope: typeof import("./herdr.ts").worktreeGroupScope;
 };
@@ -5101,6 +5103,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       [...new Set(agents.map((agent) => agent.workspaceId))],
       workspaceCwds,
       ctx.signal,
+      inventory.workspaces,
     );
     const diagnostics = live.some(
       (agent: any) =>

@@ -961,7 +961,9 @@ export function fakePi(
               : command === "herdr" && isApiSnapshot(args)
                 ? JSON.stringify({
                     id: AGENT_ID,
-                    result: { snapshot: { agents: [], panes: [] } },
+                    result: {
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    },
                   })
                 : "{}",
           stderr: "",
@@ -1257,6 +1259,7 @@ export function leadExec(
           id: AGENT_ID,
           result: {
             snapshot: {
+              workspaces: [],
               agents: JSON.parse(
                 listResponse(
                   label,
@@ -1407,6 +1410,7 @@ export function agentControllerExecutor(
           id: AGENT_ID,
           result: {
             snapshot: {
+              workspaces: [],
               agents: [parent, ...children].map((state) =>
                 agentFromState(
                   state,
@@ -1596,6 +1600,7 @@ export function delegatedLifecycleExecutor(
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: [...live.values()].map(agentForState),
                 panes: panes(),
               },
@@ -1971,7 +1976,7 @@ export function cascadeExecutor(
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents, panes } },
+            result: { snapshot: { agents, panes, workspaces: [] } },
           }),
           stderr: "",
           code: 0,
@@ -2368,7 +2373,7 @@ export function createStagedAssignmentFixture(
           return {
             stdout: JSON.stringify({
               id: 1,
-              result: { snapshot: { agents: [], panes: [] } },
+              result: { snapshot: { agents: [], panes: [], workspaces: [] } },
             }),
             stderr: "",
             code: 0,
@@ -2439,7 +2444,7 @@ export function createStagedAssignmentFixture(
   const emptyStatus = (): ExecResult => ({
     stdout: JSON.stringify({
       id: 1,
-      result: { snapshot: { agents: [], panes: [] } },
+      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
     }),
     stderr: "",
     code: 0,
@@ -2706,6 +2711,7 @@ export function startupExecutor(
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents,
                 panes:
                   closePaneOnClose && (paneClosed || tabClosed)
