@@ -8530,6 +8530,10 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       }
       assert.equal(openCalls, 0);
       assert.equal(chiefPrompt?.message, undefined);
+      assert.match(
+        chiefPrompt?.systemPrompt ?? "",
+        /When eligible same-role direct reports need technical coordination,[\s\S]*communicate directly rather than relaying their messages/,
+      );
       const contextMessage = chief.sentMessageCalls.findLast(
         ({ message }: any) =>
           message?.customType === "pi-herdsman-supervision-context",
