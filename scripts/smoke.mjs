@@ -747,6 +747,18 @@ export function assertNoFailedProjectDelegation(contents, branch) {
   throw error;
 }
 
+export function assertNoFailedManagerHandoff(progress) {
+  if (progress.supervisorResultState !== "error") return;
+
+  const error = new Error("message_supervisor failed");
+  error.code = "SMOKE_SUPERVISOR_FAILED";
+  error.smoke = {
+    stage: "manager-handoff-assignment",
+    lastProgress: progress,
+  };
+  throw error;
+}
+
 export function managerAssignmentDiagnostics({
   worktree,
   result,
@@ -759,6 +771,9 @@ export function managerAssignmentDiagnostics({
   supervisorCallObserved,
   supervisorResultState,
   supervisorErrorCategory,
+  supervisorHandlerBranchStatus,
+  supervisorPersistedErrorCategoryPresent,
+  supervisorPersistedErrorCategory,
   supervisorUnstructuredErrorClass,
   readinessDeliveryObserved,
   candidateProcessCount,
@@ -791,9 +806,19 @@ export function managerAssignmentDiagnostics({
     ].includes(supervisorUnstructuredErrorClass)
       ? { supervisorUnstructuredErrorClass }
       : {}),
-    supervisorHandlerBranchStatus: "not_observed",
-    supervisorPersistedErrorCategoryPresent: false,
-    supervisorPersistedErrorCategory: "not_observed",
+    supervisorHandlerBranchStatus:
+      supervisorHandlerBranchStatus === "operation_error_returned"
+        ? supervisorHandlerBranchStatus
+        : "not_observed",
+    supervisorPersistedErrorCategoryPresent:
+      typeof supervisorPersistedErrorCategoryPresent === "boolean"
+        ? supervisorPersistedErrorCategoryPresent
+        : false,
+    supervisorPersistedErrorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+      supervisorPersistedErrorCategory,
+    )
+      ? supervisorPersistedErrorCategory
+      : "not_observed",
     readinessDeliveryObserved: readinessDeliveryObserved ?? false,
     candidateProcessCount: candidateProcessCount ?? "not_observed",
     candidateProcessProvenanceMatch: provenanceMatch ?? "not_evaluated",
@@ -4182,22 +4207,23 @@ async function runManagerHandoffSmoke(ctx) {
               `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
       const supervisorResult = supervisor.supervisorResultState;
-      if (!managerHandoffAssignmentReady(ready, readyEntry, processProof))
-        return {
-          done: false,
-          progress: diagnostics({
-            lead: "true",
-            candidateProcessCount: processCount,
-            provenanceMatch,
-            errorCategory,
-            ...supervisor,
-            supervisorCall: String(supervisor.supervisorCallObserved),
-            supervisorSuccess: String(ready),
-            supervisorResult,
-            readiness: String(!!readyEntry),
-            readinessDeliveryObserved: !!readyEntry,
-          }),
-        };
+      if (!managerHandoffAssignmentReady(ready, readyEntry, processProof)) {
+        const progress = diagnostics({
+          lead: "true",
+          candidateProcessCount: processCount,
+          provenanceMatch,
+          errorCategory,
+          ...supervisor,
+          supervisorCall: String(supervisor.supervisorCallObserved),
+          supervisorSuccess: String(ready),
+          supervisorResult,
+          readiness: String(!!readyEntry),
+          readinessDeliveryObserved: !!readyEntry,
+        });
+
+        assertNoFailedManagerHandoff(progress);
+        return { done: false, progress };
+      }
       return {
         done: true,
         progress: diagnostics({

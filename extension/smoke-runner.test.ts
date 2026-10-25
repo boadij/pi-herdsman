@@ -73,6 +73,7 @@ import {
   savedSessionHeaderEvidence,
   staffDelegateResults,
   assertNoFailedProjectDelegation,
+  assertNoFailedManagerHandoff,
   managerAssignmentDiagnostics,
   managerHandoffSupervisorToolAvailability,
   supervisorMessageDiagnostics,
@@ -2140,6 +2141,63 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     JSON.stringify(correlated),
     /PRIVATE_ERROR|PRIVATE_CAUSE/u,
   );
+  const failedProgress = managerAssignmentDiagnostics({ ...correlated });
+  assert.equal(
+    failedProgress.supervisorHandlerBranchStatus,
+    "operation_error_returned",
+  );
+  assert.equal(failedProgress.supervisorPersistedErrorCategoryPresent, true);
+  assert.equal(
+    failedProgress.supervisorPersistedErrorCategory,
+    "internal_failure",
+  );
+  assert.throws(
+    () => assertNoFailedManagerHandoff(failedProgress),
+    (error) => {
+      assert.equal(error.code, "SMOKE_SUPERVISOR_FAILED");
+      assert.equal(error.message, "message_supervisor failed");
+      assert.equal(error.smoke.stage, "manager-handoff-assignment");
+      assert.deepEqual(error.smoke.lastProgress, failedProgress);
+      const artifact = sanitizedFailureEvidence(
+        { scenario: "manager-handoff", simulated: true },
+        { error },
+        "SCENARIO_FAIL",
+        "PASS",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.supervisorResultState,
+        "error",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.supervisorErrorCategory,
+        "internal_failure",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.supervisorHandlerBranchStatus,
+        "operation_error_returned",
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.supervisorPersistedErrorCategoryPresent,
+        true,
+      );
+      assert.equal(
+        artifact.managerHandoffProgress.supervisorPersistedErrorCategory,
+        "internal_failure",
+      );
+      assert.doesNotMatch(
+        JSON.stringify(artifact),
+        /PRIVATE_CALL_ID|PRIVATE_PROMPT|PRIVATE_ERROR|PRIVATE_CAUSE|PRIVATE_RESULT_BODY/u,
+      );
+      return true;
+    },
+  );
+  for (const state of ["missing", "pending", "success"]) {
+    assert.doesNotThrow(() =>
+      assertNoFailedManagerHandoff(
+        managerAssignmentDiagnostics({ supervisorResultState: state }),
+      ),
+    );
+  }
   const unknownCategory = await diagnose(
     contents.replace('"internal_failure"', '"PRIVATE_UNLISTED_CATEGORY"'),
   );
