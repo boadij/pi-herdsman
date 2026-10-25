@@ -187,6 +187,29 @@ test("workspace presentation provenance projects acquired Herdr records", () => 
   assert.deepEqual(
     projectWorkspaceProvenance(
       "workspace-1",
+      {
+        worktree: {
+          checkout_path: "/repo/old",
+        },
+      },
+      {
+        worktrees: [
+          {
+            open_workspace_id: "workspace-1",
+            path: "/repo/new",
+            branch: "feature/new",
+          },
+        ],
+      },
+    ),
+    {
+      workspaceCwd: "/repo/new",
+      branch: "feature/new",
+    },
+  );
+  assert.deepEqual(
+    projectWorkspaceProvenance(
+      "workspace-1",
       { worktree: { checkout_path: "/checkout" } },
       undefined,
       "/fallback",
@@ -218,6 +241,7 @@ test("supervision presentation shares one sequential topology read for twelve wo
   }));
   const worktrees = workspaces.map((workspace, index) => ({
     open_workspace_id: workspace.workspace_id,
+    path: workspace.worktree.checkout_path,
     branch: `feature/${index}`,
   }));
   const calls: string[][] = [];
