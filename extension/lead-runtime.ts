@@ -4873,6 +4873,10 @@ export function registerLeadRuntime(
     remoteChiefAgent,
     liveLead,
     setLeadExecutionMode,
+    sessionKindForPrompt: (ctx: ExtensionContext) =>
+      sessionKind?.sessionId === ctx.sessionManager.getSessionId()
+        ? sessionKind.kind
+        : undefined,
     leadExecutionPresentation: () =>
       sessionKind?.kind === "managed"
         ? {

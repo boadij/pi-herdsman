@@ -1417,7 +1417,7 @@ export default function install(pi) {
         model: model.id,
         hasAgentDefinitions: systemPrompt.includes("<agent_definitions>"),
         hasLeadIdentity: systemPrompt.includes(
-          "You are the Lead for this Pi session.",
+          "You are an ordinary Lead for this Pi session.",
         ),
         hasManagerIdentity: systemPrompt.includes(
           "You are the verified Manager for this Pi session.",
@@ -1492,7 +1492,9 @@ export default function install(pi) {
           : undefined;
       if (expectedRole) {
         const identity = {
-          lead: systemPrompt.includes("You are the Lead for this Pi session."),
+          lead: systemPrompt.includes(
+            "You are an ordinary Lead for this Pi session.",
+          ),
           manager: systemPrompt.includes(
             "You are the verified Manager for this Pi session.",
           ),

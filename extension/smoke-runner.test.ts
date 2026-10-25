@@ -3393,7 +3393,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     const context = (
       prompt: string,
       sections = {},
-      systemPrompt = "You are the Lead for this Pi session.",
+      systemPrompt = "You are an ordinary Lead for this Pi session.",
     ) => ({
       messages: [
         {

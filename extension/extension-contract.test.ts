@@ -2948,6 +2948,15 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     assert.ok(command);
 
     await pi.events.get("session_start")![0](undefined, context);
+    const ordinaryEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](ordinaryEvent, context);
+    assert.match(
+      ordinaryEvent.systemPromptOptions.sections.pi_herdsman_role,
+      /You are an ordinary Lead/,
+    );
     await command.handler("", context);
 
     assert.doesNotMatch(
@@ -2963,6 +2972,19 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(notices),
     );
+    await command.handler("leave", context);
+    const restoredEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](restoredEvent, context);
+    const restored =
+      restoredEvent.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(restored, /You are an ordinary Lead/);
+    assert.match(restored, /Own architecture/);
+    assert.doesNotMatch(restored, /ProjectAssignment/);
+    assert.doesNotMatch(restored, /verified Chief for this Pi session/);
+    assert.doesNotMatch(restored, /workspace-neutral supervision/);
   } finally {
     realFs.rmSync(mailbox, { recursive: true, force: true });
     delete process.env.HERDR_PANE_ID;
@@ -4070,29 +4092,17 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       /Partition delegable work/,
     );
     const charter = sections.pi_herdsman_role;
-    assert.match(
+    assert.match(charter, /You are an ordinary Lead/);
+    assert.match(charter, /Own architecture/);
+    assert.doesNotMatch(charter, /ProjectAssignment/);
+    assert.doesNotMatch(charter, /fresh managed project execution/);
+    assert.doesNotMatch(
       charter,
       /required project evidence is automatically inherited/,
     );
-    assert.match(
+    assert.doesNotMatch(
       charter,
-      /Ordinary Leads have no automatic required-evidence scope/,
-    );
-    assert.match(
-      charter,
-      /Only the Manager can designate continuing project requirements/,
-    );
-    assert.match(
-      charter,
-      /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
-    );
-    assert.match(
-      charter,
-      /For assigned project work, use message_supervisor for timely\s+coordination or explicit evidence transfer, not for a separate\s+completion announcement\./,
-    );
-    assert.match(
-      charter,
-      /delegation task and ordinary files are recipient-specific/,
+      /Herdsman delivers it to the Manager automatically/,
     );
     assert.match(charter, /`files` carries evidence, not runtime capability/);
     for (const name of [
@@ -4174,13 +4184,19 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /Use message_supervisor for material nonblocking coordination with your direct supervisor\./,
   );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /You are the Lead for this Pi session\./,
+  const ordinaryCharter =
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role;
+  assert.match(ordinaryCharter, /You are an ordinary Lead/);
+  assert.match(ordinaryCharter, /Own architecture/);
+  assert.doesNotMatch(ordinaryCharter, /ProjectAssignment/);
+  assert.doesNotMatch(ordinaryCharter, /fresh managed project execution/);
+  assert.doesNotMatch(
+    ordinaryCharter,
+    /required project evidence is automatically inherited/,
   );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /For assigned project work, include routine proposed requirements,\s+completion, and review readiness in your normal response;\s+Herdsman delivers it to the Manager automatically\./,
+  assert.doesNotMatch(
+    ordinaryCharter,
+    /Herdsman delivers it to the Manager automatically/,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -4188,23 +4204,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /Send proposed continuing requirements and available supporting\s+evidence to the Manager for evaluation\./,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /For assigned project work, use message_supervisor for timely\s+coordination or explicit evidence transfer, not for a separate\s+completion announcement\./,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /carry relevant evidence into onward handoffs/,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /For assigned project work, automatic result handoffs contain summary\s+text but no file attachments\./,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /explicitly transfer\s+the relevant evidence through message_supervisor\.files\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -4244,7 +4244,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.equal(stalePrompt, undefined);
   assert.match(
     staleEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /## Lead role/,
+    /No active Herdsman role is verified/,
   );
   assert.equal(
     staleEvent.systemPromptOptions.sections.agent_definitions,
@@ -4261,6 +4261,195 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.equal(pi.events.has("context"), false);
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
+});
+
+test("managed Lead prompt keeps the managed charter without an active assignment", async () => {
+  setLeadEnvironment();
+  const sessionId = randomUUID();
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId,
+        kind: "managed",
+        repoKey: "repo-key",
+        branch: "feature/managed-prompt",
+      },
+    },
+  ];
+  const pi = fakePi({ entries });
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-session-kind" &&
+          entry.data.sessionId === sessionId &&
+          entry.data.kind === "managed",
+      ),
+      "the managed session identity must be initialized for this exact session",
+    );
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(charter, /You are a Managed Lead/);
+    assert.match(charter, /Only a current exact ProjectAssignment/);
+    assert.match(charter, /unavailable or retired assignment state/);
+    assert.match(
+      charter,
+      /required project evidence is automatically inherited/,
+    );
+    assert.doesNotMatch(charter, /You are an ordinary Lead/);
+    assert.doesNotMatch(charter, /No active Herdsman role is verified/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  }
+});
+
+test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-prompt-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const repoKey = `managed-prompt-${randomUUID()}`;
+  const branch = `managed-prompt-${randomUUID()}`;
+  const runtime = supervisionRuntime();
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: sessionId,
+    repoKey,
+    branch,
+    text: "managed prompt assigned fixture",
+  });
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  repo_key: repoKey,
+                  repo_name: repoKey,
+                  source_workspace_id: WORKSPACE,
+                },
+                worktrees: [{ branch, open_workspace_id: WORKSPACE }],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(charter, /You are a Managed Lead/);
+    assert.match(charter, /Only a current exact ProjectAssignment/);
+    assert.match(
+      charter,
+      /required project evidence is automatically inherited/,
+    );
+    assert.doesNotMatch(charter, /You are an ordinary Lead/);
+    assert.doesNotMatch(charter, /No active Herdsman role is verified/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("managed Lead prompt remains managed after its assignment is replaced", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-prompt-retired-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const repoKey = `managed-prompt-retired-${randomUUID()}`;
+  const branch = `managed-prompt-retired-${randomUUID()}`;
+  const runtime = supervisionRuntime();
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data: {
+      version: 1,
+      sessionId,
+      kind: "managed",
+      repoKey,
+      branch,
+    },
+  };
+  const pi = fakePi({ entries: [identity] });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([identity]) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    writeProjectAssignment(runtime, {
+      version: 2,
+      id: randomUUID(),
+      repoKey,
+      branch,
+      text: "replacement assignment retires the exact session",
+    });
+    const supervisorTool = pi.tools.find(
+      (candidate) => candidate.name === "message_supervisor",
+    );
+    assert.ok(supervisorTool);
+    const result = await supervisorTool.execute(
+      "retired-prompt-test",
+      { message: "not delivered" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.isError, true, "retired identity cannot publish");
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(charter, /You are a Managed Lead/);
+    assert.match(charter, /unavailable or retired assignment state/);
+    assert.doesNotMatch(charter, /You are an ordinary Lead/);
+    assert.doesNotMatch(charter, /No active Herdsman role is verified/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
 });
 
 test("delegating agents receive only their allowed definition roster", async () => {
@@ -4539,6 +4728,19 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    const promptEvent = () => ({
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    });
+    const beforeRoleTransition = promptEvent();
+    await pi.events.get("before_agent_start")![0](
+      beforeRoleTransition,
+      context,
+    );
+    assert.match(
+      beforeRoleTransition.systemPromptOptions.sections.pi_herdsman_role,
+      /You are an ordinary Lead/,
+    );
     await pi.commandOptions.get("manager").handler("", context);
     assert.equal(
       readLeadCoordinationState(
@@ -4584,6 +4786,17 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
       "branch",
       "expected_head",
     ]);
+    await pi.commandOptions.get("manager").handler("leave", context);
+    const restoredEvent = promptEvent();
+    await pi.events.get("before_agent_start")![0](restoredEvent, context);
+    const restored =
+      restoredEvent.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(restored, /You are an ordinary Lead/);
+    assert.match(restored, /Own architecture/);
+    assert.doesNotMatch(restored, /ProjectAssignment/);
+    assert.doesNotMatch(restored, /verified Manager for this Pi session/);
+    assert.doesNotMatch(restored, /Supervision is event-driven/);
+    assert.doesNotMatch(restored, /Custom Manager strategy/);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     setLeadEnvironment();

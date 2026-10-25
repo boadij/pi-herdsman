@@ -366,27 +366,26 @@ const LEAD_COORDINATION_TOOLS = [
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
   "Use message_supervisor for material nonblocking coordination with your direct supervisor. Use list_peers/message_peer for peer coordination.";
-const LEAD_ROLE_CHARTER = `## Lead role
-You are the Lead for this Pi session.
-${LEAD_SCOPE_DESCRIPTION}
+const COMMON_LEAD_GUIDANCE = `${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
+${FILE_HANDOFF_GUIDANCE}`;
+const ORDINARY_LEAD_CHARTER = `## Lead role
+You are an ordinary Lead for this Pi session.
+${COMMON_LEAD_GUIDANCE}
+Ordinary Agent assignments and file handoffs are recipient-specific. Peer messages coordinate work but do not independently transfer execution ownership.`;
+const MANAGED_LEAD_GUIDANCE = `Managed Lead identity is permanent for this exact Pi session. Only a current exact ProjectAssignment permits fresh managed project execution; unavailable or retired assignment state does not grant ordinary Lead execution authority. Exactly owned Agent recovery remains separate. Use native Pi /fork or /clone for independent ordinary continuation; this does not create a separate Git checkout or fresh process configuration.
 For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
 Ordinary Leads have no automatic required-evidence scope.
 A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
 Only the Manager can designate continuing project requirements.
-Send proposed continuing requirements and available supporting
-evidence to the Manager for evaluation.
-For assigned project work, include routine proposed requirements,
-completion, and review readiness in your normal response;
-Herdsman delivers it to the Manager automatically.
-For assigned project work, use message_supervisor for timely
-coordination or explicit evidence transfer, not for a separate
-completion announcement.
-For assigned project work, automatic result handoffs contain summary
-text but no file attachments. When the Manager needs an actual artifact
-for review, decision-making, or onward delegation, explicitly transfer
-the relevant evidence through message_supervisor.files.
-${FILE_HANDOFF_GUIDANCE}`;
+Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
+For assigned project work, include routine proposed requirements, completion, and review readiness in your normal response; Herdsman delivers it to the Manager automatically.
+For assigned project work, use message_supervisor for timely coordination or explicit evidence transfer, not for a separate completion announcement.
+For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.`;
+const MANAGED_LEAD_CHARTER = `## Lead role
+You are a Managed Lead for this Pi session.
+${COMMON_LEAD_GUIDANCE}
+${MANAGED_LEAD_GUIDANCE}`;
 const SUPERVISION_EVENT_GUIDANCE =
   "Supervision is event-driven. Do not poll staff tools, send repeated messages, or sleep solely to wait for Lead progress. When no independent work remains, end the turn; incoming Lead updates resume coordination.";
 const MANAGER_ROLE_CONTRACT = `## Manager role
@@ -1452,9 +1451,12 @@ function registerExtensionImpl(
           (role === "manager" && !leadRuntime.managerLease)
         )
           return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
-        return role === "manager"
-          ? `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`
-          : LEAD_ROLE_CHARTER;
+        if (role === "manager")
+          return `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`;
+        const kind = leadRuntimes.sessionKindForPrompt(ctx);
+        if (kind === "ordinary") return ORDINARY_LEAD_CHARTER;
+        if (kind === "managed") return MANAGED_LEAD_CHARTER;
+        return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
       },
       supervisoryProfileBody: (
         ctx: ExtensionContext,
