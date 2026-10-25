@@ -555,18 +555,22 @@ try {
       if (sendEvidence && Buffer.byteLength(JSON.stringify(sendEvidence), "utf8") > 16384) output.sendEvidence = null;
       process.stdout.write(JSON.stringify(output));
     `;
-    const output = exec(side, [
-      "node",
-      "-e",
-      script,
-      resources[side].ordinaryLead.sessionPath,
-      kind,
-      boundedReaderArgument(id),
-      boundedReaderArgument(ref, 512),
-      sessionFingerprint(resources.b.ordinaryLead.sessionId),
-      sessionFingerprint(expectedRecipientSession),
-      boundedReaderArgument(expectedCanonicalRef, 512),
-    ]);
+    const output = exec(
+      side,
+      [
+        "node",
+        "-e",
+        script,
+        resources[side].ordinaryLead.sessionPath,
+        kind,
+        boundedReaderArgument(id),
+        boundedReaderArgument(ref, 512),
+        sessionFingerprint(resources.b.ordinaryLead.sessionId),
+        sessionFingerprint(expectedRecipientSession),
+        boundedReaderArgument(expectedCanonicalRef, 512),
+      ],
+      herdrEnv(side),
+    );
     const parsed = JSON.parse(output);
     if (kind === "send") {
       parsed.diagnostics = classifyCurrentSendEvidence(

@@ -163,6 +163,15 @@ test("embedded reader returns only bounded delivery and binding projections", ()
     new URL("./peer-federation-smoke.mjs", import.meta.url),
     "utf8",
   );
+  const readerWrapper = smokeSource.match(
+    /const readOrdinaryLeadSession = \([\s\S]*?\n  \};\n  const readBDecisionDiagnostics/u,
+  )?.[0];
+  assert.ok(readerWrapper, "reader wrapper exists");
+  assert.match(readerWrapper, /const output = exec\([\s\S]*?herdrEnv\(side\)/u);
+  assert.match(
+    smokeSource,
+    /const herdrEnv = \(side\) => \[[\s\S]*?`PI_CODING_AGENT_DIR=\$\{fixturePath\(side\)\}\/\.pi\/agent`/u,
+  );
   const embeddedSource = smokeSource.match(
     /const script = `([\s\S]*?)`;/u,
   )?.[1];
