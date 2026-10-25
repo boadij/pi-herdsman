@@ -59,7 +59,7 @@ topology before delivery; this does not provide a cross-socket topology RPC.
 
 ## Peer tools
 
-Ordinary Leads and active Managers have `list_peers` and `message_peer`.
+Leads (including eligible managed Leads) and active Managers have `list_peers` and `message_peer`.
 
 ```json
 {}

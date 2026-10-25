@@ -415,12 +415,6 @@ execution fields from their spawning controller; `continue` restores saved
 session settings. They do not mutate an already-running agent or the lead Pi
 session.
 
-## See also
-
-- [Agent-definition schema](../reference/agent-definition-schema.md)
-- [`/agents` commands](../reference/commands.md)
-- [Agent definitions](agent-definitions.md)
-
 ## Optional Pi Codex Conversion context sharing
 
 The Herdsman adapter for Pi Codex Conversion (PCC) is optional and supports
@@ -452,3 +446,9 @@ current PCC execution mode. The adapter does not modify tools or PCC execution
 mode; consult PCC for mode-specific requirements. PCC restores the saved
 context identity on continuation, so no adapter rebind is needed. Local and
 Tree storage are not supported because they require ongoing context routing.
+
+## See also
+
+- [Agent-definition schema](../reference/agent-definition-schema.md)
+- [`/agents` commands](../reference/commands.md)
+- [Agent definitions](agent-definitions.md)

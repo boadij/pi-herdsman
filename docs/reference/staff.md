@@ -125,16 +125,14 @@ as well. See [Handoffs and files](../guides/handoffs.md#required-assignment-evid
 
 ### Manage project required evidence
 
-In the Manager project-assignment action menu, choose **Required evidence**
-to inspect the assignment's required entries, including each exact ID, name,
-and origin. Select an entry to review its details, then choose **Remove** and
-confirm. This Manager-only action removes that exact project-owned requirement
-record. Inherited baseline requirements are shown as protected and cannot be
-removed there. Removal does not delete snapshots or source files and does not
-change evidence already accepted by Agents. The project menu does not remove
-managed-Agent-local additions; local-addition removal is an internal
-capability, not a separate model-facing tool or UI. Project-wide required evidence is controlled only by the Manager; assigned
-Leads use delegation files for recipient-specific evidence.
+Project-wide required evidence is Manager-owned. The project's **Retained
+evidence** menu shows requirement IDs, names, and origins and allows removal
+of project-owned entries. Inherited baseline entries are protected, and
+removal leaves snapshots, source files, and evidence already accepted by
+Agents unchanged. Managed-Agent-local additions have no independent UI or
+model-facing removal tool. See [Project orchestration](../guides/project-orchestration.md#start-and-resume-project-work)
+for the procedure; assigned Leads use delegation `files` for recipient-specific
+evidence.
 
 ## `delegate_project`
 
