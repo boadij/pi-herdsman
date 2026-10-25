@@ -153,6 +153,34 @@ test("publication collision during release is reported as occupied", (t) => {
   }
 });
 
+test("owner retirement after observation during acquisition is contention", (t) => {
+  const path = temporaryPath();
+  const lease = acquireProcessLock(path);
+  const ownerPath = join(path, readdirSync(path)[0]!);
+  const originalRead = fs.readFileSync;
+  let retired = false;
+  t.mock.method(fs, "readFileSync", (file: string, encoding: "utf8") => {
+    if (file === ownerPath && !retired) {
+      retired = true;
+      lease.release();
+    }
+    return originalRead(file, encoding);
+  });
+  syncBuiltinESMExports();
+
+  try {
+    throws(
+      () => acquireProcessLock(path),
+      (error: unknown) => error instanceof ProcessLockOccupiedError,
+    );
+    equal(retired, true);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(dirname(path), { recursive: true, force: true });
+  }
+});
+
 test("Linux reused PID owner is recovered without exposing private identity", (t) => {
   if (process.platform !== "linux") return t.skip("Linux process identity");
   const path = temporaryPath();

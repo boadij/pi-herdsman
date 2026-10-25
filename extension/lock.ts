@@ -313,8 +313,28 @@ export function acquireProcessLock(
     let staleOwner: LockOwner;
     try {
       staleOwner = readProcessLockOwner(claimDir, observedOwner);
-    } catch {
-      throw new Error(verifyMessage);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        let currentOwner: string;
+        try {
+          ({ owner: currentOwner } = lockOwnerEntry(claimDir));
+        } catch (checkError) {
+          if ((checkError as NodeJS.ErrnoException).code === "ENOENT")
+            throw new ProcessLockOccupiedError(occupiedMessage);
+          throw new Error(verifyMessage, { cause: checkError });
+        }
+
+        if (currentOwner !== observedOwner) {
+          try {
+            readProcessLockOwner(claimDir, currentOwner);
+          } catch (checkError) {
+            throw new Error(verifyMessage, { cause: checkError });
+          }
+
+          throw new ProcessLockOccupiedError(occupiedMessage);
+        }
+      }
+      throw new Error(verifyMessage, { cause: error });
     }
     try {
       if (processOwnerExists(staleOwner))
