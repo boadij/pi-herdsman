@@ -57,6 +57,8 @@ function runPeerWorker(
       onClose?.();
       if (code === 0 && !spawnError) return resolve();
       let kind = "unclassified";
+      let phase: string | undefined;
+      let diagnosticCode: string | undefined;
       const marker = stderr
         .split(/\r?\n/)
         .find((line) => line.startsWith(WORKER_DIAGNOSTIC));
@@ -77,6 +79,20 @@ function runPeerWorker(
             ].includes(String(diagnostic.kind))
           )
             kind = String(diagnostic.kind);
+          if (
+            diagnostic &&
+            typeof diagnostic === "object" &&
+            "phase" in diagnostic &&
+            ["acquire", "release"].includes(String(diagnostic.phase))
+          )
+            phase = String(diagnostic.phase);
+          if (
+            diagnostic &&
+            typeof diagnostic === "object" &&
+            "code" in diagnostic &&
+            ["ENOENT", "EACCES", "EPERM"].includes(String(diagnostic.code))
+          )
+            diagnosticCode = String(diagnostic.code);
         } catch {
           // Malformed child output is never forwarded.
         }
@@ -88,18 +104,25 @@ function runPeerWorker(
           : signal
             ? `signal ${signal}`
             : `exit ${code}`;
-      reject(new Error(`${name} worker ${ending}: ${kind}`));
+      reject(
+        new Error(
+          `${name} worker ${ending}: ${[kind, phase, diagnosticCode].filter(Boolean).join("/")}`,
+        ),
+      );
     });
   });
 }
 
 function workerErrorBoundary(operation: string): string {
   return `try { ${operation} } catch (error) {
-    const code = ["ENOENT", "EPERM", "EACCES"].includes(error?.code) ? error.code : undefined;
+    const causeCode = ["ENOENT", "EACCES", "EPERM"].includes(error?.cause?.code) ? error.cause.code : undefined;
+    const code = ["ENOENT", "EACCES", "EPERM"].includes(error?.code) ? error.code : undefined;
+    const phase = error?.message === "Unable to verify peer correspondence mutation ownership" ? "release" :
+      error?.message === "Unable to verify peer correspondence mutation" ? "acquire" : undefined;
     const kind = error?.message === "peer correspondence authorization failed" ? "authorization" :
       error?.message?.startsWith("Unable to verify peer correspondence mutation") ? "lock_verification" :
       code ? "filesystem" : "other";
-    console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + JSON.stringify({kind, code}));
+    console.error(${JSON.stringify(WORKER_DIAGNOSTIC)} + JSON.stringify({kind, phase, code: causeCode ?? code}));
     process.exitCode = 1;
   }`;
 }
