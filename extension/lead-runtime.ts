@@ -3766,12 +3766,17 @@ export function registerLeadRuntime(
         throw new Error(
           "Managed project execution requires a current exact assignment",
         );
-      const migrated = migrateProjectAssignmentEvidence(
-        options.coordinationHost.supervisionRuntime(),
-        assignment.repoKey,
-        assignment.branch,
-        assignment.id,
+      const needsMigration = assignment.requiredEvidence?.some(
+        (evidence) => !("result" in evidence) && !evidence.ref,
       );
+      const migrated = needsMigration
+        ? migrateProjectAssignmentEvidence(
+            options.coordinationHost.supervisionRuntime(),
+            assignment.repoKey,
+            assignment.branch,
+            assignment.id,
+          )
+        : assignment;
       if (!migrated || migrated.id !== assignment.id)
         throw new Error(
           "Managed project execution requires a current exact assignment",
