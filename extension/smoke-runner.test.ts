@@ -3393,7 +3393,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     const context = (
       prompt: string,
       sections = {},
-      systemPrompt = "You are the Lead for this Pi session.",
+      systemPrompt = "You are an ordinary Lead for this Pi session.",
     ) => ({
       messages: [
         {
@@ -3495,6 +3495,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
         model: "chief-tree",
         hasAgentDefinitions: false,
         hasLeadIdentity: true,
+        hasManagedLeadIdentity: false,
         hasManagerIdentity: false,
         hasChiefIdentity: false,
         hasRoleSection: false,
@@ -3537,6 +3538,29 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       missingManagerRoleSection.find((event: any) => event.type === "error")
         ?.error.errorMessage,
       "Provider request omitted the manager role section",
+    );
+    handlers.get("session_start")?.(
+      {},
+      {
+        sessionManager: {
+          getSessionId: () => "faux-missing-managed-lead-identity",
+        },
+      },
+    );
+    const missingManagedLeadIdentity = await collect(
+      provider.streamSimple(
+        model("manager-handoff-lead"),
+        context(
+          "Reply exactly MANAGER_HANDOFF_LEAD_READY.",
+          {},
+          "<pi_herdsman_role>\n## Managed Lead role\n</pi_herdsman_role>",
+        ),
+      ),
+    );
+    assert.equal(
+      missingManagedLeadIdentity.find((event: any) => event.type === "error")
+        ?.error.errorMessage,
+      "Provider request omitted or contradicted the Managed Lead role contract",
     );
     assert.equal(handlers.has("agent_settled"), true);
   } finally {

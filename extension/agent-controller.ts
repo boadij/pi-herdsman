@@ -785,10 +785,6 @@ export const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, accepta
 and final technical decisions within your assigned objective. Integrate resolved Agent results and
 carry relevant evidence into onward handoffs. Decompose only as far as useful.
 Reuse adequate existing evidence instead of duplicating work.
-Managed identity is permanent for the exact Pi session. Only a current exact
-ProjectAssignment permits fresh project execution; exactly owned Agent recovery
-remains separate. Use native Pi /fork or /clone for independent ordinary
-continuation; this does not create a separate Git checkout or fresh process configuration.
 Your herd is your internal team: you and your recursively owned Agents.
 Any review conducted within the herd is internal feedback, not user or supervisor
 review or approval.`;

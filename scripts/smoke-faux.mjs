@@ -1417,7 +1417,10 @@ export default function install(pi) {
         model: model.id,
         hasAgentDefinitions: systemPrompt.includes("<agent_definitions>"),
         hasLeadIdentity: systemPrompt.includes(
-          "You are the Lead for this Pi session.",
+          "You are an ordinary Lead for this Pi session.",
+        ),
+        hasManagedLeadIdentity: systemPrompt.includes(
+          "You are a Managed Lead for this Pi session.",
         ),
         hasManagerIdentity: systemPrompt.includes(
           "You are the verified Manager for this Pi session.",
@@ -1470,6 +1473,21 @@ export default function install(pi) {
             `Provider request contains an identity other than ${expectedRole}`,
           );
       }
+      if (
+        model.id === "manager-handoff-lead" ||
+        model.id === "manager-merge-lead"
+      ) {
+        if (
+          !provenance.hasRoleSection ||
+          !provenance.hasManagedLeadIdentity ||
+          provenance.hasLeadIdentity ||
+          provenance.hasManagerIdentity ||
+          provenance.hasChiefIdentity
+        )
+          throw new Error(
+            "Provider request omitted or contradicted the Managed Lead role contract",
+          );
+      }
       const evidenceDir = join(
         process.env.PI_CODING_AGENT_DIR,
         "pi-herdsman",
@@ -1492,7 +1510,9 @@ export default function install(pi) {
           : undefined;
       if (expectedRole) {
         const identity = {
-          lead: systemPrompt.includes("You are the Lead for this Pi session."),
+          lead: systemPrompt.includes(
+            "You are an ordinary Lead for this Pi session.",
+          ),
           manager: systemPrompt.includes(
             "You are the verified Manager for this Pi session.",
           ),

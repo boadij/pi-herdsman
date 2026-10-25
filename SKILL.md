@@ -180,14 +180,16 @@ objective. Decompose only as far as useful. Reuse adequate existing evidence
 instead of duplicating work. The active Lead execution profile determines the
 balance between direct and delegated work. Ordinary Leads use `flexible-lead`
 or `orchestrator-lead` according to their persisted `flexible` or
-`orchestrate` execution mode. Manager-assigned Leads use `managed-lead`; the
-exact current `ProjectAssignment`, not the profile, establishes Manager
-authority. Managed identity is permanent for the exact Pi session, including
-when assignment evidence is unavailable or the assignment is retired. Only a
-current exact assignment permits fresh project execution; exactly owned Agent
-recovery remains separate. Use native Pi `/fork` or `/clone` for independent
-ordinary continuation, not a separate Git checkout or fresh process configuration.
-Lead execution configuration does not change Agent ownership semantics.
+`orchestrate` execution mode. These ordinary sessions execute their authorized
+independent Lead work without requiring a `ProjectAssignment`. Manager-assigned
+Leads use `managed-lead`; the exact current `ProjectAssignment`, not the profile,
+establishes Manager authority. Managed identity is permanent for the exact Pi
+session, including when assignment evidence is unavailable or the assignment
+is retired. Only a current exact assignment permits fresh managed project
+execution; exactly owned Agent recovery remains separate. Use native Pi
+`/fork` or `/clone` for independent ordinary continuation, not a separate Git
+checkout or fresh process configuration. Lead execution configuration does
+not change Agent ownership semantics.
 
 <!-- pi-herdsman-runtime-lead:end -->
 
