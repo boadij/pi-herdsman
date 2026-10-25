@@ -1419,6 +1419,9 @@ export default function install(pi) {
         hasLeadIdentity: systemPrompt.includes(
           "You are an ordinary Lead for this Pi session.",
         ),
+        hasManagedLeadIdentity: systemPrompt.includes(
+          "You are a Managed Lead for this Pi session.",
+        ),
         hasManagerIdentity: systemPrompt.includes(
           "You are the verified Manager for this Pi session.",
         ),
@@ -1468,6 +1471,21 @@ export default function install(pi) {
         )
           throw new Error(
             `Provider request contains an identity other than ${expectedRole}`,
+          );
+      }
+      if (
+        model.id === "manager-handoff-lead" ||
+        model.id === "manager-merge-lead"
+      ) {
+        if (
+          !provenance.hasRoleSection ||
+          !provenance.hasManagedLeadIdentity ||
+          provenance.hasLeadIdentity ||
+          provenance.hasManagerIdentity ||
+          provenance.hasChiefIdentity
+        )
+          throw new Error(
+            "Provider request omitted or contradicted the Managed Lead role contract",
           );
       }
       const evidenceDir = join(

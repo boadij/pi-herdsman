@@ -372,10 +372,9 @@ ${FILE_HANDOFF_GUIDANCE}`;
 const ORDINARY_LEAD_CHARTER = `## Lead role
 You are an ordinary Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}
-Ordinary Agent assignments and file handoffs are recipient-specific. Peer messages coordinate work but do not independently transfer execution ownership.`;
+Your Agent assignments and file handoffs are recipient-specific. Peer messages coordinate work but do not independently transfer execution ownership.`;
 const MANAGED_LEAD_GUIDANCE = `Managed Lead identity is permanent for this exact Pi session. Only a current exact ProjectAssignment permits fresh managed project execution; unavailable or retired assignment state does not grant ordinary Lead execution authority. Exactly owned Agent recovery remains separate. Use native Pi /fork or /clone for independent ordinary continuation; this does not create a separate Git checkout or fresh process configuration.
 For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
-Ordinary Leads have no automatic required-evidence scope.
 A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
 Only the Manager can designate continuing project requirements.
 Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
