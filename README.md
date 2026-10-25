@@ -28,7 +28,7 @@ _Advanced orchestration: a live Manager → Lead → Agent workflow._
 - **Parallel and nested delegation.** Run independent work concurrently and let explicitly enabled Agents delegate their own bounded subtasks.
 - **Project orchestration.** A Manager coordinates durable branch-based work across independent Leads and their Agent trees.
 - **Direct supervision.** Chief, Manager, Lead, and Agent responsibilities stay explicit instead of collapsing into one global controller.
-- **Peer communication.** Leads can exchange messages locally; Managers can also collaborate across connected machines.
+- **Peer communication.** Leads can message eligible peers locally; unassigned ordinary Leads and Managers can also collaborate across connected machines.
 - **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session and its transitively owned managed Agents. An active Manager also sees the Leads in its current durable project assignments and their owned Agent trees.
 - **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 

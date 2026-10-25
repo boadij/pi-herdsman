@@ -178,9 +178,9 @@ Do not claim a passing full check from a partial focused run.
 
 ## CI runtime smoke
 
-GitHub Actions runs all supported simulated Pi/Herdr smoke scenarios for
-changes affecting the runtime, its dependencies, build, smoke harness, or
-validation workflow. The existing required `CI` check fails when required
+GitHub Actions runs selected simulated Pi/Herdr smoke scenarios for changes
+affecting the runtime, its dependencies, build, smoke harness, or validation
+workflow. The existing required `CI` check fails when required
 smoke does not succeed. Documentation-only and test-only changes normally skip
 it.
 
@@ -194,9 +194,10 @@ missing or unsuccessful required jobs. Local `npm run validate` remains
 unchanged and does not replace hosted integration acceptance.
 
 Simulated acceptance uses real Pi, Herdsman, and Herdr processes without model
-credentials. It does not verify real-model decisions. The supported simulated
-scenarios include `core`, `continuation`, `chief-tree`, `supervisor-agent`,
-`terminal-failure`, and `agent-crash-recovery`.
+credentials. It does not verify real-model decisions. CI runs `core`,
+`continuation`, `chief-tree`, `supervisor-agent`, `terminal-failure`,
+`agent-terminal-failure`, `manager-handoff`, and `agent-crash-recovery`.
+`manager-merge` is also supported but deliberately opt-in, not part of CI.
 
 `npm run validate` remains unchanged and does not run smoke. Manual/live smoke
 remains separate and opt-in. For cross-process Pi/Herdr behavior outside the CI

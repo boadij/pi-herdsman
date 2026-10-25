@@ -36,9 +36,10 @@ supervision of an ordinary Lead permits bounded discovery and communication,
 including live inspection, persisted transcript access when available, and
 cooperative steering through authorized messages. It does not grant project
 execution control, Agent ownership, or automatic project-result delivery. The
-Lead may reply explicitly with `message_supervisor`. Supervision does not grant Agent ownership: Manager
-and Chief can own only Agents they directly start from their own exact Pi
-session, when their effective `agents` profile permits it.
+Lead may reply explicitly with `message_supervisor`. Supervision does not
+grant Agent ownership: Manager and Chief can own only Agents they directly start
+from their own exact Pi session, when their effective `agents` profile permits
+it.
 
 ### Lead
 
@@ -250,7 +251,7 @@ verified within the in-scope sessions is omitted and reported as incomplete
 coverage rather than guessed. Chief staff, peer Leads, and unrelated sessions
 remain outside the accounting scope.
 
-See [Commands](../reference/commands.md#agents-stats) for the exact presentation
+See [Commands](../reference/commands.md#herdsman-stats) for the exact presentation
 and coverage rules.
 
 ## System responsibilities
