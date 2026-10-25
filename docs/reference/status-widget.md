@@ -282,5 +282,5 @@ Neither changes agent control state.
 ## See also
 
 - [Agent states](agent-states.md)
-- [`/agents definitions`](commands.md#agents-definitions)
+- [`/herdsman definitions`](commands.md#herdsman-definitions)
 - [Recovery](../guides/recovery.md)

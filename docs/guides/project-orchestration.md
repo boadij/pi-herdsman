@@ -5,9 +5,10 @@
 Use Manager when independent project work deserves separate Leads and Git
 branches instead of more Agents inside one Lead's worktree.
 
-Manager controls the Leads named by current project assignments; project scope
-alone grants no authority over a Lead. Project Leads own technical decisions
-and orchestrate execution through their Agent trees.
+Manager project operations control only Leads named by current assignments.
+Eligible ordinary Leads in the verified worktree group are also supervised for
+observation and communication, not project operations. Project Leads own
+technical decisions and orchestrate execution through their Agent trees.
 
 Manager-assigned project Leads use only the reserved `managed-lead` definition,
 regardless of an ordinary Lead's saved execution preference. The bundled
@@ -88,13 +89,12 @@ explicit rather than falling back to an ordinary handoff. Ordinary Leads have
 no automatic evidence scope. See [required assignment evidence](handoffs.md#required-assignment-evidence)
 and the [`message_staff`](../reference/staff.md#message_staff) and
 [`delegate_agent`](../reference/agent.md#delegate_agent) references.
-To remove project-owned requirements, use the existing project assignment
-action menu: **Required evidence**, select an entry to inspect its ID, name,
-and origin, then choose **Remove** and confirm. Inherited baseline entries are
-protected. This removes the exact requirement record, not its snapshot or
-source file, and does not alter evidence already accepted by Agents. The menu
-does not remove managed-Agent-local additions; assigned Leads have no separate
-removal UI, and local-addition removal remains internal only.
+To remove project-owned requirements, open the project assignment action menu,
+choose **Retained evidence**, select the entry by ID, name, and origin, then
+**Remove requirement…** and confirm **Remove requirement**. Inherited baseline
+entries are protected. Removal leaves the snapshot, source file, and evidence
+already accepted by Agents unchanged. The menu cannot remove managed-Agent-local
+additions; assigned Leads have no separate removal UI.
 
 ## Run independent work in parallel
 

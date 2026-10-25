@@ -110,13 +110,12 @@ or unrelated session acquires no automatic evidence scope. Retained evidence
 removal remains an internal exact-ID capability; there is no standalone
 model-facing evidence-management tool. Removing a requirement does not erase
 prior Pi-session entries or evidence already accepted by an Agent.
-For project-owned requirements, a Manager can use the existing project
-assignment action menu: **Retained evidence** → select an entry to inspect its
-ID, name, and origin → **Remove** → confirm. This removes only the exact
-project-owned requirement; inherited baseline entries are protected. It does
-not delete snapshots or source files. The project menu does not remove
-managed-Agent-local additions; assigned Leads have no separate evidence
-removal UI, and local Agent-addition removal remains internal only.
+For project-owned requirements, the Manager uses the project's **Retained
+evidence** menu. Inherited baseline requirements are protected; removal leaves
+snapshots, source files, and evidence already accepted by Agents unchanged.
+The menu cannot remove managed-Agent-local additions. See
+[Project orchestration](project-orchestration.md#start-and-resume-project-work)
+for the UI procedure.
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 

@@ -2964,6 +2964,88 @@ test("federation Manager starts its branch after an earlier completed managed as
   assert.equal(answer.content[0].arguments.branch, branch);
 });
 
+test("federation Lead correlates discovery and sends only within the current turn", () => {
+  const history = [
+    { role: "user", content: "previous request" },
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "old-list", name: "list_peers", arguments: {} },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "list_peers",
+      toolCallId: "old-list",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            peers: [{ session: "old-target", machine: "old" }],
+          }),
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "old-send",
+          name: "message_peer",
+          arguments: {},
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "message_peer",
+      toolCallId: "old-send",
+      content: "sent",
+    },
+  ];
+  const discover = (content: string) =>
+    decide("federated-peer-a", {
+      messages: [...history, { role: "user", content }],
+    });
+
+  assert.equal(discover("PEER_E2E_A_DISCOVER").content[0].name, "list_peers");
+  assert.equal(
+    discover("PEER_E2E_A_LEAD_SEND result:researcher#1").content[0].name,
+    "list_peers",
+  );
+
+  const listed = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "fresh-list", name: "list_peers", arguments: {} },
+    ],
+  };
+  const listedResult = {
+    role: "toolResult",
+    toolName: "list_peers",
+    toolCallId: "fresh-list",
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          peers: [{ session: "new-target", machine: "new" }],
+        }),
+      },
+    ],
+  };
+  const send = decide("federated-peer-a", {
+    messages: [
+      ...history,
+      { role: "user", content: "PEER_E2E_A_LEAD_SEND result:researcher#1" },
+      listed,
+      listedResult,
+    ],
+  });
+  assert.equal(send.content[0].name, "message_peer");
+  assert.equal(send.content[0].arguments.session, "new-target");
+});
+
 test("federation Lead handles inbound request after its capture prompt and imported binding", () => {
   const origin = "12345678-1234-1234-1234-123456789abc";
   const canonical = "result:abcdefab-cdef-abcd-efab-cdefabcdefab";

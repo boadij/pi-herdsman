@@ -83,6 +83,11 @@ function lastUser(messages) {
   return [...messages].reverse().find((message) => message.role === "user");
 }
 
+function currentTurn(messages) {
+  const index = messages.findLastIndex((message) => message.role === "user");
+  return index < 0 ? [] : messages.slice(index);
+}
+
 function correlatedCall(messages, name, identity) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -757,7 +762,8 @@ export function decide(model, context) {
       return waitForResult("Waiting for background Lead reply reconciliation.");
     }
     if (prompt.includes("PEER_E2E_A_LEAD_SEND")) {
-      const listed = correlatedCall(messages, "list_peers");
+      const turn = currentTurn(messages);
+      const listed = correlatedCall(turn, "list_peers");
       if (!listed) return call("list_peers", {});
       const peers = JSON.parse(text(listed.result));
       const peer = peers.peers?.find((candidate) => candidate.machine);
@@ -765,7 +771,7 @@ export function decide(model, context) {
       const semantic = prompt.match(/\bresult:[A-Za-z0-9_-]+#\d+\b/u)?.[0];
       if (!semantic)
         throw new Error("ordinary Lead request omitted its result reference");
-      if (successfulCallCount(messages, "message_peer") === 0)
+      if (successfulCallCount(turn, "message_peer") === 0)
         return call("message_peer", {
           session: peer.session,
           message: `PEER_E2E_CORRELATION_ID PEER_E2E_LEAD_REQUEST: inspect the portable file and use ${semantic}.`,
@@ -798,7 +804,7 @@ export function decide(model, context) {
       return fauxAssistantMessage("PEER_E2E_A_SINGLE_SENT");
     }
     if (prompt.includes("PEER_E2E_A_DISCOVER")) {
-      const listed = correlatedCall(messages, "list_peers");
+      const listed = correlatedCall(currentTurn(messages), "list_peers");
       if (!listed) return call("list_peers", {});
       const result = JSON.parse(text(listed.result));
       if (!result.peers?.some((peer) => peer.machine))

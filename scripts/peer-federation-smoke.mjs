@@ -19,7 +19,9 @@ import {
   isMissingDockerResource,
 } from "./peer-federation-cleanup.mjs";
 import {
+  assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
+  classifyCurrentSendEvidence,
   delegateResultEvidence,
   isLiveCorrespondenceRecipient,
   matchedManagedLeadDenial,
@@ -419,16 +421,38 @@ try {
           return { malformed: line.slice(0, 200) };
         }
       });
-  const readOrdinaryLeadSession = (side, kind, id, ref) => {
+  const boundedReaderArgument = (value, maxBytes = 128) =>
+    typeof value === "string" && Buffer.byteLength(value, "utf8") <= maxBytes
+      ? value
+      : "";
+  const sessionFingerprint = (value) =>
+    typeof value === "string" && Buffer.byteLength(value, "utf8") <= 128
+      ? createHash("sha256").update(value).digest("hex")
+      : "";
+  const readOrdinaryLeadSession = (
+    side,
+    kind,
+    id,
+    ref,
+    expectedRecipientSession,
+    expectedCanonicalRef,
+  ) => {
     const script = `
       const fs = require("node:fs");
       const path = process.argv[1], kind = process.argv[2], id = process.argv[3], ref = process.argv[4];
       const text = fs.readFileSync(path, "utf8");
       const lines = text.split("\\n");
-      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, modelTurnsAfterInbound = 0, modelTurnsBeforeBinding = 0, modelTurnsAfterBinding = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, importedResultBinding;
+      let matchingDeliveryCount = 0, matchingReplyCount = 0, inboundLeadRequestCount = 0, modelTurnsAfterInbound = 0, modelTurnsBeforeBinding = 0, modelTurnsAfterBinding = 0, artifactReadCount = 0, replyCallCount = 0, successfulReplyCount = 0, delivered, bindingPresent = false, bindingMatches = false, correctRecipient = false, artifactIncluded = false;
       let hasLeadReplyRef = false, hasLeadReply = false, hasPortableContent = false;
       const replyCalls = new Map(), replyResults = [];
-      let inSendTurn = false, receipt = null, listPeersCalls = 0, inboundSeen = false, bindingSeen = false;
+      let inSendTurn = false, receipt = null, listPeersCalls = 0, freshListPeersCalls = 0, inboundSeen = false, bindingSeen = false;
+      const sendCalls = new Map(), sendResults = new Map(), sendResultCounts = new Map(), freshListCalls = new Map(), freshListResults = new Map(), freshListResultCounts = new Map();
+      const boundedIdentity = value => typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 128 ? value : undefined;
+      const sessionFingerprint = value => typeof value === "string" && Buffer.byteLength(value, "utf8") <= 128 ? require("node:crypto").createHash("sha256").update(value).digest("hex") : "";
+      let expectedArtifact;
+      if (process.env.PI_CODING_AGENT_DIR && typeof process.argv[7] === "string" && Buffer.byteLength(process.argv[7], "utf8") <= 512 && process.argv[7].startsWith("result:")) {
+        try { expectedArtifact = fs.readFileSync(process.env.PI_CODING_AGENT_DIR + "/pi-herdsman/results/" + process.argv[7].slice("result:".length), "utf8"); } catch {}
+      }
       for (const line of lines) {
         if (!line) continue;
         let entry;
@@ -437,9 +461,30 @@ try {
           inSendTurn = entry.message.content?.some?.(part => part.type === "text" && part.text?.startsWith("PEER_E2E_A_LEAD_SEND ")) ?? false;
           if (inSendTurn) receipt = null;
         }
-        const details = entry.message?.details ?? entry.details;
-        if (inSendTurn && details?.queued === true && typeof details.id === "string")
-          receipt = { id: details.id, fromSessionId: details.fromSessionId, remoteSessionId: details.remoteSessionId };
+        if (inSendTurn && entry.message?.role === "assistant") for (const part of entry.message.content ?? []) {
+          if (part.type === "toolCall" && part.name === "message_peer") sendCalls.set(part.id, part);
+          if (part.type === "toolCall" && part.name === "list_peers") {
+            freshListPeersCalls++;
+            freshListCalls.set(part.id, part);
+          }
+        }
+        if (inSendTurn && entry.message?.role === "toolResult") {
+          if (sendCalls.has(entry.message.toolCallId)) {
+            const callId = entry.message.toolCallId;
+            const resultDetails = entry.message.details ?? entry.details;
+            sendResults.set(callId, { ...entry.message, details: resultDetails });
+            sendResultCounts.set(callId, (sendResultCounts.get(callId) ?? 0) + 1);
+            if (resultDetails?.queued === true && typeof resultDetails.id === "string") {
+              const id = boundedIdentity(resultDetails.id);
+              receipt = id ? { id } : null;
+            }
+          }
+          if (freshListCalls.has(entry.message.toolCallId)) {
+            const callId = entry.message.toolCallId;
+            freshListResultCounts.set(callId, (freshListResultCounts.get(callId) ?? 0) + 1);
+            freshListResults.set(callId, { ...entry.message, details: entry.message.details ?? entry.details });
+          }
+        }
         const hasListPeers = Array.isArray(entry.message?.content) && entry.message.content.some(part => part.type === "toolCall" && part.name === "list_peers");
         if (hasListPeers) listPeersCalls++;
         if (kind === "recipient" && entry.message?.role === "assistant") {
@@ -459,17 +504,21 @@ try {
         }
         if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id) {
           matchingDeliveryCount++;
-          delivered ??= entry;
+          delivered ??= { type: entry.type, customType: entry.customType, details: { id: boundedIdentity(entry.details.id) } };
+          correctRecipient ||= process.argv[6] !== "" && sessionFingerprint(entry.details?.toSessionId) === process.argv[6];
+          artifactIncluded ||= typeof expectedArtifact === "string" && expectedArtifact.length > 0 && typeof entry.content === "string" && entry.content.includes(expectedArtifact);
         }
         if (kind === "recipient" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.content?.includes("PEER_E2E_LEAD_REQUEST")) {
           inboundLeadRequestCount++;
           inboundSeen = true;
         }
-        if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef)
-          importedResultBinding ??= entry, bindingSeen = true;
+        if (kind === "recipient" && entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === ref && entry.data?.canonicalRef) {
+          bindingPresent = true;
+          bindingMatches ||= entry.data.canonicalRef === process.argv[7];
+          bindingSeen = true;
+        }
         if (kind === "reply" && entry.type === "custom_message" && entry.customType === "pi-herdsman-peer_message" && entry.details?.id === id && entry.content?.includes("PEER_E2E_LEAD_REPLY")) {
           matchingReplyCount++;
-          delivered ??= entry;
         }
       }
       for (const result of replyResults) {
@@ -482,37 +531,56 @@ try {
           hasPortableContent ||= evidence.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1");
         }
       }
-      const tail = Buffer.from(text).subarray(-2048).toString("utf8");
-      const recentTools = [];
-      for (const line of tail.split("\\n")) {
-        try {
-          const entry = JSON.parse(line);
-          for (const part of entry.message?.content ?? []) if (part.type === "toolCall" && typeof part.name === "string") recentTools.push({ id: part.id, name: part.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40), outcome: "called" });
-          if (entry.message?.role === "toolResult") {
-            const call = recentTools.findLast(item => item.id === entry.message.toolCallId);
-            if (call) {
-              call.outcome = entry.message.isError ? "error" : "result";
-              if (call.name === "message_peer" && entry.message.isError) {
-                const errorText = (entry.message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" ");
-                call.errorCategory = errorText.includes("not available on the current branch") ? "missing-result-binding" : errorText.includes("same-role peer") ? "peer-authorization" : "other";
-              }
-            }
-          }
-        } catch {}
-      }
-      const safeTools = recentTools.slice(-12).map(({ id, name, outcome, errorCategory }) => ({ name, outcome, ...(name === "message_peer" ? { toolCallId: typeof id === "string" ? id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) : undefined } : {}), ...(errorCategory ? { errorCategory } : {}) }));
-      process.stdout.write(JSON.stringify({ receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, modelTurnsBeforeBinding, modelTurnsAfterBinding, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent: !!importedResultBinding, importedResultBinding, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, diagnostics: { sessionBytes: Buffer.byteLength(text), exactReceiptExists: !!receipt, recentTools: safeTools } }));
+      const boundedCallIds = calls => [...calls.keys()].map(boundedIdentity).filter(Boolean).slice(0, 64);
+      const sendEvidence = kind === "send" ? {
+        freshListPeersCalls,
+        freshListCallIds: boundedCallIds(freshListCalls),
+        freshListResults: [...freshListResults].slice(0, 64).map(([toolCallId, result]) => ({
+          toolCallId: boundedIdentity(toolCallId),
+          resultCount: freshListResultCounts.get(toolCallId) ?? 0,
+          expectedPeerMatched: process.argv[5] !== "" && (result.details?.peers ?? []).some(peer => sessionFingerprint(peer.session) === process.argv[5]),
+        })),
+        messagePeerCalls: sendCalls.size,
+        sendCallIds: boundedCallIds(sendCalls),
+        sendResults: [...sendResults].slice(0, 64).map(([toolCallId, result]) => ({
+          toolCallId: boundedIdentity(toolCallId),
+          resultCount: sendResultCounts.get(toolCallId) ?? 0,
+          isError: result.isError === true,
+          reasonCode: result.isError === true ? (result.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\\n").match(/\\[(sender_unavailable|sender_role_changed|route_role_mismatch|route_ambiguous|no_authorized_target)\\]/)?.[1] : undefined,
+          queued: result.details?.queued === true,
+          receiptId: boundedIdentity(result.details?.id),
+        })),
+      } : undefined;
+      const output = { receipt, delivered, matchingDeliveryCount, matchingReplyCount, inboundLeadRequestCount, modelTurnsAfterInbound, modelTurnsBeforeBinding, modelTurnsAfterBinding, artifactReadCount, replyCallCount, successfulReplyCount, bindingPresent, bindingMatches, correctRecipient, artifactIncluded, hasLeadReplyRef, hasLeadReply, hasPortableContent, listPeersCalls, sendEvidence };
+      if (sendEvidence && Buffer.byteLength(JSON.stringify(sendEvidence), "utf8") > 16384) output.sendEvidence = null;
+      process.stdout.write(JSON.stringify(output));
     `;
-    const output = exec(side, [
-      "node",
-      "-e",
-      script,
-      resources[side].ordinaryLead.sessionPath,
-      kind,
-      id ?? "",
-      ref ?? "",
-    ]);
-    return JSON.parse(output);
+    const output = exec(
+      side,
+      [
+        "node",
+        "-e",
+        script,
+        resources[side].ordinaryLead.sessionPath,
+        kind,
+        boundedReaderArgument(id),
+        boundedReaderArgument(ref, 512),
+        sessionFingerprint(resources.b.ordinaryLead.sessionId),
+        sessionFingerprint(expectedRecipientSession),
+        boundedReaderArgument(expectedCanonicalRef, 512),
+      ],
+      herdrEnv(side),
+    );
+    const parsed = JSON.parse(output);
+    if (kind === "send") {
+      parsed.diagnostics = classifyCurrentSendEvidence(
+        parsed.sendEvidence,
+        resources.b.ordinaryLead.sessionId,
+        parsed.receipt,
+      );
+      delete parsed.sendEvidence;
+    }
+    return parsed;
   };
   const readBDecisionDiagnostics = () => {
     const path = `${resources.b.runtime.piAgentDir}/peer-federation-decisions.jsonl`;
@@ -1372,7 +1440,7 @@ try {
     .filter(Boolean)
     .map(JSON.parse);
   assertPeerInListPeersResult(
-    ordinaryLeadTranscript,
+    ordinaryLeadTranscript.slice(discoveryStartLine),
     resources.b.ordinaryLead.sessionId,
   );
   stage("ordinary-lead-discovery-confirmed", {
@@ -1729,7 +1797,7 @@ try {
       );
     if (
       readOrdinaryLeadSession("b", "recipient", "", leadResult.binding.ref)
-        .importedResultBinding
+        .bindingPresent
     )
       throw new Error(
         "B ordinary Lead was pre-seeded with A's result binding before delivery",
@@ -1750,10 +1818,11 @@ try {
       `PEER_E2E_A_LEAD_SEND ${leadResult.semanticRef}`,
     ]);
     herdr("a", ["pane", "send-keys", resources.a.ordinaryLead.pane, "Enter"]);
-    let acceptance;
+    let acceptance, sendDiagnostics;
     for (let attempt = 0; attempt < 120; attempt++) {
       const sendRead = readOrdinaryLeadSession("a", "send");
       acceptance = sendRead.receipt;
+      sendDiagnostics = sendRead.diagnostics;
       if (acceptance) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
@@ -1763,19 +1832,14 @@ try {
         `A ordinary Lead's Pi session has no durable remote peer queue receipt; diagnostics=${JSON.stringify(diagnostics)}`,
       );
     }
+    assertOrdinaryLeadSendAcceptance(sendDiagnostics);
     resources.acceptanceMessageId = acceptance.id;
     exec("a", [
       "sh",
       "-c",
       `printf '%s' ${acceptance.id} > ${fixturePath("a")}/tracked-outbound-id`,
     ]);
-    stage("peer-message-queued", {
-      id: acceptance.id,
-      from: acceptance.fromSessionId,
-      to: acceptance.remoteSessionId,
-      bSession: resources.a.remoteProbe.ordinaryLeadSession,
-      bGeneration: resources.a.remoteProbe.ordinaryLeadGeneration,
-    });
+    stage("peer-message-queued", { id: acceptance.id });
     stage("lead-outbound-retry-released", { id: acceptance.id });
     let inbox = "";
     for (let attempt = 0; attempt < 80; attempt++) {
@@ -1784,6 +1848,8 @@ try {
         "recipient",
         acceptance.id,
         resources.evidence.leadResultRef,
+        resources.a.remoteProbe.ordinaryLeadSession,
+        leadResult.binding.canonicalRef,
       );
       inbox = exec(
         "b",
@@ -1813,23 +1879,17 @@ try {
       "recipient",
       acceptance.id,
       resources.evidence.leadResultRef,
+      resources.a.remoteProbe.ordinaryLeadSession,
+      leadResult.binding.canonicalRef,
     );
     if (resources.diagnosticsEnabled)
       stage("peer-correlation", { events: readBDecisionDiagnostics() });
     const delivered = bRead.delivered;
-    const importedResultBinding = bRead.importedResultBinding;
     const checks = {
       deliveredOnce: bRead.matchingDeliveryCount === 1,
-      correctRecipient:
-        delivered?.details?.toSessionId ===
-        resources.a.remoteProbe.ordinaryLeadSession,
-      bindingPresent:
-        importedResultBinding?.data?.ref === leadResult.binding.ref &&
-        importedResultBinding?.data?.canonicalRef ===
-          leadResult.binding.canonicalRef,
-      artifactIncluded:
-        typeof delivered?.content === "string" &&
-        delivered.content.includes(leadResult.artifactText),
+      correctRecipient: bRead.correctRecipient,
+      bindingPresent: bRead.bindingMatches,
+      artifactIncluded: bRead.artifactIncluded,
       markerPresent: leadResult.artifactText.includes(
         "PEER_E2E_PORTABLE_RESULT_CONTENT_V1",
       ),

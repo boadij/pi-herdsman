@@ -410,10 +410,10 @@ through `files`.
 Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 `message_staff`. Manager has those same direct-report tools, peer tools, and
 `delegate_project`, `resume_project`, and `stop_lead`.
-For administrative removal of a project-owned evidence requirement, use the
-Manager project-assignment action menu: **Retained evidence**, inspect the
-entry, then **Remove** and confirm. Inherited requirements are protected; this
-does not delete snapshots or change evidence already accepted by Agents.
+For administrative removal of project-owned evidence, use the Manager's
+**Retained evidence** menu and its **Remove requirement…** action. Inherited
+requirements are protected; snapshots and accepted Agent evidence remain
+unchanged.
 `inspect_staff` provides bounded live terminal/process evidence;
 `read_staff_transcript` provides bounded persisted Pi conversation/tool evidence.
 Target a Lead by the exact full Pi session ID in a fresh snapshot or
@@ -449,9 +449,10 @@ Pi Herdsman uses one durable vocabulary:
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace and does not own supervised Leads' Agents. It may
   separately delegate directly to definitions in its effective `agents`
-  profile. Manager controls only Leads named by current project assignments;
-  project scope alone does not make a Lead a Manager report. Leads own technical
-  decisions and orchestrate execution through their Agent trees;
+  profile. Project operations control only currently assigned Leads; eligible
+  ordinary Leads in the verified worktree group are direct reports for
+  observation and communication. Leads own technical decisions and orchestrate
+  execution through their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
   Manager uses `delegate_project` with a task and optional branch to start new
