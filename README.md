@@ -7,14 +7,14 @@
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml)
 [![License](https://img.shields.io/npm/l/pi-herdsman)](LICENSE)
 
-Pi Herdsman lets your AI coding assistant delegate tasks to other assistants
-running in the background, while you continue using your main conversation.
-Start with one Agent, or coordinate independent work across a larger project.
+**The orchestration layer between [Pi](https://github.com/earendil-works/pi) and [herdr](https://github.com/herdrdev/herdr).**
 
-[Pi](https://github.com/earendil-works/pi) runs the coding assistants,
-[herdr](https://github.com/herdrdev/herdr)
-manages their terminal sessions and workspaces, and Herdsman coordinates their
-work.
+Pi Herdsman lets your AI coding assistant delegate tasks to background Agents
+while your main conversation stays interactive. Start with one Agent, or
+coordinate parallel, branch-based project work across independent Leads.
+
+Pi runs the coding-agent conversations; herdr manages their terminal sessions
+and workspaces; Herdsman coordinates delegation, ownership, and supervision.
 
 ## Demo
 
