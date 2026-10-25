@@ -16,7 +16,15 @@ import {
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -29,6 +37,7 @@ const scenarioNames = [
   "continuation",
   "chief-tree",
   "supervisor-agent",
+  "manager-bootstrap",
   "manager-recovery",
   "terminal-failure",
   "agent-terminal-failure",
@@ -96,6 +105,8 @@ export function parseSmokeArgs(args) {
     throw new Error("--simulated cannot be combined with --model");
   if (simulated && scenario === "manager-recovery")
     throw new Error("manager-recovery does not support --simulated");
+  if (simulated && scenario === "manager-bootstrap")
+    throw new Error("manager-bootstrap requires a live model");
   if (
     !simulated &&
     [
@@ -3128,18 +3139,32 @@ async function startCandidate(ctx) {
       : {}),
     model: ctx.model,
   });
+  let candidateCommand = [
+    "pi",
+    ...args,
+    ...(prompt === undefined ? [] : [prompt]),
+  ];
+  if (ctx.scenario === "manager-bootstrap") {
+    const diagnosticDir = join(ctx.paths.root, "manager-bootstrap-diagnostics");
+    await mkdir(diagnosticDir, { recursive: true });
+    ctx.managerBootstrapDiagnosticsPaths = {
+      start: join(diagnosticDir, "candidate-start.json"),
+      exit: join(diagnosticDir, "candidate-exit.txt"),
+      stderr: join(diagnosticDir, "candidate-stderr.log"),
+      gitTrace: join(diagnosticDir, "git-trace.jsonl"),
+    };
+    const quote = (value) => shellCommand([value]);
+    const wrapper = join(diagnosticDir, "run-candidate.sh");
+    await writeFile(
+      wrapper,
+      `#!/bin/sh\numask 077\nprintf '{"pid":"%s"}\\n' "$$" > ${quote(ctx.managerBootstrapDiagnosticsPaths.start)}\nexport GIT_TRACE2_EVENT=${quote(ctx.managerBootstrapDiagnosticsPaths.gitTrace)}\n"$@" 2> ${quote(ctx.managerBootstrapDiagnosticsPaths.stderr)}\nstatus=$?\nprintf '%s\\n' "$status" > ${quote(ctx.managerBootstrapDiagnosticsPaths.exit)}\nexit "$status"\n`,
+      { mode: 0o700, flag: "wx" },
+    );
+    candidateCommand = [wrapper, ...candidateCommand];
+  }
   await run(
     "herdr",
-    [
-      "pane",
-      "run",
-      paneId,
-      rootCandidateCommand([
-        "pi",
-        ...args,
-        ...(prompt === undefined ? [] : [prompt]),
-      ]),
-    ],
+    ["pane", "run", paneId, rootCandidateCommand(candidateCommand)],
     {
       env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),
     },
@@ -5039,6 +5064,8 @@ export function initialPromptForScenario(scenario, ctx) {
       return "Reply exactly with PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP.";
     case "manager-recovery":
       return undefined;
+    case "manager-bootstrap":
+      return undefined;
     case "terminal-failure":
       return undefined;
     case "agent-terminal-failure":
@@ -5065,6 +5092,8 @@ export async function runScenario(ctx, scenario) {
       return runSupervisorAgentSmoke(ctx);
     case "manager-recovery":
       return runManagerRecoverySmoke(ctx);
+    case "manager-bootstrap":
+      return runManagerBootstrapSmoke(ctx);
     case "terminal-failure":
       return runTerminalFailureSmoke(ctx);
     case "agent-terminal-failure":
@@ -6611,6 +6640,494 @@ async function runContinuationSmoke(ctx) {
     },
     { timeoutMs: Math.max(1, deadline - Date.now()), stallMs: MODEL_STALL_MS },
   );
+}
+
+async function runManagerBootstrapSmoke(ctx) {
+  const target = await realpath(ctx.primaryCheckoutPath);
+  const markerName = `SMOKE_MANAGER_BOOTSTRAP_${randomUUID()}`;
+  const markerPath = join(target, markerName);
+  const markerContents = "retained only in the primary checkout\n";
+  const branch = `herdsman/smoke-manager-bootstrap-${randomUUID()}`;
+  ctx.managerBootstrap = { target, markerName, branch };
+  await writeFile(markerPath, markerContents, { flag: "wx" });
+
+  markStage(ctx, "manager-bootstrap-fresh-session");
+  await waitForEvidence(
+    ctx,
+    "manager-bootstrap-fresh-session",
+    async () => {
+      const observed = await tryNestedCommand(ctx, ["agent", "list"]);
+      if (!observed.ok) throw observationFailure(observed.error);
+      const root = (observed.value.agents ?? []).find(
+        (agent) => agent.pane_id === ctx.rootPaneId,
+      );
+      return {
+        done:
+          !!root &&
+          ["id", "path"].includes(root.agent_session?.kind) &&
+          typeof root.agent_session.value === "string" &&
+          root.agent_session.value.length > 0,
+        progress: { rootSessionObserved: !!root?.agent_session?.value },
+      };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
+  );
+
+  markStage(ctx, "manager-bootstrap-herdr-identity");
+  const verifyPaneIdentity = async () => {
+    const listed = await nestedCommand(ctx, ["pane", "list"]);
+    assert.ok(Array.isArray(listed.panes), "Herdr pane list is malformed");
+    const listedPane = listed.panes.find(
+      (pane) => pane?.pane_id === ctx.rootPaneId,
+    );
+    assert.ok(listedPane, "expected Herdr pane is no longer present");
+    assert.equal(listedPane.workspace_id, ctx.rootWorkspaceId);
+    assert.ok(
+      typeof listedPane.tab_id === "string" && listedPane.tab_id.length > 0,
+      "Herdr pane list omitted the expected tab ID",
+    );
+
+    const current = (await nestedCommand(ctx, ["pane", "get", ctx.rootPaneId]))
+      .pane;
+    assert.ok(
+      current && typeof current === "object" && !Array.isArray(current),
+      "Herdr pane.get returned a malformed pane",
+    );
+    assert.equal(current.pane_id, ctx.rootPaneId);
+    assert.equal(current.tab_id, listedPane.tab_id);
+    assert.equal(current.workspace_id, ctx.rootWorkspaceId);
+    assert.ok(
+      typeof current.cwd === "string" && current.cwd.length > 0,
+      "Herdr pane.get omitted the pane cwd",
+    );
+    assert.ok(isAbsolute(current.cwd), "Herdr pane cwd is not absolute");
+    const paneCwd = await realpath(current.cwd);
+    assert.equal(
+      paneCwd,
+      target,
+      "Herdr pane cwd differs from approved target",
+    );
+    return {
+      paneId: current.pane_id,
+      tabId: current.tab_id,
+      workspaceId: current.workspace_id,
+      paneCwd,
+      target,
+    };
+  };
+  const identityEvidence = await verifyPaneIdentity();
+  console.log(
+    `manager-bootstrap preflight identity: ${JSON.stringify(identityEvidence)}`,
+  );
+
+  markStage(ctx, "manager-bootstrap-command");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  const confirmation = await waitForEvidence(
+    ctx,
+    "manager-bootstrap-confirmation-visible",
+    async () => {
+      const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+      const visible = text.replace(/\s+/gu, " ");
+      const targetVisible = visible.includes(target);
+      const choicesVisible =
+        visible.includes("Initialize Git repository?") &&
+        visible.includes("Yes") &&
+        visible.includes("No");
+      return {
+        done: targetVisible && choicesVisible,
+        value: text,
+        progress: { targetVisible, choicesVisible },
+        evidence: text.slice(-1200),
+      };
+    },
+    { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS },
+  );
+  assert.ok(
+    confirmation.replace(/\s+/gu, " ").includes(target),
+    "native confirmation must show the exact approved path before approval",
+  );
+  ctx.managerBootstrap.confirmationEvidence = confirmation
+    .replace(/\s+/gu, " ")
+    .slice(-1000);
+  ctx.managerBootstrap.confirmedIdentity = await verifyPaneIdentity();
+  const visibleConfirmation = (
+    await nestedPaneText(ctx, ctx.rootPaneId, "visible")
+  ).replace(/\s+/gu, " ");
+  assert.ok(
+    visibleConfirmation.includes(target) &&
+      visibleConfirmation.includes("Initialize Git repository?") &&
+      visibleConfirmation.includes("Yes") &&
+      visibleConfirmation.includes("No"),
+    "exact target confirmation was not visible immediately before approval",
+  );
+  ctx.managerBootstrap.confirmationVisibleBeforeApproval = true;
+  ctx.managerBootstrap.confirmationTargetMatched = true;
+  // The native confirm presents Yes first; inspect the exact target and choices before Enter.
+  await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+  ctx.managerBootstrap.approvalSent = true;
+  markStage(ctx, "manager-bootstrap-active");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Manager mode active.",
+    "--timeout",
+    "30000",
+  ]);
+
+  const verifyEmptyRoot = async () => {
+    const [count, parents, tree, status] = await Promise.all([
+      run("git", ["rev-list", "--count", "--all"], { cwd: target }),
+      run("git", ["rev-list", "--parents", "-n", "1", "HEAD"], {
+        cwd: target,
+      }),
+      run("git", ["ls-tree", "-r", "--name-only", "HEAD"], { cwd: target }),
+      run("git", ["status", "--short", "--", markerName], { cwd: target }),
+    ]);
+    assert.equal(count.stdout.trim(), "1", "bootstrap must create one commit");
+    assert.equal(parents.stdout.trim().split(/\s+/u).length, 1);
+    assert.equal(tree.stdout.trim(), "", "bootstrap tree must be empty");
+    assert.equal(status.stdout.trim(), `?? ${markerName}`);
+  };
+  await verifyEmptyRoot();
+  assert.equal(await readFile(markerPath, "utf8"), markerContents);
+
+  markStage(ctx, "manager-bootstrap-fresh-herdr-topology");
+  const freshWorkspace = await nestedCommand(ctx, [
+    "workspace",
+    "get",
+    ctx.rootWorkspaceId,
+  ]);
+  const freshTopology = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  const repoKey = assertManagerFreshPrimary(
+    ctx.rootWorkspaceId,
+    target,
+    freshWorkspace.workspace,
+    freshTopology,
+  );
+
+  markStage(ctx, "manager-bootstrap-first-delegation");
+  await nestedCommand(ctx, [
+    "agent",
+    "prompt",
+    ctx.rootPaneId,
+    `Use delegate_project exactly once. Set branch to exactly ${branch}, omit base and files, and delegate this task: do not modify files; report exactly MANAGER_BOOTSTRAP_CHILD_DONE to the supervisor; then end your turn. After delegate_project returns, make no other tool calls.`,
+  ]);
+  const delegated = await waitForEvidence(
+    ctx,
+    "manager-bootstrap-correlated-child",
+    async () => {
+      const snapshot = await rootSessionSnapshot(ctx);
+      const results = snapshot ? staffDelegateResults(snapshot.contents) : [];
+      const delegateCalls = snapshot
+        ? sessionEntries(snapshot.contents).flatMap((entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            Array.isArray(entry.message.content)
+              ? entry.message.content.filter(
+                  (part) =>
+                    part?.type === "toolCall" &&
+                    part.name === "delegate_project",
+                )
+              : [],
+          )
+        : [];
+      if (delegateCalls.length > 1)
+        throw new Error(
+          "Manager bootstrap called delegate_project more than once",
+        );
+      if (snapshot) assertNoFailedProjectDelegation(snapshot.contents, branch);
+      if (results.length > 1)
+        throw new Error(
+          "Manager bootstrap made more than one project delegation",
+        );
+      const result = results[0];
+      if (!result)
+        return {
+          done: false,
+          progress: { successfulDelegateResults: 0 },
+          evidence: snapshot ? summarizeSession(snapshot.contents) : null,
+        };
+      assert.equal(result.branch, branch);
+      const observed = await tryNestedCommand(ctx, ["agent", "list"]);
+      if (!observed.ok) throw observationFailure(observed.error);
+      const agents = observed.value.agents ?? [];
+      let child;
+      for (const agent of agents)
+        if (
+          agent.workspace_id === result.workspace_id &&
+          (await agentSessionId(ctx, agent)) === result.session
+        ) {
+          child = agent;
+          break;
+        }
+      const childEvidence = await managerChildSessionEvidence(
+        ctx,
+        agents,
+        result.workspace_id,
+        result.session,
+      );
+      const topology = await nestedCommand(ctx, [
+        "worktree",
+        "list",
+        "--workspace",
+        ctx.rootWorkspaceId,
+      ]);
+      const worktree = topology.worktrees.find(
+        (item) =>
+          item.branch === branch &&
+          item.open_workspace_id === result.workspace_id,
+      );
+      const done =
+        !!child &&
+        childEvidence.expectedSessionFile?.sessionIdMatches === true &&
+        !!worktree;
+      return {
+        done,
+        value: { result, child, childEvidence, worktree },
+        progress: {
+          successfulDelegateResults: results.length,
+          delegateCalls: delegateCalls.length,
+          correlatedChild: !!child,
+          childSessionSaved:
+            childEvidence.expectedSessionFile?.sessionIdMatches === true,
+          linkedWorktreeObserved: !!worktree,
+        },
+        evidence: { result, childEvidence, worktree },
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  assert.equal(delegated.result.workspace_id, delegated.child.workspace_id);
+  assert.equal(delegated.result.session, delegated.child.agent_session.value);
+  const linkedPath = resolve(
+    delegated.worktree.path ?? delegated.worktree.worktree_path,
+  );
+  assert.notEqual(linkedPath, target);
+  await assert.rejects(lstat(join(linkedPath, markerName)), { code: "ENOENT" });
+  assert.equal(await readFile(markerPath, "utf8"), markerContents);
+  await verifyEmptyRoot();
+
+  const finalWorkspace = await nestedCommand(ctx, [
+    "workspace",
+    "get",
+    ctx.rootWorkspaceId,
+  ]);
+  const finalTopology = await nestedCommand(ctx, [
+    "worktree",
+    "list",
+    "--workspace",
+    ctx.rootWorkspaceId,
+  ]);
+  assert.equal(finalWorkspace.workspace.workspace_id, ctx.rootWorkspaceId);
+  assert.equal(finalTopology.source.repo_key, repoKey);
+  assert.equal(resolve(finalTopology.source.source_checkout_path), target);
+  assert.ok(
+    finalTopology.worktrees.some(
+      (item) =>
+        item.branch === branch &&
+        resolve(item.path ?? item.worktree_path) === linkedPath,
+    ),
+  );
+  ctx.managerBootstrap.evidence = {
+    primaryPath: target,
+    markerName,
+    repoKey,
+    rootCommitCount: 1,
+    rootCommitHasParent: false,
+    rootTreeEmpty: true,
+    linkedPath,
+    markerInPrimary: true,
+    markerInLinkedWorktree: false,
+    delegateResult: delegated.result,
+    childSession: delegated.childEvidence.expectedSessionFile,
+  };
+  console.log(
+    `manager-bootstrap assertions: PASS ${JSON.stringify(ctx.managerBootstrap.evidence)}`,
+  );
+}
+
+function sanitizeManagerBootstrapText(value, ctx) {
+  let text = String(value ?? "");
+  for (const privateValue of [
+    ctx.paths.root,
+    ctx.rootCwd,
+    homedir(),
+    ctx.managerBootstrap?.markerName,
+    ctx.managerBootstrap?.branch,
+  ])
+    if (privateValue) text = text.replaceAll(privateValue, "<PRIVATE_VALUE>");
+  return text
+    .replace(/Bearer\s+\S+/giu, "Bearer <REDACTED>")
+    .replace(/\b(?:sk|pk)-[A-Za-z0-9_-]{16,}\b/gu, "<REDACTED_KEY>")
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/giu,
+      "<REDACTED_KEY>",
+    )
+    .replace(
+      /(api[_-]?key|access[_-]?token|secret|authorization|password|cookie)\s*[:=]\s*\S+/giu,
+      "$1=<REDACTED>",
+    )
+    .replace(/\bphs-[a-z0-9-]{6,}\b/giu, "<SESSION_ID>")
+    .replace(/\bw\d+:[pt]\d+\b/giu, "<PANE_ID>")
+    .slice(-8_000);
+}
+
+async function captureManagerBootstrapFailure(ctx) {
+  const paths = ctx.managerBootstrapDiagnosticsPaths;
+  const target = ctx.managerBootstrap?.target ?? ctx.rootCwd;
+  const evidence = { stage: ctx.stage ?? null };
+  if (ctx.managerBootstrap)
+    evidence.confirmation = {
+      visibleBeforeApproval:
+        ctx.managerBootstrap.confirmationVisibleBeforeApproval === true,
+      exactTargetMatched:
+        ctx.managerBootstrap.confirmationTargetMatched === true,
+      approvalSent: ctx.managerBootstrap.approvalSent === true,
+    };
+  const attempt = async (key, operation) => {
+    try {
+      evidence[key] = await operation();
+    } catch (error) {
+      evidence[key] = {
+        observationError: error?.code ?? error?.name ?? "error",
+      };
+    }
+  };
+  if (ctx.rootPaneId && ctx.sessionName)
+    await Promise.all([
+      attempt("paneOutput", async () => ({
+        source: "bounded-visible-terminal-output",
+        stderrMayBeMultiplexed: true,
+        text: sanitizeManagerBootstrapText(
+          (await nestedPaneText(ctx, ctx.rootPaneId, "visible"))
+            .split(/\r?\n/u)
+            .filter((line) =>
+              /manager|git|repository|initialize|error|failed|fatal|warning|exception/iu.test(
+                line,
+              ),
+            )
+            .slice(-80)
+            .join("\n"),
+          ctx,
+        ),
+      })),
+      attempt("processInfo", async () => {
+        const result = await tryNestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          ctx.rootPaneId,
+        ]);
+        if (!result.ok) return { observed: false };
+        const processes =
+          result.value?.process_info?.foreground_processes ?? [];
+        return {
+          observed: true,
+          foregroundProcessCount: processes.length,
+          candidateProcessCount: candidateProcess(
+            result.value,
+            ctx.candidateExtension,
+            ctx.herdrStateExtension,
+          ).length,
+          processNames: processes
+            .map((proc) => basename(proc.name ?? proc.exe ?? "unknown"))
+            .slice(0, 12),
+        };
+      }),
+    ]);
+  if (paths) {
+    await attempt("candidateStart", async () => {
+      const value = JSON.parse(await readFile(paths.start, "utf8"));
+      return { observed: true, pidRecorded: /^\d+$/u.test(value.pid) };
+    });
+    await attempt("candidateExit", async () => {
+      const value = (await readFile(paths.exit, "utf8")).trim();
+      return {
+        observed: true,
+        exitCode: /^\d+$/u.test(value) ? Number(value) : null,
+      };
+    });
+    await attempt("candidateStderr", async () =>
+      sanitizeManagerBootstrapText(await readFile(paths.stderr, "utf8"), ctx),
+    );
+    await attempt("gitTrace", async () => {
+      const contents = await readFile(paths.gitTrace, "utf8");
+      const commands = new Map();
+      const events = contents
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            const event = JSON.parse(line);
+            if (event.event === "start") {
+              const argv = Array.isArray(event.argv) ? event.argv : [];
+              const command = argv[1];
+              if (!["init", "commit"].includes(command)) return [];
+              if (typeof event.sid === "string")
+                commands.set(event.sid, command);
+              return [{ event: "start", command }];
+            }
+            if (event.event === "exit" && commands.has(event.sid))
+              return [
+                {
+                  event: "exit",
+                  command: commands.get(event.sid),
+                  code: Number.isInteger(event.code) ? event.code : null,
+                },
+              ];
+            return [];
+          } catch {
+            return [];
+          }
+        });
+      return { observed: true, bootstrapEvents: events.slice(-20) };
+    });
+  }
+  await attempt("gitState", async () => {
+    const gitDirExists = await lstat(join(target, ".git")).then(
+      () => true,
+      (error) => (error.code === "ENOENT" ? false : Promise.reject(error)),
+    );
+    const commands = [
+      ["status", "--short"],
+      ["rev-parse", "--show-toplevel"],
+      ["rev-parse", "--verify", "HEAD"],
+      ["rev-parse", "HEAD^{tree}"],
+      ["rev-list", "--count", "--all"],
+      ["rev-list", "--parents", "-n", "1", "HEAD"],
+      ["ls-tree", "-r", "--name-only", "HEAD"],
+    ];
+    const results = {};
+    for (const args of commands) {
+      try {
+        const result = await run("git", args, {
+          cwd: target,
+          timeout: OBSERVATION_TIMEOUT_MS,
+        });
+        results[args[0] + (args[1] === "--verify" ? ":head" : "")] = {
+          code: 0,
+          stdout: sanitizeManagerBootstrapText(result.stdout.trim(), ctx),
+        };
+      } catch (error) {
+        results[args[0] + (args[1] === "--verify" ? ":head" : "")] = {
+          code: Number.isInteger(error.code) ? error.code : null,
+          stderr: sanitizeManagerBootstrapText(
+            error.stderr ?? error.message,
+            ctx,
+          ),
+        };
+      }
+    }
+    return { gitDirExists, commands: results };
+  });
+  return evidence;
 }
 
 async function runManagerRecoverySmoke(ctx) {
@@ -10077,6 +10594,12 @@ export function sanitizedFailureEvidence(
     ...(diagnostics
       ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) }
       : {}),
+    ...(ctx.managerBootstrapFailureDiagnostics
+      ? {
+          managerBootstrapFailureDiagnostics:
+            ctx.managerBootstrapFailureDiagnostics,
+        }
+      : {}),
     ...(ctx.scenario === "core" && diagnostics?.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
       : {}),
@@ -10260,19 +10783,23 @@ async function main() {
   let evidence;
   try {
     ctx.rootCwd =
-      scenario === "agent-crash-recovery"
-        ? join(paths.root, "crash-recovery-project")
-        : scenario === "manager-recovery" ||
-            scenario === "terminal-failure" ||
-            scenario === "agent-terminal-failure" ||
-            scenario === "manager-handoff" ||
-            scenario === "manager-merge" ||
-            scenario === "supervisor-agent"
-          ? await prepareManagerRepository(paths)
-          : repoRoot;
+      scenario === "manager-bootstrap"
+        ? join(paths.root, "manager-bootstrap-project")
+        : scenario === "agent-crash-recovery"
+          ? join(paths.root, "crash-recovery-project")
+          : scenario === "manager-recovery" ||
+              scenario === "terminal-failure" ||
+              scenario === "agent-terminal-failure" ||
+              scenario === "manager-handoff" ||
+              scenario === "manager-merge" ||
+              scenario === "supervisor-agent"
+            ? await prepareManagerRepository(paths)
+            : repoRoot;
+    if (scenario === "manager-bootstrap") await mkdir(ctx.rootCwd);
     if (scenario === "agent-crash-recovery")
       await mkdir(ctx.rootCwd, { recursive: true });
     if (
+      scenario === "manager-bootstrap" ||
       scenario === "manager-recovery" ||
       scenario === "terminal-failure" ||
       scenario === "agent-terminal-failure" ||
@@ -10459,6 +10986,18 @@ async function main() {
     console.error(
       `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${formatSmokeFailure(error, ctx.stage)}`,
     );
+    if (scenario === "manager-bootstrap") {
+      try {
+        ctx.managerBootstrapFailureDiagnostics =
+          await captureManagerBootstrapFailure(ctx);
+      } catch (diagnosticError) {
+        ctx.managerBootstrapFailureDiagnostics = {
+          stage: ctx.stage ?? null,
+          captureFailed:
+            diagnosticError?.code ?? diagnosticError?.name ?? "error",
+        };
+      }
+    }
     try {
       const diagnosticProjection = ctx.sessionName
         ? await bestEffortDiagnostics(ctx, () =>

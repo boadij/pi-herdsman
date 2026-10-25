@@ -1636,6 +1636,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     "core",
     "continuation",
     "chief-tree",
+    "manager-bootstrap",
     "manager-recovery",
     "terminal-failure",
   ])
@@ -1684,6 +1685,11 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     () => parseSmokeArgs(["manager-recovery", "--simulated"]),
     /does not support --simulated/,
   );
+  assert.throws(
+    () => parseSmokeArgs(["manager-bootstrap", "--simulated"]),
+    /requires a live model/,
+  );
+  assert.equal(initialPromptForScenario("manager-bootstrap", {}), undefined);
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
   for (const scenario of ["agent-terminal-failure", "manager-handoff"]) {
@@ -3865,7 +3871,7 @@ test("continuation first-generation stalls if completed child retires before obs
   );
   const start = source.indexOf("async function runContinuationSmoke(ctx) {");
   const end = source.indexOf(
-    "\nasync function runManagerRecoverySmoke(ctx) {",
+    "\nasync function runManagerBootstrapSmoke(ctx) {",
     start,
   );
   assert.ok(start >= 0 && end > start);
@@ -4027,7 +4033,7 @@ test("simulated continuation releases completion only after full live evidence",
     );
     const start = source.indexOf("async function runContinuationSmoke(ctx) {");
     const end = source.indexOf(
-      "\nasync function runManagerRecoverySmoke(ctx) {",
+      "\nasync function runManagerBootstrapSmoke(ctx) {",
       start,
     );
     assert.ok(start >= 0 && end > start);
