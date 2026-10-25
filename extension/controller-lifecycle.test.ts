@@ -102,6 +102,7 @@ import {
   realFs,
   recoveryIdentity,
   registerExtension,
+  registerExtensionForTest,
   requestRecordBytes,
   resetAgentMailbox,
   seedLeadRole,
@@ -5325,6 +5326,7 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
   const label = `ev-${randomUUID().slice(0, 8)}`;
+  let observedPublishedRequest = false;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -5368,7 +5370,30 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
-  registerExtension!(pi.pi as never);
+  registerExtensionForTest!(pi.pi as never, {
+    afterRequestPublished: (mailboxPath, request) => {
+      if (request.agentLabel !== label) return undefined;
+      assert.equal(mailboxPath, agentMailboxPath(WORKSPACE, label));
+      const visibleRequest = readRequest(mailboxPath, request.requestId);
+      assert.ok(
+        visibleRequest,
+        "the real request file is visible after writeRequest",
+      );
+      assert.equal(visibleRequest.requestId, request.requestId);
+      assert.equal(visibleRequest.text, request.text);
+      observedPublishedRequest = true;
+      assert.throws(
+        () =>
+          writeProjectAssignment(runtime, {
+            ...assignment,
+            text: "competing global-only replacement",
+          }),
+        /project assignment authority is in progress/i,
+        "a global-only writer cannot complete before the locked callback exits",
+      );
+      return undefined;
+    },
+  });
   try {
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
@@ -5437,6 +5462,16 @@ test("assigned Lead cannot retain project evidence through delegation", async ()
     }
     const result = await delegate();
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(observedPublishedRequest, true);
+    writeProjectAssignment(runtime, {
+      ...assignment,
+      text: "replacement after publication callback exits",
+    });
+    assert.equal(
+      readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
+        ?.text,
+      "replacement after publication callback exits",
+    );
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
     assert.match(accepted!.text, /reviewer finding to retain/);

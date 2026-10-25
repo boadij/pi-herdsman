@@ -1500,6 +1500,18 @@ function withProjectAssignmentLock<T>(operation: () => T): T {
   }
 }
 
+/** Run a synchronous final action against the exact branch assignment under global authority. */
+export function withCurrentProjectAssignment<T>(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  operation: (assignment: ProjectAssignment | undefined) => T,
+): T {
+  return withProjectAssignmentLock(() =>
+    operation(readProjectAssignment(runtime, repoKey, branch)),
+  );
+}
+
 export type PeerRuntime = SupervisionRuntime & {
   peers: string;
 };

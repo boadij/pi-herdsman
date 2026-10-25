@@ -53,6 +53,7 @@ const {
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
+  withCurrentProjectAssignment,
   projectAssignmentAuthorityLockPath,
   samePeerLeadAuthority,
   canMessagePeer,
@@ -3220,6 +3221,97 @@ test("global assignment authority finds cross-socket matches and serializes the 
     removeProjectAssignment(two, "repo-two", "racing");
   }
   assert.equal(globalProjectAssignmentSnapshot().get(assignmentId), undefined);
+});
+
+test("final assignment publication serializes replacement and rejects prior invalidation", () => {
+  const runtime = supervisionRuntime(socket());
+  const evidence = () => ({
+    id: id(),
+    name: "evidence",
+    result: { ref: "result:reviewer#1", canonicalRef: `result:${id()}` },
+  });
+  const original = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "publication",
+    branch: "main",
+    text: "task",
+    requiredEvidence: [evidence()],
+  };
+  const replacement = { ...original, id: id() };
+  writeProjectAssignment(runtime, original);
+  let publications = 0;
+  try {
+    withCurrentProjectAssignment(
+      runtime,
+      original.repoKey,
+      original.branch,
+      (current) => {
+        assert.equal(current?.id, original.id);
+        assert.throws(
+          () => writeProjectAssignment(runtime, replacement),
+          /project assignment authority is in progress/i,
+        );
+        assert.throws(
+          () =>
+            removeProjectAssignment(runtime, original.repoKey, original.branch),
+          /project assignment authority is in progress/i,
+        );
+        publications++;
+      },
+    );
+    assert.equal(publications, 1);
+    assert.equal(
+      readProjectAssignment(runtime, original.repoKey, original.branch)?.id,
+      original.id,
+      "replacement cannot interleave with final validation and publication",
+    );
+
+    const rejectInvalidated = () =>
+      withCurrentProjectAssignment(
+        runtime,
+        original.repoKey,
+        original.branch,
+        (current) => {
+          if (!current || current.id !== original.id)
+            throw new Error("assignment invalidated");
+          publications++;
+        },
+      );
+    writeProjectAssignment(runtime, replacement);
+    assert.throws(rejectInvalidated, /assignment invalidated/);
+    const sameIdEvidenceChange = {
+      ...original,
+      requiredEvidence: [evidence()],
+    };
+    writeProjectAssignment(runtime, sameIdEvidenceChange);
+    assert.throws(
+      () =>
+        withCurrentProjectAssignment(
+          runtime,
+          original.repoKey,
+          original.branch,
+          (current) => {
+            if (
+              !current ||
+              current.id !== original.id ||
+              JSON.stringify(current.requiredEvidence) !==
+                JSON.stringify(original.requiredEvidence)
+            )
+              throw new Error("evidence changed");
+            publications++;
+          },
+        ),
+      /evidence changed/,
+    );
+    removeProjectAssignment(runtime, original.repoKey, original.branch);
+    writeProjectAssignment(runtime, original);
+    removeProjectAssignment(runtime, original.repoKey, original.branch);
+    assert.throws(rejectInvalidated, /assignment invalidated/);
+  } finally {
+    removeProjectAssignment(runtime, original.repoKey, original.branch);
+  }
+  assert.equal(publications, 1, "invalidated authority publishes nothing");
 });
 
 test("global assignment scan ignores only regular incidental metadata", () => {

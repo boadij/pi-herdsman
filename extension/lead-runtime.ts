@@ -36,6 +36,7 @@ import {
   readChiefMessage,
   removeChiefMessage,
   migrateProjectAssignmentEvidence,
+  withCurrentProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
   supervisionRuntime,
@@ -3777,6 +3778,13 @@ export function registerLeadRuntime(
         );
       return {
         assignment: migrated,
+        publishIfCurrent: (operation) =>
+          withCurrentProjectAssignment(
+            options.coordinationHost.supervisionRuntime(),
+            assignment.repoKey,
+            assignment.branch,
+            operation,
+          ),
         revalidate: (operation: () => Promise<void> | void) =>
           roleTransitions.withProjectAssignmentLock(
             assignment.repoKey,

@@ -697,6 +697,10 @@ type StopReportCallbacks = {
 type TestProjectAssignmentLockHooks = {
   afterAcquired?: (repoKey: string, branch: string) => Promise<void>;
   afterOccupied?: (repoKey: string, branch: string) => Promise<void>;
+  afterRequestPublished?: (
+    mailboxPath: string,
+    request: import("./mailbox.ts").RequestRecord,
+  ) => undefined;
 };
 
 export function registerExtensionForTest(
@@ -858,6 +862,7 @@ function registerExtensionImpl(
   const controllerScope: ControllerScope | undefined =
     processRole === "lead" ? { kind: "root" } : undefined;
   const controllerServices = {
+    afterRequestPublishedForTest: lockHooks?.afterRequestPublished,
     extensionPath: HERDSMAN_EXTENSION_PATH,
     isContextRetired: (manager) => retiredManagedSession(manager),
     snapshotDependencies: {

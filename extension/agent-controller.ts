@@ -3408,6 +3408,12 @@ export type AgentControllerOptions = {
     | {
         assignment: import("./supervision.ts").ProjectAssignment;
         revalidate(operation: () => Promise<void> | void): Promise<void>;
+        publishIfCurrent(
+          operation: (
+            assignment:
+              import("./supervision.ts").ProjectAssignment | undefined,
+          ) => void,
+        ): void;
       }
     | undefined
   >;
@@ -3422,6 +3428,11 @@ export type AgentControllerOptions = {
       }
     | undefined
   >;
+  /** Synchronous assertion hook used only by registerExtensionForTest. */
+  afterRequestPublishedForTest?(
+    mailboxPath: string,
+    request: RequestRecord,
+  ): undefined;
   build: RuntimeBuild;
   extensionPath: string;
   isContextRetired(
@@ -4241,7 +4252,7 @@ export function createAgentController(
     resultBindings: readonly ResultBinding[] = [],
     submitOptions: {
       waitForLock?: boolean;
-      beforeWrite?: () => Promise<void> | void;
+      beforeWrite?: (publish: () => void) => Promise<void> | void;
       evidence?: {
         projectAssignmentId: string;
         evidenceAssignmentId: string;
@@ -4364,8 +4375,16 @@ export function createAgentController(
           fail("internal_failure", message, operation);
         }
       }
-      await submitOptions.beforeWrite?.();
-      writeRequest(runtime.mailboxPath, request);
+      let requestWritten = false;
+      const publish = () => {
+        if (requestWritten)
+          fail("internal_failure", "Request was already published", operation);
+        writeRequest(runtime.mailboxPath, request);
+        requestWritten = true;
+        options.afterRequestPublishedForTest?.(runtime.mailboxPath, request);
+      };
+      await submitOptions.beforeWrite?.(publish);
+      if (!requestWritten) publish();
     } catch (error) {
       if (String(error).toLowerCase().includes("too large"))
         fail(
@@ -7755,7 +7774,7 @@ export function createAgentController(
             {
               waitForLock: true,
               evidence: evidenceMetadata,
-              beforeWrite: async () => {
+              beforeWrite: async (publish) => {
                 assertRootDelegationAllowed();
                 if (nestedEvidence) {
                   const current = currentManagedEvidence(ctx);
@@ -7894,6 +7913,26 @@ export function createAgentController(
                     throw new Error(
                       "Project assignment or required evidence changed during Agent startup; retry delegation",
                     );
+                  if (scope.kind === "root")
+                    current.publishIfCurrent((latest) => {
+                      if (
+                        !latest ||
+                        latest.id !== current.assignment.id ||
+                        (!resumed &&
+                          (JSON.stringify(latest.requiredEvidence ?? []) !==
+                            JSON.stringify(
+                              current.assignment.requiredEvidence ?? [],
+                            ) ||
+                            JSON.stringify(latest.currentEvidenceIds ?? []) !==
+                              JSON.stringify(
+                                current.assignment.currentEvidenceIds ?? [],
+                              )))
+                      )
+                        throw new Error(
+                          "Project assignment or required evidence changed during Agent startup; retry delegation",
+                        );
+                      publish();
+                    });
                 });
               },
             },
