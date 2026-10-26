@@ -1,6 +1,6 @@
 ---
 agents: [scout, researcher]
-description: General-purpose execution agent for bounded tasks requiring broad capabilities
+description: General-purpose execution agent for bounded tasks combining investigation, editing, and validation; use when work spans capabilities or no focused specialist fits; prefer focused agents for narrow tasks
 extensions: []
 inheritGlobalContext: false
 inheritProjectContext: true

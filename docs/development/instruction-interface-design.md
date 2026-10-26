@@ -122,6 +122,11 @@ Individual definitions may describe their own roles and explicitly configured
 child dependencies. Bundled Agent names in examples and test fixtures must not
 become requirements for normal operation.
 
+An Agent description is delegation-selection guidance: state the capabilities
+it offers, when they are useful, and any meaningful selection boundary. Keep
+descriptions accurate for the effective configuration. They must not imply
+permissions, authority, or mandatory workflows that the runtime does not provide.
+
 ## Prefer positive steering
 
 Design for desired behavior before constraining against undesired behavior.
