@@ -8584,7 +8584,7 @@ export function createAgentController(
       name: "close_agent",
       label: "close agent",
       description:
-        "Destructively close an eligible directly owned Agent generation.",
+        "Destructively close the verified eligible directly owned Agent generation and cascade through its owned descendants, child-first.",
       parameters: agentTargetParameters,
       promptSnippet: undefined,
       promptGuidelines: undefined,

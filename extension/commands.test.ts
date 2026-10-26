@@ -6326,6 +6326,7 @@ test("Manager removal rejects a replaced Manager after confirmation", async (t) 
 
 test("Manager removal requires the exact confirmation word", async (t) => {
   const fixture = await managerRemovalFixture(t, { runningLead: true });
+  let confirmation = "";
   for (const answer of [
     undefined,
     "",
@@ -6334,7 +6335,10 @@ test("Manager removal requires the exact confirmation word", async (t) => {
     "remove ",
     "cancel",
   ]) {
-    fixture.ctx.ui.input = async () => answer;
+    fixture.ctx.ui.input = async (message: string) => {
+      confirmation = message;
+      return answer;
+    };
     const result = await fixture.runtime.removeWorktree(
       "feat/remove-test",
       fixture.ctx,
@@ -6345,6 +6349,13 @@ test("Manager removal requires the exact confirmation word", async (t) => {
     assert.ok(fixture.assignment());
     assert.ok(existsSync(fixture.checkoutPath));
   }
+  assert.match(
+    confirmation,
+    /automatically stops its running Managed Lead and owned Agents first/,
+  );
+  assert.match(confirmation, /not automatically restarted/);
+  assert.match(confirmation, /Git branch and Pi conversation are preserved/);
+  assert.match(confirmation, /retired only after verified checkout removal/);
 });
 
 test("Manager removal covers paused, running, and reopened checkout lifecycles", async (t) => {
