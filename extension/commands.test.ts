@@ -6353,6 +6353,7 @@ test("Manager removal requires the exact confirmation word", async (t) => {
     confirmation,
     /automatically stops its running Managed Lead and owned Agents first/,
   );
+  assert.match(confirmation, /Removes this checkout and Herdr workspace/);
   assert.match(confirmation, /not automatically restarted/);
   assert.match(confirmation, /Git branch and Pi conversation are preserved/);
   assert.match(confirmation, /retired only after verified checkout removal/);

@@ -3207,6 +3207,22 @@ export function renderCoordinationResult(
     );
   if (failed) {
     const raw = resultContent(result);
+    if (
+      !expanded &&
+      tool === "staff" &&
+      action === "merge" &&
+      details.status === "cleanup_pending"
+    )
+      return new WidthSafeText(
+        statusLine(
+          theme,
+          "warning",
+          "!",
+          `merge incomplete · ${value(details.branch) || value(args.branch) || "branch"}`,
+        ),
+        0,
+        0,
+      );
     if (expanded && tool === "staff" && action === "merge")
       return new WidthSafeText(
         statusLine(
@@ -3242,13 +3258,7 @@ export function renderCoordinationResult(
       details.assignment_retired === true;
     const outcome = complete
       ? `integrated ${branch} · checkout removed · assignment retired`
-      : details.status === "cleanup_pending"
-        ? `integration ${details.integrated === true ? "succeeded" : "unconfirmed"} · cleanup pending · ${branch}`
-        : details.status === "needs_update"
-          ? `merge needs update · ${branch}`
-          : details.status === "blocked"
-            ? `merge blocked · ${branch}`
-            : `merge incomplete · ${branch}`;
+      : `merge incomplete · ${branch}`;
     if (!expanded)
       return new WidthSafeText(
         statusLine(

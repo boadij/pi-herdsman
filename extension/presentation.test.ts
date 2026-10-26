@@ -1836,29 +1836,55 @@ test("merge presentation requires cleanup facts for complete success", () => {
     }),
     /merge incomplete/,
   );
-  assert.match(
-    render({
-      ok: true,
+  const cleanupPending = {
+    content: [
+      {
+        type: "text",
+        text: "Integrated feat/recovery; automatic cleanup remains pending.",
+      },
+    ],
+    details: {
+      ok: false,
       status: "cleanup_pending",
       integrated: true,
       checkout_removed: false,
       assignment_retired: false,
-    }),
-    /integration succeeded · cleanup pending/,
-  );
-  const expanded = render(
-    {
-      ok: true,
-      status: "cleanup_pending",
-      integrated: true,
-      checkout_removed: false,
     },
-    true,
+  };
+  const compact = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      cleanupPending,
+      {},
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(compact, /merge incomplete/);
+  assert.doesNotMatch(compact, /✓|success/);
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      cleanupPending,
+      { expanded: true },
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(
+    expanded,
+    /Integrated feat\/recovery; automatic cleanup remains pending\./,
   );
   assert.match(expanded, /status: cleanup_pending/);
   assert.match(expanded, /integrated: true/);
   assert.match(expanded, /checkout removed: false/);
-  assert.doesNotMatch(expanded, /assignment retired:/);
+  assert.match(expanded, /assignment retired: false/);
   const failed = renderedText(
     renderCoordinationResult(
       "staff",

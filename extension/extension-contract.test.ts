@@ -4801,7 +4801,13 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
         "remove_worktree",
         ["owned Agents", "Pending human approval performs no cleanup"],
       ],
-      ["merge_project", ["integration and cleanup can complete separately"]],
+      [
+        "merge_project",
+        [
+          "integration and cleanup can complete separately",
+          "If a later step fails after execution stops, it is not automatically restarted",
+        ],
+      ],
     ] as const) {
       const description = pi.tools.find(
         (tool) => tool.name === name,

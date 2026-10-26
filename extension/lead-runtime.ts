@@ -7725,6 +7725,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             `Branch: ${branch}`,
             `Checkout: ${candidate.checkoutPath}`,
             "",
+            "Removes this checkout and Herdr workspace.",
             "Removing this worktree automatically stops its running Managed Lead and owned Agents first.",
             "If a later removal step fails, they are not automatically restarted.",
             "The Git branch and Pi conversation are preserved.",
