@@ -6388,6 +6388,7 @@ async function managerRemovalFixture(
     replaceManagerBeforeFinalReconcile?: boolean;
     replaceAssignmentBeforeFinalReconcile?: boolean;
     unrelatedCheckout?: boolean;
+    unrelatedDetachedCheckout?: boolean;
     preserveAssignmentDuringReconciliation?: boolean;
     confirmationResponse?: string;
     agentStateIssues?: boolean;
@@ -6473,6 +6474,14 @@ async function managerRemovalFixture(
             `worktree ${unrelatedPath}`,
             `HEAD ${"3".repeat(40)}`,
             "branch refs/heads/feat/unrelated",
+            "",
+          ]
+        : []),
+      ...(options.unrelatedDetachedCheckout
+        ? [
+            `worktree ${unrelatedPath}`,
+            `HEAD ${"3".repeat(40)}`,
+            "detached",
             "",
           ]
         : []),
@@ -6587,7 +6596,8 @@ async function managerRemovalFixture(
       join(repoKey, `${name}.assignment`),
     acquireProcessLock: () => ({ release: () => {} }),
     listProjectAssignments: () => (assignment ? [assignment] : []),
-    readProjectAssignment: () => assignment,
+    readProjectAssignment: (_runtime: unknown, _repo: string, name: string) =>
+      assignment?.branch === name ? assignment : undefined,
     SessionManager: {
       open: () => ({
         getSessionId: () => options.persistedSessionId ?? assignment?.id,
@@ -6645,6 +6655,9 @@ async function managerRemovalFixture(
                     is_linked_worktree: true,
                   },
                 ]
+              : []),
+            ...(options.unrelatedDetachedCheckout
+              ? [{ path: unrelatedPath, is_linked_worktree: true }]
               : []),
           ],
         };
@@ -6812,7 +6825,7 @@ test("Manager explicitly releases a legacy assignment without touching an unrela
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
-    unrelatedCheckout: true,
+    unrelatedDetachedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     confirmationResponse: `forget ${branch}`,
   });
@@ -6824,6 +6837,19 @@ test("Manager explicitly releases a legacy assignment without touching an unrela
   assert.equal(fixture.assignment(), undefined);
   assert.deepEqual(fixture.removals, []);
   assert.equal(fixture.confirmationCount(), 1);
+  assert.equal(fixture.reconciliationAssignmentId(), "assigned-lead");
+});
+
+test("Manager refuses to forget a branch with no durable assignment", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment("feat/unknown", fixture.ctx),
+    /No project assignment exists on this branch/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.equal(fixture.reconciliationAssignmentId(), undefined);
+  assert.deepEqual(fixture.calls, []);
 });
 
 test("legacy assignment release refuses a branch checkout and preserves authority", async (t) => {

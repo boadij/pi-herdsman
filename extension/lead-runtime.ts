@@ -8132,6 +8132,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Only the active, lease-verified Manager can forget an assignment",
       );
+    const before = host.readProjectAssignment(
+      host.supervisionRuntime(),
+      initialManager.repoKey,
+      branch,
+    );
+    if (!before) throw new Error("No project assignment exists on this branch");
     const initialTopology = await host.runHerdr(
       host.pi,
       ctx,
@@ -8153,14 +8159,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       false,
       branch,
       false,
+      before.id,
     );
-    if (
-      !host.readProjectAssignment(
-        host.supervisionRuntime(),
-        initialManager.repoKey,
-        branch,
-      )
-    )
+    const afterReconciliation = host.readProjectAssignment(
+      host.supervisionRuntime(),
+      initialManager.repoKey,
+      branch,
+    );
+    if (!afterReconciliation)
       return {
         content: [
           {
@@ -8170,6 +8176,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ],
         details: { ok: true, branch, automatic: true },
       };
+    if (afterReconciliation.id !== before.id)
+      throw new Error("Project assignment changed during reconciliation");
     const verify = async (expectedId: string) => {
       const manager = await host.currentManager(ctx);
       if (
@@ -8210,9 +8218,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !Array.isArray(topology.worktrees) ||
         topology.worktrees.some(
           (worktree: any) =>
-            typeof worktree?.branch !== "string" ||
             typeof worktree?.path !== "string" ||
-            !worktree.path,
+            !worktree.path ||
+            (worktree.branch !== undefined &&
+              typeof worktree.branch !== "string"),
         )
       )
         throw new Error(
