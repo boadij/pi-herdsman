@@ -165,7 +165,11 @@ export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
   }
 };
 
-export type StopOwnedAgentsResult = { complete: boolean; summary: string };
+export type StopOwnedAgentsResult = {
+  complete: boolean;
+  summary: string;
+  closures?: { state: ManagedAgentState; definition: string }[];
+};
 
 export type AgentStatusSnapshotHost = {
   scope: ControllerScope;
@@ -971,6 +975,109 @@ type OwnedAssignmentSession = {
   definition: string;
   label: string;
 };
+type ClosedAssignmentProof = {
+  owner_session_id: string;
+  session_id: string;
+  session_path: string;
+  run_id: string;
+  request_id: string;
+  agent: string;
+  definition: string;
+  pane_id: string;
+  workspace_id: string;
+};
+const STOP_CLOSURE_ENTRY = "pi-herdsman-agent-closed-assignment";
+
+function acceptedCloseProof(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  closed: { state: ManagedAgentState; definition: string },
+): ClosedAssignmentProof | undefined {
+  const { state } = closed;
+  const child: OwnedAssignmentSession = {
+    id: state.piSessionId ?? "",
+    path: state.piSessionFile ?? "",
+    definition: closed.definition,
+    label: state.agentLabel,
+  };
+  if (
+    !child.id ||
+    !child.path ||
+    state.ownerSessionId !== ownerSessionId ||
+    !validId(state.runId) ||
+    !validId(state.activeRequestId ?? state.resultError?.requestId ?? "")
+  )
+    return undefined;
+  const requestId = state.activeRequestId ?? state.resultError?.requestId;
+  const accepted = acceptedAssignmentReceipts(entries, ownerSessionId, child);
+  const exactAccepted = entries.some((entry: any) => {
+    const message = entry?.message;
+    const details = message?.details;
+    return (
+      entry?.type === "message" &&
+      message?.role === "toolResult" &&
+      [
+        "delegate_agent",
+        "continue_agent",
+        "agent_delegate",
+        "agent_continue",
+      ].includes(message.toolName) &&
+      message.isError !== true &&
+      details?.ok === true &&
+      details.owner_session_id === ownerSessionId &&
+      details.session_id === child.id &&
+      details.session_path === child.path &&
+      details.request_id === requestId &&
+      details.agent === child.label &&
+      details.definition === child.definition
+    );
+  });
+  if (
+    !validId(requestId ?? "") ||
+    (!accepted.some(({ requestId: acceptedId }) => acceptedId === requestId) &&
+      !exactAccepted)
+  )
+    return undefined;
+  return {
+    owner_session_id: ownerSessionId,
+    session_id: child.id,
+    session_path: child.path,
+    run_id: state.runId,
+    request_id: requestId!,
+    agent: state.agentLabel,
+    definition: closed.definition,
+    pane_id: state.paneId,
+    workspace_id: state.workspaceId,
+  };
+}
+
+function validClosedProof(
+  proof: any,
+  ownerSessionId: string,
+  child: OwnedAssignmentSession,
+): proof is ClosedAssignmentProof {
+  if (
+    !proof ||
+    typeof proof !== "object" ||
+    proof.owner_session_id !== ownerSessionId ||
+    proof.session_id !== child.id ||
+    proof.definition !== child.definition ||
+    proof.agent !== child.label ||
+    typeof proof.session_path !== "string" ||
+    !validId(proof.run_id) ||
+    !validId(proof.request_id) ||
+    typeof proof.pane_id !== "string" ||
+    !proof.pane_id.trim() ||
+    typeof proof.workspace_id !== "string" ||
+    !proof.workspace_id.trim()
+  )
+    return false;
+  try {
+    return canonicalSessionPath(proof.session_path) === child.path;
+  } catch {
+    return false;
+  }
+}
 
 function closedAssignmentReceipt(
   entries: readonly unknown[],
@@ -998,28 +1105,28 @@ function closedAssignmentReceipt(
       details.action !== "close" ||
       details.cleanup_error !== undefined ||
       details.cleanup_errors !== undefined ||
-      !proof ||
-      proof.owner_session_id !== ownerSessionId ||
-      proof.session_id !== child.id ||
-      proof.definition !== child.definition ||
-      proof.agent !== child.label ||
-      typeof proof.session_path !== "string" ||
-      !validId(proof.run_id) ||
-      !validId(proof.request_id) ||
-      typeof proof.pane_id !== "string" ||
-      !proof.pane_id.trim() ||
-      typeof proof.workspace_id !== "string" ||
-      !proof.workspace_id.trim()
+      !validClosedProof(proof, ownerSessionId, child)
     )
       return [];
-    try {
-      return canonicalSessionPath(proof.session_path) === child.path
-        ? [{ index, proof: proof as Record<string, unknown> }]
-        : [];
-    } catch {
-      return [];
-    }
+    return [{ index, proof: proof as Record<string, unknown> }];
   });
+  const stopped = entries.flatMap((entry, index) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("type" in entry) ||
+      entry.type !== "custom" ||
+      !("customType" in entry) ||
+      entry.customType !== STOP_CLOSURE_ENTRY
+    )
+      return [];
+    const data = (entry as any).data;
+    const proof = data?.proof;
+    if (data?.version !== 1 || !validClosedProof(proof, ownerSessionId, child))
+      return [];
+    return [{ index, proof: proof as Record<string, unknown> }];
+  });
+  closed.push(...stopped);
   const latestAccepted = accepted.at(-1);
   const matches = latestAccepted
     ? closed.filter(
@@ -2568,12 +2675,12 @@ export function resolveAssignmentSession(
       }
       if (!manager) continue;
       visited.add(child.id);
-      const found = walk(child.id, manager.getEntries());
+      const found = walk(child.id, manager.getBranch());
       if (found) return found;
     }
     return undefined;
   };
-  const resolved = walk(callerId, ctx.sessionManager.getEntries());
+  const resolved = walk(callerId, ctx.sessionManager.getBranch());
   if (!resolved)
     fail(
       "invalid_request",
@@ -4850,50 +4957,16 @@ export function createAgentController(
       throw failure;
     }
     const ownerSessionId = context.sessionManager.getSessionId();
-    const closedRequestId =
-      state.activeRequestId ?? state.resultError?.requestId;
-    const closedAssignment =
-      !warnings.size &&
-      state.ownerSessionId === ownerSessionId &&
-      !!state.piSessionId &&
-      !!state.piSessionFile &&
-      !!closedRequestId &&
-      validId(closedRequestId) &&
-      validId(state.runId) &&
-      context.sessionManager.getEntries().some((entry: any) => {
-        const message = entry?.message;
-        const details = message?.details;
-        return (
-          entry?.type === "message" &&
-          message?.role === "toolResult" &&
-          [
-            "delegate_agent",
-            "continue_agent",
-            "agent_delegate",
-            "agent_continue",
-          ].includes(message.toolName) &&
-          message.isError !== true &&
-          details?.ok === true &&
-          details.owner_session_id === ownerSessionId &&
-          details.session_id === state.piSessionId &&
-          details.session_path === state.piSessionFile &&
-          details.request_id === closedRequestId &&
-          details.agent === state.agentLabel &&
-          details.definition === candidate.agentDefinition
-        );
-      })
-        ? {
-            owner_session_id: ownerSessionId,
-            session_id: state.piSessionId,
-            session_path: state.piSessionFile,
-            run_id: state.runId,
-            request_id: closedRequestId,
-            agent: state.agentLabel,
+    const closedAssignment = !warnings.size
+      ? acceptedCloseProof(
+          context.sessionManager.getEntries(),
+          ownerSessionId,
+          {
+            state,
             definition: candidate.agentDefinition,
-            pane_id: state.paneId,
-            workspace_id: state.workspaceId,
-          }
-        : undefined;
+          },
+        )
+      : undefined;
     return {
       ok: true,
       action: "close",
@@ -5134,7 +5207,10 @@ export function createAgentController(
   };
 
   type StopReport = {
-    onClosed?: (label: string) => void;
+    onClosed?: (closed: {
+      state: ManagedAgentState;
+      definition: string;
+    }) => void;
     onCleanupFailure?: (label: string, message: string) => void;
   };
   const closeSnapshot = async (
@@ -5249,7 +5325,10 @@ export function createAgentController(
         return;
       }
       invalidateRuntime(state.agentLabel, state.workspaceId);
-      report?.onClosed?.(state.agentLabel);
+      report?.onClosed?.({
+        state: current,
+        definition: snapshot.agentDefinition,
+      });
     } finally {
       release?.();
     }
@@ -5425,7 +5504,7 @@ export function createAgentController(
       )
         discarded.push(`${agent.state.agentLabel}: pending result`);
     }
-    const closed: string[] = [];
+    const closed: { state: ManagedAgentState; definition: string }[] = [];
     const failures = new Map<string, { label: string; message: string }>();
     const recordFailure = (label: string, message: string) => {
       if (!failures.has(label)) failures.set(label, { label, message });
@@ -5462,8 +5541,9 @@ export function createAgentController(
             { ids: { label: current.agentLabel, paneId: current.paneId } },
           );
         await closeCascade(context, current, signal, undefined, {
-          onClosed: (label) => {
-            if (!closed.includes(label)) closed.push(label);
+          onClosed: (outcome) => {
+            if (!closed.some(({ state }) => sameIdentity(state, outcome.state)))
+              closed.push(outcome);
           },
           onCleanupFailure: (label, message) => {
             cleanupFailureReported = true;
@@ -5486,7 +5566,7 @@ export function createAgentController(
           options.appendError(context, "pi_herdsman_cleanup_error", failure);
       }
     }
-    const closedLabels = new Set(closed);
+    const closedLabels = new Set(closed.map(({ state }) => state.agentLabel));
     for (const agent of reportable)
       if (
         !closedLabels.has(agent.state.agentLabel) &&
@@ -5522,13 +5602,14 @@ export function createAgentController(
           : `Owned Agent stop incomplete: ${[...failures.values()]
               .map(({ label, message }) => `${label}: ${message}`)
               .join("; ")}`,
+        closures: closed,
       };
     const lines =
       closed.length === reportable.length && !failures.size
         ? [`Stopped ${closed.length} agents`]
         : [`Stopped ${closed.length} of ${reportable.length} agents`];
     lines.push(
-      ...closed.map((label) => `✓ ${label}`),
+      ...closed.map(({ state }) => `✓ ${state.agentLabel}`),
       ...[...failures.values()].map(
         ({ label, message }) => `✗ ${label}: ${message}`,
       ),
@@ -5538,6 +5619,7 @@ export function createAgentController(
     return {
       complete,
       summary: lines.join("\n"),
+      closures: closed,
     };
   };
 
@@ -6634,7 +6716,7 @@ export function createAgentController(
             ),
           );
           const closedReceipt = closedAssignmentReceipt(
-            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getBranch(),
             ctx.sessionManager.getSessionId(),
             resumed,
           );

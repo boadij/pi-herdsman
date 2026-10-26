@@ -58,6 +58,7 @@ import support, {
   readRequest,
   readResult,
   readAgentState,
+  seedLeadRole,
   realFs,
   recoveryIdentity,
   registerExtension,
@@ -4570,6 +4571,18 @@ async function runManagerStartupScenario(
           piSessionId: staleId,
           updatedAt: Date.now(),
         });
+      if (mode === "close-tree") {
+        realFs.writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: staleId }),
+        );
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
     }
     if (mode === "invalid-topology")
       writeProjectAssignment(supervisionRuntime(), {
@@ -4928,6 +4941,17 @@ async function runManagerStartupScenario(
             "researcher-pane",
             childPath,
           );
+          const acceptedRequestId = randomUUID();
+          researcher.activeRequestId = acceptedRequestId;
+          researcher.agentDefinition = "scout";
+          realFs.writeFileSync(
+            join(PI_AGENTS_DIR, "scout.md"),
+            "---\nname: scout\n---\nscout instructions\n",
+          );
+          realFs.writeFileSync(
+            join(PI_AGENTS_DIR, "agent.md"),
+            "---\nname: agent\nagents: [scout]\n---\nagent instructions\n",
+          );
           const scout = stateFor(
             "scout",
             childWorkspace,
@@ -4950,6 +4974,93 @@ async function runManagerStartupScenario(
             "/tmp/manager-root",
           );
           ownedTree = [researcher, scout, implementer, unrelatedResearcher];
+          const researcherSessionPath = `/tmp/${researcher.piSessionId}.jsonl`;
+          const leadAcceptedHistory = [
+            {
+              type: "message",
+              message: {
+                role: "toolResult",
+                toolName: "delegate_agent",
+                details: {
+                  ok: true,
+                  owner_session_id: staleId,
+                  session_id: researcher.piSessionId,
+                  session_path: researcherSessionPath,
+                  request_id: acceptedRequestId,
+                  agent: researcher.agentLabel,
+                  definition: "scout",
+                },
+              },
+            },
+          ];
+          const seededLeadContext = fakeContext(leadAcceptedHistory);
+          seededLeadContext.sessionManager.getSessionId = () => staleId;
+          seedLeadRole(seededLeadContext);
+          const researcherDefinition = {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: researcher.piSessionId,
+              definition: "scout",
+              label: researcher.agentLabel,
+            },
+          };
+          const leadHistory = leadAcceptedHistory.map((entry, index) => ({
+            ...entry,
+            id: `lead-entry-${index}`,
+            ...(index ? { parentId: `lead-entry-${index - 1}` } : {}),
+            timestamp: new Date().toISOString(),
+          }));
+          realFs.writeFileSync(
+            researcherSessionPath,
+            [
+              JSON.stringify({ type: "session", id: researcher.piSessionId }),
+              JSON.stringify(researcherDefinition),
+            ].join("\n") + "\n",
+          );
+          nativeSessions.set(researcher.piSessionId, {
+            id: researcher.piSessionId,
+            path: researcherSessionPath,
+            cwd: childPath,
+            entries: [researcherDefinition],
+          });
+          realFs.writeFileSync(
+            childSessionPath,
+            [
+              JSON.stringify({
+                type: "session",
+                version: 3,
+                id: staleId,
+                timestamp: new Date().toISOString(),
+                cwd: childPath,
+              }),
+              ...leadHistory.map((entry) => JSON.stringify(entry)),
+            ].join("\n") + "\n",
+          );
+          if (mode === "close-tree") {
+            const savedLeadEntries = realFs
+              .readFileSync(childSessionPath, "utf8")
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line));
+            assert.ok(
+              savedLeadEntries.some(
+                (entry) => entry.customType === "pi-herdsman-role",
+              ),
+            );
+            assert.ok(
+              savedLeadEntries.some(
+                (entry) =>
+                  entry.customType === "pi-herdsman-lead-execution",
+              ),
+            );
+          }
+          nativeSessions.set(staleId, {
+            id: staleId,
+            path: childSessionPath,
+            cwd: childPath,
+            entries: leadHistory,
+          });
           for (const state of ownedTree)
             writeAgentState(
               agentMailboxPath(state.workspaceId, state.agentLabel),
@@ -5014,6 +5125,73 @@ async function runManagerStartupScenario(
             readAgentState(agentMailboxPath(childWorkspace, "implementer")),
             undefined,
           );
+          if (mode === "close-tree") {
+            const { SessionManager } =
+              await import("@earendil-works/pi-coding-agent");
+            const leadSession = SessionManager.open(childSessionPath);
+            const history = leadSession.getBranch() as any[];
+            const proofs = history.filter(
+              (entry: any) =>
+                entry.type === "custom" &&
+                entry.customType === "pi-herdsman-agent-closed-assignment",
+            );
+            assert.equal(proofs.length, 1);
+            assert.deepEqual(
+              (proofs[0] as any).data.proof,
+              {
+                owner_session_id: staleId,
+                session_id: researcher.piSessionId,
+                session_path: researcherSessionPath,
+                run_id: researcher.runId,
+                request_id: acceptedRequestId,
+                agent: researcher.agentLabel,
+                definition: "scout",
+                pane_id: researcher.paneId,
+                workspace_id: researcher.workspaceId,
+              },
+            );
+            const ownerContext = fakeContext(history);
+            ownerContext.sessionManager.getSessionId = () => staleId;
+            assert.equal(
+              resolveAssignmentSession(ownerContext, researcher.piSessionId)
+                .id,
+              researcher.piSessionId,
+              "the stopped Lead's exact history authorizes its Agent continuation",
+            );
+            const managerContext = fakeContext(history);
+            managerContext.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+            assert.throws(
+              () =>
+                resolveAssignmentSession(
+                  managerContext,
+                  researcher.piSessionId,
+                ),
+              /ownership tree/,
+              "Manager history cannot continue the Lead-owned Agent",
+            );
+
+            const managerAttempt = await agentTool(pi, "continue").execute(
+              "continue",
+              { session: researcherSessionPath, task: "wrong owner" },
+              undefined,
+              undefined,
+              ctx,
+            );
+            assert.equal(managerAttempt.details.ok, false);
+            assert.match(managerAttempt.details.error.message, /ownership tree/);
+
+            assert.equal(
+              nativeSessions.get(LEAD_SESSION_ID)?.entries?.some(
+                (entry: any) =>
+                  entry.customType ===
+                  "pi-herdsman-agent-closed-assignment",
+              ) ?? false,
+              false,
+              "closure proof belongs only to the exact Lead session",
+            );
+
+          }
+          realFs.rmSync(researcherSessionPath, { force: true });
           assert.ok(readAgentState(agentMailboxPath(WORKSPACE, "researcher")));
           const survivingAgents = JSON.parse(
             (await exec("herdr", ["agent", "list"])).stdout,
@@ -6063,8 +6241,14 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
-    for (const state of ownedTree)
+    for (const state of ownedTree) {
       resetAgentMailbox(agentMailboxPath(state.workspaceId, state.agentLabel));
+      if (mode === "close-tree" || mode === "close-tree-failure") {
+        nativeSessions.delete(state.piSessionId);
+        if (state.piSessionFile)
+          realFs.rmSync(state.piSessionFile, { force: true });
+      }
+    }
     releaseAssignmentLock?.();
     realFs.rmSync(attachmentPath, { force: true });
     realFs.rmSync(mutationSourcePath, { force: true });
@@ -7924,6 +8108,81 @@ test("owned continuation requires a matching persisted child edge", () => {
       resolveAssignmentSession(fakeContext([accepted, close]), id).id,
       id,
     );
+    const stopped = {
+      type: "custom",
+      customType: "pi-herdsman-agent-closed-assignment",
+      data: { version: 1, proof: close.message.details.closed_assignment },
+    };
+    assert.equal(
+      resolveAssignmentSession(fakeContext([accepted, stopped]), id).id,
+      id,
+      "a versioned stop proof uses the same accepted owner edge",
+    );
+    session.entries.push({
+      type: "custom",
+      customType: "pi-herdsman-agent-context-retired",
+      data: { sessionId: id },
+    });
+    updateConfig("contextRetirement", true);
+    try {
+      assert.throws(
+        () => resolveAssignmentSession(fakeContext([accepted, stopped]), id),
+        /retired after context pressure|Cannot verify the retirement policy/,
+        "a matching stop proof cannot bypass context retirement",
+      );
+    } finally {
+      updateConfig("contextRetirement", undefined);
+    }
+    session.entries.pop();
+    assert.throws(
+      () => resolveAssignmentSession(fakeContext([stopped]), id),
+      /ownership tree/,
+      "a custom stop proof cannot create an assignment edge",
+    );
+    const abandonedOwnerHistory = [accepted, stopped];
+    const activeOwnerBranch: unknown[] = [];
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext(abandonedOwnerHistory, activeOwnerBranch),
+          id,
+        ),
+      /ownership tree/,
+      "accepted assignment and stop proof present only in abandoned owner history cannot authorize continuation from a branch lacking both",
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([accepted, stopped], [accepted]),
+          id,
+        ),
+      /ownership tree/,
+      "closure provenance from a conflicting branch cannot close the active branch assignment",
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(fakeContext([accepted, stopped, close]), id),
+      /ownership tree/,
+      "conflicting closure representations fail closed",
+    );
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          fakeContext([
+            accepted,
+            {
+              ...stopped,
+              data: {
+                version: 2,
+                proof: close.message.details.closed_assignment,
+              },
+            },
+          ]),
+          id,
+        ),
+      /ownership tree/,
+      "unsupported custom proof versions are ignored",
+    );
     const earlierTerminal = ownershipResult(id, LEAD_SESSION_ID, { path });
     earlierTerminal.details.requestId = requestId;
     assert.throws(
@@ -8058,6 +8317,102 @@ test("owned continuation requires a matching persisted child edge", () => {
   } finally {
     nativeSessions.clear();
     realFs.rmSync(path, { force: true });
+  }
+});
+
+test("nested continuation proof stays on the nested owner's active branch", () => {
+  const parentId = randomUUID();
+  const childId = randomUUID();
+  const childPath = join(testTmpRoot, `nested-child-${childId}.jsonl`);
+  const parentPath = join(testTmpRoot, `nested-parent-${parentId}.jsonl`);
+  const childIdentity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId: childId, definition: "worker", label: "worker" },
+  };
+  const child = {
+    id: childId,
+    path: childPath,
+    cwd: testTmpRoot,
+    entries: [childIdentity],
+  };
+  const parent = {
+    id: parentId,
+    path: parentPath,
+    cwd: testTmpRoot,
+    entries: [],
+  };
+  nativeSessions.clear();
+  nativeSessions.set(parentId, parent);
+  nativeSessions.set(childId, child);
+  realFs.writeFileSync(parentPath, "{}", "utf8");
+  realFs.writeFileSync(childPath, "{}", "utf8");
+
+  const accepted = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "delegate_agent",
+      details: {
+        ok: true,
+        owner_session_id: parentId,
+        session_id: childId,
+        session_path: childPath,
+        agent: "worker",
+        definition: "worker",
+        request_id: randomUUID(),
+      },
+    },
+  };
+  const closedAssignment = {
+    owner_session_id: parentId,
+    session_id: childId,
+    session_path: childPath,
+    run_id: randomUUID(),
+    request_id: accepted.message.details.request_id,
+    agent: "worker",
+    definition: "worker",
+    pane_id: "worker-pane",
+    workspace_id: "worker-workspace",
+  };
+  const stopped = {
+    type: "custom",
+    customType: "pi-herdsman-agent-closed-assignment",
+    data: { version: 1, proof: closedAssignment },
+  };
+  const activeBranch: unknown[] = [];
+  const nestedContext = fakeContext(
+    [accepted, stopped],
+    activeBranch,
+  ) as any;
+  nestedContext.sessionManager.getSessionId = () => parentId;
+  nestedContext.sessionManager.getSessionFile = () => parentPath;
+  try {
+    assert.throws(
+      () => resolveAssignmentSession(nestedContext, childId),
+      /ownership tree/,
+      "acceptance and closure on the nested owner's abandoned branch do not authorize continuation",
+    );
+
+    activeBranch.push(accepted, stopped);
+    assert.equal(
+      resolveAssignmentSession(nestedContext, childId).id,
+      childId,
+      "matching acceptance and closure on the nested owner's active branch authorize the exact child session",
+    );
+
+    const rootHistory = [
+      ownershipResult(parentId, LEAD_SESSION_ID, { path: parentPath }),
+    ];
+    assert.throws(
+      () => resolveAssignmentSession(fakeContext(rootHistory), childId),
+      /ownership tree/,
+      "the Lead retains only its direct parent edge and receives no nested child proof",
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(parentPath, { force: true });
+    realFs.rmSync(childPath, { force: true });
   }
 });
 
@@ -8921,12 +9276,41 @@ test("production continuation policy uses the saved project's trusted override",
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
-  const context = fakeContext([
-    ownershipResult(sessionId, LEAD_SESSION_ID, {
-      path: sessionPath,
-      label,
-    }),
-  ]) as any;
+  const accepted = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "delegate_agent",
+      details: {
+        ok: true,
+        owner_session_id: LEAD_SESSION_ID,
+        session_id: sessionId,
+        session_path: sessionPath,
+        agent: label,
+        definition: "agent",
+        request_id: randomUUID(),
+      },
+    },
+  };
+  const stopped = {
+    type: "custom",
+    customType: "pi-herdsman-agent-closed-assignment",
+    data: {
+      version: 1,
+      proof: {
+        owner_session_id: LEAD_SESSION_ID,
+        session_id: sessionId,
+        session_path: sessionPath,
+        run_id: randomUUID(),
+        request_id: accepted.message.details.request_id,
+        agent: label,
+        definition: "agent",
+        pane_id: "pane",
+        workspace_id: `closed-${sessionId}`,
+      },
+    },
+  };
+  const context = fakeContext([accepted, stopped]) as any;
   context.model = { provider: "continue-provider", id: "continue-model" };
   context.cwd = projectA;
   try {
