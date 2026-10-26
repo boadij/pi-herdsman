@@ -755,6 +755,7 @@ type TestProjectAssignmentLockHooks = {
     mailboxPath: string,
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
+  removeProjectMessage?: typeof removeProjectMessage;
 };
 
 export function registerExtensionForTest(
@@ -2426,7 +2427,8 @@ function registerExtensionImpl(
           listProjectMessageHeaders,
           readProjectMessage,
           listProjectMessages,
-          removeProjectMessage,
+          removeProjectMessage:
+            lockHooks?.removeProjectMessage ?? removeProjectMessage,
           readProjectAssignment,
           importResultBindings,
         },

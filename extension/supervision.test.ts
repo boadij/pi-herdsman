@@ -53,6 +53,7 @@ const {
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   withProjectAssignmentAuthority,
+  withProjectAssignmentAuthorityWait,
   withCurrentProjectAssignment,
   projectAssignmentAuthorityLockPath,
   samePeerLeadAuthority,
@@ -4152,6 +4153,41 @@ test("project retirement storage failure preserves pending messages", () => {
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
     [pending],
   );
+});
+
+test("global authority wait handles release, cancellation, and timeout without running early", async () => {
+  const path = projectAssignmentAuthorityLockPath();
+  let holder = acquireProcessLock(path, { name: "test authority holder" });
+  let calls = 0;
+  try {
+    const pending = withProjectAssignmentAuthorityWait(() => ++calls);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(calls, 0);
+    holder.release();
+    assert.equal(await pending, 1);
+    assert.equal(calls, 1);
+
+    holder = acquireProcessLock(path, { name: "test authority holder" });
+    const controller = new AbortController();
+    const cancelled = withProjectAssignmentAuthorityWait(
+      () => ++calls,
+      controller.signal,
+    );
+    controller.abort(new Error("cancel test"));
+    await assert.rejects(cancelled, /cancel test/);
+    assert.equal(calls, 1);
+
+    const started = Date.now();
+    await assert.rejects(
+      withProjectAssignmentAuthorityWait(() => ++calls),
+      /Project assignment authority is in progress/,
+    );
+    assert.ok(Date.now() - started >= 1_900);
+    assert.equal(calls, 1);
+    holder.release();
+  } finally {
+    holder.release();
+  }
 });
 
 test("pending retirements preserve exact generations and reject conflicting storage", () => {

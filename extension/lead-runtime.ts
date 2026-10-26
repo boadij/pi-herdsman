@@ -36,12 +36,16 @@ import {
   readChiefMessage,
   removeChiefMessage,
   migrateProjectAssignmentEvidence,
+  migrateProjectAssignmentEvidenceAfter,
+  readProjectAssignment,
   withCurrentProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
+  withProjectAssignmentAuthorityWait,
   withProjectAssignmentAuthority,
+  writeProjectAssignmentAfter,
   readPeerLeadRecord,
   samePeerLeadGeneration,
   samePeerLeadAuthority,
@@ -3757,7 +3761,8 @@ export function registerLeadRuntime(
   const controller = createAgentController(pi, {
     ...options.controllerServices,
     scope: { kind: "root" },
-    projectEvidence: async (ctx) => {
+    projectEvidence: async (ctx, signal) => {
+      const operationSignal = signal ?? ctx.signal;
       if (
         activeLeadRole(options.leadRuntime) !== "lead" ||
         !leadExecution?.managed
@@ -3772,11 +3777,10 @@ export function registerLeadRuntime(
         (evidence) => !("result" in evidence) && !evidence.ref,
       );
       const migrated = needsMigration
-        ? migrateProjectAssignmentEvidence(
+        ? await migrateProjectAssignmentEvidenceAfter(
             options.coordinationHost.supervisionRuntime(),
-            assignment.repoKey,
-            assignment.branch,
-            assignment.id,
+            assignment,
+            operationSignal,
           )
         : assignment;
       if (!migrated || migrated.id !== assignment.id)
@@ -3786,11 +3790,16 @@ export function registerLeadRuntime(
       return {
         assignment: migrated,
         publishIfCurrent: (operation) =>
-          withCurrentProjectAssignment(
-            options.coordinationHost.supervisionRuntime(),
-            assignment.repoKey,
-            assignment.branch,
-            operation,
+          withProjectAssignmentAuthorityWait(
+            () =>
+              operation(
+                readProjectAssignment(
+                  options.coordinationHost.supervisionRuntime(),
+                  assignment.repoKey,
+                  assignment.branch,
+                ),
+              ),
+            operationSignal,
           ),
         revalidate: (operation: () => Promise<void> | void) =>
           roleTransitions.withProjectAssignmentLock(
@@ -3804,7 +3813,7 @@ export function registerLeadRuntime(
                 );
               await operation();
             },
-            ctx.signal,
+            operationSignal,
           ),
       };
     },
@@ -10453,7 +10462,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ? { currentEvidenceIds }
             : { currentEvidenceIds: undefined }),
         };
-        host.writeProjectAssignment(runtime, written);
+        if (runtime?.assignments)
+          await writeProjectAssignmentAfter(
+            runtime,
+            current,
+            written,
+            ctx.signal,
+          );
+        else host.writeProjectAssignment(runtime, written);
         return written;
       },
       ctx.signal,

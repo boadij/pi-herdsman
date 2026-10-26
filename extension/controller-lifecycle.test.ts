@@ -44,6 +44,7 @@ import {
   readManagerDescriptor,
   removeProjectAssignment,
   migrateProjectAssignmentEvidence,
+  migrateProjectAssignmentEvidenceAfter,
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
   supervisionRuntime,
@@ -211,6 +212,7 @@ async function holdProjectAuthorityInChild(lockPath: string) {
     },
   };
 }
+
 const ownedSessionContext = (
   id: string,
   label: string,
@@ -6593,13 +6595,14 @@ test("managed Lead prepares upgraded evidence while another process holds global
   let accepted = 0;
   let starts = 0;
   let published = 0;
+  let agentGetCount = 0;
   let started!: () => void;
   const startupReached = new Promise<void>((resolve) => (started = resolve));
   const label = `fp-${randomUUID().slice(0, 8)}`;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
-    undefined,
+    (count) => (agentGetCount = count),
     undefined,
     false,
     () => {
@@ -6689,6 +6692,18 @@ test("managed Lead prepares upgraded evidence while another process holds global
       0,
       "final publication still requires global authority",
     );
+    const settledWhileOccupied = await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+    ]);
+    assert.equal(
+      settledWhileOccupied,
+      false,
+      "final publication should wait rather than fail while authority is briefly occupied",
+    );
     await authority.release();
     authority = undefined;
     const result = await pending;
@@ -6702,6 +6717,249 @@ test("managed Lead prepares upgraded evidence while another process holds global
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("managed Lead cancellation during final authority wait publishes and accepts nothing", async (t) => {
+  setLeadEnvironment();
+  const socket = join(
+    tmpdir(),
+    `project-authority-cancel-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `cancel-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "cancel-plan.md",
+    "current plan",
+  );
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [snapshot],
+  };
+  writeProjectAssignment(runtime, assignment);
+  let accepted = 0;
+  let agentGetCount = 0;
+  let started!: () => void;
+  const startupReached = new Promise<void>((resolve) => (started = resolve));
+  const label = `cancel-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    (count) => (agentGetCount = count),
+    undefined,
+    false,
+    started,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+    false,
+    () => accepted++,
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  seedSessionKind(context, "managed", "repo-key", branch);
+  const branchEntries = context.sessionManager.getBranch() as any[];
+  let published = 0;
+  registerExtensionForTest!(pi.pi as never, {
+    afterRequestPublished: (_mailboxPath, request) => {
+      if (request.agentLabel === label) published++;
+      return undefined;
+    },
+  });
+  let authority:
+    Awaited<ReturnType<typeof holdProjectAuthorityInChild>> | undefined;
+  const abort = new AbortController();
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: `Project assignment for branch\n${assignment.text}`,
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    for (const handler of pi.events.get("message_start") ?? [])
+      await handler({ message: assignmentMessage }, context);
+    authority = await holdProjectAuthorityInChild(
+      projectAssignmentAuthorityLockPath(),
+    );
+    pending = registeredAgentTool(pi, "delegate").execute(
+      "cancel-final-publication",
+      { definition: "agent", label, task: "use the current plan" },
+      abort.signal,
+      undefined,
+      context,
+    );
+    void pending.catch(() => {});
+    await Promise.race([
+      startupReached,
+      pending.then(() => {
+        throw new Error("delegation ended before reaching final publication");
+      }),
+    ]);
+    await t.waitFor(() => assert.ok(agentGetCount >= 2), {
+      timeout: 5_000,
+    });
+    assert.equal(published, 0);
+    const settledWhileOccupied = await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+    ]);
+    assert.equal(
+      settledWhileOccupied,
+      false,
+      "final publication must not bypass the held global authority lock",
+    );
+    abort.abort();
+    const settled = await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), 5_000),
+      ),
+    ]);
+    assert.equal(
+      settled,
+      true,
+      "cancelled delegation and startup rollback must settle within a bounded interval",
+    );
+    assert.equal(
+      published,
+      0,
+      "cancelled delegation must not publish a request",
+    );
+    assert.equal(accepted, 0, "cancelled delegation must not be accepted");
+  } finally {
+    abort.abort();
+    await authority?.release();
+    if (pending) await pending.catch(() => {});
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    realFs.rmSync(snapshot.path, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("legacy evidence migration does not overwrite a changed assignment after contention", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-evidence-race-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `legacy-${randomUUID()}`;
+  const snapshot = persistRequiredEvidenceSnapshot(
+    LEAD_SESSION_ID,
+    "legacy-plan.md",
+    "legacy plan",
+  );
+  const { ref: _ref, ...legacySnapshot } = snapshot;
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+    requiredEvidence: [legacySnapshot],
+  };
+  const path = projectAssignmentPath(runtime, assignment.repoKey, branch);
+  try {
+    for (const mode of [
+      "text-change",
+      "removal",
+      "replacement",
+      "evidence-change",
+    ] as const) {
+      await t.test(mode, async () => {
+        writeProjectAssignment(runtime, assignment);
+        let authority:
+          Awaited<ReturnType<typeof holdProjectAuthorityInChild>> | undefined =
+          await holdProjectAuthorityInChild(
+            projectAssignmentAuthorityLockPath(),
+          );
+        try {
+          const migrating = migrateProjectAssignmentEvidenceAfter(
+            runtime,
+            assignment,
+          );
+          const replacementId = randomUUID();
+          const changed =
+            mode === "text-change"
+              ? { ...assignment, text: "same ID, changed assignment" }
+              : mode === "replacement"
+                ? {
+                    ...assignment,
+                    id: replacementId,
+                    requiredEvidence: [
+                      { ...legacySnapshot, sourceAssignmentId: replacementId },
+                    ],
+                  }
+                : mode === "evidence-change"
+                  ? {
+                      ...assignment,
+                      requiredEvidence: [
+                        { ...legacySnapshot, name: "changed-plan.md" },
+                      ],
+                    }
+                  : undefined;
+          if (mode === "removal") realFs.unlinkSync(path);
+          else writeFileSync(path, JSON.stringify(changed));
+
+          await authority.release();
+          authority = undefined;
+          assert.equal(await migrating, undefined);
+          assert.deepEqual(
+            readProjectAssignment(runtime, assignment.repoKey, branch),
+            changed,
+          );
+        } finally {
+          await authority?.release();
+        }
+      });
+    }
+  } finally {
+    removeProjectAssignment(runtime, assignment.repoKey, branch);
     realFs.rmSync(snapshot.path, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }
@@ -6809,21 +7067,25 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
         undefined,
         context,
       );
-    await assert.rejects(
-      delegate(),
-      /Project assignment authority is in progress/i,
+    const migrating = delegate();
+    void migrating.catch(() => {});
+    const settledWhileHeld = await Promise.race([
+      migrating.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+    ]);
+    assert.equal(
+      settledWhileHeld,
+      false,
+      "migration must remain pending while authority is held",
     );
     assert.equal(starts, 0);
     assert.equal(accepted, 0);
-    assert.equal(
-      readProjectAssignment(runtime, assignment.repoKey, branch)
-        ?.requiredEvidence?.[0]?.ref,
-      undefined,
-      "a failed migration must not persist a partial upgrade",
-    );
     await authority.release();
     authority = undefined;
-    const recovered = await delegate();
+    const recovered = await migrating;
     assert.equal(recovered.details.ok, true, JSON.stringify(recovered.details));
     await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
     assert.equal(starts, 1);

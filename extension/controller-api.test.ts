@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
@@ -16,6 +17,7 @@ import { OperationError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-definitions.ts";
 import {
   readRequiredEvidenceSnapshot,
+  requiredEvidenceDirectory,
   resultPath,
   resultRef,
 } from "./storage.ts";
@@ -24,6 +26,7 @@ import {
   assignmentLockPath,
   claimProcessLock,
 } from "./lock.ts";
+import { projectAssignmentAuthorityLockPath } from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -104,6 +107,7 @@ const {
   recoverStaleProjectMessages,
   listProjectMessages,
   writeProjectMessage,
+  removeProjectMessage: removeProjectMessageRaw,
   projectAssignmentPath,
   writeChiefMessage: writeChiefMessageRaw,
   chiefMessageBytes,
@@ -2366,7 +2370,14 @@ for (const reachable of [true, false]) {
       exec,
       sendMessage: (message) => managerHistory.push(message),
     });
-    registerExtension!(pi.pi as never);
+    let failRemovalForId: string | undefined;
+    registerExtensionForTest!(pi.pi as never, {
+      removeProjectMessage: (runtime, repoKey, branch, id) => {
+        if (id === failRemovalForId)
+          throw new Error("injected project message removal failure");
+        removeProjectMessageRaw(runtime, repoKey, branch, id);
+      },
+    });
     const ctx = fakeContext(pi.entries) as any;
     managerHistory = pi.entries;
     managerBranch = managerHistory;
@@ -2462,7 +2473,7 @@ for (const reachable of [true, false]) {
             (entry: any) => entry?.customType === "pi_herdsman_state_error",
           ).length;
         const errorsBefore = stateErrors();
-        support.failProjectMessageRemoval = true;
+        failRemovalForId = cleanupRecord.id;
         try {
           writeProjectMessage(cleanupRecord, runtime);
           await t.waitFor(() =>
@@ -2479,7 +2490,7 @@ for (const reachable of [true, false]) {
             cleanupRecord,
           ]);
         } finally {
-          support.failProjectMessageRemoval = false;
+          failRemovalForId = undefined;
         }
         await t.waitFor(() =>
           assert.deepEqual(
@@ -3343,6 +3354,8 @@ async function runManagerStartupScenario(
     | "missing-herdr-session"
     | "incompatible-build"
     | "staff-message-mismatch"
+    | "staff-message-contention"
+    | "staff-message-timeout"
     | "delayed-herdr-session"
     | "conflict"
     | "managed-agent"
@@ -5747,7 +5760,10 @@ async function runManagerStartupScenario(
       mode === "managed-agent" ? 2 : startupObservations,
     );
     assert.equal(started, true);
-    if (mode === "staff-message-mismatch") {
+    if (
+      mode === "staff-message-mismatch" ||
+      mode === "staff-message-contention"
+    ) {
       const state = readLeadCoordinationState(
         supervisionRuntime(),
         childSession,
@@ -6042,7 +6058,41 @@ async function runManagerStartupScenario(
 
       const retainedPlan = completePlan.replaceAll("x", "y");
       realFs.writeFileSync(attachmentPath, retainedPlan);
-      const retained = await staffMessage.execute(
+      let holder: ReturnType<typeof spawn> | undefined;
+      if (
+        mode === "staff-message-contention" ||
+        mode === "staff-message-timeout"
+      ) {
+        holder = spawn(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `import { acquireProcessLock } from './extension/lock.ts'; const lease = acquireProcessLock(process.argv[1], { name: 'test authority holder' }); process.stdout.write('READY\\n'); process.stdin.once('data', () => lease.release());`,
+            projectAssignmentAuthorityLockPath(),
+          ],
+          { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] },
+        );
+        await new Promise<void>((resolve, reject) => {
+          let output = "";
+          holder!.stdout!.on("data", (chunk) => {
+            output += chunk.toString();
+            if (output.includes("READY")) resolve();
+          });
+          holder!.once("error", reject);
+          holder!.stderr!.on("data", (chunk) =>
+            reject(new Error(chunk.toString())),
+          );
+        });
+      }
+      const assignmentBeforeRetain = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch)!;
+      const evidenceFilesBefore = new Set(
+        readdirSync(requiredEvidenceDirectory(assignmentBeforeRetain.id)),
+      );
+      const retainedPromise = staffMessage.execute(
         "complete-retained-text-evidence",
         {
           session: childSession,
@@ -6054,6 +6104,60 @@ async function runManagerStartupScenario(
         undefined,
         ctx,
       );
+      if (mode === "staff-message-timeout") {
+        const failure = await retainedPromise.then(
+          () => undefined,
+          (error) => error,
+        );
+        holder!.stdin!.end("release");
+        assert.ok(
+          failure instanceof Error &&
+            /Required evidence was retained, but the staff handoff failed: Project assignment authority is in progress/.test(
+              failure.message,
+            ),
+          `expected authority timeout rejection, received ${String(failure)}`,
+        );
+        const currentAssignment = listProjectAssignments(
+          supervisionRuntime(),
+          repoKey,
+        ).find((item) => item.branch === assignment.branch)!;
+        assert.deepEqual(
+          currentAssignment,
+          assignmentBeforeRetain,
+          "timed-out retention must not update the assignment or publish a reference",
+        );
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "timed-out retention must not publish a staff message",
+        );
+        const persistedSnapshots = readdirSync(
+          requiredEvidenceDirectory(assignmentBeforeRetain.id),
+        ).filter((file) => !evidenceFilesBefore.has(file));
+        assert.equal(
+          persistedSnapshots.length,
+          2,
+          "pre-wait preparation leaves immutable text and attachment snapshots even though assignment publication times out",
+        );
+        const snapshotContents = persistedSnapshots.map((file) =>
+          readFileSync(
+            join(requiredEvidenceDirectory(assignmentBeforeRetain.id), file),
+            "utf8",
+          ),
+        );
+        assert.ok(snapshotContents.includes(retainedPlan));
+        assert.ok(snapshotContents.includes("Review this retained plan."));
+      } else if (holder) {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "message must not publish while another process owns assignment authority",
+        );
+        holder.stdin!.end("release");
+      }
+      if (mode === "staff-message-timeout") return;
+      const retained = await retainedPromise;
       assert.equal(retained.details.ok, true);
       realFs.unlinkSync(attachmentPath);
       await drainCoordinationInbox({
@@ -6081,6 +6185,13 @@ async function runManagerStartupScenario(
         "retained handoff is present in recipient Pi conversation context",
       );
       assert.equal(retainedMessage.customType, "pi-herdsman-manager_message");
+      if (mode === "staff-message-contention")
+        assert.equal(
+          recipientPi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === retained.details.id,
+          ).length,
+          1,
+        );
       assert.ok(retainedMessage.content.includes(retainedPlan));
       const retainedAssignment = listProjectAssignments(
         supervisionRuntime(),
@@ -6216,6 +6327,10 @@ test("Manager preserves project assignment and skips notification for incompatib
   runManagerStartupScenario("incompatible-build"));
 test("Manager message_staff rejects incompatible Leads and delivers complete attachments", () =>
   runManagerStartupScenario("staff-message-mismatch"));
+test("Manager message_staff waits for cross-process assignment authority before retaining evidence", () =>
+  runManagerStartupScenario("staff-message-contention"));
+test("Manager message_staff timeout leaves prepared evidence unreferenced and publishes no message", () =>
+  runManagerStartupScenario("staff-message-timeout"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
     "success",
