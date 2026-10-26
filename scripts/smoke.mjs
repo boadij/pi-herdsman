@@ -10761,6 +10761,24 @@ export function reportFailureEvidenceWriteError(error, action = "save") {
   );
 }
 
+export async function updateFailureEvidenceAfterCleanup(
+  ctx,
+  evidence,
+  save = preserveFailureEvidence,
+) {
+  try {
+    const artifact = await save(evidence, ctx.failureArtifact);
+    if (!ctx.failureArtifact) {
+      ctx.failureArtifact = artifact;
+      reportFailureEvidence(artifact);
+    }
+  } catch (error) {
+    ctx.evidenceSaveFailed = true;
+    if (ctx.failureArtifact) reportFailureEvidence(ctx.failureArtifact);
+    reportFailureEvidenceWriteError(error, "update");
+  }
+}
+
 export async function retainScenarioFailureEvidence(
   ctx,
   evidence,
@@ -11224,15 +11242,7 @@ async function main() {
         ).parentCleanup;
         evidence.cleanupErrorCode = null;
         evidence.cleanup = "PASS";
-        try {
-          await preserveFailureEvidence(evidence, ctx.failureArtifact);
-        } catch (error) {
-          ctx.evidenceSaveFailed = true;
-          console.error(
-            `failure evidence reference: ${failureEvidenceReference(ctx.failureArtifact)} (under system temp directory)`,
-          );
-          reportFailureEvidenceWriteError(error, "update");
-        }
+        await updateFailureEvidenceAfterCleanup(ctx, evidence);
       }
     }
     if (!failure && !cleanupError) console.log(`smoke ${scenario}: PASS`);

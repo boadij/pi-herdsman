@@ -127,6 +127,7 @@ import {
   sanitizedFailureEvidence,
   preserveFailureEvidence,
   retainScenarioFailureEvidence,
+  updateFailureEvidenceAfterCleanup,
   reportFailureEvidenceWriteError,
   descendantCleanupStatus,
   verifyParentShutdown,
@@ -368,6 +369,75 @@ test("scenario failure evidence save catch reports code without its path", async
   assert.doesNotMatch(
     errors.join("\n"),
     /private\/fixture|result\.json|EACCES: permission denied/,
+  );
+});
+
+test("cleanup evidence retry records and reports a recovered artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-cleanup-retry-"));
+  const artifact = join(root, "result.json");
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    await updateFailureEvidenceAfterCleanup(
+      ctx,
+      { scenario: "test", cleanup: "PASS" },
+      async (evidence) => {
+        await writeFile(artifact, JSON.stringify(evidence));
+        return artifact;
+      },
+    );
+  } finally {
+    console.error = originalError;
+  }
+  try {
+    assert.equal(ctx.failureArtifact, artifact);
+    assert.equal(ctx.evidenceSaveFailed, undefined);
+    assert.deepEqual(errors, [
+      `failure evidence reference: ${basename(root)}/result.json (under system temp directory)`,
+    ]);
+    assert.deepEqual(JSON.parse(await readFile(artifact, "utf8")), {
+      scenario: "test",
+      cleanup: "PASS",
+    });
+    assert.equal(isAbsolute(errors[0]), false);
+    assert.equal(errors[0].includes(tmpdir()), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup evidence retry failure reports sanitized error without undefined reference", async () => {
+  const sentinel = "/private/fixture/smoke/result.json";
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    await assert.doesNotReject(
+      updateFailureEvidenceAfterCleanup(
+        ctx,
+        { scenario: "test", cleanup: "PASS" },
+        async () => {
+          throw Object.assign(
+            new Error(`EACCES: permission denied, open '${sentinel}'`),
+            { code: "EACCES" },
+          );
+        },
+      ),
+    );
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(ctx.failureArtifact, undefined);
+  assert.equal(ctx.evidenceSaveFailed, true);
+  assert.deepEqual(errors, [
+    "failure evidence: could not update cleanup result (filesystem error EACCES)",
+  ]);
+  assert.doesNotMatch(
+    errors.join("\n"),
+    /undefined|private\/fixture|result\.json|permission denied/,
   );
 });
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
