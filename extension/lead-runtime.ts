@@ -63,6 +63,7 @@ import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import {
+  readConfig,
   isWorktreeRemovalPreapproved,
   effectiveMergePolicy,
   setManagerMergeOverride,
@@ -149,8 +150,8 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { lstatSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
   listSavedPeerMachines,
@@ -178,6 +179,7 @@ import {
   updatePeerRecipientGeneration,
   validPeerDisplayText,
 } from "./peer-correspondence.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 
 type LeadIdentityHost = {
   expectedSession(id: string, path?: string): ExpectedSession;
@@ -2284,6 +2286,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
             },
             {
+              value: "manager-git-bootstrap-confirmation",
+              label: "Skip Manager Git setup confirmation",
+              description: `Global ${config.managerGitBootstrapWithoutConfirmation ? "on" : "off"}`,
+              help: "Automatically initialize a non-Git workspace when Manager is started explicitly. Off by default.",
+            },
+            {
               value: "context-retirement",
               label: "Context retirement",
               description: `Global ${config.contextRetirement ? "on" : "off"} · ${projectDescription("contextRetirement")}`,
@@ -2327,16 +2335,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           if (mode) host.updateConfig("defaultLeadExecution", mode);
         } else if (
           selected === "context-retirement" ||
-          selected === "auto-activate-manager"
+          selected === "auto-activate-manager" ||
+          selected === "manager-git-bootstrap-confirmation"
         ) {
           const key =
             selected === "context-retirement"
               ? "contextRetirement"
-              : "autoActivateManager";
+              : selected === "auto-activate-manager"
+                ? "autoActivateManager"
+                : "managerGitBootstrapWithoutConfirmation";
           const enabled = !host.readConfig()[key];
           host.updateConfig(key, enabled);
           ctx.ui.notify(
-            `Global ${key === "contextRetirement" ? "context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
+            `Global ${key === "contextRetirement" ? "context retirement" : key === "autoActivateManager" ? "Manager auto-start" : "Manager Git setup confirmation skip"}: ${enabled ? "on" : "off"}`,
           );
         } else if (selected === "manager-merge") {
           const enabled = !host.readConfig().managerMergeEnabled;
@@ -15553,9 +15564,281 @@ export function createLeadRoleTransitions(
     const { paneId, tabId, workspaceId } = host.identity;
     if (!paneId || !tabId || !workspaceId)
       throw new Error("/manager requires a Herdr Lead identity");
-    const scope = await host.worktreeGroupScope(ctx, workspaceId);
+    const sessionId = ctx.sessionManager.getSessionId();
+    let scope: WorktreeGroupScope | undefined;
+    try {
+      scope = await host.worktreeGroupScope(ctx, workspaceId);
+    } catch (error) {
+      if (
+        !(error instanceof OperationError) ||
+        error.detail.details?.herdrCode !== "not_git_worktree"
+      )
+        throw error;
+      const skipConfirmation =
+        readConfig().managerGitBootstrapWithoutConfirmation;
+      if (!ctx.hasUI && !skipConfirmation)
+        throw new Error(
+          "/manager requires interactive confirmation to initialize Git",
+        );
+      const target = realpathSync(resolve(ctx.cwd));
+      const targetStat = statSync(target, { bigint: true });
+      if (
+        !targetStat.isDirectory() ||
+        targetStat.dev === 0n ||
+        targetStat.ino === 0n
+      )
+        throw new Error("Manager Git target is not a directory");
+      const sameDirectory = (leftPath: string, rightPath: string): boolean => {
+        try {
+          const left = statSync(leftPath, { bigint: true });
+          const right = statSync(rightPath, { bigint: true });
+          return (
+            left.isDirectory() &&
+            right.isDirectory() &&
+            left.dev !== 0n &&
+            right.dev !== 0n &&
+            left.ino !== 0n &&
+            right.ino !== 0n &&
+            left.dev === right.dev &&
+            left.ino === right.ino
+          );
+        } catch {
+          return false;
+        }
+      };
+      const verifyHerdrTarget = async () => {
+        const pane = (
+          await host.runHerdr(host.pi, ctx, ["pane", "get", paneId], {
+            signal: ctx.signal,
+          })
+        )?.pane;
+        const workspace = (
+          await host.runHerdr(host.pi, ctx, ["workspace", "get", workspaceId], {
+            signal: ctx.signal,
+          })
+        )?.workspace;
+        const paneCwd = pane?.cwd;
+        if (
+          pane?.pane_id !== paneId ||
+          pane?.tab_id !== tabId ||
+          pane?.workspace_id !== workspaceId ||
+          workspace?.workspace_id !== workspaceId ||
+          typeof paneCwd !== "string" ||
+          !isAbsolute(paneCwd) ||
+          !sameDirectory(paneCwd, target)
+        )
+          throw new Error(
+            "Manager activation cancelled because Herdr workspace identity does not match the approved directory",
+          );
+      };
+      await verifyHerdrTarget();
+      if (
+        [
+          "GIT_DIR",
+          "GIT_WORK_TREE",
+          "GIT_INDEX_FILE",
+          "GIT_COMMON_DIR",
+          "GIT_OBJECT_DIRECTORY",
+          "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+          "GIT_CEILING_DIRECTORIES",
+          "GIT_PREFIX",
+        ].some((key) => process.env[key])
+      )
+        throw new Error(
+          "Cannot initialize Git while repository-redirection environment variables are set",
+        );
+      if (
+        !skipConfirmation &&
+        !(await ctx.ui.confirm(
+          "Initialize Git repository?",
+          `Initialize ${target} with an empty initial commit, then start Manager mode? Existing files will not be committed.`,
+        ))
+      )
+        throw new Error("Manager activation cancelled.");
+      await verifyHerdrTarget();
+      if (
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        host.identity.workspaceId !== workspaceId ||
+        host.identity.paneId !== paneId ||
+        host.identity.tabId !== tabId ||
+        !sameDirectory(resolve(ctx.cwd), target) ||
+        (() => {
+          const current = statSync(target, { bigint: true });
+          return (
+            current.dev !== targetStat.dev || current.ino !== targetStat.ino
+          );
+        })()
+      )
+        throw new Error(
+          "Manager activation cancelled because the workspace changed",
+        );
+      const runGit = async (args: string[]) => {
+        const result = await host.pi.exec("git", args, {
+          cwd: target,
+          signal: ctx.signal,
+          timeout: 30_000,
+        });
+        if (result.code !== 0 || result.killed)
+          throw new Error(
+            `Git ${args[0]} failed: ${result.stderr?.trim() || "process unsuccessful"}`,
+          );
+        return result.stdout.trim();
+      };
+      const probeRoot = async (): Promise<string | undefined> => {
+        const result = await host.pi.exec(
+          "git",
+          ["rev-parse", "--show-toplevel"],
+          { cwd: target, signal: ctx.signal, timeout: 30_000 },
+        );
+        if (result.code === 0 && !result.killed)
+          return String(result.stdout ?? "").trim();
+        if (result.killed) throw new Error("Git repository inspection failed");
+        return undefined;
+      };
+      const bootstrapLock = host.acquireProcessLock(
+        join(
+          herdsmanTempRoot(),
+          "locks",
+          `manager-bootstrap-${createHash("sha256").update(target).digest("hex")}`,
+        ),
+        { name: "Manager Git bootstrap" },
+      );
+      try {
+        const hasRepositoryMetadata = () => {
+          let directory = target;
+          while (true) {
+            try {
+              lstatSync(resolve(directory, ".git"));
+              return true;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+            }
+            const parent = dirname(directory);
+            if (parent === directory) return false;
+            directory = parent;
+          }
+        };
+        let root = await probeRoot();
+        if (!root) {
+          const bare = await host.pi.exec(
+            "git",
+            ["rev-parse", "--is-bare-repository"],
+            { cwd: target, signal: ctx.signal, timeout: 30_000 },
+          );
+          if (bare.killed)
+            throw new Error("Git repository type inspection failed");
+          const bareStatus = String(bare.stdout ?? "").trim();
+          if (bare.code === 0 && bareStatus === "true")
+            throw new Error(
+              "Cannot initialize Manager Git inside an existing bare repository",
+            );
+          if (bare.code === 0 && bareStatus !== "false")
+            throw new Error("Git repository type inspection failed");
+          if (hasRepositoryMetadata())
+            throw new Error(
+              "Refusing to initialize: existing Git metadata is invalid or conflicting",
+            );
+          await runGit(["init"]);
+          root = await probeRoot();
+        }
+        if (root && !sameDirectory(root, target))
+          throw new Error(
+            "Refusing to initialize inside an enclosing Git repository",
+          );
+        if (!root)
+          throw new Error(
+            "Git initialization could not verify its working-tree root",
+          );
+        const actualRoot = await runGit(["rev-parse", "--show-toplevel"]);
+        if (!sameDirectory(actualRoot, target))
+          throw new Error(
+            "Git repository root does not match the approved directory",
+          );
+        const inspectHead = async (): Promise<string | undefined> => {
+          const result = await host.pi.exec(
+            "git",
+            ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+            { cwd: target, signal: ctx.signal, timeout: 30_000 },
+          );
+          if (result.code === 0 && !result.killed)
+            return String(result.stdout ?? "").trim();
+          if (result.killed || result.code !== 1)
+            throw new Error(
+              `Git HEAD inspection failed: ${String(result.stderr ?? "").trim() || "process unsuccessful"}`,
+            );
+          return undefined;
+        };
+        let head = await inspectHead();
+        let createdInitialCommit = false;
+        if (!head) {
+          const staged = await host.pi.exec(
+            "git",
+            ["diff", "--cached", "--quiet"],
+            { cwd: target, signal: ctx.signal, timeout: 30_000 },
+          );
+          const index = await runGit(["ls-files", "--stage"]);
+          if (
+            staged.killed ||
+            (staged.code !== 0 && staged.code !== 1) ||
+            index
+          )
+            throw new Error(
+              "Refusing to complete an unborn repository with an existing or unreadable index",
+            );
+          await runGit([
+            "commit",
+            "--only",
+            "--allow-empty",
+            "-m",
+            "chore: initialize repository",
+          ]);
+          createdInitialCommit = true;
+          head = await inspectHead();
+        }
+        if (!head) throw new Error("Git did not create an initial commit");
+        if (createdInitialCommit) {
+          const parents = await runGit([
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            "HEAD",
+          ]);
+          if (parents.trim().split(/\s+/).length !== 1)
+            throw new Error("Initial Git commit is not a root commit");
+          const tree = await runGit(["rev-parse", "HEAD^{tree}"]);
+          if (tree !== (await runGit(["mktree"])))
+            throw new Error("Initial Git commit is not empty");
+        }
+        await verifyHerdrTarget();
+        const gitCommonDir = await runGit([
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]);
+        scope = await host.worktreeGroupScope(ctx, workspaceId);
+        if (
+          !scope ||
+          scope.primaryWorkspaceId !== workspaceId ||
+          !sameDirectory(scope.repoKey, gitCommonDir)
+        )
+          throw new Error(
+            "Manager activation could not verify the initialized repository in Herdr",
+          );
+      } finally {
+        bootstrapLock.release();
+      }
+    }
+    if (!scope)
+      throw new Error("Manager workspace could not be verified in Herdr");
     if (scope.primaryWorkspaceId !== workspaceId)
       throw new Error("/manager is available only in the primary workspace");
+    if (ctx.sessionManager.getSessionId() !== sessionId)
+      throw new Error(
+        "Manager activation cancelled because the session changed",
+      );
+    host.activationGuard(sessionId, "Manager");
     const profile = host.prepareSupervisoryProfile(ctx, "manager");
     host.captureInheritedTools?.();
     const previousTools =
@@ -15564,7 +15847,7 @@ export function createLeadRoleTransitions(
     try {
       lease = host.claimManagerLease({
         build: host.build,
-        piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionId: sessionId,
         piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
