@@ -3218,7 +3218,9 @@ export function renderCoordinationResult(
           theme,
           "warning",
           "!",
-          `merge incomplete · ${value(details.branch) || value(args.branch) || "branch"}`,
+          details.integrated === true
+            ? `integrated ${value(details.branch) || value(args.branch) || "branch"} · cleanup pending`
+            : `merge incomplete · ${value(details.branch) || value(args.branch) || "branch"}`,
         ),
         0,
         0,

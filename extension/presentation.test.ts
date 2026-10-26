@@ -1863,8 +1863,25 @@ test("merge presentation requires cleanup facts for complete success", () => {
       },
     ),
   );
-  assert.match(compact, /merge incomplete/);
+  assert.match(compact, /! integrated feat\/recovery · cleanup pending/);
   assert.doesNotMatch(compact, /✓|success/);
+  const incomplete = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      {
+        ...cleanupPending,
+        details: { ...cleanupPending.details, integrated: false },
+      },
+      {},
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(incomplete, /! merge incomplete · feat\/recovery/);
+  assert.doesNotMatch(incomplete, /✓|success/);
   const expanded = renderedText(
     renderCoordinationResult(
       "staff",
