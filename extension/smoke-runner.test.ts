@@ -128,6 +128,7 @@ import {
   preserveFailureEvidence,
   retainScenarioFailureEvidence,
   updateFailureEvidenceAfterCleanup,
+  reportFinalFailureEvidence,
   reportFailureEvidenceWriteError,
   descendantCleanupStatus,
   verifyParentShutdown,
@@ -305,6 +306,81 @@ test("scenario failure reporting uses an exact relative run reference", async ()
       await readFile(join(dirname(artifact), "result.json"), "utf8"),
       `${JSON.stringify({ ...evidence, runReference: basename(dirname(artifact)) }, null, 2)}\n`,
     );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
+test("consumer receives only the finalized failure artifact through process output", async () => {
+  const evidence = {
+    scenario: "manager-bootstrap",
+    outcome: "SCENARIO_FAIL",
+    mode: "simulated",
+    errorCode: "SMOKE_STALLED",
+    sessionStartObserved: true,
+    firstRequestObserved: false,
+    firstRequestVerified: false,
+    cleanup: "PENDING",
+    parentOwnership: {
+      session: "SENSITIVE_SESSION_SENTINEL",
+      workspaceId: "SENSITIVE_WORKSPACE_SENTINEL",
+      childPid: "SENSITIVE_PID_SENTINEL",
+      childExitObserved: true,
+    },
+    managerBootstrapFailureDiagnostics: "SENSITIVE_DIAGNOSTIC_SENTINEL",
+    diagnostics: { message: "SENSITIVE_MESSAGE_SENTINEL" },
+    toolOutput: "SENSITIVE_TOOL_OUTPUT_SENTINEL",
+    prompt: "SENSITIVE_PROMPT_SENTINEL",
+    env: { SECRET_SENTINEL: "SENSITIVE_SECRET_SENTINEL" },
+  };
+  const artifact = await preserveFailureEvidence(evidence);
+  const output = [];
+  try {
+    assert.equal(
+      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      false,
+    );
+    assert.deepEqual(output, []);
+
+    evidence.cleanup = "PASS";
+    await preserveFailureEvidence(evidence, artifact);
+    assert.equal(
+      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      true,
+    );
+
+    const prefix = "SMOKE_FAILURE_ARTIFACT_JSON ";
+    assert.equal(output.length, 1);
+    assert.ok(output[0].startsWith(prefix));
+    const consumed = JSON.parse(output[0].slice(prefix.length));
+    assert.equal(consumed.runReference, basename(dirname(artifact)));
+    assert.equal(
+      consumed.artifactReference,
+      `${consumed.runReference}/result.json`,
+    );
+    assert.equal(consumed.scenario, "manager-bootstrap");
+    assert.equal(consumed.outcome, "SCENARIO_FAIL");
+    assert.equal(consumed.cleanup, "PASS");
+    assert.equal(consumed.errorCode, "SMOKE_STALLED");
+    assert.equal(consumed.sessionStartObserved, true);
+    assert.equal(consumed.firstRequestObserved, false);
+    assert.equal(consumed.firstRequestVerified, false);
+    assert.deepEqual(
+      Object.keys(consumed).sort(),
+      [
+        "artifactReference",
+        "cleanup",
+        "errorCode",
+        "firstRequestObserved",
+        "firstRequestVerified",
+        "mode",
+        "outcome",
+        "runReference",
+        "scenario",
+        "sessionStartObserved",
+      ].sort(),
+    );
+    assert.doesNotMatch(output[0], /SENSITIVE_|SECRET_SENTINEL|\/tmp\//);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }

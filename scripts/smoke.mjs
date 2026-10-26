@@ -10749,6 +10749,66 @@ export function reportFailureEvidence(artifact) {
   );
 }
 
+export async function reportFinalFailureEvidence(
+  artifact,
+  output = console.log,
+) {
+  try {
+    const evidence = JSON.parse(await readFile(artifact, "utf8"));
+    const runReference = evidence.runReference;
+    if (
+      typeof runReference !== "string" ||
+      !/^[a-zA-Z0-9_-]{1,128}$/.test(runReference) ||
+      runReference !== basename(dirname(artifact)) ||
+      !scenarioNames.includes(evidence.scenario) ||
+      !["SETUP_FAIL", "STALLED", "SCENARIO_FAIL"].includes(evidence.outcome) ||
+      !["PASS", "FAIL", "NOT_REQUIRED"].includes(evidence.cleanup)
+    )
+      return false;
+    const safeErrorCodes = [
+      "SMOKE_STALLED",
+      "COMMAND_FAILED",
+      "TIMEOUT",
+      "ENOENT",
+      "EACCES",
+      "EPERM",
+      "EROFS",
+      "EIO",
+      "ENOSPC",
+    ];
+    const projection = {
+      runReference,
+      artifactReference: `${runReference}/result.json`,
+      scenario: evidence.scenario,
+      outcome: evidence.outcome,
+      cleanup: evidence.cleanup,
+      ...(evidence.mode === "simulated" || evidence.mode === "live"
+        ? { mode: evidence.mode }
+        : {}),
+      ...(safeErrorCodes.includes(evidence.errorCode)
+        ? { errorCode: evidence.errorCode }
+        : {}),
+      ...Object.fromEntries(
+        [
+          "sessionStartObserved",
+          "firstRequestObserved",
+          "firstRequestVerified",
+          "readinessDeliveryObserved",
+          "childExitObserved",
+        ]
+          .filter((key) => typeof evidence[key] === "boolean")
+          .map((key) => [key, evidence[key]]),
+      ),
+    };
+    const json = JSON.stringify(projection);
+    if (Buffer.byteLength(json, "utf8") > 32 * 1024) return false;
+    output(`SMOKE_FAILURE_ARTIFACT_JSON ${json}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function reportFailureEvidenceWriteError(error, action = "save") {
   const operation = action === "update" ? "update cleanup result" : "save";
   const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(
@@ -11245,6 +11305,8 @@ async function main() {
         await updateFailureEvidenceAfterCleanup(ctx, evidence);
       }
     }
+    if (failure && ctx.failureArtifact && !ctx.evidenceSaveFailed)
+      await reportFinalFailureEvidence(ctx.failureArtifact);
     if (!failure && !cleanupError) console.log(`smoke ${scenario}: PASS`);
     if (failure || ctx.evidenceSaveFailed) process.exitCode = 1;
   }
