@@ -60,6 +60,7 @@ topology before delivery; this does not provide a cross-socket topology RPC.
 ## Peer tools
 
 Leads (including eligible managed Leads) and active Managers have `list_peers` and `message_peer`.
+Initiate a peer message for concrete, task-relevant coordination another eligible coordinator needs. Reply when asked or when a response resolves the exchange; avoid unsolicited routine broadcasts and unnecessary acknowledgments. Share useful evidence when it helps the peer act.
 
 ```json
 {}

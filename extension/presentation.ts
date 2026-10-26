@@ -2886,31 +2886,37 @@ function expandedResultLines(
     value(args.label) ||
     "agent";
   const heading =
-    action === "list"
-      ? tool === "staff"
-        ? "staff"
-        : tool === "peer"
-          ? "peer"
-          : "agents"
-      : tool === "peer" && action === "message"
-        ? peerMessageStatus(details)
-        : action === "inspect"
-          ? `inspect ${display}`
-          : tool === "staff" && action === "remove"
-            ? "remove worktree"
-            : action === "delegate" || action === "continue"
-              ? `${display} started`
-              : tool === "supervisor"
-                ? "sent to supervisor"
-                : action === "steer"
-                  ? "steering queued"
-                  : action === "interrupt"
-                    ? "interrupt accepted"
-                    : tool === "agent" && action === "reply"
-                      ? `reply sent to ${display}`
-                      : action === "close"
-                        ? `${display} closed`
-                        : `${action} ${display}`;
+    tool === "staff" && action === "merge" && details.ok === true
+      ? "merge project"
+      : tool === "staff" &&
+          action === "resume" &&
+          details.already_running === true
+        ? "project already running"
+        : action === "list"
+          ? tool === "staff"
+            ? "staff"
+            : tool === "peer"
+              ? "peer"
+              : "agents"
+          : tool === "peer" && action === "message"
+            ? peerMessageStatus(details)
+            : action === "inspect"
+              ? `inspect ${display}`
+              : tool === "staff" && action === "remove"
+                ? "remove worktree"
+                : action === "delegate" || action === "continue"
+                  ? `${display} started`
+                  : tool === "supervisor"
+                    ? "sent to supervisor"
+                    : action === "steer"
+                      ? "steering queued"
+                      : action === "interrupt"
+                        ? "interrupt accepted"
+                        : tool === "agent" && action === "reply"
+                          ? `reply sent to ${display}`
+                          : action === "close"
+                            ? `${display} closed`
+                            : `${action} ${display}`;
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
@@ -2963,6 +2969,15 @@ function expandedResultLines(
       `assignment: ${details.assignment_retired === true ? "retired" : details.assignment_retired === false ? "not retired" : "unconfirmed"}`,
     );
   }
+  if (tool === "staff" && action === "merge")
+    for (const [label, key] of [
+      ["status", "status"],
+      ["integrated", "integrated"],
+      ["checkout removed", "checkout_removed"],
+      ["assignment retired", "assignment_retired"],
+    ] as const)
+      if (details[key] !== undefined)
+        lines.push(`${label}: ${String(details[key])}`);
   if (action === "list" && tool === "agent")
     lines.push(
       "",
@@ -3198,6 +3213,38 @@ export function renderCoordinationResult(
     );
   if (failed) {
     const raw = resultContent(result);
+    if (
+      !expanded &&
+      tool === "staff" &&
+      action === "merge" &&
+      details.status === "cleanup_pending"
+    )
+      return new WidthSafeText(
+        statusLine(
+          theme,
+          "warning",
+          "!",
+          details.integrated === true
+            ? `integrated ${value(details.branch) || value(args.branch) || "branch"} · cleanup pending`
+            : `merge incomplete · ${value(details.branch) || value(args.branch) || "branch"}`,
+        ),
+        0,
+        0,
+      );
+    if (expanded && tool === "staff" && action === "merge")
+      return new WidthSafeText(
+        statusLine(
+          theme,
+          "error",
+          "✗",
+          raw.length > 4000
+            ? `${raw.slice(0, 3999)}…`
+            : raw || "Operation failed",
+        ) +
+          `\n${expandedResultLines(tool, action, details, args, theme, context?.activeRole).slice(1).join("\n")}`,
+        0,
+        0,
+      );
     const fallback = expanded
       ? raw.length > 4000
         ? `${raw.slice(0, 3999)}…`
@@ -3210,6 +3257,44 @@ export function renderCoordinationResult(
       ...context,
       expanded: false,
     });
+  if (tool === "staff" && action === "merge") {
+    const branch = value(details.branch) || value(args.branch) || "branch";
+    const complete =
+      details.status === "complete" &&
+      details.integrated === true &&
+      details.checkout_removed === true &&
+      details.assignment_retired === true;
+    const outcome = complete
+      ? `integrated ${branch} · checkout removed · assignment retired`
+      : `merge incomplete · ${branch}`;
+    if (!expanded)
+      return new WidthSafeText(
+        statusLine(
+          theme,
+          complete ? "success" : "warning",
+          complete ? "✓" : "!",
+          outcome,
+        ),
+        0,
+        0,
+      );
+  }
+  if (
+    !expanded &&
+    tool === "staff" &&
+    ["delegate", "resume", "stop"].includes(action)
+  ) {
+    const branch = value(details.branch) || value(args.branch) || "project";
+    const outcome =
+      action === "delegate"
+        ? `project started · ${branch}`
+        : action === "resume"
+          ? details.already_running === true
+            ? `project already running · ${branch}`
+            : `project resumed · ${branch}`
+          : `Lead stopped · ${branch} preserved`;
+    return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);
+  }
   if (expanded)
     return new WidthSafeText(
       expandedResultLines(

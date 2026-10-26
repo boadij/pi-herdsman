@@ -21,6 +21,7 @@ import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
+  ProcessLockOccupiedError,
   isProcessLockClaim,
   readLiveProcessLock,
   readProcessLockStatus,
@@ -1500,6 +1501,55 @@ function withProjectAssignmentLock<T>(operation: () => T): T {
   }
 }
 
+/** Wait briefly for global authority, but keep every lock-held operation synchronous. */
+export async function withProjectAssignmentAuthorityWait<T>(
+  operation: () => T,
+  signal?: AbortSignal,
+  onOccupied?: () => void,
+): Promise<T> {
+  // Match the existing project-lock contention budget; callers fail closed after brief contention.
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    signal?.throwIfAborted();
+    let lease: ReturnType<typeof acquireProcessLock>;
+    try {
+      lease = acquireProcessLock(projectAuthorityLock, {
+        name: "project assignment authority",
+      });
+    } catch (error) {
+      if (!(error instanceof ProcessLockOccupiedError)) throw error;
+      onOccupied?.();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, Math.min(25, remaining));
+        function done() {
+          signal?.removeEventListener("abort", aborted);
+          resolve();
+        }
+        function aborted() {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", aborted);
+          reject(signal?.reason ?? new Error("Operation aborted"));
+        }
+        signal?.addEventListener("abort", aborted, { once: true });
+        if (signal?.aborted) aborted();
+      });
+      continue;
+    }
+    try {
+      const result = operation();
+      if (result && typeof (result as { then?: unknown }).then === "function")
+        throw new Error(
+          "Project assignment authority operation must be synchronous",
+        );
+      return result;
+    } finally {
+      lease.release();
+    }
+  }
+}
+
 /** Run a synchronous final action against the exact branch assignment under global authority. */
 export function withCurrentProjectAssignment<T>(
   runtime: SupervisionRuntime,
@@ -2359,6 +2409,33 @@ export function writeProjectAssignment(
   );
 }
 
+export function writeProjectAssignmentAfter(
+  runtime: SupervisionRuntime,
+  expected: ProjectAssignment,
+  assignment: ProjectAssignment,
+  signal?: AbortSignal,
+  verifyAuthority?: () => void,
+  onOccupied?: () => void,
+): Promise<void> {
+  return withProjectAssignmentAuthorityWait(
+    () => {
+      verifyAuthority?.();
+      const current = readProjectAssignment(
+        runtime,
+        expected.repoKey,
+        expected.branch,
+      );
+      if (!current || !isDeepStrictEqual(current, expected))
+        throw new Error(
+          "Project assignment changed before required evidence was updated",
+        );
+      writeProjectAssignmentUnlocked(runtime, assignment);
+    },
+    signal,
+    onOccupied,
+  );
+}
+
 function writeProjectAssignmentUnlocked(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
@@ -2440,6 +2517,24 @@ export function migrateProjectAssignmentEvidence(
     if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
     return upgraded;
   });
+}
+
+export function migrateProjectAssignmentEvidenceAfter(
+  runtime: SupervisionRuntime,
+  expected: ProjectAssignment,
+  signal?: AbortSignal,
+): Promise<ProjectAssignment | undefined> {
+  return withProjectAssignmentAuthorityWait(() => {
+    const current = readProjectAssignment(
+      runtime,
+      expected.repoKey,
+      expected.branch,
+    );
+    if (!current || !isDeepStrictEqual(current, expected)) return undefined;
+    const upgraded = upgradeProjectAssignmentEvidence(current);
+    if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
+    return upgraded;
+  }, signal);
 }
 
 export function readProjectAssignment(

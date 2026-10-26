@@ -36,12 +36,17 @@ import {
   readChiefMessage,
   removeChiefMessage,
   migrateProjectAssignmentEvidence,
+  migrateProjectAssignmentEvidenceAfter,
+  readProjectAssignment,
+  readManagerDescriptor,
   withCurrentProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
+  withProjectAssignmentAuthorityWait,
   withProjectAssignmentAuthority,
+  writeProjectAssignmentAfter,
   readPeerLeadRecord,
   samePeerLeadGeneration,
   samePeerLeadAuthority,
@@ -251,6 +256,7 @@ type LeadTransitionHost = {
     repoKey: string,
     branch: string,
   ): Promise<void>;
+  onProjectAssignmentAuthorityWaitOccupied?(): void;
   projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   readManagerDescriptorStatus: typeof import("./supervision.ts").readManagerDescriptorStatus;
@@ -561,6 +567,7 @@ type LeadHerdRunHost = {
 };
 
 type LeadProjectHost = {
+  onProjectAssignmentAuthorityWaitOccupied?(): void;
   readConfig: typeof import("./config.ts").readConfig;
   projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
   acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
@@ -3776,7 +3783,8 @@ export function registerLeadRuntime(
   const controller = createAgentController(pi, {
     ...options.controllerServices,
     scope: { kind: "root" },
-    projectEvidence: async (ctx) => {
+    projectEvidence: async (ctx, signal) => {
+      const operationSignal = signal ?? ctx.signal;
       if (
         activeLeadRole(options.leadRuntime) !== "lead" ||
         !leadExecution?.managed
@@ -3791,11 +3799,10 @@ export function registerLeadRuntime(
         (evidence) => !("result" in evidence) && !evidence.ref,
       );
       const migrated = needsMigration
-        ? migrateProjectAssignmentEvidence(
+        ? await migrateProjectAssignmentEvidenceAfter(
             options.coordinationHost.supervisionRuntime(),
-            assignment.repoKey,
-            assignment.branch,
-            assignment.id,
+            assignment,
+            operationSignal,
           )
         : assignment;
       if (!migrated || migrated.id !== assignment.id)
@@ -3805,11 +3812,16 @@ export function registerLeadRuntime(
       return {
         assignment: migrated,
         publishIfCurrent: (operation) =>
-          withCurrentProjectAssignment(
-            options.coordinationHost.supervisionRuntime(),
-            assignment.repoKey,
-            assignment.branch,
-            operation,
+          withProjectAssignmentAuthorityWait(
+            () =>
+              operation(
+                readProjectAssignment(
+                  options.coordinationHost.supervisionRuntime(),
+                  assignment.repoKey,
+                  assignment.branch,
+                ),
+              ),
+            operationSignal,
           ),
         revalidate: (operation: () => Promise<void> | void) =>
           roleTransitions.withProjectAssignmentLock(
@@ -3823,7 +3835,7 @@ export function registerLeadRuntime(
                 );
               await operation();
             },
-            ctx.signal,
+            operationSignal,
           ),
       };
     },
@@ -7771,9 +7783,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             `Checkout: ${candidate.checkoutPath}`,
             "",
             "Removes this checkout and Herdr workspace.",
-            "Running managed execution may be stopped.",
-            "Preserves the Git branch and Pi conversation.",
-            "Retires the assignment after verified removal.",
+            "Removing this worktree automatically stops its running Managed Lead and owned Agents first.",
+            "If a later removal step fails, they are not automatically restarted.",
+            "The Git branch and Pi conversation are preserved.",
+            "The project assignment is retired only after verified checkout removal.",
             "",
             "Type remove to confirm.",
           ].join("\n"),
@@ -10784,7 +10797,39 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ? { currentEvidenceIds }
             : { currentEvidenceIds: undefined }),
         };
-        host.writeProjectAssignment(runtime, written);
+        if (runtime?.assignments)
+          await writeProjectAssignmentAfter(
+            runtime,
+            current,
+            written,
+            ctx.signal,
+            () => {
+              const currentLease = host.managerLease();
+              const liveManager = readManagerDescriptor(
+                runtime,
+                managerAuthority.workspaceId,
+              );
+              if (
+                host.activeRole() !== "manager" ||
+                host.leadRuntime.roleSuspended ||
+                !currentLease ||
+                !host.sameManagerDescriptor(
+                  currentLease.descriptor,
+                  managerAuthority,
+                ) ||
+                currentLease.descriptor.leaseId !== managerLeaseId ||
+                !liveManager ||
+                !host.sameManagerDescriptor(liveManager, managerAuthority) ||
+                liveManager.repoKey !== assignment.repoKey ||
+                liveManager.workspaceId !== managerAuthority.workspaceId
+              )
+                throw new Error(
+                  "Manager authority changed before required evidence was updated",
+                );
+            },
+            host.onProjectAssignmentAuthorityWaitOccupied,
+          );
+        else host.writeProjectAssignment(runtime, written);
         return written;
       },
       ctx.signal,
