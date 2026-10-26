@@ -1758,6 +1758,18 @@ test("expanded staff project results show resolved branches and resume scope", (
   );
   assert.match(resumed, /branch: feat\/recovery/);
   assert.match(resumed, /task: Recover the existing project work/);
+
+  const alreadyRunning = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      { details: { ok: true, already_running: true, branch: "feat/recovery" } },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "resume" } },
+    ),
+  );
+  assert.match(alreadyRunning, /^project already running/m);
 });
 
 test("compact Manager lifecycle results distinguish project outcomes", () => {
@@ -1902,6 +1914,17 @@ test("merge presentation requires cleanup facts for complete success", () => {
   assert.match(expanded, /integrated: true/);
   assert.match(expanded, /checkout removed: false/);
   assert.match(expanded, /assignment retired: false/);
+  const successfulExpanded = render(
+    {
+      ok: true,
+      status: "complete",
+      integrated: true,
+      checkout_removed: true,
+      assignment_retired: true,
+    },
+    true,
+  );
+  assert.match(successfulExpanded, /^merge project/m);
   const failed = renderedText(
     renderCoordinationResult(
       "staff",

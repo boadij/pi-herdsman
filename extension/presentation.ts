@@ -2886,31 +2886,37 @@ function expandedResultLines(
     value(args.label) ||
     "agent";
   const heading =
-    action === "list"
-      ? tool === "staff"
-        ? "staff"
-        : tool === "peer"
-          ? "peer"
-          : "agents"
-      : tool === "peer" && action === "message"
-        ? peerMessageStatus(details)
-        : action === "inspect"
-          ? `inspect ${display}`
-          : tool === "staff" && action === "remove"
-            ? "remove worktree"
-            : action === "delegate" || action === "continue"
-              ? `${display} started`
-              : tool === "supervisor"
-                ? "sent to supervisor"
-                : action === "steer"
-                  ? "steering queued"
-                  : action === "interrupt"
-                    ? "interrupt accepted"
-                    : tool === "agent" && action === "reply"
-                      ? `reply sent to ${display}`
-                      : action === "close"
-                        ? `${display} closed`
-                        : `${action} ${display}`;
+    tool === "staff" && action === "merge" && details.ok === true
+      ? "merge project"
+      : tool === "staff" &&
+          action === "resume" &&
+          details.already_running === true
+        ? "project already running"
+        : action === "list"
+          ? tool === "staff"
+            ? "staff"
+            : tool === "peer"
+              ? "peer"
+              : "agents"
+          : tool === "peer" && action === "message"
+            ? peerMessageStatus(details)
+            : action === "inspect"
+              ? `inspect ${display}`
+              : tool === "staff" && action === "remove"
+                ? "remove worktree"
+                : action === "delegate" || action === "continue"
+                  ? `${display} started`
+                  : tool === "supervisor"
+                    ? "sent to supervisor"
+                    : action === "steer"
+                      ? "steering queued"
+                      : action === "interrupt"
+                        ? "interrupt accepted"
+                        : tool === "agent" && action === "reply"
+                          ? `reply sent to ${display}`
+                          : action === "close"
+                            ? `${display} closed`
+                            : `${action} ${display}`;
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
