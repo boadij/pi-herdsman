@@ -2998,6 +2998,27 @@ test("project assignments are scoped by repository and branch, strict, and remov
     }),
     projectAssignmentBytes(nearLimitAssignment),
   );
+  const exactLimitAssignment = {
+    ...assignment,
+    text: "x".repeat(
+      PROJECT_ASSIGNMENT_MAX_BYTES -
+        projectAssignmentBytes({ ...assignment, text: "" }),
+    ),
+  };
+  assert.equal(
+    projectAssignmentBytes(exactLimitAssignment),
+    PROJECT_ASSIGNMENT_MAX_BYTES,
+  );
+  const exactLimitWithCheckout = {
+    ...exactLimitAssignment,
+    checkoutPath: join(tmpdir(), `checkout-${id()}`),
+  };
+  writeProjectAssignment(runtime, exactLimitWithCheckout);
+  assert.equal(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
+      ?.checkoutPath,
+    exactLimitWithCheckout.checkoutPath,
+  );
   writeProjectAssignment(runtime, {
     ...nearLimitAssignment,
     piSessionFile: "/custom/pi/sessions/lead.jsonl",

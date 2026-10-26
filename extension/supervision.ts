@@ -2277,7 +2277,7 @@ export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
 const PROJECT_ASSIGNMENT_FILE_MAX_BYTES = PROJECT_ASSIGNMENT_MAX_BYTES * 2;
 
 export function projectAssignmentBytes(assignment: ProjectAssignment): number {
-  const { piSessionFile: _, ...payload } = assignment;
+  const { checkoutPath: _, piSessionFile: __, ...payload } = assignment;
   return Buffer.byteLength(`${JSON.stringify(payload)}\n`, "utf8");
 }
 

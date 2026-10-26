@@ -18,7 +18,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertManagerRecoveryAssignment } from "./manager-recovery-assignment.mjs";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -7090,13 +7089,31 @@ async function runManagerRecoverySmoke(ctx) {
   markStage(ctx, "initial-assignment-validation");
   const initialAssignmentBytes = await assignmentBytes();
   const record = JSON.parse(initialAssignmentBytes);
+  assert.ok(
+    Object.keys(record).every((key) =>
+      [
+        "branch",
+        "checkoutPath",
+        "currentEvidenceIds",
+        "id",
+        "piSessionFile",
+        "repoKey",
+        "requiredEvidence",
+        "resultBindings",
+        "text",
+        "version",
+      ].includes(key),
+    ),
+    "assignment contains an unknown key",
+  );
+  assert.equal(record.version, 2);
   assert.equal(record.id, first.session);
   assert.equal(record.branch, branch);
   assert.equal(record.repoKey, repoKey);
+  assert.equal(record.checkoutPath, await realpath(worktreePath));
   assert.doesNotMatch(record.text, new RegExp(contextMarker));
   assert.equal(typeof record.piSessionFile, "string");
   assert.ok(record.piSessionFile.length > 0);
-  assertManagerRecoveryAssignment(record);
   const assertUnchangedAssignment = async () =>
     assert.equal(
       await assignmentBytes(),
