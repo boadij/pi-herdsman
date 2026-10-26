@@ -9032,21 +9032,38 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       operation.action === "resume"
         ? migrateProjectAssignmentEvidence(runtime, manager.repoKey, branch)
         : readProjectAssignment(runtime, manager.repoKey, branch);
-    if (existing && existing.repoKey !== manager.repoKey)
+    if (operation.action === "delegate" && existing) {
+      await host.reconcileProjectAssignments(
+        ctx,
+        manager.repoKey,
+        primaryWorkspaceId,
+        typeof topology.source.source_checkout_path === "string"
+          ? topology.source.source_checkout_path
+          : "",
+        true,
+        branch,
+      );
+    }
+    const currentAssignment =
+      operation.action === "delegate" && existing
+        ? readProjectAssignment(runtime, manager.repoKey, branch)
+        : existing;
+    if (currentAssignment && currentAssignment.repoKey !== manager.repoKey)
       throw new Error("Project assignment belongs to another repository");
-    if (operation.action === "delegate" && existing)
+    if (operation.action === "delegate" && currentAssignment)
       throw new Error(
         `Work already exists on ${branch}; resume it with resume_project.`,
       );
-    if (operation.action === "resume" && !existing)
+    if (operation.action === "resume" && !currentAssignment)
       throw new Error(
         `No existing work was found on ${branch}; start it with delegate_project and a task.`,
       );
     const presentationTask =
       operation.action === "resume"
-        ? projectTaskSummary(existing!.text)
+        ? projectTaskSummary(currentAssignment!.text)
         : undefined;
-    const id = operation.action === "resume" ? existing!.id : operation.id;
+    const id =
+      operation.action === "resume" ? currentAssignment!.id : operation.id;
     const branchWorktrees = topology.worktrees.filter(
       (worktree: any) => worktree?.branch === branch,
     );
@@ -9057,7 +9074,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
     const live =
-      operation.action === "resume" ? await liveAgent(ctx, existing!.id) : [];
+      operation.action === "resume"
+        ? await liveAgent(ctx, currentAssignment!.id)
+        : [];
     if (live.length > 1)
       throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
     if (live.length === 1) {
@@ -9089,7 +9108,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationName,
         `Lead ${id}`,
       );
-      await bindLeadSessionFile(existing!, live[0]);
+      await bindLeadSessionFile(currentAssignment!, live[0]);
       writeChiefMessage({
         version: 2,
         build: HERDSMAN_BUILD,
@@ -9099,7 +9118,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         fromSessionId: manager.piSessionId,
         toSessionId: id,
         leadSessionId: id,
-        branch: existing!.branch,
+        branch: currentAssignment!.branch,
         text: "Project assignment ready.",
         createdAt: Date.now(),
       });
@@ -9157,7 +9176,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
     let assignment: ProjectAssignment;
-    if (operation.action === "resume") assignment = existing!;
+    if (operation.action === "resume") assignment = currentAssignment!;
     else {
       const limits = await messageLimits(ctx);
       const suppliedFiles = resolveMessageFiles(
@@ -9331,6 +9350,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr checkout does not match the assigned repository and branch",
           );
+        if (
+          !isAbsolute(cwd!) ||
+          workspaceId === primaryWorkspaceId ||
+          realpathSync(cwd!) ===
+            realpathSync(topology.source.source_checkout_path) ||
+          (matchingWorktrees.length === 1 &&
+            realpathSync(cwd!) !== realpathSync(matchingWorktrees[0]!.path))
+        )
+          throw new Error(
+            "Herdr checkout is not the verified linked project worktree",
+          );
+        assignment = { ...assignment, checkoutPath: realpathSync(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error(
@@ -14947,7 +14978,7 @@ export function createLeadRoleTransitions(
       sourceCheckoutPath,
     );
     if (!initialInventory) return;
-    const knownCheckoutPath = (
+    const knownSessionCheckoutPath = (
       assignment: ProjectAssignment,
     ): string | undefined => {
       if (!assignment.piSessionFile) return undefined;
@@ -14959,16 +14990,31 @@ export function createLeadRoleTransitions(
         return undefined;
       }
     };
+    const checkoutProvenance = (assignment: ProjectAssignment) => {
+      const recorded = assignment.checkoutPath
+        ? resolve(assignment.checkoutPath)
+        : undefined;
+      const session = knownSessionCheckoutPath(assignment);
+      return {
+        path: recorded ?? session,
+        conflicting: !!recorded && !!session && recorded !== session,
+      };
+    };
     const checkoutMaySurvive = (
       assignment: ProjectAssignment,
       inventory: NonNullable<typeof initialInventory>,
+      checkoutPath = checkoutProvenance(assignment).path,
     ): boolean => {
-      const cwd = knownCheckoutPath(assignment);
-      if (cwd)
-        return inventory.some(
-          (worktree) =>
-            resolve(worktree.path) === cwd &&
-            gitPathStatus(worktree.path) !== "absent",
+      if (checkoutPath)
+        return (
+          gitPathStatus(checkoutPath) !== "absent" ||
+          inventory.some(
+            (worktree) =>
+              resolve(worktree.path) === checkoutPath &&
+              (worktree.locked ||
+                !worktree.prunable ||
+                gitPathStatus(worktree.path) !== "absent"),
+          )
         );
       // Without checkout provenance, any linked checkout could be the assigned one.
       return inventory.some(
@@ -14983,7 +15029,20 @@ export function createLeadRoleTransitions(
         (expectedAssignmentId && observed.id !== expectedAssignmentId)
       )
         continue;
-      if (checkoutMaySurvive(observed, initialInventory)) continue;
+      const observedProvenance = checkoutProvenance(observed);
+      if (observedProvenance.conflicting) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_state_error",
+          new Error("Project assignment has conflicting checkout provenance"),
+        );
+        continue;
+      }
+      if (
+        checkoutMaySurvive(observed, initialInventory, observedProvenance.path)
+      )
+        continue;
       const initialMatches = initialInventory.filter(
         (worktree) => worktree.branch === observed.branch,
       );
@@ -15030,7 +15089,12 @@ export function createLeadRoleTransitions(
             sourceCheckoutPath,
           );
           if (!inventory) return;
-          if (checkoutMaySurvive(current, inventory)) return;
+          const currentProvenance = checkoutProvenance(current);
+          if (
+            currentProvenance.conflicting ||
+            checkoutMaySurvive(current, inventory, currentProvenance.path)
+          )
+            return;
           const matches = inventory.filter(
             (worktree) => worktree.branch === observed.branch,
           );

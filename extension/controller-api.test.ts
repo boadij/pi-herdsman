@@ -756,6 +756,9 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   process.env.HERDR_TAB_ID = "lead-tab";
   const runtime = supervisionRuntime();
   const repoKey = realFs.mkdtempSync(join(tmpdir(), "pr334-removal-repo-"));
+  const removedCheckoutPath = join(repoKey, "removed-checkout");
+  const survivingCheckoutPath = join(repoKey, "surviving-checkout");
+  realFs.mkdirSync(survivingCheckoutPath);
   const managerId = randomUUID();
   const branch = "feat/retirement";
   const assignment = {
@@ -764,18 +767,36 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     repoKey,
     branch,
     text: "project assignment",
+    checkoutPath: removedCheckoutPath,
   };
-  const message = (id: string) => ({
+  const survivingAssignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey,
+    branch: "feat/surviving",
+    text: "unrelated project assignment",
+    checkoutPath: survivingCheckoutPath,
+  };
+  const message = (
+    id: string,
+    fromSessionId = assignment.id,
+    messageBranch = branch,
+  ) => ({
     version: 2 as const,
     id,
     repoKey,
-    branch,
-    fromSessionId: assignment.id,
+    branch: messageBranch,
+    fromSessionId,
     text: "retained project message",
     createdAt: Date.now(),
   });
   writeProjectAssignment(runtime, assignment);
+  writeProjectAssignment(runtime, survivingAssignment);
   writeProjectMessage(message(randomUUID()), runtime);
+  writeProjectMessage(
+    message(randomUUID(), survivingAssignment.id, survivingAssignment.branch),
+    runtime,
+  );
 
   const server = createServer();
   const sockets = new Set<Socket>();
@@ -881,7 +902,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     if (_command === "git" && args[0] === "worktree" && args[1] === "list") {
       notifyGitInventory();
       return {
-        stdout: `worktree ${repoKey}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
+        stdout: `worktree ${repoKey}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0worktree ${survivingCheckoutPath}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${survivingAssignment.branch}\0\0`,
         stderr: "",
         code: 0,
       };
@@ -963,12 +984,19 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     removedWorkspaceMissing = true;
     publishRemoval(branch);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (!listProjectAssignments(runtime, repoKey).length) break;
+      if (listProjectAssignments(runtime, repoKey).length === 2) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [assignment]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      assignment,
+      survivingAssignment,
+    ]);
     assert.deepEqual(listPendingRetirements(runtime, repoKey), []);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
+    assert.equal(
+      listProjectMessages(runtime, repoKey, survivingAssignment.branch).length,
+      1,
+    );
 
     const staleObserved = { ...assignment, id: randomUUID() };
     writeProjectAssignment(runtime, staleObserved);
@@ -987,7 +1015,10 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     writeProjectAssignment(runtime, replacement);
     releaseLock();
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      replacement,
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 2);
 
     removeProjectAssignment(runtime, repoKey, branch);
@@ -1032,16 +1063,25 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     await waitFor(worktreeListRequested, "worktree topology");
     await waitFor(gitInventoryRequested, "Git inventory");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      replacement,
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
     releaseRetirementLock();
     releaseRetirementLock = undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (!listProjectAssignments(runtime, repoKey).length) break;
+      if (listProjectAssignments(runtime, repoKey).length === 1) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), []);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 0);
+    assert.equal(
+      listProjectMessages(runtime, repoKey, survivingAssignment.branch).length,
+      1,
+    );
     assert.deepEqual(listPendingRetirements(runtime, repoKey), [replacement]);
     assert.equal(
       pi.sentMessageCalls.some(
@@ -3345,8 +3385,10 @@ async function runManagerStartupScenario(
     | "reconcile-reassociated"
     | "reconcile-detached-unrelated"
     | "reconcile-session-unreadable"
+    | "reconcile-conflicting-provenance"
     | "reconcile-assignment-lock"
     | "verified-absence-resume"
+    | "delegate-reconciles-absent-assignment"
     | "close-resume"
     | "close-failure"
     | "close-retirement-race"
@@ -3390,6 +3432,10 @@ async function runManagerStartupScenario(
   const reconciliationId = randomUUID();
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const existingGitWorktree = join(tmpdir(), `git-worktree-${randomUUID()}`);
+  const survivingGitWorktree = join(
+    tmpdir(),
+    `git-worktree-survivor-${randomUUID()}`,
+  );
   const childPath = existingGitWorktree;
   const reconciliationBranch = "smoke/orphan";
   const attachmentPath = join(tmpdir(), `assignment-${randomUUID()}.md`);
@@ -3523,6 +3569,7 @@ async function runManagerStartupScenario(
         const hasManagedCheckout =
           ![
             "verified-absence-resume",
+            "delegate-reconciles-absent-assignment",
             "reconcile-absent",
             "reconcile-prunable-absent",
             "reconcile-stale-unprunable",
@@ -3530,6 +3577,7 @@ async function runManagerStartupScenario(
             "reconcile-replacement",
             "reconcile-detached-unrelated",
             "reconcile-session-unreadable",
+            "reconcile-conflicting-provenance",
             "reconcile-assignment-lock",
           ].includes(mode) && !mode.startsWith("active-missing");
         const worktrees = [
@@ -3548,6 +3596,7 @@ async function runManagerStartupScenario(
             "reconcile-detached",
             "reconcile-reassociated",
             "reconcile-detached-unrelated",
+            "reconcile-conflicting-provenance",
           ].includes(mode)
             ? [
                 mode === "reconcile-detached" ||
@@ -3555,6 +3604,12 @@ async function runManagerStartupScenario(
                   ? `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0detached\0\0`
                   : `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${mode === "reconcile-reassociated" ? "feat/reused" : reconciliationBranch}\0${mode === "reconcile-locked" ? "locked in progress\0" : mode === "reconcile-prunable-absent" ? "prunable missing directory\0" : ""}\0`,
               ]
+            : []),
+          ...(mode === "delegate-reconciles-absent-assignment"
+            ? (realFs.mkdirSync(survivingGitWorktree, { recursive: true }),
+              [
+                `worktree ${survivingGitWorktree}\0HEAD ${"c".repeat(40)}\0branch refs/heads/feat/surviving\0\0`,
+              ])
             : []),
         ];
         gitListOutput = worktrees.join("");
@@ -3629,6 +3684,8 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       createCalls++;
       created = true;
+      if (mode === "delegate-reconciles-absent-assignment")
+        realFs.mkdirSync(childPath, { recursive: true });
       const branch = args[args.indexOf("--branch") + 1];
       assert.ok(branch);
       if (mode === "existing-git-branch")
@@ -3954,6 +4011,7 @@ async function runManagerStartupScenario(
       );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
+        ...(starting.checkoutPath ? ["checkoutPath"] : []),
         ...(starting.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         ...(["active-missing", "active-missing-legacy"].includes(mode)
@@ -4323,13 +4381,26 @@ async function runManagerStartupScenario(
         ...([
           "reconcile-detached-unrelated",
           "reconcile-session-unreadable",
+          "reconcile-conflicting-provenance",
         ].includes(mode)
           ? { piSessionFile: `/tmp/${reconciliationId}.jsonl` }
           : {}),
+        ...([
+          "reconcile-present",
+          "reconcile-locked",
+          "reconcile-prunable-absent",
+        ].includes(mode)
+          ? { checkoutPath: existingGitWorktree }
+          : mode === "reconcile-conflicting-provenance"
+            ? { checkoutPath: `${existingGitWorktree}-conflict` }
+            : {}),
       });
       if (mode === "reconcile-reassociated") {
         realFs.mkdirSync(existingGitWorktree, { recursive: true });
-      } else if (mode === "reconcile-detached-unrelated") {
+      } else if (
+        mode === "reconcile-detached-unrelated" ||
+        mode === "reconcile-conflicting-provenance"
+      ) {
         nativeSessions.set(reconciliationId, {
           id: reconciliationId,
           path: `/tmp/${reconciliationId}.jsonl`,
@@ -4592,6 +4663,28 @@ async function runManagerStartupScenario(
         },
         supervisionRuntime(),
       );
+    if (mode === "delegate-reconciles-absent-assignment") {
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id: staleId,
+        repoKey,
+        branch: "smoke/recover",
+        text: "failed-start assignment",
+        checkoutPath: existingGitWorktree,
+      });
+      writeProjectMessage(
+        {
+          version: 2,
+          id: randomUUID(),
+          repoKey,
+          branch: "smoke/recover",
+          fromSessionId: staleId,
+          text: "pending failed-start message",
+          createdAt: Date.now(),
+        },
+        supervisionRuntime(),
+      );
+    }
     const execute = () => (
       (invalidTopologyCall = worktreeListCalls + 4),
       (resumeMode ? staffResume : staff).execute(
@@ -4623,6 +4716,9 @@ async function runManagerStartupScenario(
                 : {}),
               ...(mode === "existing-git-branch"
                 ? { branch: reconciliationBranch, base: reconciliationBranch }
+                : {}),
+              ...(mode === "delegate-reconciles-absent-assignment"
+                ? { branch: "smoke/recover" }
                 : {}),
               ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
               ...(mode === "invalid-topology"
@@ -4658,6 +4754,30 @@ async function runManagerStartupScenario(
       );
       assert.equal(createCalls, 0);
       assert.equal(startCalls, 0);
+      return;
+    }
+    if (mode === "delegate-reconciles-absent-assignment") {
+      const delegated = await execute();
+      assert.equal(delegated.details.ok, true);
+      assert.equal(delegated.details.action, "delegate");
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      )[0]!;
+      assert.notEqual(assignment.id, staleId);
+      assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
+      assert.equal(createCalls, 1);
+      assert.equal(startCalls, 1);
+      assert.deepEqual(
+        listPendingRetirements(supervisionRuntime(), repoKey).map(
+          ({ id }) => id,
+        ),
+        [staleId],
+      );
+      assert.deepEqual(
+        listProjectMessages(supervisionRuntime(), repoKey, "smoke/recover"),
+        [],
+      );
       return;
     }
     if (mode === "unassigned-close") {
@@ -5403,6 +5523,7 @@ async function runManagerStartupScenario(
       assert.equal(assignment.id, childSession);
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
@@ -5478,6 +5599,7 @@ async function runManagerStartupScenario(
       )[0]!;
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
@@ -5591,6 +5713,7 @@ async function runManagerStartupScenario(
     )[0]!;
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
+      "checkoutPath",
       ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
       "id",
       ...(["success", "unmaterialized-path"].includes(mode)
@@ -5601,6 +5724,7 @@ async function runManagerStartupScenario(
       "text",
       "version",
     ]);
+    assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
     if (["success", "unmaterialized-path"].includes(mode))
       assert.equal(
         assignment.piSessionFile,
@@ -6258,6 +6382,8 @@ test("Manager retains placement when recovery topology is not authoritative", ()
   runManagerStartupScenario("invalid-topology"));
 test("resume_project retires verified-absent work instead of recreating it", () =>
   runManagerStartupScenario("verified-absence-resume"));
+test("delegate_project reconciles an absent failed-start assignment before branch reuse", () =>
+  runManagerStartupScenario("delegate-reconciles-absent-assignment"));
 for (const mode of [
   "reconcile-absent",
   "reconcile-present",
@@ -6270,6 +6396,7 @@ for (const mode of [
   "reconcile-reassociated",
   "reconcile-detached-unrelated",
   "reconcile-session-unreadable",
+  "reconcile-conflicting-provenance",
   "reconcile-assignment-lock",
 ] as const)
   test(`Manager startup reconciles orphan assignments safely (${mode})`, () =>

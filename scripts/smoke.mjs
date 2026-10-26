@@ -7646,30 +7646,31 @@ async function runManagerRecoverySmoke(ctx) {
   markStage(ctx, "initial-assignment-validation");
   const initialAssignmentBytes = await assignmentBytes();
   const record = JSON.parse(initialAssignmentBytes);
+  assert.ok(
+    Object.keys(record).every((key) =>
+      [
+        "branch",
+        "checkoutPath",
+        "currentEvidenceIds",
+        "id",
+        "piSessionFile",
+        "repoKey",
+        "requiredEvidence",
+        "resultBindings",
+        "text",
+        "version",
+      ].includes(key),
+    ),
+    "assignment contains an unknown key",
+  );
+  assert.equal(record.version, 2);
   assert.equal(record.id, first.session);
   assert.equal(record.branch, branch);
   assert.equal(record.repoKey, repoKey);
+  assert.equal(record.checkoutPath, await realpath(worktreePath));
   assert.doesNotMatch(record.text, new RegExp(contextMarker));
   assert.equal(typeof record.piSessionFile, "string");
   assert.ok(record.piSessionFile.length > 0);
-  const requiredAssignmentKeys = [
-    "branch",
-    "id",
-    "piSessionFile",
-    "repoKey",
-    "text",
-    "version",
-  ];
-  const allowedAssignmentKeys = [
-    ...requiredAssignmentKeys,
-    "currentEvidenceIds",
-    "requiredEvidence",
-    "resultBindings",
-  ];
-  assert.ok(requiredAssignmentKeys.every((key) => Object.hasOwn(record, key)));
-  assert.ok(
-    Object.keys(record).every((key) => allowedAssignmentKeys.includes(key)),
-  );
   const assertUnchangedAssignment = async () =>
     assert.equal(
       await assignmentBytes(),
