@@ -565,75 +565,131 @@ function expectedSession(id?: string, path?: string): ExpectedSession {
 function isPiAgent(agent: any): boolean {
   return sessionIdentity(agent?.agent_session) !== undefined;
 }
-async function workspacePresentationProvenance(
+export async function workspacePresentationProvenance(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   workspaceIds: readonly string[],
   workspaceCwds: ReadonlyMap<string, string>,
   signal?: AbortSignal,
+  snapshotWorkspaces?: readonly HerdrRecord[],
 ): Promise<ReadonlyMap<string, WorkspaceProvenance>> {
-  const entries = await Promise.all(
-    workspaceIds.map(async (workspaceId) => {
-      let workspace: any;
-      try {
-        workspace = (
-          await runHerdr(pi, ctx, ["workspace", "get", workspaceId], {
-            signal,
-          })
-        )?.workspace;
-      } catch {
-        return [
-          workspaceId,
-          projectWorkspaceProvenance(
+  const workspaces = new Map<string, HerdrRecord>();
+  if (snapshotWorkspaces) {
+    for (const workspace of snapshotWorkspaces)
+      if (typeof workspace?.workspace_id === "string")
+        workspaces.set(workspace.workspace_id, workspace);
+  } else {
+    const records = await Promise.all(
+      workspaceIds.map(async (workspaceId) => {
+        try {
+          return [
             workspaceId,
-            undefined,
-            undefined,
-            workspaceCwds.get(workspaceId),
-          ),
-        ] as const;
-      }
-      if (!hasWorkspaceWorktree(workspace))
-        return [
-          workspaceId,
-          projectWorkspaceProvenance(
-            workspaceId,
-            workspace,
-            undefined,
-            workspaceCwds.get(workspaceId),
-          ),
-        ] as const;
-      let worktreeInfo: any;
+            (
+              await runHerdr(pi, ctx, ["workspace", "get", workspaceId], {
+                signal,
+              })
+            )?.workspace,
+          ] as const;
+        } catch {
+          return [workspaceId, undefined] as const;
+        }
+      }),
+    );
+    for (const [workspaceId, workspace] of records)
+      if (workspace) workspaces.set(workspaceId, workspace);
+  }
+
+  const sources = new Map<
+    string,
+    { workspaceId: string; repoKey: string; repoRoot: string }
+  >();
+  for (const workspaceId of new Set(workspaceIds)) {
+    const workspace = workspaces.get(workspaceId);
+    if (!workspace) continue;
+    const repoKey = workspace?.worktree?.repo_key;
+    const repoRoot = workspace?.worktree?.repo_root;
+    if (
+      typeof repoKey !== "string" ||
+      !repoKey ||
+      typeof repoRoot !== "string" ||
+      !repoRoot
+    )
+      continue;
+    const key = `${repoKey}\0${repoRoot}`;
+    if (!sources.has(key)) sources.set(key, { workspaceId, repoKey, repoRoot });
+  }
+
+  const topologyByRepo = new Map<string, HerdrRecord>();
+  for (const [key, source] of sources) {
+    if (signal?.aborted) break;
+    try {
+      const topology = await runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--workspace", source.workspaceId],
+        { signal },
+      );
+      if (
+        topology?.source?.repo_key === source.repoKey &&
+        topology?.source?.repo_root === source.repoRoot &&
+        Array.isArray(topology?.worktrees)
+      )
+        topologyByRepo.set(key, topology);
+    } catch {
+      // Presentation stays partial when repository discovery is unavailable.
+    }
+  }
+
+  const topologyByWorkspace = new Map<string, HerdrRecord>();
+  if (!snapshotWorkspaces)
+    for (const workspaceId of new Set(workspaceIds)) {
+      const workspace = workspaces.get(workspaceId);
+      const repoKey = workspace?.worktree?.repo_key;
+      const repoRoot = workspace?.worktree?.repo_root;
+      if (
+        !hasWorkspaceWorktree(workspace) ||
+        (typeof repoKey === "string" &&
+          repoKey &&
+          typeof repoRoot === "string" &&
+          repoRoot)
+      )
+        continue;
       try {
-        worktreeInfo = await runHerdr(
-          pi,
-          ctx,
-          ["worktree", "list", "--workspace", workspaceId],
-          { signal },
+        topologyByWorkspace.set(
+          workspaceId,
+          await runHerdr(
+            pi,
+            ctx,
+            ["worktree", "list", "--workspace", workspaceId],
+            { signal },
+          ),
         );
       } catch {
-        return [
-          workspaceId,
-          projectWorkspaceProvenance(
-            workspaceId,
-            workspace,
-            undefined,
-            workspaceCwds.get(workspaceId),
-            true,
-          ),
-        ] as const;
+        // Preserve the peer's partial presentation when discovery is unavailable.
       }
+    }
+
+  return new Map(
+    workspaceIds.map((workspaceId) => {
+      const workspace = workspaces.get(workspaceId);
+      const repoKey = workspace?.worktree?.repo_key;
+      const repoRoot = workspace?.worktree?.repo_root;
+      const key =
+        typeof repoKey === "string" && typeof repoRoot === "string"
+          ? `${repoKey}\0${repoRoot}`
+          : undefined;
       return [
         workspaceId,
         projectWorkspaceProvenance(
           workspaceId,
           workspace,
-          worktreeInfo,
+          (key ? topologyByRepo.get(key) : undefined) ??
+            topologyByWorkspace.get(workspaceId),
           workspaceCwds.get(workspaceId),
         ),
-      ] as const;
+      ];
     }),
   );
-  return new Map(entries);
 }
 function resultPath(runtime: Runtime, requestId: string): string {
   return `${runtime.mailboxPath}/result-${requestId}.json`;

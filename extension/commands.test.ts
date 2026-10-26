@@ -378,6 +378,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
     resolveMessageFiles: () => [],
   } as any);
   const snapshot = {
+    workspaces: [],
     project: "ui-project",
     work: [{ branch: assignment.branch, session: "lead-ui", status: "active" }],
     leads: [],
@@ -398,7 +399,11 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
     activeRole: () => "manager",
     state,
     pi: {},
-    herdrSessionSnapshot: async () => ({ agents: [], panes: [] }),
+    herdrSessionSnapshot: async () => ({
+      agents: [],
+      panes: [],
+      workspaces: [],
+    }),
     managedAgentSnapshots: async () => ({ agents: [] }),
     loadSnapshot: async () => snapshot,
     managerSupervisionItems: (value: any) =>
@@ -639,7 +644,7 @@ test("registered Manager command removes persisted required evidence through the
       if (args[0] === "agent" && args[1] === "get")
         return respond({ agent: managerAgentIdentity() });
       if (isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
     },
   });
@@ -1929,7 +1934,9 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerAgentIdentity() })
               : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [], panes: [] } })
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
                 : respond({}),
   });
   const context = fakeContext(pi.entries) as any;
@@ -2221,7 +2228,9 @@ test("Manager peer messages deliver to a live Manager without changing its role"
               : args[0] === "agent" && args[1] === "get"
                 ? respond({ agent: identity })
                 : isApiSnapshot(args)
-                  ? respond({ snapshot: { agents: [], panes: [] } })
+                  ? respond({
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    })
                   : respond({}),
       ...(recipient
         ? {
@@ -2838,7 +2847,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     if (args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgentIdentity() });
     if (isApiSnapshot(args))
-      return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
     return respond({});
   };
   const currentUsage = (amount: number) => ({
@@ -3209,7 +3218,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
           await release.promise;
         }
         active--;
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       }
       return respond({});
     },
@@ -3314,7 +3323,9 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
               : command === "herdr" && isApiSnapshot(args)
                 ? JSON.stringify({
                     id: AGENT_ID,
-                    result: { snapshot: { agents: [], panes: [] } },
+                    result: {
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    },
                   })
                 : "{}",
         stderr: "",
@@ -3487,7 +3498,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgentIdentity() });
     if (command === "herdr" && isApiSnapshot(args))
-      return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
     return respond({});
   };
   const first = fakeChiefPi({
@@ -4056,7 +4067,9 @@ test("failed Manager activation preserves late inherited tools through rollback"
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerAgentIdentity() })
               : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [], panes: [] } })
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
                 : respond({}),
   });
   const context = fakeContext(pi.entries) as any;
@@ -4148,7 +4161,9 @@ test("Manager leave retains its lease and role when persistence fails", async ()
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerAgentIdentity() })
               : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [], panes: [] } })
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
                 : respond({}),
   });
   const ctx = fakeContext(pi.entries) as any;
@@ -4298,7 +4313,9 @@ test("Manager leave suspends authority when lease release fails", async () => {
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerAgentIdentity() })
               : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [], panes: [] } })
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
                 : respond({}),
   });
   const ctx = fakeContext() as any;
@@ -4414,7 +4431,7 @@ test("restored Manager registers supervision tools and restores Manager tools", 
       if (command === "herdr" && isAgentList(args))
         return respond({ agents: [] });
       if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
     },
   });
@@ -4505,7 +4522,7 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
     exec: (_command, args) => {
       if (isApiSnapshot(args)) {
         snapshotCalls++;
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       }
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
@@ -4635,7 +4652,7 @@ test("Manager auto-start activates after identity and coordination verification 
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return respond({ agent });
       if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
     },
   });
@@ -5839,7 +5856,7 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return respond({ agent });
       if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
     },
   });
@@ -5934,7 +5951,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
         return respond({ agent });
       }
       if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
     },
   });
@@ -6178,7 +6195,9 @@ test("linked and non-project sessions derive ordinary Lead tools", async () => {
         if (command === "herdr" && isAgentList(args))
           return respond({ agents: [] });
         if (command === "herdr" && isApiSnapshot(args))
-          return respond({ snapshot: { agents: [], panes: [] } });
+          return respond({
+            snapshot: { agents: [], panes: [], workspaces: [] },
+          });
         return respond({});
       },
     });
@@ -6526,6 +6545,7 @@ async function managerRemovalFixture(
           },
         ],
         panes: [],
+        workspaces: [],
       };
     },
     isPiAgent: () => true,
@@ -7976,6 +7996,7 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
         snapshot: {
+          workspaces: [],
           panes: [],
           agents: started
             ? [
@@ -9364,7 +9385,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     }
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
-        snapshot: { agents: liveAgents, panes: [] },
+        snapshot: { agents: liveAgents, panes: [], workspaces: [] },
       });
     return respond({});
   };
@@ -9910,7 +9931,11 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
       return respond({ agent: managerAgent });
     if (isApiSnapshot(args))
       return respond({
-        snapshot: { agents: [managerAgent, leadAgent], panes: [] },
+        snapshot: {
+          agents: [managerAgent, leadAgent],
+          panes: [],
+          workspaces: [],
+        },
       });
     return respond({});
   };
@@ -10220,7 +10245,11 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
         return respond({ agent: managerAgent });
       if (isApiSnapshot(args))
         return respond({
-          snapshot: { agents: [managerAgent, leadAgent], panes: [] },
+          snapshot: {
+            agents: [managerAgent, leadAgent],
+            panes: [],
+            workspaces: [],
+          },
         });
       return respond({});
     },
@@ -12750,7 +12779,9 @@ test("Chief activation replaces the lead widget and overview selection is intera
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: leads, panes: leads } },
+            result: {
+              snapshot: { agents: leads, panes: leads, workspaces: [] },
+            },
           }),
           stderr: "",
           code: 0,
@@ -13316,7 +13347,7 @@ async function openChiefOverview(
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
-                snapshot: { agents, panes: agents },
+                snapshot: { agents, panes: agents, workspaces: [] },
               },
             }),
             stderr: "",
@@ -13586,7 +13617,10 @@ test("active chief shutdown clears its role before releasing the lease", async (
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { agents: [], snapshot: { agents: [], panes: [] } },
+              result: {
+                agents: [],
+                snapshot: { agents: [], panes: [], workspaces: [] },
+              },
             }),
             stderr: "",
             code: 0,
@@ -13655,7 +13689,10 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { agents: [], snapshot: { agents: [], panes: [] } },
+              result: {
+                agents: [],
+                snapshot: { agents: [], panes: [], workspaces: [] },
+              },
             }),
             stderr: "",
             code: 0,
@@ -15120,6 +15157,7 @@ test("Running rejects duplicate rendered labels before focus", async (t) => {
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: [agent],
                   panes: [
                     {
@@ -15224,6 +15262,7 @@ test("Running excludes lost and unknown durable generations", async () => {
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: [],
                   panes: [
                     {
@@ -15321,6 +15360,7 @@ test("Running warns when the selected agent is replaced before focus", async () 
                 ),
               ),
               snapshot: {
+                workspaces: [],
                 agents: JSON.parse(
                   listResponse(
                     label,
@@ -15516,8 +15556,10 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
                 session_path: identity.piSessionFile,
               })),
               available_panes: [],
+              workspaces: [],
               agent_definitions: [],
               snapshot: {
+                workspaces: [],
                 agents: states.map(({ label, identity }) => ({
                   ...JSON.parse(
                     listResponse(
@@ -16656,7 +16698,7 @@ test("lead agents stop reports an empty owned inventory safely", async () => {
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { snapshot: { agents: [], panes: [] } },
+              result: { snapshot: { agents: [], panes: [], workspaces: [] } },
             }),
             stderr: "",
             code: 0,
@@ -17427,6 +17469,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: [
                     agentFromState(state),
                     {
@@ -17935,7 +17978,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
               stdout: JSON.stringify({
                 id: 1,
                 result: {
-                  snapshot: { agents: [], panes: [] },
+                  snapshot: { agents: [], panes: [], workspaces: [] },
                 },
               }),
               stderr: "",
@@ -18206,6 +18249,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: [
                   herdrAgent,
                   {
@@ -18392,6 +18436,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
       id: 1,
       result: {
         snapshot: {
+          workspaces: [],
           agents: [herdrAgent],
           panes: [
             {
@@ -18470,7 +18515,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   resolveReconciliation!({
     stdout: JSON.stringify({
       id: 1,
-      result: { snapshot: { agents: [], panes: [] } },
+      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
     }),
     stderr: "",
     code: 0,
@@ -18530,6 +18575,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       id: 1,
       result: {
         snapshot: {
+          workspaces: [],
           agents: live ? [herdrAgent] : [],
           panes: live
             ? [

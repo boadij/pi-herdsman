@@ -786,6 +786,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                   value.agents[0].pane_id = "pane-start";
                   value.agents[0].tab_id = "registered-tab";
                   value.snapshot = {
+                    workspaces: [],
                     agents: value.agents,
                     panes: [
                       {
@@ -802,7 +803,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                   id: AGENT_ID,
                   result: {
                     ...JSON.parse(emptyList()).result,
-                    snapshot: { agents: [], panes: [] },
+                    snapshot: { agents: [], panes: [], workspaces: [] },
                   },
                 }),
           stderr: "",
@@ -1355,6 +1356,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
               cwd: "/tmp",
             });
             value.snapshot = {
+              workspaces: [],
               agents: value.agents,
               panes: [
                 {
@@ -2608,6 +2610,7 @@ test("lead recovery integration validation aborts with session shutdown", async 
             result: {
               agents: JSON.parse(listResponse(label, "working")).agents,
               snapshot: {
+                workspaces: [],
                 agents: JSON.parse(listResponse(label, "working")).agents,
                 panes: [
                   {
@@ -4131,6 +4134,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
                 id: AGENT_ID,
                 result: {
                   snapshot: {
+                    workspaces: [],
                     agents: (() => {
                       const value = JSON.parse(
                         listResponse(
@@ -4166,7 +4170,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
               })
             : JSON.stringify({
                 id: AGENT_ID,
-                result: { snapshot: { agents: [], panes: [] } },
+                result: { snapshot: { agents: [], panes: [], workspaces: [] } },
               }),
           stderr: "",
           code: 0,
@@ -4496,6 +4500,7 @@ test("stale scanner skips every replaced identity field before publication", asy
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: JSON.parse(listResponse(label, "working")).agents,
                   panes: [
                     {
@@ -5334,6 +5339,7 @@ test("old unacknowledged requests get attention without being resubmitted", asyn
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: JSON.parse(
                   listResponse(
                     label,
@@ -5413,7 +5419,7 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [], panes: [] } },
+            result: { snapshot: { agents: [], panes: [], workspaces: [] } },
           }),
           stderr: "",
           code: 0,
@@ -6694,6 +6700,7 @@ test("list derives inactivity without changing public state", async () => {
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents,
                 panes: agents.map((agent) => ({
                   pane_id: agent.pane_id,

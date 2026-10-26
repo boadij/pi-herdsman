@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.33.1](https://github.com/boadij/pi-herdsman/compare/v0.33.0...v0.33.1) (2026-10-25)
+
+
+### Fixes
+
+* **coordination:** prefer direct peer collaboration across supervisors ([#597](https://github.com/boadij/pi-herdsman/issues/597)) ([4c87b23](https://github.com/boadij/pi-herdsman/commit/4c87b231598a9f0f7660abd18ce67dadfd43bd90))
+* **instructions:** isolate ordinary and managed Lead contracts ([#605](https://github.com/boadij/pi-herdsman/issues/605)) ([c393b54](https://github.com/boadij/pi-herdsman/commit/c393b5415f8a262b35b678c9d4d9d01482348ef8))
+* **lead:** serialize project authority with delegation publication ([#601](https://github.com/boadij/pi-herdsman/issues/601)) ([121744f](https://github.com/boadij/pi-herdsman/commit/121744f87ff5179c3fa38e8bd4480ccccbc6e95a))
+* **lock:** handle concurrent lock retirement during acquisition ([#604](https://github.com/boadij/pi-herdsman/issues/604)) ([c11e92c](https://github.com/boadij/pi-herdsman/commit/c11e92c003cd580c0a2cd3fc715ec9ad996f990e))
+* **peer:** require fresh Lead discovery and diagnose send rejection ([#594](https://github.com/boadij/pi-herdsman/issues/594)) ([405395d](https://github.com/boadij/pi-herdsman/commit/405395d9cb39d49b2b0bcd28a2d571fce6bc84ca))
+* **smoke:** report failed supervisor handoffs promptly ([#603](https://github.com/boadij/pi-herdsman/issues/603)) ([623c1dc](https://github.com/boadij/pi-herdsman/commit/623c1dc25d16aa38b5d3b059ea23ba4792fad583))
+* **supervision:** deduplicate Herdr worktree discovery ([#608](https://github.com/boadij/pi-herdsman/issues/608)) ([c08b4ec](https://github.com/boadij/pi-herdsman/commit/c08b4ecb45e384b83f53e0b3b3bdf286cf9acd71))
+
+
+### Documentation
+
+* align current coordination and validation guidance ([#600](https://github.com/boadij/pi-herdsman/issues/600)) ([dc75aa3](https://github.com/boadij/pi-herdsman/commit/dc75aa3ff2d3ed1346666485f15d3a26a5112e1e))
+* **readme:** restore Pi and herdr orchestration positioning ([#607](https://github.com/boadij/pi-herdsman/issues/607)) ([1066232](https://github.com/boadij/pi-herdsman/commit/10662322fb5a40b533977acd61a9c17ecde58400))
+
 ## [0.33.0](https://github.com/boadij/pi-herdsman/compare/v0.32.1...v0.33.0) (2026-10-24)
 
 

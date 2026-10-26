@@ -120,9 +120,11 @@ export function projectWorkspaceProvenance(
       ? currentWorktree.branch
       : undefined;
   const workspaceCwd =
-    typeof worktreeInfo?.source?.source_checkout_path === "string"
-      ? worktreeInfo.source.source_checkout_path
-      : fallbackCwd;
+    typeof currentWorktree?.path === "string"
+      ? currentWorktree.path
+      : typeof worktree?.checkout_path === "string"
+        ? worktree.checkout_path
+        : fallbackCwd;
   return {
     ...(workspaceLabel ? { workspaceLabel } : {}),
     ...(workspaceCwd ? { workspaceCwd } : {}),

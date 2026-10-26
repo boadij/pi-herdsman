@@ -1162,7 +1162,10 @@ test("list peers and message use global peer presence, not caller inventory", as
           ? {
               stdout: JSON.stringify({
                 id: AGENT_ID,
-                result: { agents: [], snapshot: { agents: [], panes: [] } },
+                result: {
+                  agents: [],
+                  snapshot: { agents: [], panes: [], workspaces: [] },
+                },
               }),
               stderr: "",
               code: 0,
@@ -2576,6 +2579,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
           id: AGENT_ID,
           result: {
             snapshot: {
+              workspaces: [],
               agents: [leadAgent, chiefAgent],
               panes: [leadAgent, chiefAgent],
             },
@@ -3043,6 +3047,7 @@ test("a replacement chief never falls back to the previous session supervision",
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: [leadAgent],
                   panes: [leadAgent],
                 },
@@ -3159,6 +3164,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
                 id: AGENT_ID,
                 result: {
                   snapshot: {
+                    workspaces: [],
                     agents: [leadAgent],
                     panes: [leadAgent],
                   },
@@ -3177,6 +3183,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
               id: AGENT_ID,
               result: {
                 snapshot: {
+                  workspaces: [],
                   agents: [leadAgent],
                   panes: [leadAgent],
                 },
@@ -4054,7 +4061,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       stdout: JSON.stringify({
         id: AGENT_ID,
         result: isApiSnapshot(args)
-          ? { snapshot: { agents: [], panes: [] } }
+          ? { snapshot: { agents: [], panes: [], workspaces: [] } }
           : {
               source: {
                 repo_key: "repo-key",
@@ -4134,7 +4141,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { snapshot: { agents: [], panes: [] } },
+              result: { snapshot: { agents: [], panes: [], workspaces: [] } },
             }),
             stderr: "",
             code: 0,
@@ -4719,7 +4726,9 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerIdentity() })
               : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [], panes: [] } })
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
                 : respond({}),
   });
   const context = fakeContext(pi.entries) as any;
@@ -5953,6 +5962,7 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: [
                   {
                     workspace_id: WORKSPACE,
@@ -6389,6 +6399,7 @@ for (const delegationEnabled of [false, true]) {
                 id: AGENT_ID,
                 result: {
                   snapshot: {
+                    workspaces: [],
                     agents: [identity, lead],
                     panes: [
                       {
@@ -6524,7 +6535,7 @@ test("periodic health loss reminders do not open transcripts for missing mailbox
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { snapshot: { agents: [], panes: [] } },
+              result: { snapshot: { agents: [], panes: [], workspaces: [] } },
             }),
             stderr: "",
             code: 0,

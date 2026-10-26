@@ -65,6 +65,7 @@ import {
 } from "./presentation.ts";
 import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
+import { workspacePresentationProvenance } from "./index.ts";
 
 initTheme("dark");
 
@@ -162,7 +163,7 @@ test("workspace presentation provenance projects acquired Herdr records", () => 
       "workspace-1",
       {
         label: "Feature",
-        worktree: { repo_name: "repo" },
+        worktree: { repo_name: "repo", checkout_path: "/workspace-1" },
       },
       {
         source: { source_checkout_path: "/repo", repo_name: "source-repo" },
@@ -174,7 +175,7 @@ test("workspace presentation provenance projects acquired Herdr records", () => 
     ),
     {
       workspaceLabel: "Feature",
-      workspaceCwd: "/repo",
+      workspaceCwd: "/workspace-1",
       repoName: "repo",
       branch: "feature/one",
     },
@@ -186,11 +187,34 @@ test("workspace presentation provenance projects acquired Herdr records", () => 
   assert.deepEqual(
     projectWorkspaceProvenance(
       "workspace-1",
+      {
+        worktree: {
+          checkout_path: "/repo/old",
+        },
+      },
+      {
+        worktrees: [
+          {
+            open_workspace_id: "workspace-1",
+            path: "/repo/new",
+            branch: "feature/new",
+          },
+        ],
+      },
+    ),
+    {
+      workspaceCwd: "/repo/new",
+      branch: "feature/new",
+    },
+  );
+  assert.deepEqual(
+    projectWorkspaceProvenance(
+      "workspace-1",
       { worktree: { checkout_path: "/checkout" } },
       undefined,
       "/fallback",
     ),
-    { workspaceCwd: "/fallback" },
+    { workspaceCwd: "/checkout" },
   );
   assert.deepEqual(
     projectWorkspaceProvenance(
@@ -202,6 +226,191 @@ test("workspace presentation provenance projects acquired Herdr records", () => 
     ),
     { workspaceCwd: "/checkout" },
   );
+});
+
+test("supervision presentation shares one sequential topology read for twelve workspaces", async () => {
+  const workspaces = Array.from({ length: 12 }, (_, index) => ({
+    workspace_id: `workspace-${index}`,
+    label: `Lead ${index}`,
+    worktree: {
+      repo_key: "repo-key",
+      repo_root: "/repo",
+      repo_name: "repo",
+      checkout_path: `/repo/checkout-${index}`,
+    },
+  }));
+  const worktrees = workspaces.map((workspace, index) => ({
+    open_workspace_id: workspace.workspace_id,
+    path: workspace.worktree.checkout_path,
+    branch: `feature/${index}`,
+  }));
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          id: 1,
+          result: {
+            source: { repo_key: "repo-key", repo_root: "/repo" },
+            worktrees,
+          },
+        }),
+        stderr: "",
+      };
+    },
+  } as any;
+  const result = await workspacePresentationProvenance(
+    pi,
+    { cwd: "/repo" } as any,
+    workspaces.map(({ workspace_id }) => workspace_id),
+    new Map(),
+    undefined,
+    workspaces,
+  );
+  assert.equal(calls.length, 1);
+  for (let index = 0; index < workspaces.length; index++)
+    assert.deepEqual(result.get(`workspace-${index}`), {
+      workspaceLabel: `Lead ${index}`,
+      workspaceCwd: `/repo/checkout-${index}`,
+      repoName: "repo",
+      branch: `feature/${index}`,
+    });
+});
+
+test("supervision presentation reads separate repositories and rejects mismatched topology", async () => {
+  const workspaces = [
+    {
+      workspace_id: "a",
+      label: "A",
+      worktree: { repo_key: "a", repo_root: "/a", checkout_path: "/a/w" },
+    },
+    {
+      workspace_id: "b",
+      label: "B",
+      worktree: { repo_key: "b", repo_root: "/b", checkout_path: "/b/w" },
+    },
+    {
+      workspace_id: "wrong-root",
+      label: "Wrong root",
+      worktree: { repo_key: "c", repo_root: "/c", checkout_path: "/c/w" },
+    },
+    {
+      workspace_id: "busy",
+      label: "Busy",
+      worktree: {
+        repo_key: "busy",
+        repo_root: "/busy",
+        checkout_path: "/busy/w",
+      },
+    },
+    { workspace_id: "plain", label: "Plain" },
+  ];
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      if (args[3] === "busy") throw new Error("worktree_busy");
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          id: 1,
+          result: {
+            source:
+              args[3] === "a"
+                ? { repo_key: "wrong", repo_root: "/a" }
+                : args[3] === "wrong-root"
+                  ? { repo_key: "c", repo_root: "/other" }
+                  : { repo_key: "b", repo_root: "/b" },
+            worktrees: [{ open_workspace_id: args[3], branch: "branch" }],
+          },
+        }),
+        stderr: "",
+      };
+    },
+  } as any;
+  const result = await workspacePresentationProvenance(
+    pi,
+    { cwd: "/" } as any,
+    ["a", "b", "wrong-root", "busy", "plain", "missing"],
+    new Map([["missing", "/fallback"]]),
+    undefined,
+    workspaces,
+  );
+  assert.equal(calls.length, 4);
+  assert.deepEqual(result.get("a"), {
+    workspaceLabel: "A",
+    workspaceCwd: "/a/w",
+  });
+  assert.deepEqual(result.get("b"), {
+    workspaceLabel: "B",
+    workspaceCwd: "/b/w",
+    branch: "branch",
+  });
+  assert.deepEqual(result.get("wrong-root"), {
+    workspaceLabel: "Wrong root",
+    workspaceCwd: "/c/w",
+  });
+  assert.deepEqual(result.get("missing"), { workspaceCwd: "/fallback" });
+  assert.deepEqual(result.get("busy"), {
+    workspaceLabel: "Busy",
+    workspaceCwd: "/busy/w",
+  });
+  assert.deepEqual(result.get("plain"), { workspaceLabel: "Plain" });
+});
+
+test("supervision presentation stops repository reads after abort", async () => {
+  const workspaces = ["first", "later"].map((id) => ({
+    workspace_id: id,
+    worktree: {
+      repo_key: id,
+      repo_root: `/${id}`,
+      checkout_path: `/${id}/worktree`,
+    },
+  }));
+  const controller = new AbortController();
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      controller.abort();
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          id: 1,
+          result: {
+            source: { repo_key: "first", repo_root: "/first" },
+            worktrees: [
+              { open_workspace_id: "first", branch: "feature/first" },
+            ],
+          },
+        }),
+        stderr: "",
+      };
+    },
+  } as any;
+
+  const result = await workspacePresentationProvenance(
+    pi,
+    { cwd: "/" } as any,
+    ["first", "later"],
+    new Map(),
+    controller.signal,
+    workspaces,
+  );
+
+  assert.deepEqual(
+    calls.map((args) => args.slice(0, 2)),
+    [["worktree", "list"]],
+  );
+  assert.deepEqual(result.get("first"), {
+    workspaceCwd: "/first/worktree",
+    branch: "feature/first",
+  });
+  assert.deepEqual(result.get("later"), {
+    workspaceCwd: "/later/worktree",
+  });
 });
 
 test("session usage presents Pi input breakdown and cost-ordered models", () => {

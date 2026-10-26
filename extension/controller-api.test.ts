@@ -287,7 +287,8 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
   }));
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
-    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    if (isApiSnapshot(args))
+      result = { snapshot: { agents, panes: [], workspaces: [] } };
     else if (isAgentList(args))
       result = {
         agents: managerIdentityUnavailable
@@ -1130,7 +1131,8 @@ test("message_supervisor tool cancellation prevents project publication while wa
   const pi = fakeChiefPi({
     exec: (_command, args) => {
       let result: unknown = {};
-      if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+      if (isApiSnapshot(args))
+        result = { snapshot: { agents, panes: [], workspaces: [] } };
       else if (isAgentList(args)) result = { agents };
       else if (args[0] === "agent" && args[1] === "get")
         result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
@@ -1264,7 +1266,8 @@ test("project Lead observes Manager availability across turnover without exposin
   ];
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
-    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    if (isApiSnapshot(args))
+      result = { snapshot: { agents, panes: [], workspaces: [] } };
     else if (isAgentList(args)) result = { agents };
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
@@ -1585,7 +1588,8 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     if (observationFailure)
       return { stdout: "", stderr: "simulated Herdr failure", code: 1 };
     let result: unknown = {};
-    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    if (isApiSnapshot(args))
+      result = { snapshot: { agents, panes: [], workspaces: [] } };
     else if (isAgentList(args)) result = { agents };
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
@@ -1893,7 +1897,8 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
   }));
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
-    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    if (isApiSnapshot(args))
+      result = { snapshot: { agents, panes: [], workspaces: [] } };
     else if (isAgentList(args)) result = { agents };
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
@@ -2002,7 +2007,8 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
   });
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
-    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    if (isApiSnapshot(args))
+      result = { snapshot: { agents, panes: [], workspaces: [] } };
     else if (isAgentList(args)) result = { agents };
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
@@ -2301,7 +2307,11 @@ for (const reachable of [true, false]) {
         result = { agent: reachable ? managerAgent : undefined };
       else if (isApiSnapshot(args))
         result = {
-          snapshot: { agents: reachable ? [managerAgent] : [], panes: [] },
+          snapshot: {
+            agents: reachable ? [managerAgent] : [],
+            panes: [],
+            workspaces: [],
+          },
         };
       return {
         stdout: JSON.stringify({ id: AGENT_ID, result }),
@@ -2773,7 +2783,9 @@ for (const scenario of [
       exec: (_command, args) => {
         let result: unknown = {};
         if (isApiSnapshot(args))
-          result = { snapshot: { agents: inventory, panes: [] } };
+          result = {
+            snapshot: { agents: inventory, panes: [], workspaces: [] },
+          };
         else if (isAgentList(args)) result = { agents: inventory };
         else if (args[0] === "agent" && args[1] === "get") result = { agent };
         else if (args[0] === "workspace" && args[1] === "get")
@@ -3199,6 +3211,7 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
         snapshot: {
+          workspaces: [],
           panes: [],
           agents: started
             ? [
@@ -4009,6 +4022,7 @@ async function runManagerStartupScenario(
       }
       return respond({
         snapshot: {
+          workspaces: [],
           panes: ownedTree
             .filter((state) => !closedTreePanes.has(state.paneId))
             .map((state) => ({
@@ -7562,6 +7576,7 @@ test("list retains durable agents whose physical identity is not exact", async (
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: [
                   {
                     name: "unmanaged-agent",
@@ -7700,7 +7715,10 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { agents: [], snapshot: { agents: [], panes: [] } },
+              result: {
+                agents: [],
+                snapshot: { agents: [], panes: [], workspaces: [] },
+              },
             }),
             stderr: "",
             code: 0,
@@ -9771,6 +9789,7 @@ test("session assignment fails closed on duplicate live representations", async 
             result: {
               agents: [agentFromState(first), agentFromState(second)],
               snapshot: {
+                workspaces: [],
                 agents: [agentFromState(first), agentFromState(second)],
                 panes: [first, second].map((state) => ({
                   pane_id: state.paneId,
@@ -10555,6 +10574,7 @@ test("lead steers a parent waiting for direct-child work only while working", as
                 ),
               ],
               snapshot: {
+                workspaces: [],
                 agents: [
                   agentFromState(liveParent, parentStatus),
                   agentFromState(

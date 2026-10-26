@@ -2934,7 +2934,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [], panes: [] } },
+            result: { snapshot: { agents: [], panes: [], workspaces: [] } },
           }),
           stderr: "",
           code: 0,
@@ -7611,7 +7611,9 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: managerAgent };
     else if (isApiSnapshot(args))
-      result = { snapshot: { agents: [managerAgent], panes: [] } };
+      result = {
+        snapshot: { agents: [managerAgent], panes: [], workspaces: [] },
+      };
     return {
       stdout: JSON.stringify({ id: AGENT_ID, result }),
       stderr: "",
@@ -9138,6 +9140,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: JSON.parse(listResponse(label, "idle", null)).agents,
                 panes: [
                   {
@@ -9608,7 +9611,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
           ? {
               stdout: JSON.stringify({
                 id: AGENT_ID,
-                result: { snapshot: { agents: [], panes: [] } },
+                result: { snapshot: { agents: [], panes: [], workspaces: [] } },
               }),
               stderr: "",
               code: 0,
@@ -11376,7 +11379,9 @@ test("session continuation ignores an unrelated missing live session path", asyn
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [staleAgent], panes: [] } },
+            result: {
+              snapshot: { agents: [staleAgent], panes: [], workspaces: [] },
+            },
           }),
           stderr: "",
           code: 0,
@@ -11468,7 +11473,9 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [staleAgent], panes: [] } },
+            result: {
+              snapshot: { agents: [staleAgent], panes: [], workspaces: [] },
+            },
           }),
           stderr: "",
           code: 0,
@@ -11561,7 +11568,9 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [staleAgent], panes: [] } },
+            result: {
+              snapshot: { agents: [staleAgent], panes: [], workspaces: [] },
+            },
           }),
           stderr: "",
           code: 0,
@@ -11662,7 +11671,9 @@ test("session continuation ignores removed secondary session fields", async () =
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { snapshot: { agents: [staleAgent], panes: [] } },
+            result: {
+              snapshot: { agents: [staleAgent], panes: [], workspaces: [] },
+            },
           }),
           stderr: "",
           code: 0,
@@ -12142,6 +12153,7 @@ test("rejects an invalid generated collision label after releasing its claim", a
             id: AGENT_ID,
             result: {
               snapshot: {
+                workspaces: [],
                 agents: JSON.parse(listResponse("other-agent")).agents,
                 panes: [
                   {
