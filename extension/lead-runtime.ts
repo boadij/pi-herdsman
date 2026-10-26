@@ -584,6 +584,14 @@ type LeadProjectHost = {
   findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  retireProjectAssignment: typeof import("./supervision.ts").retireProjectAssignment;
+  removeProjectMessagesForAssignment: typeof import("./supervision.ts").removeProjectMessagesForAssignment;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
   currentProjectAssignment(
     ctx: ExtensionContext,
   ): Promise<ProjectAssignment | undefined>;
@@ -4087,6 +4095,10 @@ export function registerLeadRuntime(
   const projectHost = options.projectHost;
   const projectServices = {
     ...projectHost,
+    retireProjectAssignment: options.roleTransitionHost.retireProjectAssignment,
+    removeProjectMessagesForAssignment:
+      options.roleTransitionHost.removeProjectMessagesForAssignment,
+    appendDurableError: options.herdRunServices.appendDurableError,
     writeProjectAssignment,
     liveAgent,
     liveLead,
@@ -4211,6 +4223,11 @@ export function registerLeadRuntime(
         removeWorktree: (
           ...args: Parameters<typeof projectRuntime.removeWorktree>
         ) => projectRuntime.removeWorktree(...args),
+        forgetLegacyProjectAssignment: (
+          ...args: Parameters<
+            typeof projectRuntime.forgetLegacyProjectAssignment
+          >
+        ) => projectRuntime.forgetLegacyProjectAssignment(...args),
         inspectRequiredEvidence: (branch, ctx) =>
           projectRuntime.inspectRequiredEvidence(branch, ctx),
         removeRequiredEvidence: (branch, id, assignment, ctx) =>
@@ -5773,6 +5790,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       removeWorktree(
         ...args: Parameters<LeadProjectRuntime["removeWorktree"]>
       ): ReturnType<LeadProjectRuntime["removeWorktree"]>;
+      forgetLegacyProjectAssignment(
+        ...args: Parameters<LeadProjectRuntime["forgetLegacyProjectAssignment"]>
+      ): ReturnType<LeadProjectRuntime["forgetLegacyProjectAssignment"]>;
       inspectRequiredEvidence(
         branch: string,
         ctx: ExtensionContext,
@@ -6191,6 +6211,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               ]
             : []),
         { value: "remove", label: "Remove worktree…" },
+        ...(host.activeRole() === "manager" && selection.status === "paused"
+          ? [{ value: "forget", label: "Forget orphaned assignment…" }]
+          : []),
         ...(host.activeRole() === "manager"
           ? [{ value: "required-evidence", label: "Retained evidence" }]
           : []),
@@ -6224,6 +6247,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               : result.details.cancelled
                 ? "info"
                 : "warning",
+          );
+        } else if (action === "forget") {
+          const result = await uiActions.forgetLegacyProjectAssignment(
+            selection.branch,
+            ctx,
+            ctx.signal,
+          );
+          ctx.ui.notify(
+            result.content[0]?.text ??
+              `Forget of ${selection.branch} finished.`,
+            result.details.ok || result.details.cancelled ? "info" : "warning",
           );
         } else if (action === "required-evidence") {
           const assignment = await uiActions.inspectRequiredEvidence(
@@ -8079,6 +8113,283 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       return false;
     resolvePendingRemoval(selected, ctx);
     return true;
+  };
+  const forgetLegacyProjectAssignment = async (
+    branch: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const operationSignal = signal ?? ctx.signal;
+    const initialManager = await host.currentManager(ctx);
+    const lease = host.managerLease();
+    if (
+      host.activeRole() !== "manager" ||
+      !initialManager ||
+      !lease ||
+      host.leadRuntime.roleSuspended ||
+      !host.sameManagerDescriptor(initialManager, lease.descriptor)
+    )
+      throw new Error(
+        "Only the active, lease-verified Manager can forget an assignment",
+      );
+    const initialTopology = await host.runHerdr(
+      host.pi,
+      ctx,
+      ["worktree", "list", "--workspace", initialManager.workspaceId],
+      { signal: operationSignal },
+    );
+    if (
+      initialTopology?.source?.repo_key !== initialManager.repoKey ||
+      initialTopology?.source?.source_workspace_id !==
+        initialManager.workspaceId ||
+      typeof initialTopology?.source?.source_checkout_path !== "string"
+    )
+      throw new Error("Herdr worktree topology is unavailable or inconsistent");
+    await host.reconcileProjectAssignments(
+      ctx,
+      initialManager.repoKey,
+      initialManager.workspaceId,
+      initialTopology.source.source_checkout_path,
+      false,
+      branch,
+      false,
+    );
+    if (
+      !host.readProjectAssignment(
+        host.supervisionRuntime(),
+        initialManager.repoKey,
+        branch,
+      )
+    )
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Automatically retired verified absent assignment ${branch}; no manual release was needed.`,
+          },
+        ],
+        details: { ok: true, branch, automatic: true },
+      };
+    const verify = async (expectedId: string) => {
+      const manager = await host.currentManager(ctx);
+      if (
+        host.activeRole() !== "manager" ||
+        host.leadRuntime.roleSuspended ||
+        !manager ||
+        !host.sameManagerDescriptor(manager, initialManager) ||
+        !host.managerLease() ||
+        !host.sameManagerDescriptor(
+          host.managerLease()!.descriptor,
+          initialManager,
+        )
+      )
+        throw new Error(
+          "Manager authority changed; assignment was not retired",
+        );
+      const group = await host.worktreeGroupScope(
+        host.pi,
+        ctx,
+        manager.workspaceId,
+        operationSignal,
+      );
+      if (
+        group.repoKey !== manager.repoKey ||
+        group.primaryWorkspaceId !== manager.workspaceId
+      )
+        throw new Error("Manager worktree group is not authoritative");
+      const topology = await host.runHerdr(
+        host.pi,
+        ctx,
+        ["worktree", "list", "--workspace", manager.workspaceId],
+        { signal: operationSignal },
+      );
+      if (
+        topology?.source?.repo_key !== manager.repoKey ||
+        topology?.source?.source_workspace_id !== manager.workspaceId ||
+        typeof topology?.source?.source_checkout_path !== "string" ||
+        !Array.isArray(topology.worktrees) ||
+        topology.worktrees.some(
+          (worktree: any) =>
+            typeof worktree?.branch !== "string" ||
+            typeof worktree?.path !== "string" ||
+            !worktree.path,
+        )
+      )
+        throw new Error(
+          "Herdr worktree topology is unavailable or inconsistent",
+        );
+      const current = host.readProjectAssignment(
+        host.supervisionRuntime(),
+        manager.repoKey,
+        branch,
+      );
+      if (!current || current.id !== expectedId || current.branch !== branch)
+        throw new Error("Project assignment changed; nothing was retired");
+      if (current.checkoutPath)
+        throw new Error(
+          "Checkout provenance exists; automatic reconciliation owns this assignment",
+        );
+      if (current.piSessionFile) {
+        try {
+          const session = host.SessionManager.open(current.piSessionFile);
+          if (session.getSessionId() !== current.id)
+            throw new Error("Assignment session identity conflicts");
+          throw new Error("Checkout provenance exists; assignment preserved");
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            /Checkout provenance|identity conflicts/u.test(error.message)
+          )
+            throw error;
+          throw new Error(
+            "Assignment session provenance is unavailable or conflicting",
+          );
+        }
+      }
+      const [git, common, root] = await Promise.all([
+        host.pi.exec("git", ["worktree", "list", "--porcelain", "-z"], {
+          cwd: topology.source.source_checkout_path,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
+        host.pi.exec(
+          "git",
+          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+          {
+            cwd: topology.source.source_checkout_path,
+            signal: operationSignal,
+            timeout: 10_000,
+          },
+        ),
+        host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
+          cwd: topology.source.source_checkout_path,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
+      ]);
+      const inventory = parseGitWorktreeInventory(String(git.stdout ?? ""));
+      if (
+        git.code !== 0 ||
+        git.killed ||
+        git.stderr?.trim() ||
+        !inventory ||
+        common.code !== 0 ||
+        common.killed ||
+        common.stderr?.trim() ||
+        root.code !== 0 ||
+        root.killed ||
+        root.stderr?.trim() ||
+        realpathSync(String(common.stdout ?? "").trim()) !==
+          realpathSync(manager.repoKey) ||
+        realpathSync(String(root.stdout ?? "").trim()) !==
+          realpathSync(topology.source.source_checkout_path) ||
+        !inventory.some(
+          (worktree) =>
+            resolve(worktree.path) ===
+            resolve(topology.source.source_checkout_path),
+        )
+      )
+        throw new Error(
+          "Git worktree inventory is unavailable or inconsistent",
+        );
+      if (
+        inventory.some((worktree) => worktree.branch === branch) ||
+        topology.worktrees.some((worktree: any) => worktree?.branch === branch)
+      )
+        throw new Error(
+          "A checkout still uses this branch; assignment preserved",
+        );
+      const [leads, snapshot] = await Promise.all([
+        host.liveLead(ctx, current.id),
+        host.herdrSessionSnapshot(host.pi, ctx, operationSignal),
+      ]);
+      const agentStates = host.scanAgentStates();
+      if (agentStates.issues.length)
+        throw new Error(
+          "Agent ownership inventory is incomplete; assignment preserved",
+        );
+      if (
+        leads.length ||
+        snapshot.agents.some(
+          (agent) => host.herdrSessionId(agent) === current.id,
+        ) ||
+        agentStates.states.some(
+          ({ state }) =>
+            state.ownerSessionId === current.id ||
+            state.piSessionId === current.id,
+        )
+      )
+        throw new Error(
+          "Live or potentially active execution is known; assignment preserved",
+        );
+      return { manager, current };
+    };
+    const assignments = host
+      .listProjectAssignments(host.supervisionRuntime(), initialManager.repoKey)
+      .filter((assignment) => assignment.branch === branch);
+    if (assignments.length !== 1)
+      throw new Error(
+        "Branch does not identify exactly one current assignment",
+      );
+    const expectedId = assignments[0]!.id;
+    await verify(expectedId);
+    if (!ctx.hasUI)
+      throw new Error(
+        "Legacy assignment release requires interactive confirmation",
+      );
+    const answer = await ctx.ui.input(
+      `Release Manager authority for ${branch}?\n\nThis removes the durable project assignment and retires its pending project messages. Git checkouts, branches, Pi conversations, processes, and Agent ownership are not changed.\n\nNo live target execution or matching branch checkout was found, but unobserved execution cannot be ruled out.\n\nType forget ${branch} to confirm.`,
+      undefined,
+      { signal: operationSignal },
+    );
+    if (answer !== `forget ${branch}`)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Forget of ${branch} cancelled; assignment unchanged.`,
+          },
+        ],
+        details: { ok: false, cancelled: true, branch },
+      };
+    return host.withProjectWorkLock(
+      `${initialManager.repoKey}\0${branch}`,
+      () =>
+        host.withProjectAssignmentLock(
+          initialManager.repoKey,
+          branch,
+          async () => {
+            const { current } = await verify(expectedId);
+            if (
+              !host.retireProjectAssignment(host.supervisionRuntime(), current)
+            )
+              throw new Error("Assignment changed; nothing was retired");
+            try {
+              host.removeProjectMessagesForAssignment(
+                host.supervisionRuntime(),
+                current,
+              );
+            } catch (error) {
+              host.appendDurableError(
+                host.pi,
+                ctx,
+                "pi_herdsman_state_error",
+                error,
+              );
+            }
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Released Manager authority for ${branch}; Git and Pi history preserved.`,
+                },
+              ],
+              details: { ok: true, branch, assignment_id: expectedId },
+            };
+          },
+          operationSignal,
+        ),
+    );
   };
   const setRemovalPreauthorization = async (
     enabled: boolean,
@@ -10548,6 +10859,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     cancelPendingRemoval,
     setRemovalPreauthorization,
     getRemovalPreauthorization,
+    forgetLegacyProjectAssignment,
     executeStaff,
     updateAssignmentEvidence,
     inspectRequiredEvidence,

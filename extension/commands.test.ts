@@ -6387,16 +6387,24 @@ async function managerRemovalFixture(
     revokeRemovalPreapprovalAfterPreflight?: boolean;
     replaceManagerBeforeFinalReconcile?: boolean;
     replaceAssignmentBeforeFinalReconcile?: boolean;
+    unrelatedCheckout?: boolean;
+    preserveAssignmentDuringReconciliation?: boolean;
+    confirmationResponse?: string;
+    agentStateIssues?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
   const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  const unrelatedPath = realFs.mkdtempSync(
+    join(PI_AGENT_ROOT, "remove-unrelated-"),
+  );
   if (options.absentCheckout) rmSync(checkoutPath, { recursive: true });
   const persistedCheckoutPath = options.persistedCheckoutPath
     ? realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-original-"))
     : undefined;
   t.after(() => rmSync(repoKey, { recursive: true, force: true }));
   t.after(() => rmSync(checkoutPath, { recursive: true, force: true }));
+  t.after(() => rmSync(unrelatedPath, { recursive: true, force: true }));
   if (persistedCheckoutPath)
     t.after(() =>
       rmSync(persistedCheckoutPath, { recursive: true, force: true }),
@@ -6460,6 +6468,14 @@ async function managerRemovalFixture(
             "",
           ]
         : []),
+      ...(options.unrelatedCheckout
+        ? [
+            `worktree ${unrelatedPath}`,
+            `HEAD ${"3".repeat(40)}`,
+            "branch refs/heads/feat/unrelated",
+            "",
+          ]
+        : []),
       "",
     ];
     return worktrees.join("\0");
@@ -6478,7 +6494,11 @@ async function managerRemovalFixture(
       exec: async (command: string, args: string[], runOptions: any) => {
         assert.equal(command, "git");
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
-          return { code: 0, stdout: `${checkoutPath}\n`, stderr: "" };
+          return {
+            code: 0,
+            stdout: `${runOptions.cwd === repoKey ? repoKey : checkoutPath}\n`,
+            stderr: "",
+          };
         if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
           return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
         if (
@@ -6606,16 +6626,27 @@ async function managerRemovalFixture(
             repo_key: repoKey,
             source_checkout_path: repoKey,
           },
-          worktrees: checkoutPresent
-            ? [
-                {
-                  open_workspace_id: topologyWorkspaceId,
-                  branch,
-                  path: checkoutPath,
-                  is_linked_worktree: true,
-                },
-              ]
-            : [],
+          worktrees: [
+            ...(checkoutPresent
+              ? [
+                  {
+                    open_workspace_id: topologyWorkspaceId,
+                    branch,
+                    path: checkoutPath,
+                    is_linked_worktree: true,
+                  },
+                ]
+              : []),
+            ...(options.unrelatedCheckout
+              ? [
+                  {
+                    branch: "feat/unrelated",
+                    path: unrelatedPath,
+                    is_linked_worktree: true,
+                  },
+                ]
+              : []),
+          ],
         };
       if (args[1] === "open") {
         workspaceId =
@@ -6682,7 +6713,12 @@ async function managerRemovalFixture(
     },
     isPiAgent: () => true,
     herdrSessionId: (agent: any) => agent.pi_session_id ?? "assigned-lead",
-    scanAgentStates: () => ({ states: [] }),
+    scanAgentStates: () => ({
+      states: [],
+      issues: options.agentStateIssues
+        ? [{ path: "unavailable", diagnostic: "test" }]
+        : [],
+    }),
     stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
     stopProjectLeadPane: async () => {
       stoppedLeadCount++;
@@ -6713,9 +6749,20 @@ async function managerRemovalFixture(
       reconciliationAssignmentId = args[7];
       reconciliationProjectWorkLocked = args[4];
       if (options.reconcileError) throw new Error("reconcile uncertain");
-      if (!checkoutPresent && (!args[7] || assignment?.id === args[7]))
+      if (
+        !options.preserveAssignmentDuringReconciliation &&
+        !checkoutPresent &&
+        (!args[7] || assignment?.id === args[7])
+      )
         assignment = undefined;
     },
+    retireProjectAssignment: (_runtime: unknown, current: any) => {
+      if (assignment?.id !== current.id) return false;
+      assignment = undefined;
+      return true;
+    },
+    removeProjectMessagesForAssignment: () => {},
+    appendDurableError: () => {},
     HERDSMAN_BUILD: {} as any,
   } as any);
   const ctx = fakeContext([]) as any;
@@ -6732,7 +6779,7 @@ async function managerRemovalFixture(
       assignment = { ...assignment, id: "replacement-assignment" };
     if (options.primaryWorkspaceAfterConfirmation)
       topologyWorkspaceId = "manager-workspace";
-    return "remove";
+    return options.confirmationResponse ?? "remove";
   };
   return {
     runtime,
@@ -6759,6 +6806,169 @@ async function managerRemovalFixture(
     reconciliationProjectWorkLocked: () => reconciliationProjectWorkLocked,
   };
 }
+
+test("Manager explicitly releases a legacy assignment without touching an unrelated checkout", async (t) => {
+  const branch = "feat/remove-test";
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: `forget ${branch}`,
+  });
+  const result = await fixture.runtime.forgetLegacyProjectAssignment(
+    branch,
+    fixture.ctx,
+  );
+  assert.equal(result.details.ok, true);
+  assert.equal(fixture.assignment(), undefined);
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.confirmationCount(), 1);
+});
+
+test("legacy assignment release refuses a branch checkout and preserves authority", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    missingSessionProvenance: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Checkout provenance exists|checkout still uses this branch/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("legacy assignment release cancellation and stale Manager leave authority intact", async (t) => {
+  const cancelled = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: "cancel",
+  });
+  const result = await cancelled.runtime.forgetLegacyProjectAssignment(
+    "feat/remove-test",
+    cancelled.ctx,
+  );
+  assert.equal(result.details.cancelled, true);
+  assert.ok(cancelled.assignment());
+
+  const stale = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: "forget feat/remove-test",
+    replaceManagerAfterConfirmation: true,
+  });
+  await assert.rejects(
+    stale.runtime.forgetLegacyProjectAssignment("feat/remove-test", stale.ctx),
+    /Manager authority changed/u,
+  );
+  assert.ok(stale.assignment());
+});
+
+test("legacy assignment release refuses known live execution before confirmation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    runningLead: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses the exact live Pi session without Lead coordination", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    targetOccupants: [{ pi_session_id: "assigned-lead" }],
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses incomplete durable Agent ownership inventory", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    agentStateIssues: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Agent ownership inventory is incomplete/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release preserves authority on unavailable observations or replaced assignment", async (t) => {
+  const unavailable = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    snapshotErrorAfterStop: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    unavailable.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      unavailable.ctx,
+    ),
+    /snapshot failed/u,
+  );
+  assert.ok(unavailable.assignment());
+  assert.equal(unavailable.confirmationCount(), 0);
+
+  const replaced = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    changeAssignmentAfterConfirmation: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    replaced.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      replaced.ctx,
+    ),
+    /Project assignment changed/u,
+  );
+  assert.equal(replaced.assignment()?.id, "replacement-assignment");
+});
 
 test("Manager merge runtime rejects disabled permission and stale accepted HEAD before mutation", async (t) => {
   const disabled = await managerRemovalFixture(t, { mergeEnabled: false });
@@ -8711,6 +8921,7 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions(""), [
       { value: "leave", label: "leave" },
       { value: "remove", label: "remove" },
+      { value: "forget", label: "forget" },
       { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
@@ -8726,6 +8937,12 @@ async function managerDelegateAssignmentTest(
     );
     assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("forget herds"), [
+      { value: `forget ${assignment.branch}`, label: assignment.branch },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("forget "), [
+      { value: `forget ${assignment.branch}`, label: assignment.branch },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("remove"), []);
     assert.deepEqual(managerCommand.getArgumentCompletions("remove "), [
