@@ -15839,295 +15839,313 @@ test("Lead stop does not let the Lead continue a nested descendant directly", as
   }
 });
 
-test("descendant proof persistence warning does not invalidate a clean parent close", async (t) => {
-  setLeadEnvironment();
-  const sessionRoot = mkdtempSync(join(tmpdir(), "herdsman-close-cascade-"));
-  const leadPath = join(sessionRoot, "lead.jsonl");
-  const parentRequestId = randomUUID();
-  const childRequestId = randomUUID();
-  const parent = {
-    ...managedState(
-      "close-cascade-parent",
-      parentRequestId,
-      recoveryIdentity("close-cascade-parent"),
-    ),
-    agentDefinition: "agent",
-    ownerSessionId: LEAD_SESSION_ID,
-    piSessionId: PARENT_SESSION_ID,
-    piSessionFile: join(sessionRoot, "parent.jsonl"),
-  };
-  const child = {
-    ...managedState(
-      "close-cascade-child",
-      childRequestId,
-      recoveryIdentity("close-cascade-child"),
-    ),
-    agentDefinition: "agent",
-    ownerSessionId: parent.piSessionId,
-    piSessionId: CHILD_SESSION_ID,
-    piSessionFile: join(sessionRoot, "child.jsonl"),
-  };
-  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
-  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
-  resetAgentMailbox(parentMailbox);
-  resetAgentMailbox(childMailbox);
-  const acceptance = (
-    ownerSessionId: string,
-    state: ManagedAgentState,
-    requestId: string,
-  ) => ({
-    type: "message",
-    message: {
-      role: "toolResult",
-      toolName: "delegate_agent",
-      isError: false,
-      details: {
-        ok: true,
-        owner_session_id: ownerSessionId,
-        session_id: state.piSessionId,
-        session_path: state.piSessionFile,
-        request_id: requestId,
-        agent: state.agentLabel,
-        definition: state.agentDefinition,
-        run_id: state.runId,
-        pane_id: state.paneId,
-        workspace_id: state.workspaceId,
-      },
-    },
-  });
-  const parentEntries = [
-    {
-      type: "custom",
-      customType: "pi-herdsman-agent-definition",
-      data: {
-        sessionId: parent.piSessionId,
-        definition: "agent",
-        label: parent.agentLabel,
-      },
-    },
-    // Deliberately omit A's accepted B request: physical closure succeeds,
-    // but safe persistence of B's historical proof must fail closed.
-  ];
-  for (const [state, entries] of [
-    [parent, parentEntries],
-    [
-      child,
-      [
-        {
-          type: "custom",
-          customType: "pi-herdsman-agent-definition",
-          data: {
-            sessionId: child.piSessionId,
-            definition: "agent",
-            label: child.agentLabel,
-          },
+for (const acceptedChild of [true, false]) {
+  test(`close cascade ${acceptedChild ? "preserves" : "rejects"} nested continuation`, async (t) => {
+    setLeadEnvironment();
+    const sessionRoot = mkdtempSync(join(tmpdir(), "herdsman-close-cascade-"));
+    const leadPath = join(sessionRoot, "lead.jsonl");
+    const parentRequestId = randomUUID();
+    const childRequestId = randomUUID();
+    const parent = {
+      ...managedState(
+        "close-cascade-parent",
+        parentRequestId,
+        recoveryIdentity("close-cascade-parent"),
+      ),
+      agentDefinition: "agent",
+      ownerSessionId: LEAD_SESSION_ID,
+      piSessionId: PARENT_SESSION_ID,
+      piSessionFile: join(sessionRoot, "parent.jsonl"),
+    };
+    const child = {
+      ...managedState(
+        "close-cascade-child",
+        childRequestId,
+        recoveryIdentity("close-cascade-child"),
+      ),
+      agentDefinition: "agent",
+      ownerSessionId: parent.piSessionId,
+      piSessionId: CHILD_SESSION_ID,
+      piSessionFile: join(sessionRoot, "child.jsonl"),
+    };
+    const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+    const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    const acceptance = (
+      ownerSessionId: string,
+      state: ManagedAgentState,
+      requestId: string,
+    ) => ({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        isError: false,
+        details: {
+          ok: true,
+          owner_session_id: ownerSessionId,
+          session_id: state.piSessionId,
+          session_path: state.piSessionFile,
+          request_id: requestId,
+          agent: state.agentLabel,
+          definition: state.agentDefinition,
+          run_id: state.runId,
+          pane_id: state.paneId,
+          workspace_id: state.workspaceId,
         },
+      },
+    });
+    const parentEntries = [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: parent.piSessionId,
+          definition: "agent",
+          label: parent.agentLabel,
+        },
+      },
+      ...(acceptedChild
+        ? [acceptance(parent.piSessionId, child, childRequestId)]
+        : []),
+    ];
+    for (const [state, entries] of [
+      [parent, parentEntries],
+      [
+        child,
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: child.piSessionId,
+              definition: "agent",
+              label: child.agentLabel,
+            },
+          },
+        ],
       ],
-    ],
-  ] as const) {
-    nativeSessions.set(state.piSessionFile!, {
-      id: state.piSessionId!,
-      path: state.piSessionFile!,
-      entries: [...entries],
+    ] as const) {
+      nativeSessions.set(state.piSessionFile!, {
+        id: state.piSessionId!,
+        path: state.piSessionFile!,
+        entries: [...entries],
+      });
+      writeFileSync(
+        state.piSessionFile!,
+        [{ type: "session", id: state.piSessionId, cwd: state.cwd }, ...entries]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n") + "\n",
+      );
+    }
+    writeAgentState(parentMailbox, parent);
+    writeAgentState(childMailbox, child);
+    const lifecycle = delegatedLifecycleExecutor(parent, [child]);
+    const pi = fakePi({ exec: lifecycle.exec });
+    const leadAcceptance = acceptance(LEAD_SESSION_ID, parent, parentRequestId);
+    pi.entries.push(leadAcceptance);
+    registerExtension!(pi.pi as never);
+    const context = fakeContext(pi.entries) as any;
+    context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+    context.hasUI = true;
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    t.after(async () => {
+      await pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(parentMailbox);
+      resetAgentMailbox(childMailbox);
+      nativeSessions.delete(parent.piSessionFile!);
+      nativeSessions.delete(child.piSessionFile!);
+      rmSync(sessionRoot, { recursive: true, force: true });
+    });
+
+    const result = await agentTool(pi, "close").execute(
+      "close-cascade-parent",
+      { agent: parent.agentLabel },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(result.details.action, "close");
+    assert.equal(result.details.agent, parent.agentLabel);
+    assert.equal(result.details.cleanup_error, undefined);
+    assert.equal(result.details.cleanup_errors, undefined);
+    if (acceptedChild) {
+      assert.equal(result.details.descendant_continuation_warning, undefined);
+    } else {
+      assert.match(
+        result.details.descendant_continuation_warning,
+        /continuation proof/i,
+      );
+    }
+    assert.equal(
+      result.details.closed_assignment.session_id,
+      parent.piSessionId,
+    );
+    assert.deepEqual(lifecycle.closeOrder, [
+      child.agentLabel,
+      parent.agentLabel,
+    ]);
+    // Pi persists native tool results as message entries. Preserve the actual
+    // close result here so continuation is authorized by the recorded call.
+    pi.entries.push({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "close_agent",
+        isError: false,
+        content: result.content,
+        details: result.details,
+      },
     });
     writeFileSync(
-      state.piSessionFile!,
-      [{ type: "session", id: state.piSessionId, cwd: state.cwd }, ...entries]
+      leadPath,
+      [{ type: "session", id: LEAD_SESSION_ID, cwd: "/tmp" }, ...pi.entries]
         .map((entry) => JSON.stringify(entry))
         .join("\n") + "\n",
     );
-  }
-  writeAgentState(parentMailbox, parent);
-  writeAgentState(childMailbox, child);
-  const lifecycle = delegatedLifecycleExecutor(parent, [child]);
-  const pi = fakePi({ exec: lifecycle.exec });
-  const leadAcceptance = acceptance(LEAD_SESSION_ID, parent, parentRequestId);
-  pi.entries.push(leadAcceptance);
-  registerExtension!(pi.pi as never);
-  const context = fakeContext(pi.entries) as any;
-  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
-  context.hasUI = true;
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  t.after(async () => {
-    await pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(parentMailbox);
-    resetAgentMailbox(childMailbox);
-    nativeSessions.delete(parent.piSessionFile!);
-    nativeSessions.delete(child.piSessionFile!);
-    rmSync(sessionRoot, { recursive: true, force: true });
-  });
-
-  const result = await agentTool(pi, "close").execute(
-    "close-cascade-parent",
-    { agent: parent.agentLabel },
-    undefined,
-    undefined,
-    context,
-  );
-  assert.equal(result.details.ok, true, JSON.stringify(result.details));
-  assert.equal(result.details.action, "close");
-  assert.equal(result.details.agent, parent.agentLabel);
-  assert.equal(result.details.cleanup_error, undefined);
-  assert.equal(result.details.cleanup_errors, undefined);
-  assert.match(
-    result.details.descendant_continuation_warning,
-    /continuation proof/i,
-  );
-  assert.equal(result.details.closed_assignment.session_id, parent.piSessionId);
-  assert.deepEqual(lifecycle.closeOrder, [child.agentLabel, parent.agentLabel]);
-  // Pi persists native tool results as message entries. Preserve the actual
-  // close result here so continuation is authorized by the recorded call.
-  pi.entries.push({
-    type: "message",
-    message: {
-      role: "toolResult",
-      toolName: "close_agent",
-      isError: false,
-      content: result.content,
-      details: result.details,
-    },
-  });
-  writeFileSync(
-    leadPath,
-    [{ type: "session", id: LEAD_SESSION_ID, cwd: "/tmp" }, ...pi.entries]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n") + "\n",
-  );
-  const leadDiskEntries = readFileSync(leadPath, "utf8")
-    .trim()
-    .split("\n")
-    .slice(1)
-    .map((line) => JSON.parse(line));
-  nativeSessions.set(leadPath, {
-    id: LEAD_SESSION_ID,
-    path: leadPath,
-    cwd: "/tmp",
-    entries: leadDiskEntries,
-  });
-  const reopenedLead = (SessionManager as any).open(leadPath);
-  assert.equal(reopenedLead.getSessionId(), LEAD_SESSION_ID);
-  assert.equal(reopenedLead.getSessionFile(), leadPath);
-  const resumedLeadEntries = reopenedLead.getEntries() as any[];
-  const openedParent = (SessionManager as any).open(parent.piSessionFile);
-  assert.equal(openedParent.getSessionId(), parent.piSessionId);
-  const parentHistory = openedParent.getEntries() as any[];
-  assert.equal(
-    parentHistory.some(
-      (entry) =>
-        entry.customType === "pi-herdsman-agent-closed-assignment" &&
-        entry.data?.version === 1 &&
-        entry.data?.proof?.owner_session_id === parent.piSessionId &&
-        entry.data?.proof?.session_id === child.piSessionId &&
-        entry.data?.proof?.session_path === child.piSessionFile,
-    ),
-    false,
-    "B's proof is absent when A's accepted assignment cannot be verified",
-  );
-  assert.equal(
-    pi.entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-agent-closed-assignment" &&
-        entry.data?.proof?.session_id === child.piSessionId,
-    ),
-    false,
-    "descendant proof is not granted to the unrelated Lead history",
-  );
-  const continuationLaunches: string[][] = [];
-  const exec = (command: string, args: string[], options?: any) => {
-    const response = lifecycle.exec(command, args, options);
-    if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
-      continuationLaunches.push(args);
-      const sessionIndex = args.indexOf("--session");
-      const continuedState = lifecycle.live.get(parent.agentLabel);
-      if (continuedState && sessionIndex >= 0) {
-        const reopenedAgent = (SessionManager as any).open(
-          args[sessionIndex + 1],
-        );
-        continuedState.piSessionId = reopenedAgent.getSessionId();
-        continuedState.piSessionFile = reopenedAgent.getSessionFile();
-        writeAgentState(parentMailbox, continuedState);
-      }
-    }
-    return response;
-  };
-  const resumedLeadPi = fakePi({ exec, entries: resumedLeadEntries });
-  registerExtension!(resumedLeadPi.pi as never);
-  const resumedLeadContext = fakeContext(resumedLeadEntries) as any;
-  resumedLeadContext.sessionManager.getSessionId = () =>
-    reopenedLead.getSessionId();
-  resumedLeadContext.sessionManager.getSessionFile = () =>
-    reopenedLead.getSessionFile();
-  await resumedLeadPi.events.get("session_start")?.[0](
-    undefined,
-    resumedLeadContext,
-  );
-  const continuedParent = await agentTool(resumedLeadPi, "continue").execute(
-    "continue-cascade-parent",
-    { session: parent.piSessionId, task: "continue A after close cascade" },
-    undefined,
-    undefined,
-    resumedLeadContext,
-  );
-  assert.equal(
-    continuedParent.details.ok,
-    true,
-    JSON.stringify(continuedParent.details),
-  );
-  assert.equal(continuedParent.details.session_id, parent.piSessionId);
-  assert.equal(continuedParent.details.session_path, parent.piSessionFile);
-  assert.ok(
-    continuationLaunches[0]?.includes("--session") &&
-      continuationLaunches[0]?.includes(
-        realFs.realpathSync(parent.piSessionFile!),
+    const leadDiskEntries = readFileSync(leadPath, "utf8")
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line));
+    nativeSessions.set(leadPath, {
+      id: LEAD_SESSION_ID,
+      path: leadPath,
+      cwd: "/tmp",
+      entries: leadDiskEntries,
+    });
+    const reopenedLead = (SessionManager as any).open(leadPath);
+    assert.equal(reopenedLead.getSessionId(), LEAD_SESSION_ID);
+    assert.equal(reopenedLead.getSessionFile(), leadPath);
+    const resumedLeadEntries = reopenedLead.getEntries() as any[];
+    const openedParent = (SessionManager as any).open(parent.piSessionFile);
+    assert.equal(openedParent.getSessionId(), parent.piSessionId);
+    const parentHistory = openedParent.getEntries() as any[];
+    assert.equal(
+      parentHistory.some(
+        (entry) =>
+          entry.customType === "pi-herdsman-agent-closed-assignment" &&
+          entry.data?.version === 1 &&
+          entry.data?.proof?.owner_session_id === parent.piSessionId &&
+          entry.data?.proof?.session_id === child.piSessionId &&
+          entry.data?.proof?.session_path === child.piSessionFile,
       ),
-    JSON.stringify(continuationLaunches[0]),
-  );
-  assert.notEqual(lifecycle.live.get(parent.agentLabel)?.runId, parent.runId);
+      acceptedChild,
+      acceptedChild
+        ? "B's closure proof is persisted in A's history"
+        : "B's proof is absent when A's accepted assignment cannot be verified",
+    );
+    assert.equal(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-closed-assignment" &&
+          entry.data?.proof?.session_id === child.piSessionId,
+      ),
+      false,
+      "descendant proof is not granted to the unrelated Lead history",
+    );
+    const continuationLaunches: string[][] = [];
+    const exec = (command: string, args: string[], options?: any) => {
+      const response = lifecycle.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        continuationLaunches.push(args);
+        const sessionIndex = args.indexOf("--session");
+        const continuedState = lifecycle.live.get(parent.agentLabel);
+        if (continuedState && sessionIndex >= 0) {
+          const reopenedAgent = (SessionManager as any).open(
+            args[sessionIndex + 1],
+          );
+          continuedState.piSessionId = reopenedAgent.getSessionId();
+          continuedState.piSessionFile = reopenedAgent.getSessionFile();
+          writeAgentState(parentMailbox, continuedState);
+        }
+      }
+      return response;
+    };
+    const resumedLeadPi = fakePi({ exec, entries: resumedLeadEntries });
+    registerExtension!(resumedLeadPi.pi as never);
+    const resumedLeadContext = fakeContext(resumedLeadEntries) as any;
+    resumedLeadContext.sessionManager.getSessionId = () =>
+      reopenedLead.getSessionId();
+    resumedLeadContext.sessionManager.getSessionFile = () =>
+      reopenedLead.getSessionFile();
+    await resumedLeadPi.events.get("session_start")?.[0](
+      undefined,
+      resumedLeadContext,
+    );
+    const continuedParent = await agentTool(resumedLeadPi, "continue").execute(
+      "continue-cascade-parent",
+      { session: parent.piSessionId, task: "continue A after close cascade" },
+      undefined,
+      undefined,
+      resumedLeadContext,
+    );
+    assert.equal(
+      continuedParent.details.ok,
+      true,
+      JSON.stringify(continuedParent.details),
+    );
+    assert.equal(continuedParent.details.session_id, parent.piSessionId);
+    assert.equal(continuedParent.details.session_path, parent.piSessionFile);
+    assert.ok(
+      continuationLaunches[0]?.includes("--session") &&
+        continuationLaunches[0]?.includes(
+          realFs.realpathSync(parent.piSessionFile!),
+        ),
+      JSON.stringify(continuationLaunches[0]),
+    );
+    assert.notEqual(lifecycle.live.get(parent.agentLabel)?.runId, parent.runId);
 
-  // Continue B only from A's reopened saved owner history; Lead never receives B's proof.
-  const reopenedParent = (SessionManager as any).open(parent.piSessionFile);
-  assert.equal(reopenedParent.getSessionId(), parent.piSessionId);
-  assert.equal(reopenedParent.getSessionFile(), parent.piSessionFile);
-  const resumedParentEntries = reopenedParent.getEntries() as any[];
-  const resumedParentPi = fakePi({ exec, entries: resumedParentEntries });
-  registerExtension!(resumedParentPi.pi as never);
-  const resumedParentContext = fakeContext(resumedParentEntries) as any;
-  resumedParentContext.sessionManager.getSessionId = () =>
-    reopenedParent.getSessionId();
-  resumedParentContext.sessionManager.getSessionFile = () =>
-    reopenedParent.getSessionFile();
-  await resumedParentPi.events.get("session_start")?.[0](
-    undefined,
-    resumedParentContext,
-  );
-  const continuedChild = await agentTool(resumedParentPi, "continue").execute(
-    "continue-cascade-child",
-    { session: child.piSessionId, task: "continue B from A's durable history" },
-    undefined,
-    undefined,
-    resumedParentContext,
-  );
-  assert.equal(
-    continuedChild.details.ok,
-    false,
-    JSON.stringify(continuedChild.details),
-  );
-  assert.equal(
-    continuationLaunches.length,
-    1,
-    "B is not resumed without proof",
-  );
-  assert.equal(
-    resumedLeadEntries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-agent-closed-assignment" &&
-        entry.data?.proof?.session_id === child.piSessionId,
-    ),
-    false,
-  );
-  await resumedLeadPi.events.get("session_shutdown")?.[0]();
-  await resumedParentPi.events.get("session_shutdown")?.[0]();
-});
+    // Continue B only from A's reopened saved owner history; Lead never receives B's proof.
+    const reopenedParent = (SessionManager as any).open(parent.piSessionFile);
+    assert.equal(reopenedParent.getSessionId(), parent.piSessionId);
+    assert.equal(reopenedParent.getSessionFile(), parent.piSessionFile);
+    const resumedParentEntries = reopenedParent.getEntries() as any[];
+    const resumedParentPi = fakePi({ exec, entries: resumedParentEntries });
+    registerExtension!(resumedParentPi.pi as never);
+    const resumedParentContext = fakeContext(resumedParentEntries) as any;
+    resumedParentContext.sessionManager.getSessionId = () =>
+      reopenedParent.getSessionId();
+    resumedParentContext.sessionManager.getSessionFile = () =>
+      reopenedParent.getSessionFile();
+    await resumedParentPi.events.get("session_start")?.[0](
+      undefined,
+      resumedParentContext,
+    );
+    const continuedChild = await agentTool(resumedParentPi, "continue").execute(
+      "continue-cascade-child",
+      {
+        session: child.piSessionId,
+        task: "continue B from A's durable history",
+      },
+      undefined,
+      undefined,
+      resumedParentContext,
+    );
+    assert.equal(
+      continuedChild.details.ok,
+      acceptedChild,
+      JSON.stringify(continuedChild.details),
+    );
+    assert.equal(
+      continuationLaunches.length,
+      acceptedChild ? 2 : 1,
+      acceptedChild ? "A and B are resumed" : "B is not resumed without proof",
+    );
+    assert.equal(
+      resumedLeadEntries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-closed-assignment" &&
+          entry.data?.proof?.session_id === child.piSessionId,
+      ),
+      false,
+    );
+    await resumedLeadPi.events.get("session_shutdown")?.[0]();
+    await resumedParentPi.events.get("session_shutdown")?.[0]();
+  });
+}
 
 test("lead agents stop refuses an agent whose identity changes after inventory", async () => {
   setLeadEnvironment();
