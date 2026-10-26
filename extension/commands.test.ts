@@ -15839,7 +15839,7 @@ test("Lead stop does not let the Lead continue a nested descendant directly", as
   }
 });
 
-test("normal close cascade persists descendant closure proof to the direct owner's session", async (t) => {
+test("descendant proof persistence warning does not invalidate a clean parent close", async (t) => {
   setLeadEnvironment();
   const sessionRoot = mkdtempSync(join(tmpdir(), "herdsman-close-cascade-"));
   const leadPath = join(sessionRoot, "lead.jsonl");
@@ -15905,7 +15905,8 @@ test("normal close cascade persists descendant closure proof to the direct owner
         label: parent.agentLabel,
       },
     },
-    acceptance(parent.piSessionId!, child, childRequestId),
+    // Deliberately omit A's accepted B request: physical closure succeeds,
+    // but safe persistence of B's historical proof must fail closed.
   ];
   for (const [state, entries] of [
     [parent, parentEntries],
@@ -15966,6 +15967,13 @@ test("normal close cascade persists descendant closure proof to the direct owner
   assert.equal(result.details.ok, true, JSON.stringify(result.details));
   assert.equal(result.details.action, "close");
   assert.equal(result.details.agent, parent.agentLabel);
+  assert.equal(result.details.cleanup_error, undefined);
+  assert.equal(result.details.cleanup_errors, undefined);
+  assert.match(
+    result.details.descendant_continuation_warning,
+    /continuation proof/i,
+  );
+  assert.equal(result.details.closed_assignment.session_id, parent.piSessionId);
   assert.deepEqual(lifecycle.closeOrder, [child.agentLabel, parent.agentLabel]);
   // Pi persists native tool results as message entries. Preserve the actual
   // close result here so continuation is authorized by the recorded call.
@@ -16003,7 +16011,7 @@ test("normal close cascade persists descendant closure proof to the direct owner
   const openedParent = (SessionManager as any).open(parent.piSessionFile);
   assert.equal(openedParent.getSessionId(), parent.piSessionId);
   const parentHistory = openedParent.getEntries() as any[];
-  assert.ok(
+  assert.equal(
     parentHistory.some(
       (entry) =>
         entry.customType === "pi-herdsman-agent-closed-assignment" &&
@@ -16012,7 +16020,8 @@ test("normal close cascade persists descendant closure proof to the direct owner
         entry.data?.proof?.session_id === child.piSessionId &&
         entry.data?.proof?.session_path === child.piSessionFile,
     ),
-    "B's verified closure proof is persisted in A's exact saved history",
+    false,
+    "B's proof is absent when A's accepted assignment cannot be verified",
   );
   assert.equal(
     pi.entries.some(
@@ -16100,15 +16109,13 @@ test("normal close cascade persists descendant closure proof to the direct owner
   );
   assert.equal(
     continuedChild.details.ok,
-    true,
+    false,
     JSON.stringify(continuedChild.details),
   );
-  assert.ok(continuedChild.details.session_id);
-  assert.ok(continuationLaunches[1]?.includes("--session"));
-  assert.ok(
-    continuationLaunches[1]?.includes(
-      realFs.realpathSync(child.piSessionFile!),
-    ),
+  assert.equal(
+    continuationLaunches.length,
+    1,
+    "B is not resumed without proof",
   );
   assert.equal(
     resumedLeadEntries.some(

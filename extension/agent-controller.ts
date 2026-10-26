@@ -4916,6 +4916,7 @@ export function createAgentController(
         "close",
       );
     const warnings = new Map<string, string>();
+    let descendantContinuationWarning: string | undefined;
     const closed: { state: ManagedAgentState; definition: string }[] = [];
     const report: StopReport = {
       onClosed: (outcome) => closed.push(outcome),
@@ -4950,19 +4951,17 @@ export function createAgentController(
           context,
           descendants,
           state,
-        ))
-          warnings.set("descendant continuation", warning);
+        )) {
+          descendantContinuationWarning = warning;
+          break;
+        }
       } catch {
-        warnings.set(
-          "descendant continuation",
-          "Descendant continuation proof could not be safely persisted",
-        );
+        descendantContinuationWarning =
+          "Descendant continuation proof could not be safely persisted";
       }
     }
     const ownerSessionId = context.sessionManager.getSessionId();
-    const closedAssignment = ![...warnings.keys()].some(
-      (key) => key !== "descendant continuation",
-    )
+    const closedAssignment = !warnings.size
       ? acceptedCloseProof(
           context.sessionManager.getEntries(),
           ownerSessionId,
@@ -4983,6 +4982,9 @@ export function createAgentController(
         : {}),
       ...(warnings.size > 1
         ? { cleanup_errors: Object.fromEntries(warnings) }
+        : {}),
+      ...(descendantContinuationWarning
+        ? { descendant_continuation_warning: descendantContinuationWarning }
         : {}),
     };
   };

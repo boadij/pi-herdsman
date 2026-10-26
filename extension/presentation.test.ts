@@ -3866,6 +3866,40 @@ test("tool and completion renderers retain structured action details", (t) => {
       }),
       /Cleanup warning: mailbox cleanup failed/,
     );
+    const closeWarnings = {
+      details: {
+        ok: true,
+        agent: "researcher",
+        cleanup_error: "mailbox cleanup failed",
+        descendant_continuation_warning: "child proof could not be saved",
+      },
+    };
+    assert.match(
+      renderedText(
+        renderCoordinationResult(
+          "agent",
+          "close",
+          closeWarnings,
+          {},
+          presentationTheme,
+          { args: { action: "close" } },
+        ),
+      ),
+      /researcher closed\n  ! cleanup warning · Ctrl\+O\n  ! descendant continuation warning · Ctrl\+O/,
+    );
+    assert.match(
+      renderedText(
+        renderCoordinationResult(
+          "agent",
+          "close",
+          closeWarnings,
+          { expanded: true },
+          presentationTheme,
+          { args: { action: "close" } },
+        ),
+      ),
+      /descendant continuation warning: child proof could not be saved/,
+    );
     assert.match(
       formatToolModelResult("close", {
         ok: true,

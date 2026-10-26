@@ -2162,6 +2162,12 @@ export function formatToolModelResult(
     : v.cleanup_errors && typeof v.cleanup_errors === "object"
       ? ["", "Cleanup warnings:", JSON.stringify(v.cleanup_errors, null, 2)]
       : [];
+  const descendantWarning = value(v.descendant_continuation_warning)
+    ? [
+        "",
+        `Descendant continuation warning: ${value(v.descendant_continuation_warning)}`,
+      ]
+    : [];
   if (v.ok === false) {
     const e = (v.error ?? {}) as Record<string, unknown>;
     const details =
@@ -2428,6 +2434,7 @@ export function formatToolModelResult(
         })()
       : []),
     ...cleanup,
+    ...descendantWarning,
   ].join("\n");
 }
 type CoordinationTool = "agent" | "supervisor" | "peer" | "staff";
@@ -2985,6 +2992,10 @@ function expandedResultLines(
           ]
         : []),
     );
+  if (action === "close" && value(details.descendant_continuation_warning))
+    lines.push(
+      `descendant continuation warning: ${value(details.descendant_continuation_warning)}`,
+    );
   if (action === "list" && (tool === "staff" || tool === "peer")) {
     if (tool === "peer") {
       const peers = Array.isArray(details.peers) ? details.peers : [];
@@ -3286,6 +3297,9 @@ export function renderCoordinationResult(
         (details.cleanup_error ||
         (details.cleanup_errors && typeof details.cleanup_errors === "object")
           ? `\n${humanText(theme, "warning", `  ! cleanup warning · Ctrl+O`)}`
+          : "") +
+        (action === "close" && value(details.descendant_continuation_warning)
+          ? `\n${humanText(theme, "warning", `  ! descendant continuation warning · Ctrl+O`)}`
           : ""),
       0,
       0,
