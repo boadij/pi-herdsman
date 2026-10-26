@@ -10761,12 +10761,15 @@ export async function reportFinalFailureEvidence(
       !/^[a-zA-Z0-9_-]{1,128}$/.test(runReference) ||
       runReference !== basename(dirname(artifact)) ||
       !scenarioNames.includes(evidence.scenario) ||
-      !["SETUP_FAIL", "STALLED", "SCENARIO_FAIL"].includes(evidence.outcome) ||
+      !["SETUP_FAIL", "STALLED", "SCENARIO_FAIL", "EVIDENCE_FAIL"].includes(
+        evidence.outcome,
+      ) ||
       !["PASS", "FAIL", "NOT_REQUIRED"].includes(evidence.cleanup)
     )
       return false;
     const safeErrorCodes = [
       "SMOKE_STALLED",
+      "SMOKE_TIMEOUT",
       "COMMAND_FAILED",
       "TIMEOUT",
       "ENOENT",
@@ -10799,6 +10802,18 @@ export async function reportFinalFailureEvidence(
           .filter((key) => typeof evidence[key] === "boolean")
           .map((key) => [key, evidence[key]]),
       ),
+      ...(evidence.scenario === "manager-bootstrap" &&
+      evidence.managerBootstrapDelegation
+        ? {
+            managerBootstrapDelegation: managerBootstrapDelegationProjection(
+              evidence.managerBootstrapDelegation,
+            ),
+          }
+        : {}),
+      ...(evidence.scenario === "manager-bootstrap" &&
+      ["manager-bootstrap-correlated-child"].includes(evidence.stage)
+        ? { failureStage: evidence.stage }
+        : {}),
     };
     const json = JSON.stringify(projection);
     if (Buffer.byteLength(json, "utf8") > 32 * 1024) return false;
@@ -11305,7 +11320,7 @@ async function main() {
         await updateFailureEvidenceAfterCleanup(ctx, evidence);
       }
     }
-    if (failure && ctx.failureArtifact && !ctx.evidenceSaveFailed)
+    if (failure && ctx.failureArtifact)
       await reportFinalFailureEvidence(ctx.failureArtifact);
     if (!failure && !cleanupError) console.log(`smoke ${scenario}: PASS`);
     if (failure || ctx.evidenceSaveFailed) process.exitCode = 1;

@@ -314,9 +314,20 @@ test("scenario failure reporting uses an exact relative run reference", async ()
 test("consumer receives only the finalized failure artifact through process output", async () => {
   const evidence = {
     scenario: "manager-bootstrap",
-    outcome: "SCENARIO_FAIL",
+    outcome: "EVIDENCE_FAIL",
     mode: "simulated",
-    errorCode: "SMOKE_STALLED",
+    errorCode: "SMOKE_TIMEOUT",
+    stage: "manager-bootstrap-correlated-child",
+    managerBootstrapDelegation: {
+      delegateCalls: 3,
+      expectedBranchDelegateCalls: 2,
+      resultState: "success",
+      correlatedChild: true,
+      childSessionSaved: true,
+      linkedWorktreeObserved: true,
+      session: "SENSITIVE_SESSION_SENTINEL",
+      path: "/SENSITIVE_PATH_SENTINEL",
+    },
     sessionStartObserved: true,
     firstRequestObserved: false,
     firstRequestVerified: false,
@@ -359,9 +370,18 @@ test("consumer receives only the finalized failure artifact through process outp
       `${consumed.runReference}/result.json`,
     );
     assert.equal(consumed.scenario, "manager-bootstrap");
-    assert.equal(consumed.outcome, "SCENARIO_FAIL");
+    assert.equal(consumed.outcome, "EVIDENCE_FAIL");
     assert.equal(consumed.cleanup, "PASS");
-    assert.equal(consumed.errorCode, "SMOKE_STALLED");
+    assert.equal(consumed.errorCode, "SMOKE_TIMEOUT");
+    assert.equal(consumed.failureStage, "manager-bootstrap-correlated-child");
+    assert.deepEqual(consumed.managerBootstrapDelegation, {
+      delegateCalls: 3,
+      expectedBranchDelegateCalls: 2,
+      resultState: "success",
+      correlatedChild: true,
+      childSessionSaved: true,
+      linkedWorktreeObserved: true,
+    });
     assert.equal(consumed.sessionStartObserved, true);
     assert.equal(consumed.firstRequestObserved, false);
     assert.equal(consumed.firstRequestVerified, false);
@@ -371,6 +391,7 @@ test("consumer receives only the finalized failure artifact through process outp
         "artifactReference",
         "cleanup",
         "errorCode",
+        "failureStage",
         "firstRequestObserved",
         "firstRequestVerified",
         "mode",
@@ -378,6 +399,7 @@ test("consumer receives only the finalized failure artifact through process outp
         "runReference",
         "scenario",
         "sessionStartObserved",
+        "managerBootstrapDelegation",
       ].sort(),
     );
     assert.doesNotMatch(output[0], /SENSITIVE_|SECRET_SENTINEL|\/tmp\//);
@@ -481,6 +503,47 @@ test("cleanup evidence retry records and reports a recovered artifact", async ()
     assert.equal(errors[0].includes(tmpdir()), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup retry artifact is delivered after its initial save failed", async () => {
+  const ctx = {};
+  const evidence = {
+    scenario: "manager-bootstrap",
+    outcome: "SCENARIO_FAIL",
+    cleanup: "PASS",
+  };
+  const output = [];
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(
+      await retainScenarioFailureEvidence(ctx, evidence, async () => {
+        throw Object.assign(new Error("private failure path"), {
+          code: "EACCES",
+        });
+      }),
+      null,
+    );
+    assert.equal(ctx.evidenceSaveFailed, true);
+    await updateFailureEvidenceAfterCleanup(ctx, evidence);
+    assert.ok(ctx.failureArtifact);
+    assert.equal(
+      await reportFinalFailureEvidence(ctx.failureArtifact, (line) =>
+        output.push(line),
+      ),
+      true,
+    );
+    assert.equal(output.length, 1);
+    const payload = JSON.parse(
+      output[0].replace("SMOKE_FAILURE_ARTIFACT_JSON ", ""),
+    );
+    assert.equal(payload.outcome, "SCENARIO_FAIL");
+    assert.equal(payload.cleanup, "PASS");
+  } finally {
+    console.error = originalError;
+    if (ctx.failureArtifact)
+      await rm(dirname(ctx.failureArtifact), { recursive: true, force: true });
   }
 });
 
