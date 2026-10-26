@@ -40,12 +40,13 @@ an ordinary Git primary workspace.
 
 For a non-Git workspace, explicitly running `/manager` or choosing
 **Project Manager > Start Manager mode** asks you to confirm the exact
-directory. Confirmation creates a local repository with an empty initial
-commit; existing files are not committed. Manager activation then uses its
-normal verification and eligibility checks. Declining or a failed
-initialization leaves the session outside Manager mode. Automatic Manager
-startup and restoration remain non-mutating:
-they do not initialize Git or request this confirmation. Create the repository
+directory by default. The global **Skip Manager Git setup confirmation**
+setting disables that prompt for explicit activation. Initialization creates a
+local repository with an empty initial commit; existing files are not
+committed. Manager activation then uses its normal verification and eligibility
+checks. Declining or a failed initialization leaves the session outside
+Manager mode. Automatic Manager startup and restoration remain non-mutating:
+they never initialize Git or request this confirmation. Create the repository
 through an explicit activation before relying on Manager for a non-Git
 workspace.
 

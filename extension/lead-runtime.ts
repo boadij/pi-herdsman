@@ -15617,15 +15617,26 @@ export function createLeadRoleTransitions(
             directory = parent;
           }
         };
-        // Check Git and its configuration without exposing config values before any init.
-        await runGit(["--version"]);
-        await runGit(["config", "--list", "--null"]);
         let root = await probeRoot();
-        if (!root && hasRepositoryMetadata())
-          throw new Error(
-            "Refusing to initialize: existing Git metadata is invalid or conflicting",
-          );
         if (!root) {
+          const bare = await host.pi.exec(
+            "git",
+            ["rev-parse", "--is-bare-repository"],
+            { cwd: target, signal: ctx.signal, timeout: 30_000 },
+          );
+          if (bare.killed)
+            throw new Error("Git repository type inspection failed");
+          const bareStatus = String(bare.stdout ?? "").trim();
+          if (bare.code === 0 && bareStatus === "true")
+            throw new Error(
+              "Cannot initialize Manager Git inside an existing bare repository",
+            );
+          if (bare.code === 0 && bareStatus !== "false")
+            throw new Error("Git repository type inspection failed");
+          if (hasRepositoryMetadata())
+            throw new Error(
+              "Refusing to initialize: existing Git metadata is invalid or conflicting",
+            );
           await runGit(["init"]);
           root = await probeRoot();
         }
@@ -15633,12 +15644,10 @@ export function createLeadRoleTransitions(
           throw new Error(
             "Refusing to initialize inside an enclosing Git repository",
           );
-        if (!root) {
-          await runGit(["init"]);
-          root = await probeRoot();
-        }
         if (!root)
-          throw new Error("Git initialization did not create a repository");
+          throw new Error(
+            "Git initialization could not verify its working-tree root",
+          );
         const actualRoot = realpathSync(
           await runGit(["rev-parse", "--show-toplevel"]),
         );

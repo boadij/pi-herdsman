@@ -4768,7 +4768,7 @@ function managerBootstrapHarness(
     omitPaneCwd?: boolean;
     assertLockDuringFinalScope?: boolean;
     initializeBeforeProbe?: boolean;
-    failGitPreflight?: boolean;
+    failRootRediscovery?: boolean;
   } = {},
 ) {
   setLeadEnvironment();
@@ -4803,6 +4803,7 @@ function managerBootstrapHarness(
   let finalScopeLockVerified = false;
   const gitRuns: ManagerBootstrapGitRun[] = [];
   let initializedBeforeProbe = false;
+  let initCount = 0;
   const invocations: Array<{ command: string; args: string[]; cwd?: string }> =
     [];
   const runGit = (args: string[], gitCwd: string = cwd) => {
@@ -4839,8 +4840,13 @@ function managerBootstrapHarness(
     exec: (command, args, execOptions) => {
       invocations.push({ command, args, cwd: execOptions?.cwd });
       if (command === "git") {
-        if (options.failGitPreflight && args[0] === "--version")
-          return { stdout: "", stderr: "unavailable", code: 1 };
+        if (
+          options.failRootRediscovery &&
+          args[0] === "rev-parse" &&
+          args.includes("--show-toplevel") &&
+          initCount > 0
+        )
+          return { stdout: "", stderr: "", code: 1 };
         if (
           options.initializeBeforeProbe &&
           args[0] === "rev-parse" &&
@@ -4878,6 +4884,7 @@ function managerBootstrapHarness(
           return { stdout: "", stderr: "simulated commit failure", code: 1 };
         }
         const result = runGit(args, execOptions?.cwd ?? cwd);
+        if (args[0] === "init") initCount++;
         if (args[0] === "init" && options.stageAfterInit) {
           const staged = runGit(
             ["add", options.stageAfterInit],
@@ -4974,6 +4981,49 @@ function managerBootstrapHarness(
     notices,
     invocations,
     git: (args: string[], gitCwd: string = cwd) => runGit(args, gitCwd),
+    gitDiagnostic: () => {
+      const allowed = new Set([
+        "rev-parse",
+        "--show-toplevel",
+        "--is-bare-repository",
+        "--verify",
+        "--quiet",
+        "HEAD^{commit}",
+        "HEAD",
+        "--git-common-dir",
+        "--path-format=absolute",
+        "init",
+        "diff",
+        "--cached",
+        "--quiet",
+        "ls-files",
+        "--stage",
+        "commit",
+        "--only",
+        "--allow-empty",
+        "-m",
+        "chore: initialize repository",
+        "rev-list",
+        "--parents",
+        "-n",
+        "1",
+        "mktree",
+        "HEAD^{tree}",
+        "add",
+      ]);
+      return JSON.stringify(
+        gitRuns.map(({ args, status, signal, killed, spawnError }) => ({
+          args:
+            args[0] === "config"
+              ? ["config", "<args redacted>"]
+              : args.map((arg) => (allowed.has(arg) ? arg : "<omitted>")),
+          status,
+          ...(signal ? { signal } : {}),
+          killed,
+          ...(spawnError ? { spawnError: spawnError.code } : {}),
+        })),
+      );
+    },
     get finalScopeLockVerified() {
       return finalScopeLockVerified;
     },
@@ -5026,6 +5076,41 @@ function managerBootstrapLockPath(cwd: string): string {
 }
 
 managerBootstrapTest(
+  "Manager bootstrap Git diagnostics redact config arguments but retain failed operation status",
+  (t) => {
+    const cwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-bootstrap-diagnostic-"),
+    );
+    const harness = managerBootstrapHarness(cwd);
+    t.after(harness.cleanup);
+    assert.equal(harness.git(["init"]).status, 0);
+    assert.equal(
+      harness.git(["config", "user.name", "Synthetic User"]).status,
+      0,
+    );
+    assert.equal(
+      harness.git(["config", "user.email", "synthetic@example.invalid"]).status,
+      0,
+    );
+    assert.notEqual(
+      harness.git(["rev-parse", "--verify", "missing-ref"]).status,
+      0,
+    );
+
+    const diagnostic = harness.gitDiagnostic();
+    assert.match(diagnostic, /\["config","<args redacted>"\]/);
+    assert.doesNotMatch(
+      diagnostic,
+      /user\.name|user\.email|Synthetic User|synthetic@example\.invalid/,
+    );
+    assert.match(
+      diagnostic,
+      /"args":\["rev-parse","--verify","<omitted>"\],"status":128/,
+    );
+  },
+);
+
+managerBootstrapTest(
   "Manager explicit bootstrap confirms, checks Herdr through Pi, and creates one empty commit",
   async (t) => {
     const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-"));
@@ -5034,7 +5119,13 @@ managerBootstrapTest(
     const harness = managerBootstrapHarness(cwd);
     const git = (args: string[]) => {
       const result = harness.git(args);
-      assert.equal(result.status, 0, `git ${args[0]} exited ${result.status}`);
+      assert.equal(
+        result.status,
+        0,
+        result.status === 0
+          ? undefined
+          : `git ${args[0]} exited ${result.status}: ${harness.gitDiagnostic()}`,
+      );
       return result.stdout.trim();
     };
     t.after(harness.cleanup);
@@ -5169,6 +5260,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
   },
 );
@@ -5295,6 +5387,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
     assert.equal(
       harness.git(["rev-parse", "HEAD^{tree}"]).stdout.trim(),
@@ -5333,6 +5426,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
@@ -5365,6 +5459,7 @@ managerBootstrapTest(
     assert.equal(
       enabled.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      enabled.gitDiagnostic(),
     );
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
@@ -5469,6 +5564,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
     assert.equal(
       harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout.trim(),
@@ -5488,30 +5584,8 @@ managerBootstrapTest(
 );
 
 managerBootstrapTest(
-  "Manager bootstrap fails closed on Git preflight failure and corrupt or enclosing metadata",
+  "Manager bootstrap rejects corrupt, bare, and enclosing repository metadata",
   async (t) => {
-    const preflightCwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-preflight-"),
-    );
-    const preflight = managerBootstrapHarness(preflightCwd, {
-      failGitPreflight: true,
-    });
-    t.after(preflight.cleanup);
-    await preflight.pi.events.get("session_start")![0](
-      undefined,
-      preflight.context,
-    );
-    await preflight.pi.commandOptions
-      .get("manager")!
-      .handler("", preflight.context);
-    assert.equal(
-      preflight.invocations.some(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ),
-      false,
-    );
-    assert.equal(realFs.existsSync(join(preflightCwd, ".git")), false);
-
     const corruptCwd = realFs.mkdtempSync(
       join(tmpdir(), "manager-corrupt-git-"),
     );
@@ -5531,6 +5605,23 @@ managerBootstrapTest(
       ),
       false,
     );
+
+    const bareCwd = realFs.mkdtempSync(join(tmpdir(), "manager-bare-git-"));
+    assert.equal(
+      spawnSync("git", ["init", "--bare"], { cwd: bareCwd }).status,
+      0,
+    );
+    const bare = managerBootstrapHarness(bareCwd);
+    t.after(bare.cleanup);
+    await bare.pi.events.get("session_start")![0](undefined, bare.context);
+    await bare.pi.commandOptions.get("manager")!.handler("", bare.context);
+    assert.equal(
+      bare.invocations.some(
+        ({ command, args }) => command === "git" && args[0] === "init",
+      ),
+      false,
+    );
+    assert.equal(realFs.existsSync(join(bareCwd, ".git")), false);
 
     const parent = realFs.mkdtempSync(join(tmpdir(), "manager-enclosing-git-"));
     assert.equal(spawnSync("git", ["init"], { cwd: parent }).status, 0);
@@ -5552,6 +5643,35 @@ managerBootstrapTest(
       false,
     );
     realFs.rmSync(parent, { recursive: true, force: true });
+  },
+);
+
+managerBootstrapTest(
+  "Manager bootstrap does not repeat init when root rediscovery fails",
+  async (t) => {
+    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-root-rediscovery-"));
+    const harness = managerBootstrapHarness(cwd, { failRootRediscovery: true });
+    t.after(harness.cleanup);
+    await harness.pi.events.get("session_start")![0](
+      undefined,
+      harness.context,
+    );
+    await harness.pi.commandOptions
+      .get("manager")!
+      .handler("", harness.context);
+    assert.equal(
+      harness.invocations.filter(
+        ({ command, args }) => command === "git" && args[0] === "init",
+      ).length,
+      1,
+      harness.gitDiagnostic(),
+    );
+    assert.equal(realFs.existsSync(join(cwd, ".git")), true);
+    assert.ok(
+      harness.notices.some((notice) =>
+        /verify its working-tree root/.test(notice),
+      ),
+    );
   },
 );
 
@@ -5583,6 +5703,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
     assert.equal(
       harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout,
@@ -5645,6 +5766,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
   },
 );
@@ -5687,6 +5809,7 @@ managerBootstrapTest(
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
+      harness.gitDiagnostic(),
     );
   },
 );
