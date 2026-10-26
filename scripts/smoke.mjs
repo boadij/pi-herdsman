@@ -300,9 +300,27 @@ export function formatSmokeFailure(error, stage) {
     typeof error?.message === "string" ? error.message : String(error);
   if (error?.code === "SMOKE_STALLED" || error?.code === "SMOKE_TIMEOUT") {
     const smoke = error.smoke ?? {};
+    if (smoke.stage === "manager-bootstrap-correlated-child")
+      return `${name}: ${message}\nstage: ${smoke.stage}\nkind: ${error.code === "SMOKE_STALLED" ? "STALLED" : "TIMEOUT"}\nelapsed: ${smoke.elapsedMs ?? "unknown"}ms\ninactive: ${smoke.inactiveMs ?? "unknown"}ms\nmanager bootstrap delegation: ${JSON.stringify(managerBootstrapDelegationProjection(smoke.lastProgress))}`;
     return `${name}: ${message}\nstage: ${smoke.stage ?? stage ?? "not recorded"}\nkind: ${error.code === "SMOKE_STALLED" ? "STALLED" : "TIMEOUT"}\nelapsed: ${smoke.elapsedMs ?? "unknown"}ms\ninactive: ${smoke.inactiveMs ?? "unknown"}ms\nlast progress: ${JSON.stringify(smoke.lastProgress ?? null)}\nlast evidence: ${JSON.stringify(smoke.lastEvidence ?? null)}\nlast observation error: ${smoke.lastObservationError ?? "none"}`;
   }
   return `stage: ${stage ?? "not recorded"}\nerror: ${name}: ${message}`;
+}
+
+export function managerBootstrapDelegationProjection(progress = {}) {
+  return {
+    expectedBranchDelegateCalls:
+      Number.isSafeInteger(progress.expectedBranchDelegateCalls) &&
+      progress.expectedBranchDelegateCalls >= 0
+        ? Math.min(progress.expectedBranchDelegateCalls, 100)
+        : 0,
+    resultState: ["absent", "error", "success"].includes(progress.resultState)
+      ? progress.resultState
+      : "absent",
+    correlatedChild: progress.correlatedChild === true,
+    childSessionSaved: progress.childSessionSaved === true,
+    linkedWorktreeObserved: progress.linkedWorktreeObserved === true,
+  };
 }
 
 function markStage(ctx, stage) {
@@ -6842,7 +6860,24 @@ async function runManagerBootstrapSmoke(ctx) {
         throw new Error(
           "Manager bootstrap called delegate_project more than once",
         );
-      if (snapshot) assertNoFailedProjectDelegation(snapshot.contents, branch);
+      const expectedCalls = delegateCalls.filter(
+        (call) => call.arguments?.branch === branch,
+      );
+      ctx.managerBootstrapDelegationProgress = {
+        expectedBranchDelegateCalls: expectedCalls.length,
+        resultState: results.length ? "success" : "absent",
+        correlatedChild: false,
+        childSessionSaved: false,
+        linkedWorktreeObserved: false,
+      };
+      if (snapshot) {
+        try {
+          assertNoFailedProjectDelegation(snapshot.contents, branch);
+        } catch (error) {
+          ctx.managerBootstrapDelegationProgress.resultState = "error";
+          throw error;
+        }
+      }
       if (results.length > 1)
         throw new Error(
           "Manager bootstrap made more than one project delegation",
@@ -6851,7 +6886,7 @@ async function runManagerBootstrapSmoke(ctx) {
       if (!result)
         return {
           done: false,
-          progress: { successfulDelegateResults: 0 },
+          progress: ctx.managerBootstrapDelegationProgress,
           evidence: snapshot ? summarizeSession(snapshot.contents) : null,
         };
       assert.equal(result.branch, branch);
@@ -6888,12 +6923,17 @@ async function runManagerBootstrapSmoke(ctx) {
         !!child &&
         childEvidence.expectedSessionFile?.sessionIdMatches === true &&
         !!worktree;
+      Object.assign(ctx.managerBootstrapDelegationProgress, {
+        correlatedChild: !!child,
+        childSessionSaved:
+          childEvidence.expectedSessionFile?.sessionIdMatches === true,
+        linkedWorktreeObserved: !!worktree,
+      });
       return {
         done,
         value: { result, child, childEvidence, worktree },
         progress: {
-          successfulDelegateResults: results.length,
-          delegateCalls: delegateCalls.length,
+          ...ctx.managerBootstrapDelegationProgress,
           correlatedChild: !!child,
           childSessionSaved:
             childEvidence.expectedSessionFile?.sessionIdMatches === true,
@@ -10591,6 +10631,14 @@ export function sanitizedFailureEvidence(
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
+    ...(ctx.scenario === "manager-bootstrap" &&
+    ctx.managerBootstrapDelegationProgress
+      ? {
+          managerBootstrapDelegation: managerBootstrapDelegationProjection(
+            ctx.managerBootstrapDelegationProgress,
+          ),
+        }
+      : {}),
     ...(diagnostics
       ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) }
       : {}),
@@ -10655,6 +10703,7 @@ export async function preserveFailureEvidence(evidence, path) {
   const directory = await mkdtemp(
     join(tmpdir(), "pi-herdsman-smoke-evidence-"),
   );
+  evidence.runReference = basename(directory);
   const evidencePath = join(directory, "result.json");
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
     flag: "wx",
@@ -10698,7 +10747,9 @@ async function main() {
         firstRequestVerified: false,
         cleanup: "NOT_REQUIRED",
       });
-      console.error(`failure evidence: ${artifact}`);
+      console.error(
+        `failure evidence reference: ${basename(dirname(artifact))}/result.json (under system temp directory)`,
+      );
     } catch (evidenceError) {
       console.error(
         `failure evidence: could not save: ${evidenceError.message}`,

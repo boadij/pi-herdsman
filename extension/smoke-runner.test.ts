@@ -16,7 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
@@ -67,6 +67,7 @@ import {
   parseHerdrOutput,
   parseSmokeArgs,
   formatSmokeFailure,
+  managerBootstrapDelegationProjection,
   herdrErrorCode,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
@@ -132,6 +133,94 @@ import {
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
 } from "../scripts/smoke.mjs";
+
+test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
+  const cases = [
+    [
+      "no call",
+      { expectedBranchDelegateCalls: 0, resultState: "absent" },
+      "absent",
+    ],
+    [
+      "call error",
+      { expectedBranchDelegateCalls: 1, resultState: "error" },
+      "error",
+    ],
+    [
+      "missing child",
+      { expectedBranchDelegateCalls: 1, resultState: "success" },
+      "success",
+    ],
+    [
+      "missing worktree",
+      {
+        expectedBranchDelegateCalls: 1,
+        resultState: "success",
+        correlatedChild: true,
+        childSessionSaved: true,
+      },
+      "success",
+    ],
+  ];
+  for (const [name, input, resultState] of cases) {
+    const result = managerBootstrapDelegationProjection(input);
+    assert.equal(result.resultState, resultState, name);
+    assert.equal(
+      result.expectedBranchDelegateCalls,
+      input.expectedBranchDelegateCalls,
+      name,
+    );
+    assert.equal(
+      result.linkedWorktreeObserved,
+      input.linkedWorktreeObserved === true,
+      name,
+    );
+    assert.deepEqual(Object.keys(result).sort(), [
+      "childSessionSaved",
+      "correlatedChild",
+      "expectedBranchDelegateCalls",
+      "linkedWorktreeObserved",
+      "resultState",
+    ]);
+  }
+});
+
+test("manager bootstrap timeout omits raw session evidence", () => {
+  const output = formatSmokeFailure({
+    name: "Error",
+    message: "timed out",
+    code: "SMOKE_TIMEOUT",
+    smoke: {
+      stage: "manager-bootstrap-correlated-child",
+      lastProgress: { expectedBranchDelegateCalls: 1, resultState: "success" },
+      lastEvidence: "PRIVATE SESSION CONTENT",
+      lastObservationError: "PRIVATE ERROR",
+    },
+  });
+  assert.match(output, /resultState.*success/);
+  assert.doesNotMatch(output, /PRIVATE/);
+});
+
+test("manager bootstrap run reference resolves to its exact retained artifact", async () => {
+  const evidence = { scenario: "manager-bootstrap", safe: true };
+  const artifact = await preserveFailureEvidence(evidence);
+  const reference = `${evidence.runReference}/result.json`;
+  assert.match(reference, /^pi-herdsman-smoke-evidence-[^/]+\/result\.json$/);
+  assert.equal(isAbsolute(reference), false);
+  const ownedDirectory = join(tmpdir(), evidence.runReference);
+  const [directoryInfo, realDirectory, artifactPath, retained] =
+    await Promise.all([
+      stat(ownedDirectory),
+      realpath(ownedDirectory),
+      realpath(artifact),
+      readFile(join(tmpdir(), reference), "utf8"),
+    ]);
+  assert.ok(directoryInfo.isDirectory());
+  assert.equal(artifactPath, join(realDirectory, "result.json"));
+  assert.deepEqual(JSON.parse(retained), evidence);
+  assert.equal(reference.includes(tmpdir()), false);
+  await rm(ownedDirectory, { recursive: true });
+});
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
 
 test("package read identity accepts equivalent paths and rejects other files", () => {
