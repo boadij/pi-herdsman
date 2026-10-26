@@ -249,9 +249,12 @@ active Pi branch. For a foreign owner, persistence requires owner shutdown,
 quiescence/exclusion, and history revalidation; if that boundary cannot be
 established, cleanup may succeed without continuation proof. Partial, unknown,
 or conflicting provenance fails closed. The operation is not crash-atomic, so a
-crash between cleanup and receipt persistence can leave no proof. A Manager
-cannot directly continue a Lead-owned Agent; the Lead must resume and remain
-the authorized direct owner.
+crash between cleanup and receipt persistence can leave no proof. A root
+controller may access a recursively owned descendant only when complete durable
+ancestry is proven, with matching active-branch acceptance or closure evidence
+at every owner edge. This does not give a Manager supervising a Lead ownership
+of the Lead's Agents. Do not infer nested continuation eligibility from
+physical cleanup alone; unknown or partial ancestry remains ineligible.
 
 ## Historical session failure
 

@@ -132,9 +132,12 @@ automatically restarts unfinished work. Missing acceptance, partial/unknown
 closure, conflicting provenance, or unavailable current project authorization
 fails closed. Receipt persistence for a foreign owner requires shutdown,
 quiescence/exclusion, and history revalidation, and may be unavailable even
-when cleanup succeeds. Persistence is not crash-atomic. Continuation remains
-limited to the direct owner: a Manager cannot directly continue a Lead-owned
-Agent.
+when cleanup succeeds. Persistence is not crash-atomic. A root controller may
+access a recursively owned descendant only when complete durable ancestry is
+proven, with matching active-branch acceptance or closure evidence at every
+owner edge. This does not give a Manager supervising a Lead ownership of the
+Lead's Agents; physical cleanup alone does not prove nested continuation
+eligibility.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
 to itself.

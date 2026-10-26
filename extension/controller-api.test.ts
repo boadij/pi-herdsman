@@ -5050,8 +5050,7 @@ async function runManagerStartupScenario(
             );
             assert.ok(
               savedLeadEntries.some(
-                (entry) =>
-                  entry.customType === "pi-herdsman-lead-execution",
+                (entry) => entry.customType === "pi-herdsman-lead-execution",
               ),
             );
           }
@@ -5136,25 +5135,21 @@ async function runManagerStartupScenario(
                 entry.customType === "pi-herdsman-agent-closed-assignment",
             );
             assert.equal(proofs.length, 1);
-            assert.deepEqual(
-              (proofs[0] as any).data.proof,
-              {
-                owner_session_id: staleId,
-                session_id: researcher.piSessionId,
-                session_path: researcherSessionPath,
-                run_id: researcher.runId,
-                request_id: acceptedRequestId,
-                agent: researcher.agentLabel,
-                definition: "scout",
-                pane_id: researcher.paneId,
-                workspace_id: researcher.workspaceId,
-              },
-            );
+            assert.deepEqual((proofs[0] as any).data.proof, {
+              owner_session_id: staleId,
+              session_id: researcher.piSessionId,
+              session_path: researcherSessionPath,
+              run_id: researcher.runId,
+              request_id: acceptedRequestId,
+              agent: researcher.agentLabel,
+              definition: "scout",
+              pane_id: researcher.paneId,
+              workspace_id: researcher.workspaceId,
+            });
             const ownerContext = fakeContext(history);
             ownerContext.sessionManager.getSessionId = () => staleId;
             assert.equal(
-              resolveAssignmentSession(ownerContext, researcher.piSessionId)
-                .id,
+              resolveAssignmentSession(ownerContext, researcher.piSessionId).id,
               researcher.piSessionId,
               "the stopped Lead's exact history authorizes its Agent continuation",
             );
@@ -5178,18 +5173,21 @@ async function runManagerStartupScenario(
               ctx,
             );
             assert.equal(managerAttempt.details.ok, false);
-            assert.match(managerAttempt.details.error.message, /ownership tree/);
+            assert.match(
+              managerAttempt.details.error.message,
+              /ownership tree/,
+            );
 
             assert.equal(
-              nativeSessions.get(LEAD_SESSION_ID)?.entries?.some(
-                (entry: any) =>
-                  entry.customType ===
-                  "pi-herdsman-agent-closed-assignment",
-              ) ?? false,
+              nativeSessions
+                .get(LEAD_SESSION_ID)
+                ?.entries?.some(
+                  (entry: any) =>
+                    entry.customType === "pi-herdsman-agent-closed-assignment",
+                ) ?? false,
               false,
               "closure proof belongs only to the exact Lead session",
             );
-
           }
           realFs.rmSync(researcherSessionPath, { force: true });
           assert.ok(readAgentState(agentMailboxPath(WORKSPACE, "researcher")));
@@ -8340,7 +8338,13 @@ test("nested continuation proof stays on the nested owner's active branch", () =
     id: parentId,
     path: parentPath,
     cwd: testTmpRoot,
-    entries: [],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: parentId, definition: "worker", label: "worker" },
+      },
+    ],
   };
   nativeSessions.clear();
   nativeSessions.set(parentId, parent);
@@ -8380,11 +8384,9 @@ test("nested continuation proof stays on the nested owner's active branch", () =
     customType: "pi-herdsman-agent-closed-assignment",
     data: { version: 1, proof: closedAssignment },
   };
+  parent.entries = [parent.entries[0], accepted, stopped];
   const activeBranch: unknown[] = [];
-  const nestedContext = fakeContext(
-    [accepted, stopped],
-    activeBranch,
-  ) as any;
+  const nestedContext = fakeContext([accepted, stopped], activeBranch) as any;
   nestedContext.sessionManager.getSessionId = () => parentId;
   nestedContext.sessionManager.getSessionFile = () => parentPath;
   try {
@@ -8401,13 +8403,49 @@ test("nested continuation proof stays on the nested owner's active branch", () =
       "matching acceptance and closure on the nested owner's active branch authorize the exact child session",
     );
 
+    const rootRequestId = randomUUID();
     const rootHistory = [
-      ownershipResult(parentId, LEAD_SESSION_ID, { path: parentPath }),
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "delegate_agent",
+          details: {
+            ok: true,
+            owner_session_id: LEAD_SESSION_ID,
+            session_id: parentId,
+            session_path: parentPath,
+            agent: "worker",
+            definition: "worker",
+            request_id: rootRequestId,
+          },
+        },
+      },
+      {
+        type: "custom_message",
+        customType: "pi-herdsman-agent-result",
+        content: "",
+        display: true,
+        details: {
+          piSessionId: parentId,
+          piSessionFile: parentPath,
+          ownerSessionId: LEAD_SESSION_ID,
+          runId: randomUUID(),
+          requestId: rootRequestId,
+          agentLabel: "worker",
+          agentDefinition: "worker",
+          status: "completed",
+        },
+      },
     ];
+    const recursiveRoot = fakeContext(rootHistory) as any;
+    recursiveRoot.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+    assert.equal(resolveAssignmentSession(recursiveRoot, childId).id, childId);
+    const unrelated = fakeContext(rootHistory) as any;
+    unrelated.sessionManager.getSessionId = () => randomUUID();
     assert.throws(
-      () => resolveAssignmentSession(fakeContext(rootHistory), childId),
+      () => resolveAssignmentSession(unrelated, childId),
       /ownership tree/,
-      "the Lead retains only its direct parent edge and receives no nested child proof",
     );
   } finally {
     nativeSessions.clear();

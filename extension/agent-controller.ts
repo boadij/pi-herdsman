@@ -988,7 +988,7 @@ type ClosedAssignmentProof = {
 };
 const STOP_CLOSURE_ENTRY = "pi-herdsman-agent-closed-assignment";
 
-function acceptedCloseProof(
+export function acceptedCloseProof(
   entries: readonly unknown[],
   ownerSessionId: string,
   closed: { state: ManagedAgentState; definition: string },
@@ -1009,35 +1009,12 @@ function acceptedCloseProof(
   )
     return undefined;
   const requestId = state.activeRequestId ?? state.resultError?.requestId;
-  const accepted = acceptedAssignmentReceipts(entries, ownerSessionId, child);
-  const exactAccepted = entries.some((entry: any) => {
-    const message = entry?.message;
-    const details = message?.details;
-    return (
-      entry?.type === "message" &&
-      message?.role === "toolResult" &&
-      [
-        "delegate_agent",
-        "continue_agent",
-        "agent_delegate",
-        "agent_continue",
-      ].includes(message.toolName) &&
-      message.isError !== true &&
-      details?.ok === true &&
-      details.owner_session_id === ownerSessionId &&
-      details.session_id === child.id &&
-      details.session_path === child.path &&
-      details.request_id === requestId &&
-      details.agent === child.label &&
-      details.definition === child.definition
-    );
-  });
-  if (
-    !validId(requestId ?? "") ||
-    (!accepted.some(({ requestId: acceptedId }) => acceptedId === requestId) &&
-      !exactAccepted)
-  )
-    return undefined;
+  const accepted = acceptedAssignmentReceipts(
+    entries,
+    ownerSessionId,
+    child,
+  ).filter(({ requestId: acceptedId }) => acceptedId === requestId);
+  if (!validId(requestId ?? "") || accepted.length !== 1) return undefined;
   return {
     owner_session_id: ownerSessionId,
     session_id: child.id,
@@ -1175,7 +1152,8 @@ function acceptedAssignmentReceipts(
     )
       return [];
     try {
-      return canonicalSessionPath(details.session_path) === child.path
+      return canonicalSessionPath(details.session_path) ===
+        canonicalSessionPath(child.path)
         ? [{ index, requestId: details.request_id }]
         : [];
     } catch {
@@ -3567,6 +3545,11 @@ export type AgentControllerOptions = {
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): void;
+  persistClosedDescendants?(
+    ctx: ExtensionContext,
+    closures: { state: ManagedAgentState; definition: string }[],
+    selected: ManagedAgentState,
+  ): Promise<string[]>;
 };
 
 type ManagedAgentBootstrapPreparation = {
@@ -4933,7 +4916,9 @@ export function createAgentController(
         "close",
       );
     const warnings = new Map<string, string>();
+    const closed: { state: ManagedAgentState; definition: string }[] = [];
     const report: StopReport = {
+      onClosed: (outcome) => closed.push(outcome),
       onCleanupFailure: (label, message) => warnings.set(label, message),
     };
     try {
@@ -4956,8 +4941,28 @@ export function createAgentController(
         options.appendError(context, "pi_herdsman_cleanup_error", failure);
       throw failure;
     }
+    const descendants = closed.filter(
+      ({ state: closedState }) => !sameIdentity(closedState, state),
+    );
+    if (descendants.length && options.persistClosedDescendants) {
+      try {
+        for (const warning of await options.persistClosedDescendants(
+          context,
+          descendants,
+          state,
+        ))
+          warnings.set("descendant continuation", warning);
+      } catch {
+        warnings.set(
+          "descendant continuation",
+          "Descendant continuation proof could not be safely persisted",
+        );
+      }
+    }
     const ownerSessionId = context.sessionManager.getSessionId();
-    const closedAssignment = !warnings.size
+    const closedAssignment = ![...warnings.keys()].some(
+      (key) => key !== "descendant continuation",
+    )
       ? acceptedCloseProof(
           context.sessionManager.getEntries(),
           ownerSessionId,

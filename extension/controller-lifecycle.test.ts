@@ -362,6 +362,8 @@ test("parent delegates two same-definition children with exact ownership", async
   };
   (context as any).thinkingLevel = "high";
   const mailboxes: string[] = [];
+  const childSessionIds: string[] = [];
+  const childSessionFiles: string[] = [];
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
@@ -510,6 +512,16 @@ test("parent delegates two same-definition children with exact ownership", async
       3,
     );
     assert.equal(lifecycle.createdTabs(), 0);
+    for (const state of mailboxes.map((mailbox) => readAgentState(mailbox)!)) {
+      childSessionIds.push(state.piSessionId);
+      childSessionFiles.push(state.piSessionFile!);
+      writeValidPiSessionFile({
+        id: state.piSessionId,
+        path: state.piSessionFile!,
+        cwd: state.cwd,
+      });
+      registerNativeAgentSession(state);
+    }
     for (const label of labels) {
       const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
@@ -546,6 +558,9 @@ test("parent delegates two same-definition children with exact ownership", async
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+    for (const sessionId of childSessionIds) nativeSessions.delete(sessionId);
+    for (const sessionFile of childSessionFiles)
+      realFs.rmSync(sessionFile, { force: true });
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
   }
 });
