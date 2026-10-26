@@ -4795,6 +4795,30 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
       "branch",
       "expected_head",
     ]);
+    for (const [name, terms] of [
+      ["resume_project", ["already-running", "without creating a duplicate"]],
+      [
+        "remove_worktree",
+        ["owned Agents", "Pending human approval performs no cleanup"],
+      ],
+      [
+        "merge_project",
+        [
+          "integration and cleanup can complete separately",
+          "If a later step fails after execution stops, it is not automatically restarted",
+        ],
+      ],
+    ] as const) {
+      const description = pi.tools.find(
+        (tool) => tool.name === name,
+      )?.description;
+      for (const term of terms)
+        assert.ok(description?.includes(term), `${name}: ${term}`);
+    }
+    const closeDescription = pi.tools.find(
+      (tool) => tool.name === "close_agent",
+    )?.description;
+    assert.match(closeDescription ?? "", /owned descendants, child-first/);
     await pi.commandOptions.get("manager").handler("leave", context);
     const restoredEvent = promptEvent();
     await pi.events.get("before_agent_start")![0](restoredEvent, context);
