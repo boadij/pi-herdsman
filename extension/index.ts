@@ -2163,7 +2163,7 @@ function registerExtensionImpl(
           name: "resume_project",
           label: "resume project",
           description:
-            "Resume existing unresolved project work by its exact Git branch.",
+            "Reuse an already-running Lead for the exact branch; otherwise resume its existing assignment without creating a duplicate.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (
@@ -2190,7 +2190,7 @@ function registerExtensionImpl(
           name: "remove_worktree",
           label: "remove worktree",
           description:
-            "Remove an explicitly requested assigned project's linked worktree. When project preauthorization is enabled, execute the guarded removal. Otherwise create an actionable human approval request and return promptly. Do not repeat or poll a pending request.",
+            "Remove an explicitly requested assigned project's linked worktree. After authorization, automatically stop any running assigned Lead and its owned Agents before removal; no separate stop call is needed. The Git branch and Pi conversation are preserved. Pending human approval performs no cleanup. When project preauthorization is enabled, execute the guarded removal. Otherwise create an actionable human approval request and return promptly. Do not repeat or poll a pending request.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (
@@ -2217,7 +2217,7 @@ function registerExtensionImpl(
           name: "merge_project",
           label: "merge project",
           description:
-            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may finalize and remove the source checkout when authorized.",
+            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may stop running managed execution before integration. If a later step fails after execution stops, it is not automatically restarted. Verified integration triggers guarded cleanup, but integration and cleanup can complete separately; do not treat integration alone as full finalization.",
           parameters: Type.Object(
             {
               branch: Type.String({

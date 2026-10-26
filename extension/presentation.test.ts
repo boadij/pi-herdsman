@@ -1758,6 +1758,187 @@ test("expanded staff project results show resolved branches and resume scope", (
   );
   assert.match(resumed, /branch: feat\/recovery/);
   assert.match(resumed, /task: Recover the existing project work/);
+
+  const alreadyRunning = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      { details: { ok: true, already_running: true, branch: "feat/recovery" } },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "resume" } },
+    ),
+  );
+  assert.match(alreadyRunning, /^project already running/m);
+});
+
+test("compact Manager lifecycle results distinguish project outcomes", () => {
+  const render = (action: string, details: Record<string, unknown>) =>
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        action,
+        { details },
+        {},
+        presentationTheme,
+        { args: { branch: "feat/recovery" } },
+      ),
+    );
+  assert.match(
+    render("delegate", { ok: true, branch: "feat/recovery" }),
+    /project started · feat\/recovery/,
+  );
+  assert.match(
+    render("resume", {
+      ok: true,
+      branch: "feat/recovery",
+      already_running: true,
+    }),
+    /project already running · feat\/recovery/,
+  );
+  assert.match(
+    render("resume", { ok: true, branch: "feat/recovery" }),
+    /project resumed · feat\/recovery/,
+  );
+  assert.match(
+    render("stop", { ok: true, branch: "feat/recovery" }),
+    /Lead stopped · feat\/recovery preserved/,
+  );
+});
+
+test("merge presentation requires cleanup facts for complete success", () => {
+  const render = (details: Record<string, unknown>, expanded = false) =>
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        "merge",
+        { details },
+        { expanded },
+        presentationTheme,
+        { args: { branch: "feat/recovery" } },
+      ),
+    );
+  assert.match(
+    render({
+      ok: true,
+      status: "complete",
+      integrated: true,
+      checkout_removed: true,
+      assignment_retired: true,
+    }),
+    /integrated feat\/recovery · checkout removed · assignment retired/,
+  );
+  assert.match(
+    render({
+      ok: true,
+      status: "complete",
+      integrated: true,
+      checkout_removed: false,
+      assignment_retired: false,
+    }),
+    /merge incomplete/,
+  );
+  assert.match(
+    render({
+      ok: true,
+      status: "complete",
+      integrated: false,
+      checkout_removed: true,
+      assignment_retired: true,
+    }),
+    /merge incomplete/,
+  );
+  const cleanupPending = {
+    content: [
+      {
+        type: "text",
+        text: "Integrated feat/recovery; automatic cleanup remains pending.",
+      },
+    ],
+    details: {
+      ok: false,
+      status: "cleanup_pending",
+      integrated: true,
+      checkout_removed: false,
+      assignment_retired: false,
+    },
+  };
+  const compact = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      cleanupPending,
+      {},
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(compact, /! integrated feat\/recovery · cleanup pending/);
+  assert.doesNotMatch(compact, /✓|success/);
+  const incomplete = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      {
+        ...cleanupPending,
+        details: { ...cleanupPending.details, integrated: false },
+      },
+      {},
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(incomplete, /! merge incomplete · feat\/recovery/);
+  assert.doesNotMatch(incomplete, /✓|success/);
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      cleanupPending,
+      { expanded: true },
+      presentationTheme,
+      {
+        args: { branch: "feat/recovery" },
+      },
+    ),
+  );
+  assert.match(
+    expanded,
+    /Integrated feat\/recovery; automatic cleanup remains pending\./,
+  );
+  assert.match(expanded, /status: cleanup_pending/);
+  assert.match(expanded, /integrated: true/);
+  assert.match(expanded, /checkout removed: false/);
+  assert.match(expanded, /assignment retired: false/);
+  const successfulExpanded = render(
+    {
+      ok: true,
+      status: "complete",
+      integrated: true,
+      checkout_removed: true,
+      assignment_retired: true,
+    },
+    true,
+  );
+  assert.match(successfulExpanded, /^merge project/m);
+  const failed = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "merge",
+      {
+        content: [{ type: "text", text: "Merge blocked: target changed" }],
+        details: { ok: false, status: "blocked", integrated: false },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(failed, /Merge blocked: target changed/);
+  assert.match(failed, /status: blocked/);
 });
 
 test("compact successful worktree removal reports the branch and retirement", () => {
