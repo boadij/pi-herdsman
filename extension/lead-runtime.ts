@@ -15501,9 +15501,31 @@ export function createLeadRoleTransitions(
           "/manager requires interactive confirmation to initialize Git",
         );
       const target = realpathSync(resolve(ctx.cwd));
-      const targetStat = statSync(target);
-      if (!targetStat.isDirectory())
+      const targetStat = statSync(target, { bigint: true });
+      if (
+        !targetStat.isDirectory() ||
+        targetStat.dev === 0n ||
+        targetStat.ino === 0n
+      )
         throw new Error("Manager Git target is not a directory");
+      const sameDirectory = (leftPath: string, rightPath: string): boolean => {
+        try {
+          const left = statSync(leftPath, { bigint: true });
+          const right = statSync(rightPath, { bigint: true });
+          return (
+            left.isDirectory() &&
+            right.isDirectory() &&
+            left.dev !== 0n &&
+            right.dev !== 0n &&
+            left.ino !== 0n &&
+            right.ino !== 0n &&
+            left.dev === right.dev &&
+            left.ino === right.ino
+          );
+        } catch {
+          return false;
+        }
+      };
       const verifyHerdrTarget = async () => {
         const pane = (
           await host.runHerdr(host.pi, ctx, ["pane", "get", paneId], {
@@ -15523,7 +15545,7 @@ export function createLeadRoleTransitions(
           workspace?.workspace_id !== workspaceId ||
           typeof paneCwd !== "string" ||
           !isAbsolute(paneCwd) ||
-          realpathSync(paneCwd) !== target
+          !sameDirectory(paneCwd, target)
         )
           throw new Error(
             "Manager activation cancelled because Herdr workspace identity does not match the approved directory",
@@ -15559,9 +15581,9 @@ export function createLeadRoleTransitions(
         host.identity.workspaceId !== workspaceId ||
         host.identity.paneId !== paneId ||
         host.identity.tabId !== tabId ||
-        realpathSync(resolve(ctx.cwd)) !== target ||
+        !sameDirectory(resolve(ctx.cwd), target) ||
         (() => {
-          const current = statSync(target);
+          const current = statSync(target, { bigint: true });
           return (
             current.dev !== targetStat.dev || current.ino !== targetStat.ino
           );
@@ -15640,7 +15662,7 @@ export function createLeadRoleTransitions(
           await runGit(["init"]);
           root = await probeRoot();
         }
-        if (root && realpathSync(root) !== target)
+        if (root && !sameDirectory(root, target))
           throw new Error(
             "Refusing to initialize inside an enclosing Git repository",
           );
@@ -15648,10 +15670,8 @@ export function createLeadRoleTransitions(
           throw new Error(
             "Git initialization could not verify its working-tree root",
           );
-        const actualRoot = realpathSync(
-          await runGit(["rev-parse", "--show-toplevel"]),
-        );
-        if (actualRoot !== target)
+        const actualRoot = await runGit(["rev-parse", "--show-toplevel"]);
+        if (!sameDirectory(actualRoot, target))
           throw new Error(
             "Git repository root does not match the approved directory",
           );
@@ -15712,18 +15732,16 @@ export function createLeadRoleTransitions(
             throw new Error("Initial Git commit is not empty");
         }
         await verifyHerdrTarget();
-        const gitCommonDir = realpathSync(
-          await runGit([
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-common-dir",
-          ]),
-        );
+        const gitCommonDir = await runGit([
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]);
         scope = await host.worktreeGroupScope(ctx, workspaceId);
         if (
           !scope ||
           scope.primaryWorkspaceId !== workspaceId ||
-          realpathSync(scope.repoKey) !== gitCommonDir
+          !sameDirectory(scope.repoKey, gitCommonDir)
         )
           throw new Error(
             "Manager activation could not verify the initialized repository in Herdr",
@@ -15736,6 +15754,11 @@ export function createLeadRoleTransitions(
       throw new Error("Manager workspace could not be verified in Herdr");
     if (scope.primaryWorkspaceId !== workspaceId)
       throw new Error("/manager is available only in the primary workspace");
+    if (ctx.sessionManager.getSessionId() !== sessionId)
+      throw new Error(
+        "Manager activation cancelled because the session changed",
+      );
+    host.activationGuard(sessionId, "Manager");
     const profile = host.prepareSupervisoryProfile(ctx, "manager");
     host.captureInheritedTools?.();
     const previousTools =
@@ -15744,7 +15767,7 @@ export function createLeadRoleTransitions(
     try {
       lease = host.claimManagerLease({
         build: host.build,
-        piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionId: sessionId,
         piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,

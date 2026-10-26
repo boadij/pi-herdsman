@@ -4767,6 +4767,7 @@ function managerBootstrapHarness(
     paneCwd?: unknown;
     omitPaneCwd?: boolean;
     assertLockDuringFinalScope?: boolean;
+    onFinalHerdrVerification?: () => void;
     initializeBeforeProbe?: boolean;
     failRootRediscovery?: boolean;
   } = {},
@@ -4801,6 +4802,7 @@ function managerBootstrapHarness(
     : cwd;
   let omitPaneCwd = options.omitPaneCwd ?? false;
   let finalScopeLockVerified = false;
+  let committedWorktreeListResponses = 0;
   const gitRuns: ManagerBootstrapGitRun[] = [];
   let initializedBeforeProbe = false;
   let initCount = 0;
@@ -4926,6 +4928,8 @@ function managerBootstrapHarness(
             cwd,
             encoding: "utf8",
           }).status === 0;
+        if (hasCommittedHead && ++committedWorktreeListResponses === 1)
+          options.onFinalHerdrVerification?.();
         if (hasCommittedHead && options.assertLockDuringFinalScope) {
           assert.equal(
             readLiveProcessLock(managerBootstrapLockPath(cwd)).pid,
@@ -5835,6 +5839,47 @@ managerBootstrapTest(
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "manager",
+    );
+  },
+);
+
+managerBootstrapTest(
+  "Manager bootstrap rejects a session change during final Herdr verification",
+  async (t) => {
+    const cwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-bootstrap-session-change-"),
+    );
+    const replacementSessionId = randomUUID();
+    let sessionChangedDuringFinalHerdrResponse = false;
+    let harness: ReturnType<typeof managerBootstrapHarness>;
+    harness = managerBootstrapHarness(cwd, {
+      onFinalHerdrVerification: () => {
+        sessionChangedDuringFinalHerdrResponse = true;
+        harness.context.sessionManager.getSessionId = () =>
+          replacementSessionId;
+      },
+    });
+    t.after(harness.cleanup);
+    await harness.pi.events.get("session_start")![0](
+      undefined,
+      harness.context,
+    );
+    await harness.pi.commandOptions
+      .get("manager")!
+      .handler("", harness.context);
+    assert.equal(sessionChangedDuringFinalHerdrResponse, true);
+    assert.ok(harness.notices.some((notice) => /session changed/.test(notice)));
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "lead",
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), replacementSessionId),
+      undefined,
+    );
+    assert.equal(
+      harness.pi.pi.getActiveTools().includes("delegate_project"),
+      false,
     );
   },
 );
