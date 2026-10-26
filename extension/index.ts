@@ -751,6 +751,7 @@ type StopReportCallbacks = {
 type TestProjectAssignmentLockHooks = {
   afterAcquired?: (repoKey: string, branch: string) => Promise<void>;
   afterOccupied?: (repoKey: string, branch: string) => Promise<void>;
+  onAuthorityWaitOccupied?: () => void;
   afterRequestPublished?: (
     mailboxPath: string,
     request: import("./mailbox.ts").RequestRecord,
@@ -1368,6 +1369,8 @@ function registerExtensionImpl(
     writeProjectMessage,
     afterProjectAssignmentLockAcquired: lockHooks?.afterAcquired,
     afterProjectAssignmentLockOccupied: lockHooks?.afterOccupied,
+    onProjectAssignmentAuthorityWaitOccupied:
+      lockHooks?.onAuthorityWaitOccupied,
     retireProjectAssignment,
     removeProjectMessagesForAssignment,
     recoverStaleProjectMessages,
@@ -1462,6 +1465,8 @@ function registerExtensionImpl(
       resolveMessageFiles: controllerResolveMessageFiles,
       projectAssignmentBytes,
       writeProjectAssignment,
+      onProjectAssignmentAuthorityWaitOccupied:
+        lockHooks?.onAuthorityWaitOccupied,
       delay,
       startHerdrAgentInPane,
       sessionIdentity,

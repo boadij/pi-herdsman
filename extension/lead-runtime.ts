@@ -38,6 +38,7 @@ import {
   migrateProjectAssignmentEvidence,
   migrateProjectAssignmentEvidenceAfter,
   readProjectAssignment,
+  readManagerDescriptor,
   withCurrentProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
@@ -255,6 +256,7 @@ type LeadTransitionHost = {
     repoKey: string,
     branch: string,
   ): Promise<void>;
+  onProjectAssignmentAuthorityWaitOccupied?(): void;
   projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   readManagerDescriptorStatus: typeof import("./supervision.ts").readManagerDescriptorStatus;
@@ -565,6 +567,7 @@ type LeadHerdRunHost = {
 };
 
 type LeadProjectHost = {
+  onProjectAssignmentAuthorityWaitOccupied?(): void;
   readConfig: typeof import("./config.ts").readConfig;
   projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
   acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
@@ -10479,6 +10482,31 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             current,
             written,
             ctx.signal,
+            () => {
+              const currentLease = host.managerLease();
+              const liveManager = readManagerDescriptor(
+                runtime,
+                managerAuthority.workspaceId,
+              );
+              if (
+                host.activeRole() !== "manager" ||
+                host.leadRuntime.roleSuspended ||
+                !currentLease ||
+                !host.sameManagerDescriptor(
+                  currentLease.descriptor,
+                  managerAuthority,
+                ) ||
+                currentLease.descriptor.leaseId !== managerLeaseId ||
+                !liveManager ||
+                !host.sameManagerDescriptor(liveManager, managerAuthority) ||
+                liveManager.repoKey !== assignment.repoKey ||
+                liveManager.workspaceId !== managerAuthority.workspaceId
+              )
+                throw new Error(
+                  "Manager authority changed before required evidence was updated",
+                );
+            },
+            host.onProjectAssignmentAuthorityWaitOccupied,
           );
         else host.writeProjectAssignment(runtime, written);
         return written;

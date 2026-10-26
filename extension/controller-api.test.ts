@@ -3355,6 +3355,7 @@ async function runManagerStartupScenario(
     | "incompatible-build"
     | "staff-message-mismatch"
     | "staff-message-contention"
+    | "staff-message-contention-replaced"
     | "staff-message-timeout"
     | "delayed-herdr-session"
     | "conflict"
@@ -4359,8 +4360,22 @@ async function runManagerStartupScenario(
     activeTools: ["read"],
     exec,
   });
-  registerExtension!(pi.pi as never);
+  let resolveAuthorityWait!: () => void;
+  let authorityWaitArmed = false;
+  let authorityWaitSignaled = false;
+  const authorityWait = new Promise<void>((resolve) => {
+    resolveAuthorityWait = resolve;
+  });
+  registerExtensionForTest!(pi.pi as never, {
+    onAuthorityWaitOccupied: () => {
+      if (authorityWaitArmed && !authorityWaitSignaled) {
+        authorityWaitSignaled = true;
+        resolveAuthorityWait();
+      }
+    },
+  });
   let releaseAssignmentLock: (() => void) | undefined;
+  let contentionHolder: ReturnType<typeof spawn> | undefined;
   try {
     const activeBranch: any[] = pi.entries;
     const ctx = fakeContext(pi.entries, activeBranch) as any;
@@ -5762,7 +5777,8 @@ async function runManagerStartupScenario(
     assert.equal(started, true);
     if (
       mode === "staff-message-mismatch" ||
-      mode === "staff-message-contention"
+      mode === "staff-message-contention" ||
+      mode === "staff-message-contention-replaced"
     ) {
       const state = readLeadCoordinationState(
         supervisionRuntime(),
@@ -6058,12 +6074,12 @@ async function runManagerStartupScenario(
 
       const retainedPlan = completePlan.replaceAll("x", "y");
       realFs.writeFileSync(attachmentPath, retainedPlan);
-      let holder: ReturnType<typeof spawn> | undefined;
       if (
         mode === "staff-message-contention" ||
+        mode === "staff-message-contention-replaced" ||
         mode === "staff-message-timeout"
       ) {
-        holder = spawn(
+        contentionHolder = spawn(
           process.execPath,
           [
             "--input-type=module",
@@ -6075,12 +6091,12 @@ async function runManagerStartupScenario(
         );
         await new Promise<void>((resolve, reject) => {
           let output = "";
-          holder!.stdout!.on("data", (chunk) => {
+          contentionHolder!.stdout!.on("data", (chunk) => {
             output += chunk.toString();
             if (output.includes("READY")) resolve();
           });
-          holder!.once("error", reject);
-          holder!.stderr!.on("data", (chunk) =>
+          contentionHolder!.once("error", reject);
+          contentionHolder!.stderr!.on("data", (chunk) =>
             reject(new Error(chunk.toString())),
           );
         });
@@ -6092,6 +6108,7 @@ async function runManagerStartupScenario(
       const evidenceFilesBefore = new Set(
         readdirSync(requiredEvidenceDirectory(assignmentBeforeRetain.id)),
       );
+      authorityWaitArmed = true;
       const retainedPromise = staffMessage.execute(
         "complete-retained-text-evidence",
         {
@@ -6104,12 +6121,29 @@ async function runManagerStartupScenario(
         undefined,
         ctx,
       );
+      const waitForAuthorityContention =
+        mode === "staff-message-contention" ||
+        mode === "staff-message-contention-replaced"
+          ? Promise.race([
+              authorityWait,
+              retainedPromise.then(
+                () => {
+                  throw new Error(
+                    "retained handoff completed before contention",
+                  );
+                },
+                (error) => {
+                  throw error;
+                },
+              ),
+            ])
+          : undefined;
       if (mode === "staff-message-timeout") {
         const failure = await retainedPromise.then(
           () => undefined,
           (error) => error,
         );
-        holder!.stdin!.end("release");
+        contentionHolder!.stdin!.end("release");
         assert.ok(
           failure instanceof Error &&
             /Required evidence was retained, but the staff handoff failed: Project assignment authority is in progress/.test(
@@ -6147,14 +6181,56 @@ async function runManagerStartupScenario(
         );
         assert.ok(snapshotContents.includes(retainedPlan));
         assert.ok(snapshotContents.includes("Review this retained plan."));
-      } else if (holder) {
-        await new Promise((resolve) => setTimeout(resolve, 75));
+      } else if (mode === "staff-message-contention-replaced") {
+        await waitForAuthorityContention;
         assert.equal(
           listChiefMessagePaths(supervisionRuntime(), childSession).length,
           1,
           "message must not publish while another process owns assignment authority",
         );
-        holder.stdin!.end("release");
+        const descriptorPath = managerDescriptorPath(
+          supervisionRuntime(),
+          WORKSPACE,
+        );
+        const descriptor = readManagerDescriptor(
+          supervisionRuntime(),
+          WORKSPACE,
+        )!;
+        writeFileSync(
+          descriptorPath,
+          JSON.stringify({ ...descriptor, leaseId: randomUUID() }),
+        );
+        contentionHolder!.stdin!.end("release");
+        let rejected = false;
+        try {
+          await retainedPromise;
+        } catch {
+          rejected = true;
+        }
+        assert.equal(rejected, true, "replaced Manager must reject handoff");
+        const currentAssignment = listProjectAssignments(
+          supervisionRuntime(),
+          repoKey,
+        ).find((item) => item.branch === assignment.branch)!;
+        assert.deepEqual(
+          currentAssignment,
+          assignmentBeforeRetain,
+          "replaced Manager authority must not update assignment evidence",
+        );
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "replaced Manager authority must not publish a staff message",
+        );
+        return;
+      } else if (contentionHolder) {
+        await waitForAuthorityContention;
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "message must not publish while another process owns assignment authority",
+        );
+        contentionHolder.stdin!.end("release");
       }
       if (mode === "staff-message-timeout") return;
       const retained = await retainedPromise;
@@ -6298,6 +6374,7 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
+    contentionHolder?.stdin?.end("release");
     for (const state of ownedTree)
       resetAgentMailbox(agentMailboxPath(state.workspaceId, state.agentLabel));
     releaseAssignmentLock?.();
@@ -6329,6 +6406,8 @@ test("Manager message_staff rejects incompatible Leads and delivers complete att
   runManagerStartupScenario("staff-message-mismatch"));
 test("Manager message_staff waits for cross-process assignment authority before retaining evidence", () =>
   runManagerStartupScenario("staff-message-contention"));
+test("Manager message_staff rejects retained evidence after lease replacement while waiting for assignment authority", () =>
+  runManagerStartupScenario("staff-message-contention-replaced"));
 test("Manager message_staff timeout leaves prepared evidence unreferenced and publishes no message", () =>
   runManagerStartupScenario("staff-message-timeout"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>

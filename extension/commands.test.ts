@@ -349,12 +349,19 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
     ],
   };
   writeProjectAssignment(runtimeStorage, assignment);
-  const manager = {
-    piSessionId: "manager-ui",
-    repoKey: assignment.repoKey,
-    workspaceId: WORKSPACE,
-    leaseId: "lease-ui",
-  };
+  const managerLease = claimManagerLease(
+    {
+      build: HERDSMAN_BUILD,
+      piSessionId: "manager-ui",
+      paneId: "manager-ui-pane",
+      tabId: "manager-ui-tab",
+      repoKey: assignment.repoKey,
+      workspaceId: WORKSPACE,
+    },
+    runtimeStorage,
+  );
+  t.after(() => managerLease.release());
+  const manager = managerLease.descriptor;
   const projectRuntime = createLeadProjectRuntime({
     leadRuntime: { roleSuspended: false } as any,
     activeRole: () => "manager",

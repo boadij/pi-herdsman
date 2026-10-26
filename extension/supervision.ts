@@ -1505,6 +1505,7 @@ function withProjectAssignmentLock<T>(operation: () => T): T {
 export async function withProjectAssignmentAuthorityWait<T>(
   operation: () => T,
   signal?: AbortSignal,
+  onOccupied?: () => void,
 ): Promise<T> {
   // Match the existing project-lock contention budget; callers fail closed after brief contention.
   const deadline = Date.now() + 2_000;
@@ -1517,6 +1518,7 @@ export async function withProjectAssignmentAuthorityWait<T>(
       });
     } catch (error) {
       if (!(error instanceof ProcessLockOccupiedError)) throw error;
+      onOccupied?.();
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw error;
       await new Promise<void>((resolve, reject) => {
@@ -2412,19 +2414,26 @@ export function writeProjectAssignmentAfter(
   expected: ProjectAssignment,
   assignment: ProjectAssignment,
   signal?: AbortSignal,
+  verifyAuthority?: () => void,
+  onOccupied?: () => void,
 ): Promise<void> {
-  return withProjectAssignmentAuthorityWait(() => {
-    const current = readProjectAssignment(
-      runtime,
-      expected.repoKey,
-      expected.branch,
-    );
-    if (!current || !isDeepStrictEqual(current, expected))
-      throw new Error(
-        "Project assignment changed before required evidence was updated",
+  return withProjectAssignmentAuthorityWait(
+    () => {
+      verifyAuthority?.();
+      const current = readProjectAssignment(
+        runtime,
+        expected.repoKey,
+        expected.branch,
       );
-    writeProjectAssignmentUnlocked(runtime, assignment);
-  }, signal);
+      if (!current || !isDeepStrictEqual(current, expected))
+        throw new Error(
+          "Project assignment changed before required evidence was updated",
+        );
+      writeProjectAssignmentUnlocked(runtime, assignment);
+    },
+    signal,
+    onOccupied,
+  );
 }
 
 function writeProjectAssignmentUnlocked(
