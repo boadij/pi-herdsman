@@ -309,6 +309,11 @@ export function formatSmokeFailure(error, stage) {
 
 export function managerBootstrapDelegationProjection(progress = {}) {
   return {
+    delegateCalls:
+      Number.isSafeInteger(progress.delegateCalls) &&
+      progress.delegateCalls >= 0
+        ? Math.min(progress.delegateCalls, 100)
+        : 0,
     expectedBranchDelegateCalls:
       Number.isSafeInteger(progress.expectedBranchDelegateCalls) &&
       progress.expectedBranchDelegateCalls >= 0
@@ -320,6 +325,31 @@ export function managerBootstrapDelegationProjection(progress = {}) {
     correlatedChild: progress.correlatedChild === true,
     childSessionSaved: progress.childSessionSaved === true,
     linkedWorktreeObserved: progress.linkedWorktreeObserved === true,
+  };
+}
+
+export function managerBootstrapDelegationState(contents, branch) {
+  const entries = sessionEntries(contents);
+  const delegateCalls = entries.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content.filter(
+          (part) =>
+            part?.type === "toolCall" && part.name === "delegate_project",
+        )
+      : [],
+  );
+  const expectedCalls = delegateCalls.filter(
+    (call) => call.arguments?.branch === branch,
+  );
+  const matchingResults = staffDelegateResults(contents).filter(
+    (result) => result.branch === branch,
+  );
+  return {
+    delegateCalls: delegateCalls.length,
+    expectedBranchDelegateCalls: expectedCalls.length,
+    resultState: matchingResults.length ? "success" : "absent",
   };
 }
 
@@ -6860,12 +6890,8 @@ async function runManagerBootstrapSmoke(ctx) {
         throw new Error(
           "Manager bootstrap called delegate_project more than once",
         );
-      const expectedCalls = delegateCalls.filter(
-        (call) => call.arguments?.branch === branch,
-      );
       ctx.managerBootstrapDelegationProgress = {
-        expectedBranchDelegateCalls: expectedCalls.length,
-        resultState: results.length ? "success" : "absent",
+        ...managerBootstrapDelegationState(snapshot?.contents ?? "", branch),
         correlatedChild: false,
         childSessionSaved: false,
         linkedWorktreeObserved: false,
@@ -10713,6 +10739,45 @@ export async function preserveFailureEvidence(evidence, path) {
   return evidencePath;
 }
 
+export function failureEvidenceReference(artifact) {
+  return `${basename(dirname(artifact))}/result.json`;
+}
+
+export function reportFailureEvidence(artifact) {
+  console.error(
+    `failure evidence reference: ${failureEvidenceReference(artifact)} (under system temp directory)`,
+  );
+}
+
+export function reportFailureEvidenceWriteError(error, action = "save") {
+  const operation = action === "update" ? "update cleanup result" : "save";
+  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(
+    error?.code,
+  )
+    ? error.code
+    : "unknown";
+  console.error(
+    `failure evidence: could not ${operation} (filesystem error ${code})`,
+  );
+}
+
+export async function retainScenarioFailureEvidence(
+  ctx,
+  evidence,
+  save = preserveFailureEvidence,
+) {
+  try {
+    const artifact = await save(evidence);
+    ctx.failureArtifact = artifact;
+    reportFailureEvidence(artifact);
+    return artifact;
+  } catch (error) {
+    ctx.evidenceSaveFailed = true;
+    reportFailureEvidenceWriteError(error);
+    return null;
+  }
+}
+
 function cleanupEvidence(owned) {
   return `parent=${owned.parent?.name ?? "not-created"} workspace=${owned.parent?.workspaceId ?? "not-created"} session=${owned.sessionName ?? "not-created"} host-tab=${owned.hostTabId ?? "not-created"} host-pane=${owned.hostPaneId ?? "not-created"}`;
 }
@@ -10748,13 +10813,9 @@ async function main() {
         firstRequestVerified: false,
         cleanup: "NOT_REQUIRED",
       });
-      console.error(
-        `failure evidence reference: ${basename(dirname(artifact))}/result.json (under system temp directory)`,
-      );
+      reportFailureEvidence(artifact);
     } catch (evidenceError) {
-      console.error(
-        `failure evidence: could not save: ${evidenceError.message}`,
-      );
+      reportFailureEvidenceWriteError(evidenceError);
     }
     process.exitCode = 1;
     return;
@@ -10781,11 +10842,9 @@ async function main() {
         firstRequestVerified: false,
         cleanup: "NOT_REQUIRED",
       });
-      console.error(`failure evidence: ${artifact}`);
+      reportFailureEvidence(artifact);
     } catch (evidenceError) {
-      console.error(
-        `failure evidence: could not save: ${evidenceError.message}`,
-      );
+      reportFailureEvidenceWriteError(evidenceError);
     }
     process.exitCode = 1;
     return;
@@ -11088,15 +11147,9 @@ async function main() {
         "PENDING",
         diagnosticProjection,
       );
-      const artifact = await preserveFailureEvidence(evidence);
-      ctx.failureArtifact = artifact;
-      console.error(`failure evidence: ${artifact}`);
+      await retainScenarioFailureEvidence(ctx, evidence);
     } catch (diagnosticError) {
-      console.error(
-        `failure evidence: could not save: ${
-          diagnosticError?.message ?? diagnosticError
-        }`,
-      );
+      reportFailureEvidenceWriteError(diagnosticError);
       ctx.evidenceSaveFailed = true;
     }
   } finally {
@@ -11133,10 +11186,10 @@ async function main() {
             ctx.failureArtifact,
           );
           ctx.failureArtifact = artifact;
-          console.error(`failure evidence: ${artifact}`);
+          reportFailureEvidence(artifact);
         } catch (error) {
           ctx.evidenceSaveFailed = true;
-          console.error(`failure evidence: could not save: ${error.message}`);
+          reportFailureEvidenceWriteError(error);
         }
       } else if (evidence) {
         evidence.parentOwnership = parentOwnership;
@@ -11154,10 +11207,10 @@ async function main() {
             ctx.failureArtifact,
           );
           ctx.failureArtifact = artifact;
-          console.error(`failure evidence: ${artifact}`);
+          reportFailureEvidence(artifact);
         } catch (error) {
           ctx.evidenceSaveFailed = true;
-          console.error(`failure evidence: could not save: ${error.message}`);
+          reportFailureEvidenceWriteError(error);
         }
       }
     } else {
@@ -11176,8 +11229,9 @@ async function main() {
         } catch (error) {
           ctx.evidenceSaveFailed = true;
           console.error(
-            `failure evidence: could not update cleanup result: ${error.message}`,
+            `failure evidence reference: ${failureEvidenceReference(ctx.failureArtifact)} (under system temp directory)`,
           );
+          reportFailureEvidenceWriteError(error, "update");
         }
       }
     }
