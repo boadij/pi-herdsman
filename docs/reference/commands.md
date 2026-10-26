@@ -234,8 +234,12 @@ Manager mode. If another live Manager
 holds the lease, activation fails and the
 caller remains an ordinary Lead. When an eligible `/manager` activation is
 requested in a non-Git workspace, `/manager` and **Start Manager mode** ask for
-confirmation naming the exact directory. Confirming creates a local Git
-repository and one empty initial commit; existing files are left uncommitted.
+confirmation naming the exact directory by default. The global Settings option
+**Skip Manager Git setup confirmation** is off by default; when enabled it skips
+only this prompt for explicit starts. Either way, initialization creates a local
+Git repository and one empty initial commit; existing files remain uncommitted
+and absent from new worktrees until separately committed. Automatic startup and
+restoration never bootstrap Git.
 Declining or a failed initialization does not activate Manager. Role activation
 does not abandon the session's directly owned Agent work.
 

@@ -49,6 +49,7 @@ schema is:
   "spawnPlacement": "subtree",
   "contextRetirement": true,
   "autoActivateManager": false,
+  "managerGitBootstrapWithoutConfirmation": false,
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072,
   "worktreeRemovalPreapprovedRepos": ["/verified/repository"],
@@ -59,17 +60,18 @@ schema is:
 
 An absent file means these defaults:
 
-| Field                             |            Default | Allowed values                                                                |
-| --------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
-| `defaultLeadExecution`            |         `flexible` | `flexible`, `orchestrate`                                                     |
-| `spawnPlacement`                  |          `subtree` | `tab`, `subtree`, `split`                                                     |
-| `contextRetirement`               |               true | boolean                                                                       |
-| `autoActivateManager`             |              false | boolean                                                                       |
-| `inlineAttachmentLimitBytes`      | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
-| `mailboxPayloadLimitBytes`        | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
-| `worktreeRemovalPreapprovedRepos` |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
-| `managerMergeEnabled`             |            `false` | boolean; global default for Manager local Git integration                     |
-| `managerMergeOverrides`           |               `{}` | map of verified repository identities to boolean overrides                    |
+| Field                                    |            Default | Allowed values                                                                |
+| ---------------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
+| `defaultLeadExecution`                   |         `flexible` | `flexible`, `orchestrate`                                                     |
+| `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
+| `contextRetirement`                      |               true | boolean                                                                       |
+| `autoActivateManager`                    |              false | boolean                                                                       |
+| `managerGitBootstrapWithoutConfirmation` |              false | boolean; global-only, skips confirmation only for explicit Manager start      |
+| `inlineAttachmentLimitBytes`             | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
+| `mailboxPayloadLimitBytes`               | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
+| `worktreeRemovalPreapprovedRepos`        |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
+| `managerMergeEnabled`                    |            `false` | boolean; global default for Manager local Git integration                     |
+| `managerMergeOverrides`                  |               `{}` | map of verified repository identities to boolean overrides                    |
 
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human
@@ -111,6 +113,12 @@ its Herdr primary workspace. Linked workspaces, unavailable eligibility
 evidence, or an existing Manager leave it as an ordinary Lead. The preference
 does not persist Manager role intent and changing it does not affect the current
 session.
+
+`managerGitBootstrapWithoutConfirmation` is a global-only preference, off by
+default. When enabled, it skips the confirmation for Git initialization only
+when Manager is started explicitly. Automatic startup and session restoration
+never initialize Git because of this preference. Existing files remain
+uncommitted and absent from new worktrees until separately committed.
 
 The Settings menu edits global defaults and, in the `Project overrides…` submenu,
 trusted-project values for these two preferences. Choose `Inherit global`, `On

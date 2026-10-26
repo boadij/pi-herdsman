@@ -4694,6 +4694,7 @@ test("Manager auto-start activates after identity and coordination verification 
 test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
   const projectCwd = realFs.mkdtempSync(
     join(tmpdir(), "herdsman-manager-no-git-autostart-"),
   );
@@ -4730,6 +4731,7 @@ test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
+    updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
     realFs.rmSync(projectCwd, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
@@ -4749,281 +4751,12 @@ type ManagerBootstrapGitRun = {
   stderr: string;
 };
 
-let managerBootstrapDiagnosticSources: Array<() => string> = [];
-
-function managerBootstrapAssertionFailureMessage(
-  sources: Array<() => string>,
-  testIdentifier: string,
-): string {
-  return [
-    "Manager bootstrap test assertion failed.",
-    `test=${testIdentifier}`,
-    sources.map((source) => source()).join("\n"),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-async function runManagerBootstrapTestBody(
-  body: () => Promise<void> | void,
-  testIdentifier: string,
-): Promise<void> {
-  try {
-    await body();
-  } catch {
-    throw new Error(
-      managerBootstrapAssertionFailureMessage(
-        managerBootstrapDiagnosticSources,
-        testIdentifier,
-      ),
-    );
-  }
-}
-
 function managerBootstrapTest(
   name: string,
   body: (t: TestContext) => Promise<void> | void,
 ): void {
-  test(name, async (t) => {
-    const previousSources = managerBootstrapDiagnosticSources;
-    managerBootstrapDiagnosticSources = [];
-    try {
-      await runManagerBootstrapTestBody(() => body(t), name);
-    } finally {
-      managerBootstrapDiagnosticSources = previousSources;
-    }
-  });
+  test(name, body);
 }
-
-function managerBootstrapGitDiagnostic(
-  records: ManagerBootstrapGitRun[],
-  target: string,
-): string {
-  if (!records.length)
-    return "Git subprocess diagnostics: no Git process was invoked.";
-  const subcommands = new Set([
-    "add",
-    "commit",
-    "diff",
-    "init",
-    "ls-files",
-    "mktree",
-    "rev-list",
-    "rev-parse",
-  ]);
-  const safeArgs = new Set([
-    "--allow-empty",
-    "--cached",
-    "--name-only",
-    "--only",
-    "--parents",
-    "--quiet",
-    "--show-toplevel",
-    "--stage",
-    "--verify",
-    "-n",
-    "-r",
-    "-m",
-    "HEAD",
-    "HEAD^{tree}",
-    "1",
-    "chore: initialize repository",
-  ]);
-  const firstNonSuccess = records.findIndex(
-    (record) =>
-      record.status !== 0 || record.signal !== null || !!record.spawnError,
-  );
-  const lines = records.map((record, index) => {
-    let foundSubcommand = false;
-    const args = record.args
-      .map((arg) => {
-        if (!foundSubcommand && subcommands.has(arg)) {
-          foundSubcommand = true;
-          return arg;
-        }
-        return safeArgs.has(arg) ? arg : "[redacted-arg]";
-      })
-      .join(" ");
-    const category = !record.stderr.trim()
-      ? "none"
-      : /ambiguous argument/i.test(record.stderr)
-        ? "revision-rejected"
-        : /not a git repository/i.test(record.stderr)
-          ? "repository-absent"
-          : /index/i.test(record.stderr)
-            ? "index-condition"
-            : /permission denied|access is denied/i.test(record.stderr)
-              ? "permission-denied"
-              : "<redacted>";
-    const spawnCode = record.spawnError?.code;
-    const spawnErrorCode =
-      spawnCode &&
-      [
-        "EACCES",
-        "EISDIR",
-        "EMFILE",
-        "ENFILE",
-        "ENOENT",
-        "ENOTDIR",
-        "EPERM",
-        "ETIMEDOUT",
-      ].includes(spawnCode)
-        ? spawnCode
-        : record.spawnError
-          ? "<redacted>"
-          : "none";
-    const signal =
-      record.signal &&
-      /^SIG(?:ABRT|ALRM|BUS|FPE|HUP|ILL|INT|KILL|PIPE|QUIT|SEGV|TERM|TRAP|USR1|USR2)$/.test(
-        record.signal,
-      )
-        ? record.signal
-        : record.signal
-          ? "<redacted>"
-          : "none";
-    return [
-      `${index + 1}${index === firstNonSuccess ? " [first non-success]" : ""}: git ${args}`,
-      `exitStatus=${record.status ?? "null"} signal=${signal} killed=${record.killed}`,
-      `cwd=${
-        !record.cwd
-          ? "[unspecified]"
-          : resolve(record.cwd) === resolve(target)
-            ? "[temp-workspace]"
-            : "[other-cwd]"
-      }`,
-      `spawnErrorCode=${spawnErrorCode}`,
-      `resultCategory=${category}`,
-    ].join(" | ");
-  });
-  return `Git subprocess diagnostics (${records.length} calls; first non-success is not necessarily unexpected):\n${lines.join("\n")}`;
-}
-
-test("Manager bootstrap diagnostics emit only allowlisted safe fields", () => {
-  const diagnostic = managerBootstrapGitDiagnostic(
-    [
-      {
-        args: ["rev-parse", "HEAD", "/Users/Standalone Name/private path/repo"],
-        cwd: "C:\\Users\\Standalone Name\\private path\\repo",
-        status: 128,
-        signal: "SIGTERM",
-        killed: true,
-        spawnError: {
-          code: "ENOENT",
-          message:
-            "Synthetic User standalone@example.invalid https://user:pass@example.test/path token=labelled-secret sk-unlabelled-secret",
-        },
-        stderr: [
-          "fatal: ambiguous argument 'HEAD'",
-          "/Users/Posix Name/with spaces/private path",
-          "C:\\Users\\Windows Name\\with spaces\\private path",
-          "username=StandaloneName email=standalone@example.invalid",
-          "https://user:password@example.test/private",
-          "credential=labelled-secret",
-          "unlabelled sk-unlabelled-secret",
-        ].join("; "),
-        stdout:
-          "Sensitive Output User email@example.test https://u:p@example.test sk-token-value",
-      },
-    ],
-    "C:\\Users\\Standalone Name\\private path\\repo",
-  );
-  assert.match(diagnostic, /git rev-parse HEAD/);
-  assert.match(diagnostic, /exitStatus=128/);
-  assert.match(diagnostic, /resultCategory=revision-rejected/);
-  assert.match(diagnostic, /signal=SIGTERM killed=true/);
-  assert.match(diagnostic, /spawnErrorCode=ENOENT/);
-  assert.match(diagnostic, /cwd=\[temp-workspace\]/);
-  assert.match(diagnostic, /Git subprocess diagnostics \(1 calls;/);
-  assert.match(diagnostic, /1 \[first non-success\]:/);
-  assert.match(
-    managerBootstrapAssertionFailureMessage(
-      [() => diagnostic],
-      "safe-diagnostic-test",
-    ),
-    /Git subprocess diagnostics.*git rev-parse/s,
-  );
-  assert.doesNotMatch(
-    diagnostic,
-    /Standalone|Synthetic|Posix|Windows|private|example\.test|https?:|password|labelled-secret|sk-unlabelled-secret|Sensitive Output|email@example\.test|sk-token-value|\/Users|C:\\Users/i,
-  );
-  const unknown = managerBootstrapGitDiagnostic(
-    [
-      {
-        args: ["commit", "--allow-empty"],
-        status: 1,
-        signal: null,
-        killed: false,
-        stderr: "arbitrary user/path/token output must not appear",
-        stdout: "also untrusted",
-      },
-    ],
-    "",
-  );
-  assert.match(unknown, /git commit --allow-empty/);
-  assert.match(unknown, /resultCategory=<redacted>/);
-  assert.match(unknown, /Git subprocess diagnostics \(1 calls;/);
-  assert.match(unknown, /1 \[first non-success\]:/);
-  assert.match(unknown, /cwd=\[unspecified\]/);
-  assert.doesNotMatch(unknown, /arbitrary|user\/path|token output|untrusted/);
-  const mismatched = managerBootstrapGitDiagnostic(
-    [
-      {
-        args: ["rev-parse", "HEAD"],
-        cwd: "/private/different/path",
-        status: 0,
-        signal: null,
-        killed: false,
-        stdout: "",
-        stderr: "",
-      },
-    ],
-    "/private/expected/path",
-  );
-  assert.match(mismatched, /cwd=\[other-cwd\]/);
-  assert.doesNotMatch(mismatched, /\/private\/(?:different|expected)\/path/);
-});
-
-test("Manager bootstrap assertion wrapper attaches only sanitized Git diagnostics", async () => {
-  const previousSources = managerBootstrapDiagnosticSources;
-  managerBootstrapDiagnosticSources = [
-    () =>
-      managerBootstrapGitDiagnostic(
-        [
-          {
-            args: ["rev-parse", "HEAD", "/private/sensitive/path"],
-            cwd: "/private/sensitive/path",
-            status: 128,
-            signal: null,
-            killed: false,
-            stderr: "fatal: ambiguous argument '/private/sensitive/path'",
-            stdout: "sensitive stdout",
-          },
-        ],
-        "/private/sensitive/path",
-      ),
-  ];
-  try {
-    await assert.rejects(
-      runManagerBootstrapTestBody(() => {
-        throw new Error("arbitrary assertion text with private details");
-      }, "safe-wrapper-test"),
-      (error: unknown) => {
-        assert(error instanceof Error);
-        assert.match(error.message, /Manager bootstrap test assertion failed/);
-        assert.match(error.message, /test=safe-wrapper-test/);
-        assert.match(error.message, /Git subprocess diagnostics \(1 calls;/);
-        assert.match(error.message, /resultCategory=revision-rejected/);
-        assert.doesNotMatch(
-          error.message,
-          /arbitrary assertion text|private|sensitive stdout/,
-        );
-        return true;
-      },
-    );
-  } finally {
-    managerBootstrapDiagnosticSources = previousSources;
-  }
-});
 
 function managerBootstrapHarness(
   cwd: string,
@@ -5034,6 +4767,8 @@ function managerBootstrapHarness(
     paneCwd?: unknown;
     omitPaneCwd?: boolean;
     assertLockDuringFinalScope?: boolean;
+    initializeBeforeProbe?: boolean;
+    failGitPreflight?: boolean;
   } = {},
 ) {
   setLeadEnvironment();
@@ -5067,6 +4802,7 @@ function managerBootstrapHarness(
   let omitPaneCwd = options.omitPaneCwd ?? false;
   let finalScopeLockVerified = false;
   const gitRuns: ManagerBootstrapGitRun[] = [];
+  let initializedBeforeProbe = false;
   const invocations: Array<{ command: string; args: string[]; cwd?: string }> =
     [];
   const runGit = (args: string[], gitCwd: string = cwd) => {
@@ -5093,9 +4829,6 @@ function managerBootstrapHarness(
     });
     return result;
   };
-  managerBootstrapDiagnosticSources.push(() =>
-    managerBootstrapGitDiagnostic(gitRuns, cwd),
-  );
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -5106,6 +4839,31 @@ function managerBootstrapHarness(
     exec: (command, args, execOptions) => {
       invocations.push({ command, args, cwd: execOptions?.cwd });
       if (command === "git") {
+        if (options.failGitPreflight && args[0] === "--version")
+          return { stdout: "", stderr: "unavailable", code: 1 };
+        if (
+          options.initializeBeforeProbe &&
+          args[0] === "rev-parse" &&
+          args.includes("--show-toplevel") &&
+          !initializedBeforeProbe
+        ) {
+          initializedBeforeProbe = true;
+          assert.equal(runGit(["init"]).status, 0);
+          assert.equal(runGit(["config", "user.name", "Test"]).status, 0);
+          assert.equal(
+            runGit(["config", "user.email", "test@example.invalid"]).status,
+            0,
+          );
+          realFs.writeFileSync(
+            join(cwd, "concurrent.txt"),
+            "already committed\n",
+          );
+          assert.equal(runGit(["add", "concurrent.txt"]).status, 0);
+          assert.equal(
+            runGit(["commit", "--allow-empty", "-m", "concurrent"]).status,
+            0,
+          );
+        }
         if (args[0] === "commit" && failCommit) {
           failCommit = false;
           gitRuns.push({
@@ -5125,11 +4883,7 @@ function managerBootstrapHarness(
             ["add", options.stageAfterInit],
             execOptions?.cwd ?? cwd,
           );
-          assert.equal(
-            staged.status,
-            0,
-            managerBootstrapGitDiagnostic(gitRuns, cwd),
-          );
+          assert.equal(staged.status, 0, "Git command failed");
         }
         return {
           stdout: result.stdout ?? "",
@@ -5176,7 +4930,7 @@ function managerBootstrapHarness(
           ? respond({
               source: {
                 source_workspace_id: WORKSPACE,
-                repo_key: cwd,
+                repo_key: join(cwd, ".git"),
                 repo_name: "project",
               },
               worktrees: [],
@@ -5508,6 +5262,7 @@ managerBootstrapTest(
   async (t) => {
     const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-menu-bootstrap-"));
     const harness = managerBootstrapHarness(cwd);
+    updateConfig("managerGitBootstrapWithoutConfirmation", true);
     const selected: Array<{ title: string; options: string[] }> = [];
     const choices: Array<string | undefined> = [
       "Project manager",
@@ -5519,7 +5274,10 @@ managerBootstrapTest(
       const choice = choices.shift();
       return options.find((option) => option === choice);
     };
-    t.after(harness.cleanup);
+    t.after(() => {
+      updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
+      return harness.cleanup();
+    });
     await harness.pi.events.get("session_start")![0](
       undefined,
       harness.context,
@@ -5533,7 +5291,7 @@ managerBootstrapTest(
       ),
       ["root", "Project manager", "root"],
     );
-    assert.equal(harness.confirmations, 1, harness.notices.join("\n"));
+    assert.equal(harness.confirmations, 0);
     assert.equal(
       harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
       "1",
@@ -5545,6 +5303,97 @@ managerBootstrapTest(
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "manager",
+    );
+  },
+);
+
+managerBootstrapTest(
+  "enabled explicit /manager skips confirmation and bootstraps",
+  async (t) => {
+    const cwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-command-bootstrap-"),
+    );
+    updateConfig("autoActivateManager", false);
+    updateConfig("managerGitBootstrapWithoutConfirmation", true);
+    const harness = managerBootstrapHarness(cwd);
+    t.after(() => {
+      updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
+      updateConfig("autoActivateManager", undefined);
+      return harness.cleanup();
+    });
+    await harness.pi.events.get("session_start")![0](
+      undefined,
+      harness.context,
+    );
+    updateConfig("managerGitBootstrapWithoutConfirmation", true);
+    await harness.pi.commandOptions
+      .get("manager")!
+      .handler("", harness.context);
+    assert.equal(harness.confirmations, 0);
+    assert.equal(
+      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+      "1",
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+  },
+);
+
+managerBootstrapTest(
+  "explicit /manager bootstraps without UI only when confirmation is opted out",
+  async (t) => {
+    t.after(() =>
+      updateConfig("managerGitBootstrapWithoutConfirmation", undefined),
+    );
+    const enabledCwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-command-bootstrap-no-ui-enabled-"),
+    );
+    updateConfig("managerGitBootstrapWithoutConfirmation", true);
+    const enabled = managerBootstrapHarness(enabledCwd);
+    enabled.context.hasUI = false;
+    t.after(() => enabled.cleanup());
+    await enabled.pi.events.get("session_start")![0](
+      undefined,
+      enabled.context,
+    );
+    await enabled.pi.commandOptions
+      .get("manager")!
+      .handler("", enabled.context);
+    assert.equal(enabled.confirmations, 0);
+    assert.equal(
+      enabled.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+      "1",
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+
+    const disabledCwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-command-bootstrap-no-ui-disabled-"),
+    );
+    updateConfig("managerGitBootstrapWithoutConfirmation", false);
+    const disabled = managerBootstrapHarness(disabledCwd);
+    disabled.context.hasUI = false;
+    t.after(() => disabled.cleanup());
+    await disabled.pi.events.get("session_start")![0](
+      undefined,
+      disabled.context,
+    );
+    await disabled.pi.commandOptions
+      .get("manager")!
+      .handler("", disabled.context);
+    assert.equal(disabled.confirmations, 0);
+    assert.equal(
+      disabled.invocations.some(({ command }) => command === "git"),
+      false,
+    );
+    assert.equal(realFs.existsSync(join(disabledCwd, ".git")), false);
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "lead",
     );
   },
 );
@@ -5588,6 +5437,121 @@ managerBootstrapTest(
         label,
       );
     }
+  },
+);
+
+managerBootstrapTest(
+  "Manager bootstrap accepts a valid repository committed before its locked inspection",
+  async (t) => {
+    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-race-"));
+    const harness = managerBootstrapHarness(cwd);
+    t.after(harness.cleanup);
+    harness.setConfirm(async () => {
+      assert.equal(harness.git(["init"]).status, 0);
+      assert.equal(harness.git(["config", "user.name", "Test"]).status, 0);
+      assert.equal(
+        harness.git(["config", "user.email", "test@example.invalid"]).status,
+        0,
+      );
+      realFs.writeFileSync(join(cwd, "concurrent.txt"), "already committed\n");
+      assert.equal(harness.git(["add", "concurrent.txt"]).status, 0);
+      assert.equal(harness.git(["commit", "-m", "concurrent"]).status, 0);
+      return true;
+    });
+    await harness.pi.events.get("session_start")![0](
+      undefined,
+      harness.context,
+    );
+    await harness.pi.commandOptions
+      .get("manager")!
+      .handler("", harness.context);
+    assert.equal(harness.confirmations, 1);
+    assert.equal(
+      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+      "1",
+    );
+    assert.equal(
+      harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout.trim(),
+      "concurrent.txt",
+    );
+    assert.equal(
+      harness.invocations.filter(
+        ({ command, args }) => command === "git" && args[0] === "commit",
+      ).length,
+      0,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+  },
+);
+
+managerBootstrapTest(
+  "Manager bootstrap fails closed on Git preflight failure and corrupt or enclosing metadata",
+  async (t) => {
+    const preflightCwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-preflight-"),
+    );
+    const preflight = managerBootstrapHarness(preflightCwd, {
+      failGitPreflight: true,
+    });
+    t.after(preflight.cleanup);
+    await preflight.pi.events.get("session_start")![0](
+      undefined,
+      preflight.context,
+    );
+    await preflight.pi.commandOptions
+      .get("manager")!
+      .handler("", preflight.context);
+    assert.equal(
+      preflight.invocations.some(
+        ({ command, args }) => command === "git" && args[0] === "init",
+      ),
+      false,
+    );
+    assert.equal(realFs.existsSync(join(preflightCwd, ".git")), false);
+
+    const corruptCwd = realFs.mkdtempSync(
+      join(tmpdir(), "manager-corrupt-git-"),
+    );
+    realFs.writeFileSync(join(corruptCwd, ".git"), "not git metadata");
+    const corrupt = managerBootstrapHarness(corruptCwd);
+    t.after(corrupt.cleanup);
+    await corrupt.pi.events.get("session_start")![0](
+      undefined,
+      corrupt.context,
+    );
+    await corrupt.pi.commandOptions
+      .get("manager")!
+      .handler("", corrupt.context);
+    assert.equal(
+      corrupt.invocations.some(
+        ({ command, args }) => command === "git" && args[0] === "init",
+      ),
+      false,
+    );
+
+    const parent = realFs.mkdtempSync(join(tmpdir(), "manager-enclosing-git-"));
+    assert.equal(spawnSync("git", ["init"], { cwd: parent }).status, 0);
+    const child = join(parent, "child");
+    realFs.mkdirSync(child);
+    const enclosing = managerBootstrapHarness(child);
+    t.after(enclosing.cleanup);
+    await enclosing.pi.events.get("session_start")![0](
+      undefined,
+      enclosing.context,
+    );
+    await enclosing.pi.commandOptions
+      .get("manager")!
+      .handler("", enclosing.context);
+    assert.equal(
+      enclosing.invocations.some(
+        ({ command, args }) => command === "git" && args[0] === "init",
+      ),
+      false,
+    );
+    realFs.rmSync(parent, { recursive: true, force: true });
   },
 );
 
@@ -13938,6 +13902,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.deepEqual(prompts[1]?.options, [
     "Default Lead execution  flexible",
     "Manager auto-start  Global off · Effective off (global; untrusted project)",
+    "Skip Manager Git setup confirmation  Global off",
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Manager local merge  Global off",
     "Message limits",
@@ -14622,6 +14587,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     assert.deepEqual(prompts[1]?.options, [
       "Default Lead execution  flexible",
       "Manager auto-start  Global off · Effective off (global; untrusted project)",
+      "Skip Manager Git setup confirmation  Global off",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Manager local merge  Global off",
       "Message limits",
@@ -14719,6 +14685,40 @@ test("Manager auto-start menu toggle does not change the running role", async ()
     assert.deepEqual(notices, ["Global Manager auto-start: on"]);
   } finally {
     updateConfig("autoActivateManager", undefined);
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("Manager Git confirmation Settings toggle updates global config without changing role", async () => {
+  setLeadEnvironment();
+  updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = process.cwd();
+  context.hasUI = true;
+  context.mode = "rpc";
+  const activeTools = pi.pi.getActiveTools();
+  const notices: string[] = [];
+  let selection = 0;
+  context.ui.select = async (_title: string, options: string[]) => {
+    if (selection++ === 0) return "Settings";
+    return selection === 2
+      ? options.find((option) =>
+          option.includes("Skip Manager Git setup confirmation"),
+        )
+      : undefined;
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("herdsman").handler("", context);
+    assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, true);
+    assert.deepEqual(pi.pi.getActiveTools(), activeTools);
+    assert.deepEqual(notices, [
+      "Global Manager Git setup confirmation skip: on",
+    ]);
+  } finally {
+    updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
@@ -14978,7 +14978,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
           component.handleInput("\r");
           break;
         case 1:
-          for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 2:

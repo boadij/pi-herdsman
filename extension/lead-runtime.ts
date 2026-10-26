@@ -59,6 +59,7 @@ import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import {
+  readConfig,
   isWorktreeRemovalPreapproved,
   effectiveMergePolicy,
   setManagerMergeOverride,
@@ -146,7 +147,7 @@ import {
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
   listSavedPeerMachines,
@@ -2281,6 +2282,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
             },
             {
+              value: "manager-git-bootstrap-confirmation",
+              label: "Skip Manager Git setup confirmation",
+              description: `Global ${config.managerGitBootstrapWithoutConfirmation ? "on" : "off"}`,
+              help: "Automatically initialize a non-Git workspace when Manager is started explicitly. Off by default.",
+            },
+            {
               value: "context-retirement",
               label: "Context retirement",
               description: `Global ${config.contextRetirement ? "on" : "off"} · ${projectDescription("contextRetirement")}`,
@@ -2324,16 +2331,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           if (mode) host.updateConfig("defaultLeadExecution", mode);
         } else if (
           selected === "context-retirement" ||
-          selected === "auto-activate-manager"
+          selected === "auto-activate-manager" ||
+          selected === "manager-git-bootstrap-confirmation"
         ) {
           const key =
             selected === "context-retirement"
               ? "contextRetirement"
-              : "autoActivateManager";
+              : selected === "auto-activate-manager"
+                ? "autoActivateManager"
+                : "managerGitBootstrapWithoutConfirmation";
           const enabled = !host.readConfig()[key];
           host.updateConfig(key, enabled);
           ctx.ui.notify(
-            `Global ${key === "contextRetirement" ? "context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
+            `Global ${key === "contextRetirement" ? "context retirement" : key === "autoActivateManager" ? "Manager auto-start" : "Manager Git setup confirmation skip"}: ${enabled ? "on" : "off"}`,
           );
         } else if (selected === "manager-merge") {
           const enabled = !host.readConfig().managerMergeEnabled;
@@ -15484,7 +15494,9 @@ export function createLeadRoleTransitions(
         error.detail.details?.herdrCode !== "not_git_worktree"
       )
         throw error;
-      if (!ctx.hasUI)
+      const skipConfirmation =
+        readConfig().managerGitBootstrapWithoutConfirmation;
+      if (!ctx.hasUI && !skipConfirmation)
         throw new Error(
           "/manager requires interactive confirmation to initialize Git",
         );
@@ -15534,6 +15546,7 @@ export function createLeadRoleTransitions(
           "Cannot initialize Git while repository-redirection environment variables are set",
         );
       if (
+        !skipConfirmation &&
         !(await ctx.ui.confirm(
           "Initialize Git repository?",
           `Initialize ${target} with an empty initial commit, then start Manager mode? Existing files will not be committed.`,
@@ -15577,15 +15590,7 @@ export function createLeadRoleTransitions(
         );
         if (result.code === 0 && !result.killed)
           return String(result.stdout ?? "").trim();
-        if (
-          result.killed ||
-          !/fatal: not a git repository(?: \(or any of the parent directories\))?/.test(
-            String(result.stderr ?? "").trim(),
-          )
-        )
-          throw new Error(
-            `Git repository inspection failed: ${String(result.stderr ?? "").trim() || "process unsuccessful"}`,
-          );
+        if (result.killed) throw new Error("Git repository inspection failed");
         return undefined;
       };
       const bootstrapLock = host.acquireProcessLock(
@@ -15597,19 +15602,33 @@ export function createLeadRoleTransitions(
         { name: "Manager Git bootstrap" },
       );
       try {
-        const metadataPath = resolve(target, ".git");
-        let hasMetadata = false;
-        try {
-          lstatSync(metadataPath);
-          hasMetadata = true;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
+        const hasRepositoryMetadata = () => {
+          let directory = target;
+          while (true) {
+            try {
+              lstatSync(resolve(directory, ".git"));
+              return true;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+            }
+            const parent = dirname(directory);
+            if (parent === directory) return false;
+            directory = parent;
+          }
+        };
+        // Check Git and its configuration without exposing config values before any init.
+        await runGit(["--version"]);
+        await runGit(["config", "--list", "--null"]);
         let root = await probeRoot();
-        if (!root && hasMetadata)
+        if (!root && hasRepositoryMetadata())
           throw new Error(
-            "Refusing to initialize: existing .git metadata is invalid or conflicting",
+            "Refusing to initialize: existing Git metadata is invalid or conflicting",
           );
+        if (!root) {
+          await runGit(["init"]);
+          root = await probeRoot();
+        }
         if (root && realpathSync(root) !== target)
           throw new Error(
             "Refusing to initialize inside an enclosing Git repository",
@@ -15630,23 +15649,19 @@ export function createLeadRoleTransitions(
         const inspectHead = async (): Promise<string | undefined> => {
           const result = await host.pi.exec(
             "git",
-            ["rev-parse", "--verify", "HEAD"],
+            ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
             { cwd: target, signal: ctx.signal, timeout: 30_000 },
           );
           if (result.code === 0 && !result.killed)
             return String(result.stdout ?? "").trim();
-          if (
-            result.killed ||
-            !/fatal: Needed a single revision/.test(
-              String(result.stderr ?? "").trim(),
-            )
-          )
+          if (result.killed || result.code !== 1)
             throw new Error(
               `Git HEAD inspection failed: ${String(result.stderr ?? "").trim() || "process unsuccessful"}`,
             );
           return undefined;
         };
         let head = await inspectHead();
+        let createdInitialCommit = false;
         if (!head) {
           const staged = await host.pi.exec(
             "git",
@@ -15669,27 +15684,37 @@ export function createLeadRoleTransitions(
             "-m",
             "chore: initialize repository",
           ]);
+          createdInitialCommit = true;
           head = await inspectHead();
         }
         if (!head) throw new Error("Git did not create an initial commit");
-        const parents = await runGit([
-          "rev-list",
-          "--parents",
-          "-n",
-          "1",
-          "HEAD",
-        ]);
-        if (parents.trim().split(/\s+/).length !== 1)
-          throw new Error("Initial Git commit is not a root commit");
-        const tree = await runGit(["rev-parse", "HEAD^{tree}"]);
-        if (tree !== (await runGit(["mktree"])))
-          throw new Error("Initial Git commit is not empty");
+        if (createdInitialCommit) {
+          const parents = await runGit([
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            "HEAD",
+          ]);
+          if (parents.trim().split(/\s+/).length !== 1)
+            throw new Error("Initial Git commit is not a root commit");
+          const tree = await runGit(["rev-parse", "HEAD^{tree}"]);
+          if (tree !== (await runGit(["mktree"])))
+            throw new Error("Initial Git commit is not empty");
+        }
         await verifyHerdrTarget();
+        const gitCommonDir = realpathSync(
+          await runGit([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+          ]),
+        );
         scope = await host.worktreeGroupScope(ctx, workspaceId);
         if (
           !scope ||
           scope.primaryWorkspaceId !== workspaceId ||
-          realpathSync(scope.repoKey) !== target
+          realpathSync(scope.repoKey) !== gitCommonDir
         )
           throw new Error(
             "Manager activation could not verify the initialized repository in Herdr",

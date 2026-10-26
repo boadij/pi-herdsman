@@ -95,6 +95,7 @@ test("missing config resolves to defaults without creating storage", () => {
   assert.equal(readConfig().contextRetirement, true);
   assert.equal(readConfig().defaultLeadExecution, "flexible");
   assert.equal(readConfig().autoActivateManager, false);
+  assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, false);
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
 });
 
@@ -441,6 +442,10 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
     ],
     ['{"contextRetirement":"false"}', "contextRetirement"],
     ['{"autoActivateManager":"true"}', "autoActivateManager"],
+    [
+      '{"managerGitBootstrapWithoutConfirmation":1}',
+      "managerGitBootstrapWithoutConfirmation",
+    ],
     ["{", "Invalid Pi Herdsman config JSON"],
     ["[]", "root must be an object"],
     ['{"typo":true}', "unknown field typo"],
@@ -456,6 +461,11 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
     () => updateConfig("defaultLeadExecution", "invalid" as never),
     /defaultLeadExecution/,
   );
+  assert.throws(
+    () =>
+      updateConfig("managerGitBootstrapWithoutConfirmation", "yes" as never),
+    /managerGitBootstrapWithoutConfirmation/,
+  );
 });
 
 test("updates preserve configured keys, reset one key, and delete the final config", () => {
@@ -463,6 +473,7 @@ test("updates preserve configured keys, reset one key, and delete the final conf
   updateConfig("defaultLeadExecution", "orchestrate");
   updateConfig("contextRetirement", false);
   updateConfig("autoActivateManager", true);
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
   updateConfig("mailboxPayloadLimitBytes", 64 * 1024);
   assert.deepEqual(
     JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
@@ -471,6 +482,7 @@ test("updates preserve configured keys, reset one key, and delete the final conf
       defaultLeadExecution: "orchestrate",
       contextRetirement: false,
       autoActivateManager: true,
+      managerGitBootstrapWithoutConfirmation: true,
       mailboxPayloadLimitBytes: 64 * 1024,
     },
   );
@@ -478,6 +490,8 @@ test("updates preserve configured keys, reset one key, and delete the final conf
   assert.equal(readConfig().defaultLeadExecution, "orchestrate");
   assert.equal(readConfig().contextRetirement, false);
   assert.equal(readConfig().autoActivateManager, true);
+  assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, true);
+  updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
   updateConfig("spawnPlacement", undefined);
   updateConfig("defaultLeadExecution", undefined);
   assert.deepEqual(
