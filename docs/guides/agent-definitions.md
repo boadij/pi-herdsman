@@ -172,6 +172,14 @@ The bundled definitions are portable defaults, not required workflow stages.
 Project definitions are for repository-specific policy; global definitions are
 for user-specific final policy.
 
+### Write useful descriptions
+
+Write `description` for the delegator: state what the Agent can do, when to use
+it, and a meaningful boundary where another capability fits better. Prefer
+concrete tasks over generic role labels. Descriptions guide selection; they do
+not grant tools or dictate workflows. Keep them accurate when overrides change
+capabilities, and qualify optional integrations.
+
 ## Create a standalone definition
 
 Create a Markdown file in the global agents directory:
@@ -179,7 +187,7 @@ Create a Markdown file in the global agents directory:
 ```markdown
 ---
 name: docs-reviewer
-description: Read-only documentation reviewer
+description: Read-only documentation reviewer for correctness, navigation, and examples; use to verify documentation changes before publication
 model: openai-codex/gpt-5.6-luna
 thinking: medium
 systemPromptMode: replace

@@ -1,6 +1,6 @@
 ---
 name: agent-definitions
-description: Manage Pi Herdsman Agent definitions and reserved role profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
+description: Manage Pi Herdsman Agent definitions and reserved role profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition descriptions, models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
 ---
 
 # Pi Herdsman Agent definitions
@@ -52,6 +52,9 @@ this skill does not define a second schema or management API.
      `bodyMode: append`; replace the body only when replacement is intended.
    - Express capability restrictions structurally through definition fields
      rather than relying on prompt prose.
+   - For ordinary Agents, make `description` explain capabilities, suitable
+     tasks, and meaningful selection boundaries. Keep it accurate when changing
+     effective capabilities; follow the Agent-definitions guide.
    - Herdsman preserves `permission:` for compatible extensions but does not
      enforce its contents itself.
    - Before editing a reserved role definition, read the canonical schema for
