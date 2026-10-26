@@ -35,6 +35,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- manager-bootstrap
 npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
 ```
@@ -120,6 +121,13 @@ are separate acceptance invocations; neither adds a production setting or
 proves pending retirement delivery across Manager replacement.
 
 `manager-recovery --simulated` remains unsupported and fails immediately.
+`manager-bootstrap` is live-only: it starts from a disposable marker-bearing
+non-Git workspace, invokes `/manager`, verifies the native confirmation shows
+the exact target before approving it, then checks the empty root commit, fresh
+same-session Herdr repository identity, and one correlated first project
+delegation. It also verifies the marker remains in the primary checkout and is
+absent from the resulting linked worktree. It does not use `manager-merge` as a
+bootstrap substitute.
 `--simulated` cannot be combined with `--model`. Without
 `--simulated`, the configured or explicitly selected live model remains in use;
 there is no fallback between modes. `terminal-failure` uses the same native
@@ -143,7 +151,9 @@ The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior),
 `supervisor-agent` (Chief direct Agent delegation, completed result delivery,
-and role exit), `manager-recovery` (Manager delegation, review messaging,
+and role exit), `manager-bootstrap` (real confirmation of Git initialization in
+a disposable non-Git primary workspace followed by first delegation and
+same-session Herdr verification), `manager-recovery` (Manager delegation, review messaging,
 `stop_lead`, verified pause/resume with an intact checkout, Manager turnover
 with a pending project message, verified missing-worktree retirement without
 recreating the assignment, and refusal to resume retired work),
