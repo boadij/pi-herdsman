@@ -365,7 +365,7 @@ const LEAD_COORDINATION_TOOLS = [
 ] as const;
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
-  "Use message_supervisor for material nonblocking coordination with your direct supervisor. Use list_peers/message_peer for peer coordination.";
+  "Use message_supervisor for material coordination or evidence your direct supervisor needs. Use list_peers/message_peer for concrete, task-relevant coordination with eligible peers. Avoid unsolicited routine progress updates, unnecessary acknowledgments, and redundant result announcements. Continue work or report normally when no coordination is needed.";
 const COMMON_LEAD_GUIDANCE = `${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 ${FILE_HANDOFF_GUIDANCE}`;
@@ -1968,7 +1968,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Send nonblocking material coordination to your direct supervisor",
         description:
-          "Send a nonblocking question, clarification, warning, risk, scope change, or other material coordination to your direct supervisor.",
+          "Send a nonblocking question, clarification, warning, risk, decision, scope change, or evidence only when it is material or needed by your direct supervisor. Avoid unsolicited routine progress updates and duplicate result announcements.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
         execute: (...args: any[]) =>
@@ -1992,7 +1992,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
-          "Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
+          "Send task-relevant communication needed by another eligible coordinator, not routine broadcasts or gratuitous acknowledgments. Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>

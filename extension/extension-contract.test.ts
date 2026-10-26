@@ -4189,7 +4189,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.equal(prompt, undefined);
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /Use message_supervisor for material nonblocking coordination with your direct supervisor\./,
+    /Use message_supervisor for material coordination or evidence your direct supervisor needs\./,
   );
   const ordinaryCharter =
     promptEvent.systemPromptOptions.sections.pi_herdsman_role;
@@ -4217,6 +4217,19 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /list_peers\/message_peer/,
   );
+  assert.match(ordinaryCharter, /Avoid unsolicited routine progress updates/);
+  assert.match(ordinaryCharter, /unnecessary acknowledgments/);
+  const supervisorTool = pi.tools.find(
+    (tool) => tool.name === "message_supervisor",
+  );
+  const peerTool = pi.tools.find((tool) => tool.name === "message_peer");
+  assert.match(
+    supervisorTool?.description ?? "",
+    /only when it is material or needed by your direct supervisor/,
+  );
+  assert.match(supervisorTool?.description ?? "", /routine progress updates/);
+  assert.match(peerTool?.description ?? "", /task-relevant communication/);
+  assert.match(peerTool?.description ?? "", /not routine broadcasts/);
   assert.doesNotMatch(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /project-assignment delivery/,
@@ -4313,6 +4326,7 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     assert.match(charter, /You are a Managed Lead/);
     assert.match(charter, /Only a current exact ProjectAssignment/);
     assert.match(charter, /unavailable or retired assignment state/);
+    assert.match(charter, /Avoid unsolicited routine progress updates/);
     assert.match(
       charter,
       /required project evidence is automatically inherited/,
@@ -4382,6 +4396,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
       charter,
       /required project evidence is automatically inherited/,
     );
+    assert.match(charter, /Avoid unsolicited routine progress updates/);
     assert.doesNotMatch(charter, /You are an ordinary Lead/);
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
   } finally {
@@ -4769,6 +4784,15 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
+    assert.match(
+      pi.tools.find((tool) => tool.name === "message_supervisor")
+        ?.description ?? "",
+      /only when it is material or needed by your direct supervisor/,
+    );
+    assert.match(
+      pi.tools.find((tool) => tool.name === "message_peer")?.description ?? "",
+      /task-relevant communication/,
+    );
     assert.doesNotMatch(
       prompt,
       /Coordinate assigned project work through Leads/,
