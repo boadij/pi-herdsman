@@ -18,6 +18,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertManagerRecoveryAssignment } from "./manager-recovery-assignment.mjs";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -7095,24 +7096,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.doesNotMatch(record.text, new RegExp(contextMarker));
   assert.equal(typeof record.piSessionFile, "string");
   assert.ok(record.piSessionFile.length > 0);
-  const requiredAssignmentKeys = [
-    "branch",
-    "id",
-    "piSessionFile",
-    "repoKey",
-    "text",
-    "version",
-  ];
-  const allowedAssignmentKeys = [
-    ...requiredAssignmentKeys,
-    "currentEvidenceIds",
-    "requiredEvidence",
-    "resultBindings",
-  ];
-  assert.ok(requiredAssignmentKeys.every((key) => Object.hasOwn(record, key)));
-  assert.ok(
-    Object.keys(record).every((key) => allowedAssignmentKeys.includes(key)),
-  );
+  assertManagerRecoveryAssignment(record);
   const assertUnchangedAssignment = async () =>
     assert.equal(
       await assignmentBytes(),

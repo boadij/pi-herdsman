@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
@@ -2266,6 +2266,7 @@ export type ProjectAssignment = Readonly<{
   repoKey: string;
   branch: string;
   text: string;
+  checkoutPath?: string;
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
   requiredEvidence?: RequiredEvidence[];
@@ -2299,6 +2300,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
   const optional = [
+    "checkoutPath",
     "piSessionFile",
     "resultBindings",
     "requiredEvidence",
@@ -2316,6 +2318,11 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.checkoutPath === undefined ||
+      (typeof r.checkoutPath === "string" &&
+        isAbsolute(r.checkoutPath) &&
+        normalize(r.checkoutPath) === r.checkoutPath &&
+        !/[\u0000-\u001f]/.test(r.checkoutPath))) &&
     (r.piSessionFile === undefined ||
       (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||

@@ -6682,13 +6682,13 @@ async function managerDelegateAssignmentTest(
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: [
-            `worktree ${reportCheckoutAbsent ? repoKey : "/tmp/manager-root"}`,
+            `worktree ${repoKey}`,
             `HEAD ${"0".repeat(40)}`,
             "branch refs/heads/main",
             "",
             ...(!reportCheckoutAbsent
               ? [
-                  `worktree ${childCwd}`,
+                  `worktree ${realFs.realpathSync(childCwd)}`,
                   `HEAD ${"1".repeat(40)}`,
                   `branch refs/heads/${createdBranch}`,
                   "",
@@ -6725,8 +6725,7 @@ async function managerDelegateAssignmentTest(
           worktree: {
             repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
-            checkout_path:
-              args[2] === childWorkspace ? childCwd : "/tmp/manager-root",
+            checkout_path: args[2] === childWorkspace ? childCwd : repoKey,
           },
         },
         ...(args[2] === childWorkspace
@@ -6740,25 +6739,29 @@ async function managerDelegateAssignmentTest(
           source_workspace_id: primaryWorkspace,
           repo_key: repoKey,
           repo_name: "project",
-          source_checkout_path: reportCheckoutAbsent
-            ? repoKey
-            : "/tmp/manager-root",
+          source_checkout_path: reportCheckoutAbsent ? repoKey : repoKey,
         },
         worktrees: created
           ? [
               {
                 open_workspace_id: primaryWorkspace,
                 branch: "main",
-                path: "/tmp/manager-root",
+                path: repoKey,
                 is_linked_worktree: false,
               },
-              {
-                open_workspace_id: childWorkspace,
-                branch: listProjectAssignments(supervisionRuntime(), repoKey)[0]
-                  ?.branch,
-                path: childCwd,
-                is_linked_worktree: true,
-              },
+              ...(!reportCheckoutAbsent
+                ? [
+                    {
+                      open_workspace_id: childWorkspace,
+                      branch: listProjectAssignments(
+                        supervisionRuntime(),
+                        repoKey,
+                      )[0]?.branch,
+                      path: realFs.realpathSync(childCwd),
+                      is_linked_worktree: true,
+                    },
+                  ]
+                : []),
               {
                 branch: "closed-worktree",
                 path: "/tmp/manager-closed",
@@ -6926,7 +6929,7 @@ async function managerDelegateAssignmentTest(
         nativeSessions.set(childSessionPath(), {
           id: childSession,
           path: childSessionPath(),
-          cwd: childCwd,
+          cwd: realFs.realpathSync(childCwd),
           entries: [],
         });
       }
@@ -7441,13 +7444,13 @@ async function managerDelegateAssignmentTest(
       {
         workspace: WORKSPACE,
         branch: "main",
-        path: "/tmp/manager-root",
+        path: repoKey,
         linked: false,
       },
       {
         workspace: childWorkspace,
         branch: assignment!.branch,
-        path: childCwd,
+        path: realFs.realpathSync(childCwd),
         linked: true,
       },
     ]);
@@ -7557,6 +7560,7 @@ async function managerDelegateAssignmentTest(
     );
     assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
       "branch",
+      "checkoutPath",
       "currentEvidenceIds",
       "id",
       "piSessionFile",
@@ -7917,6 +7921,8 @@ async function managerDelegateAssignmentTest(
       reportCheckoutAbsent = true;
       rmSync(childCwd, { recursive: true, force: true });
       tabCommands.length = 0;
+      // The Manager and Lead contexts share process.env in this test harness.
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
       publishRetirement();
       await waitForStage("removed assignment", () =>
         assert.equal(

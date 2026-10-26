@@ -2897,8 +2897,21 @@ test("project assignments are scoped by repository and branch, strict, and remov
     findProjectAssignmentBySession(runtime, assignment.repoKey, "elsewhere"),
     [],
   );
+  const withCheckoutPath = {
+    ...assignment,
+    checkoutPath: join(tmpdir(), `checkout-${id()}`),
+  };
+  writeProjectAssignment(runtime, withCheckoutPath);
+  assert.equal(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
+      ?.checkoutPath,
+    withCheckoutPath.checkoutPath,
+  );
   for (const invalid of [
     { branch: undefined },
+    { checkoutPath: "relative" },
+    { checkoutPath: `${tmpdir()}${sep}..${sep}invalid-checkout` },
+    { checkoutPath: `${tmpdir()}${sep}invalid\0checkout` },
     { piSessionFile: 42 },
     { piSessionFile: "" },
     {
