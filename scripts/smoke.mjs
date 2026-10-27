@@ -1851,6 +1851,7 @@ export function correlatedContinuationTask(
   resultId,
   expectedSessionId,
   prompt,
+  identity = null,
 ) {
   const entries = sessionEntries(contents);
   const byId = new Map(
@@ -1883,7 +1884,15 @@ export function correlatedContinuationTask(
       message.isError ||
       message.details?.ok !== true ||
       message.details.action !== "continue" ||
-      message.details.session_id !== expectedSessionId
+      message.details.session_id !== expectedSessionId ||
+      (identity &&
+        (message.details.session_path !== identity.sessionPath ||
+          message.details.owner_session_id !== identity.ownerSessionId ||
+          message.details.agent !== identity.label ||
+          message.details.definition !== identity.definition ||
+          typeof message.details.request_id !== "string" ||
+          !message.details.request_id.trim() ||
+          message.details.request_id === identity.requestId))
     )
       continue;
     for (const candidate of ancestors.slice(0, index).reverse()) {
@@ -1902,15 +1911,164 @@ export function correlatedContinuationTask(
       );
       if (!call) continue;
       const task = call.arguments?.task;
+      if (
+        identity &&
+        ![identity.sessionId, identity.sessionPath].includes(
+          call.arguments?.session,
+        )
+      )
+        continue;
       // Keep the exact task in memory only; reject oversized tasks rather than truncate them.
       return typeof task === "string" &&
         task.trim() &&
         Buffer.byteLength(task) <= 16 * 1024
-        ? task
+        ? identity
+          ? {
+              task,
+              requestId: message.details.request_id,
+              resultId: ancestors[index].id,
+            }
+          : task
         : null;
     }
   }
   return null;
+}
+
+export function activeStopContinuationEvidence(
+  contents,
+  childContents,
+  resultId,
+  prompt,
+  marker,
+  identity,
+  boundary,
+) {
+  const continuation = correlatedContinuationTask(
+    contents,
+    resultId,
+    identity.sessionId,
+    prompt,
+    identity,
+  );
+  if (
+    !continuation ||
+    typeof boundary !== "string" ||
+    !childContents.startsWith(boundary)
+  )
+    return null;
+  if (
+    !savedSessionHeaderEvidence(childContents, identity.sessionId)
+      .sessionIdMatches
+  )
+    return null;
+  const childEntries = sessionEntries(childContents);
+  const boundaryLeaf = sessionEntries(boundary).at(-1)?.id;
+  if (typeof boundaryLeaf !== "string" || !boundaryLeaf) return null;
+  const childById = new Map(
+    childEntries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const appendedIds = new Set(
+    sessionEntries(childContents.slice(boundary.length))
+      .map((entry) => entry.id)
+      .filter(Boolean),
+  );
+  const normalize = (text) => text.replace(/\s+/g, " ").trim().toLowerCase();
+  let childEntry = childEntries.at(-1);
+  const childVisited = new Set();
+  let taskFound = false;
+  let boundaryFound = false;
+  while (childEntry?.id && !childVisited.has(childEntry.id)) {
+    childVisited.add(childEntry.id);
+    if (childEntry.id === boundaryLeaf && taskFound) boundaryFound = true;
+    if (
+      appendedIds.has(childEntry.id) &&
+      childEntry.type === "message" &&
+      childEntry.message?.role === "user" &&
+      normalize(messageText(childEntry.message.content)).includes(
+        normalize(continuation.task),
+      )
+    )
+      taskFound = true;
+    childEntry = childById.get(childEntry.parentId);
+  }
+  if (!taskFound || !boundaryFound) return null;
+  const entries = sessionEntries(contents);
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const ancestors = [];
+  const visited = new Set();
+  let current = byId.get(resultId);
+  while (current?.id && !visited.has(current.id)) {
+    visited.add(current.id);
+    ancestors.push(current);
+    current = byId.get(current.parentId);
+  }
+  const receipts = ancestors.filter(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-agent-result" &&
+      entry.details?.requestId === continuation.requestId,
+  );
+  if (receipts.length !== 1) return null;
+  const { details, content } = receipts[0];
+  const resultIndex = ancestors.findIndex(
+    (entry) => entry.id === continuation.resultId,
+  );
+  if (resultIndex <= ancestors.indexOf(receipts[0])) return null;
+  if (
+    details.ownerSessionId !== identity.ownerSessionId ||
+    details.agentLabel !== identity.label ||
+    details.agentDefinition !== identity.definition ||
+    details.piSessionId !== identity.sessionId ||
+    (details.piSessionFile !== undefined &&
+      details.piSessionFile !== identity.sessionPath) ||
+    typeof details.runId !== "string" ||
+    !details.runId.trim() ||
+    details.runId === identity.runId ||
+    details.status !== "completed" ||
+    typeof content !== "string"
+  )
+    return null;
+  if (![true, false, null].includes(details.sessionRetired)) return null;
+  if (
+    Object.hasOwn(details, "resultRef") &&
+    (typeof details.resultRef !== "string" ||
+      !/^result:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+        details.resultRef,
+      ) ||
+      details.resultRef !== `result:${details.requestId}`)
+  )
+    return null;
+  const parts = content.split("\n\n");
+  if (!parts.shift()?.startsWith("Agent result · ")) return null;
+  if (
+    Object.hasOwn(details, "resultRef") &&
+    !parts.shift()?.startsWith("Result ref: ")
+  )
+    return null;
+  if (details.sessionRetired === true || details.sessionRetired === null) {
+    const retirement = parts.shift();
+    if (
+      retirement !==
+      (details.sessionRetired
+        ? "Continuation unavailable: session retired after context pressure. If follow-up work remains, use delegate_agent with this result and relevant files."
+        : "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent.")
+    )
+      return null;
+  }
+  if (
+    details.delegationStatus !== undefined &&
+    parts.pop() !== details.delegationStatus
+  )
+    return null;
+  if (!parts.join("\n\n").includes(marker)) return null;
+  return {
+    sessionId: identity.sessionId,
+    runId: details.runId,
+    requestId: continuation.requestId,
+  };
 }
 
 async function sessionPathEvidence(ctx, path, expectedSessionId) {
@@ -9094,6 +9252,7 @@ async function runActiveStopSmoke(ctx) {
     },
     { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS },
   );
+  const continuationBoundary = await readFile(identity.sessionPath, "utf8");
   await promptRoot(followup);
   await waitForEvidence(
     ctx,
@@ -9103,54 +9262,40 @@ async function runActiveStopSmoke(ctx) {
       const results =
         snapshot &&
         continuationResultsForPrompt(snapshot.contents, followup, marker);
-      const continued =
-        results?.filter(
-          (result) =>
-            correlatedContinuationTask(
-              snapshot.contents,
-              result.id,
-              identity.sessionId,
-              followup,
-            ) !== null,
-        ) ?? [];
       if (results?.length > 1)
         throw new Error("active-stop produced multiple descendant responses");
-      if (continued.length === 1) {
-        const descendants = await smokeManagedAgentRecords(
-          ctx,
-          (await tryNestedCommand(ctx, ["agent", "list"])).value.agents ?? [],
+      if (results?.length === 1) {
+        const childContents = await readFile(
+          identity.sessionPath,
+          "utf8",
+        ).catch((error) =>
+          error.code === "ENOENT" ? "" : Promise.reject(error),
         );
-        const resumed = descendants.find(({ session: child, mailbox: box }) => {
-          const sessionId = child?.id;
-          const runId = box?.state.runId;
-          const requestId = box?.state.activeRequestId;
-          return sessionId === identity.sessionId &&
-            child.path === identity.sessionPath &&
-            box?.state.agentLabel === label &&
-            typeof runId === "string" &&
-            !!runId.trim() &&
-            runId !== identity.runId &&
-            typeof requestId === "string" &&
-            !!requestId.trim() &&
-            requestId !== identity.requestId
-            ? { sessionId, runId, requestId }
-            : null;
-        });
-        if (resumed)
-          return {
-            done: true,
-            value: {
-              sessionId: resumed.session.id,
-              runId: resumed.mailbox.state.runId,
-              requestId: resumed.mailbox.state.activeRequestId,
-            },
-          };
+        const evidence = activeStopContinuationEvidence(
+          snapshot.contents,
+          childContents,
+          results[0].id,
+          followup,
+          marker,
+          identity,
+          continuationBoundary,
+        );
+        if (evidence) return { done: true, value: evidence };
       }
       return {
         done: false,
         progress: {
           results: results?.length ?? 0,
-          successfulCorrelatedContinueCalls: continued.length,
+          successfulCorrelatedContinueCalls:
+            results?.filter((result) =>
+              correlatedContinuationTask(
+                snapshot.contents,
+                result.id,
+                identity.sessionId,
+                followup,
+                identity,
+              ),
+            ).length ?? 0,
         },
       };
     },

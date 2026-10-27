@@ -49,6 +49,7 @@ import {
   managerRecoveryReviewPrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
+  activeStopContinuationEvidence,
   correlatedContinuationTask,
   managerChildSessionEvidence,
   initialPromptForScenario,
@@ -4916,22 +4917,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     body,
     /continuationResultsForPrompt\(snapshot\.contents, followup, marker\)/,
   );
-  assert.match(
-    body,
-    /correlatedContinuationTask\(\s*snapshot\.contents,\s*result\.id,\s*identity\.sessionId,\s*followup,?\s*\)\s*!==\s*null/,
-  );
-  assert.match(body, /sessionId === identity\.sessionId/);
-  assert.match(body, /typeof runId === "string"\s*&&\s*!!runId\.trim\(\)/);
-  assert.match(body, /runId !== identity\.runId/);
-  assert.match(
-    body,
-    /typeof requestId === "string"\s*&&\s*!!requestId\.trim\(\)/,
-  );
-  assert.match(body, /requestId !== identity\.requestId/);
-  assert.match(
-    body,
-    /sessionId: resumed\.session\.id,\s*runId: resumed\.mailbox\.state\.runId,\s*requestId: resumed\.mailbox\.state\.activeRequestId/,
-  );
+  assert.match(body, /activeStopContinuationEvidence\(/);
   assert.match(body, /const startupHistory = responseCompleted\s*\? undefined/);
   assert.match(body, /\.slice\(-4\)[\s\S]*?role: entry\.message\.role/);
   assert.match(body, /stopReason: entry\.message\.stopReason/);
@@ -4954,6 +4940,218 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     "Agent pane absence must be established before checking the captured PID",
   );
   assert.doesNotMatch(body, /"process-info",\s*"--pane",\s*identity\.paneId/);
+});
+
+test("active-stop accepts fast completion only with exact durable identity", () => {
+  const identity = {
+    sessionId: "child",
+    sessionPath: "/child.jsonl",
+    ownerSessionId: "owner",
+    label: "agent",
+    definition: "worker",
+    runId: "old-run",
+    requestId: "old-request",
+  };
+  const prompt = "continue",
+    task = "finish task",
+    marker = "DONE";
+  const entries: any[] = [
+    {
+      type: "message",
+      id: "prompt",
+      message: { role: "user", content: prompt },
+    },
+    {
+      type: "message",
+      id: "call",
+      parentId: "prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool",
+            name: "continue_agent",
+            arguments: { session: identity.sessionPath, task },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "result",
+      parentId: "call",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        toolCallId: "tool",
+        details: {
+          ok: true,
+          action: "continue",
+          session_id: "child",
+          session_path: "/child.jsonl",
+          owner_session_id: "owner",
+          agent: "agent",
+          definition: "worker",
+          request_id: "new-request",
+        },
+      },
+    },
+    {
+      type: "custom_message",
+      id: "receipt",
+      parentId: "result",
+      customType: "pi-herdsman-agent-result",
+      content: "Agent result · agent=agent\n\nDONE",
+      details: {
+        requestId: "new-request",
+        ownerSessionId: "owner",
+        agentLabel: "agent",
+        agentDefinition: "worker",
+        piSessionId: "child",
+        piSessionFile: "/child.jsonl",
+        runId: "new-run",
+        status: "completed",
+        sessionRetired: false,
+      },
+    },
+    {
+      type: "message",
+      id: "response",
+      parentId: "receipt",
+      message: { role: "assistant", stopReason: "stop", content: marker },
+    },
+  ];
+  const child: any[] = [
+    { type: "session", id: "child" },
+    {
+      type: "message",
+      id: "earlier",
+      message: { role: "user", content: "earlier" },
+    },
+    {
+      type: "message",
+      id: "leaf",
+      parentId: "earlier",
+      message: { role: "assistant", content: "stopped" },
+    },
+    {
+      type: "message",
+      id: "task",
+      parentId: "leaf",
+      message: { role: "user", content: task },
+    },
+  ];
+  const encode = (value: unknown[]) =>
+    value.map((entry) => JSON.stringify(entry)).join("\n");
+  const boundary = encode(child.slice(0, 3)) + "\n";
+  const check = (root = entries, saved = child, before = boundary) =>
+    activeStopContinuationEvidence(
+      encode(root),
+      encode(saved),
+      "response",
+      prompt,
+      marker,
+      identity,
+      before,
+    );
+  assert.deepEqual(check(), {
+    sessionId: "child",
+    runId: "new-run",
+    requestId: "new-request",
+  });
+  for (const [retired, notice] of [
+    [
+      true,
+      "Continuation unavailable: session retired after context pressure. If follow-up work remains, use delegate_agent with this result and relevant files.",
+    ],
+    [
+      null,
+      "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent.",
+    ],
+  ] as const) {
+    const valid = structuredClone(entries);
+    valid[3].details.sessionRetired = retired;
+    valid[3].content = `Agent result · agent=agent\n\n${notice}\n\nDONE`;
+    assert.ok(check(valid));
+  }
+  const referenced = structuredClone(entries);
+  referenced[2].message.details.request_id = referenced[3].details.requestId =
+    "550e8400-e29b-41d4-a716-446655440000";
+  referenced[3].details.resultRef = `result:${referenced[3].details.requestId}`;
+  referenced[3].content =
+    "Agent result · agent=agent\n\nResult ref: result:agent#1\n\nDONE";
+  assert.ok(check(referenced));
+  for (const [index, field, value] of [
+    [2, "request_id", "old-request"],
+    [2, "session_path", "/other"],
+    [2, "owner_session_id", "other"],
+    [2, "agent", "other"],
+    [2, "definition", "other"],
+    [3, "requestId", "other"],
+    [3, "ownerSessionId", "other"],
+    [3, "agentLabel", "other"],
+    [3, "agentDefinition", "other"],
+    [3, "piSessionId", "other"],
+    [3, "piSessionFile", "/other"],
+    [3, "runId", "old-run"],
+    [3, "status", "failed"],
+  ] as const) {
+    const copy = structuredClone(entries);
+    (index === 2 ? copy[index].message.details : copy[index].details)[field] =
+      value;
+    assert.equal(check(copy), null, field);
+  }
+  const missingMarker = structuredClone(entries);
+  missingMarker[3].content = "no marker";
+  assert.equal(check(missingMarker), null);
+  const sibling = structuredClone(entries);
+  sibling[4].parentId = "result";
+  assert.equal(check(sibling), null);
+  const wrapper = structuredClone(entries);
+  wrapper[3].content = "Agent result · agent=DONE\n\nnot present";
+  assert.equal(check(wrapper), null);
+  const status = structuredClone(entries);
+  status[3].content = "Agent result · agent=agent\n\nnot present\n\nDONE";
+  status[3].details.delegationStatus = "DONE";
+  assert.equal(check(status), null);
+  const reference = structuredClone(entries);
+  reference[3].content =
+    "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
+  reference[3].details.resultRef = "result:request";
+  assert.equal(check(reference), null);
+  for (const value of [undefined, 0, "false", {}, []]) {
+    const malformed = structuredClone(entries);
+    malformed[3].details.sessionRetired = value;
+    malformed[3].content = "Agent result · agent=agent\n\nDONE\n\nnot present";
+    assert.equal(check(malformed), null);
+  }
+  for (const value of [null, false, "", 0, {}, "result:request"]) {
+    const malformed = structuredClone(entries);
+    malformed[3].details.resultRef = value;
+    malformed[3].content =
+      "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
+    assert.equal(check(malformed), null);
+  }
+  const branched = structuredClone(child);
+  branched[3].parentId = "earlier";
+  assert.equal(check(entries, branched), null);
+  assert.equal(check(entries, child, encode(child)), null);
+  const abandonedTask = [
+    ...child,
+    {
+      type: "message",
+      id: "other",
+      message: { role: "assistant", content: "other" },
+    },
+  ];
+  assert.equal(check(entries, abandonedTask), null);
+  const wrongSession = structuredClone(child);
+  wrongSession[0].id = "other";
+  assert.equal(check(entries, wrongSession), null);
+  const wrongTask = structuredClone(child);
+  wrongTask[3].message.content = "other";
+  assert.equal(check(entries, wrongTask), null);
 });
 
 test("terminal-failure evidence remains actionable and Manager uses only delegate_project", () => {
