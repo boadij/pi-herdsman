@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.34.0](https://github.com/boadij/pi-herdsman/compare/v0.33.1...v0.34.0) (2026-10-27)
+
+
+### Features
+
+* **manager:** initialize Git repositories on explicit activation ([#609](https://github.com/boadij/pi-herdsman/issues/609)) ([ac878e9](https://github.com/boadij/pi-herdsman/commit/ac878e9f2084848818db383214eaa49e2131b352))
+
+
+### Fixes
+
+* **agent:** preserve continuation after verified stop ([#620](https://github.com/boadij/pi-herdsman/issues/620)) ([9df5180](https://github.com/boadij/pi-herdsman/commit/9df518042ed7d57c3c5fd04308a0f091f7067a6b))
+* **coordination:** clarify lifecycle tool contracts and results ([#623](https://github.com/boadij/pi-herdsman/issues/623)) ([87542da](https://github.com/boadij/pi-herdsman/commit/87542daf05cff4c79b3960ba71315cb7cfa4ec37))
+* **coordination:** clarify supervisor and peer messaging ([#627](https://github.com/boadij/pi-herdsman/issues/627)) ([0ee23c3](https://github.com/boadij/pi-herdsman/commit/0ee23c393f0441a68d0add87772ec8cbe9da07bd))
+* **manager:** allow safe legacy orphan retirement ([#628](https://github.com/boadij/pi-herdsman/issues/628)) ([1afcab3](https://github.com/boadij/pi-herdsman/commit/1afcab376e8c67ae4155ce630b35c242f0237628))
+* **manager:** default new Git bootstrap repositories to main ([#629](https://github.com/boadij/pi-herdsman/issues/629)) ([5869bea](https://github.com/boadij/pi-herdsman/commit/5869bea6168fdfecb8df75c2fdbf609aacacedbd))
+* **manager:** retire failed-start project assignments safely ([#617](https://github.com/boadij/pi-herdsman/issues/617)) ([5df49d7](https://github.com/boadij/pi-herdsman/commit/5df49d72cfdeec3a101c501353e3207ad3c9873a))
+* **supervision:** wait for project assignment authority ([#624](https://github.com/boadij/pi-herdsman/issues/624)) ([87c2ecb](https://github.com/boadij/pi-herdsman/commit/87c2ecb90c4767b0e311bd0576087dd9444c10df))
+
+
+### Refactoring
+
+* **test:** eliminate redundant suite coverage and fixtures ([#631](https://github.com/boadij/pi-herdsman/issues/631)) ([f8fc67b](https://github.com/boadij/pi-herdsman/commit/f8fc67b7583a239c2df90662a755e9fca41f302e)), closes [#630](https://github.com/boadij/pi-herdsman/issues/630)
+
+
+### Documentation
+
+* **agents:** clarify capability-based delegation descriptions ([#610](https://github.com/boadij/pi-herdsman/issues/610)) ([40c7534](https://github.com/boadij/pi-herdsman/commit/40c7534d00beb8c47b1a768ff08838091533a78e))
+
+
+### CI
+
+* use static peer federation job name ([#632](https://github.com/boadij/pi-herdsman/issues/632)) ([51a757c](https://github.com/boadij/pi-herdsman/commit/51a757cfc4676109de7293d75a31de44652e0056))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.20 ([#626](https://github.com/boadij/pi-herdsman/issues/626)) ([7ce4643](https://github.com/boadij/pi-herdsman/commit/7ce464313a696fbf383e016c0f6c570896f16f0c))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.21 ([#633](https://github.com/boadij/pi-herdsman/issues/633)) ([c3723b4](https://github.com/boadij/pi-herdsman/commit/c3723b40fea944b082fc46b34d6071cb6a5e349f))
+
 ## [0.33.1](https://github.com/boadij/pi-herdsman/compare/v0.33.0...v0.33.1) (2026-10-25)
 
 
