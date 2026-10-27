@@ -4908,8 +4908,20 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   assert.match(body, /requestId !== identity\.requestId/);
   assert.match(
     body,
-    /sessionId: resumed\.sessionId,\s*runId: resumed\.runId,\s*requestId: resumed\.requestId/,
+    /sessionId: resumed\.session\.id,\s*runId: resumed\.mailbox\.state\.runId,\s*requestId: resumed\.mailbox\.state\.activeRequestId/,
   );
+  assert.match(body, /const startupHistory = responseCompleted\s*\? undefined/);
+  assert.match(body, /\.slice\(-4\)[\s\S]*?role: entry\.message\.role/);
+  assert.match(body, /stopReason: entry\.message\.stopReason/);
+  assert.match(
+    body,
+    /parentId: sanitizeManagerBootstrapText\(entry\.parentId, ctx\)/,
+  );
+  assert.match(
+    body,
+    /messageText\(entry\.message\.content\)[\s\S]*?\.slice\(-200\)/,
+  );
+  assert.match(body, /\.\.\.\(startupHistory && \{ startupHistory \}\)/);
   assert.match(body, /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/);
   assert.match(body, /process\.kill\(pid, 0\)/);
   assert.match(body, /error\?\.code !== "ESRCH"/);

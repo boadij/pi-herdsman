@@ -8669,6 +8669,28 @@ async function runActiveStopSmoke(ctx) {
         startupPrompt,
         "PI_HERDSMAN_ACTIVE_STOP_READY.",
       );
+      const startupHistory = responseCompleted
+        ? undefined
+        : sessionEntries(snapshot.contents)
+            .filter(
+              (entry) =>
+                entry.type === "message" &&
+                ["user", "assistant"].includes(entry.message?.role),
+            )
+            .slice(-4)
+            .map((entry) => ({
+              id: sanitizeManagerBootstrapText(entry.id, ctx).slice(0, 100),
+              role: entry.message.role,
+              stopReason: entry.message.stopReason ?? null,
+              parentId: sanitizeManagerBootstrapText(entry.parentId, ctx).slice(
+                0,
+                100,
+              ),
+              text: sanitizeManagerBootstrapText(
+                messageText(entry.message.content),
+                ctx,
+              ).slice(-200),
+            }));
       const header = sessionEntries(snapshot.contents).find(
         (entry) => entry.type === "session",
       );
@@ -8702,6 +8724,7 @@ async function runActiveStopSmoke(ctx) {
           observationError: processObservationError,
           progress: {
             responseCompleted,
+            ...(startupHistory && { startupHistory }),
             candidateProcess: processObservationError,
             terminalTail,
           },
@@ -8736,6 +8759,7 @@ async function runActiveStopSmoke(ctx) {
           progress: {
             snapshot: true,
             responseCompleted,
+            ...(startupHistory && { startupHistory }),
             candidatePids: matches
               .map(({ pid }) => pid)
               .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
@@ -9107,9 +9131,9 @@ async function runActiveStopSmoke(ctx) {
           return {
             done: true,
             value: {
-              sessionId: resumed.sessionId,
-              runId: resumed.runId,
-              requestId: resumed.requestId,
+              sessionId: resumed.session.id,
+              runId: resumed.mailbox.state.runId,
+              requestId: resumed.mailbox.state.activeRequestId,
             },
           };
       }
