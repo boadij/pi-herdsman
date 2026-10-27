@@ -2534,7 +2534,6 @@ test("staged fresh assignment removes a fast completion during the initial resul
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(result.details.request_id, fixture.requestId);
     const requestId = fixture.requestId;
-    assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
     fixture.markCompleted(requestId);
 

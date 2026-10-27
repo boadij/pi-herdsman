@@ -235,10 +235,6 @@ test("current error codes replace the legacy label and busy codes", async () => 
       fakeContext(),
     );
   assert.equal(duplicateResult.details.error.category, "agent_label_exists");
-  assert.notEqual(
-    duplicateResult.details.error.category,
-    "worker_label_exists",
-  );
   duplicatePi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(duplicateMailbox);
 
@@ -272,7 +268,6 @@ test("current error codes replace the legacy label and busy codes", async () => 
         fakeContext(),
       );
     assert.equal(busyResult.details.error.category, "agent_busy");
-    assert.notEqual(busyResult.details.error.category, "worker_busy");
   } finally {
     busyPi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(busyMailbox);

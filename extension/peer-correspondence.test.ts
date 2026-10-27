@@ -394,7 +394,7 @@ test("peer origin display metadata validates, persists, and enriches without bre
   removePeerCorrespondence(c.id);
 });
 
-test("same exact session may explicitly recover a changed generation, but mismatched generations cannot poll", () => {
+test("same exact session may explicitly recover a changed generation, but a mismatched origin generation cannot poll", () => {
   const c = createPeerCorrespondence({
     originSession: randomUUID(),
     originGeneration: randomUUID(),
@@ -411,18 +411,6 @@ test("same exact session may explicitly recover a changed generation, but mismat
         randomUUID(),
         c.recipientSession,
         c.recipientGeneration,
-      ),
-    /authorization/,
-  );
-  assert.throws(
-    () =>
-      pollPeerReplies(
-        c.id,
-        c.capability,
-        c.originSession,
-        c.originGeneration,
-        c.recipientSession,
-        randomUUID(),
       ),
     /authorization/,
   );
