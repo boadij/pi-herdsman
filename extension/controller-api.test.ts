@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
@@ -251,316 +257,166 @@ const ownershipResult = (
   },
 });
 
-test("a manually continued assigned Lead rejects stale Manager messages and structures the malformed-topology probe error", async (t) => {
-  setLeadEnvironment();
-  const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
-  process.env.HERDR_SOCKET_PATH = socket;
-  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
-  process.env.HERDR_PANE_ID = "lead-pane";
-  process.env.HERDR_TAB_ID = "lead-tab";
-  const chiefId = randomUUID();
-  const managerId = randomUUID();
-  const leadId = randomUUID();
-  const runtime = supervisionRuntime();
-  const chief = claimChiefLease({
-    piSessionId: chiefId,
-    paneId: "chief-pane",
-    tabId: "chief-tab",
-    workspaceId: WORKSPACE,
-  });
-  const manager = claimManagerLease({
-    piSessionId: managerId,
-    paneId: "manager-pane",
-    tabId: "manager-tab",
-    workspaceId: WORKSPACE,
-    repoKey: "repo-key",
-  });
-  const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
-  const descriptor = readFileSync(descriptorPath, "utf8");
-  let managerReleased = false;
-  let managerIdentityUnavailable = false;
-  let malformedWorktreeTopology = false;
-  const agents = [
-    [chiefId, "chief-pane", "chief-tab", WORKSPACE],
-    [managerId, "manager-pane", "manager-tab", WORKSPACE],
-    [leadId, "lead-pane", "lead-tab", "linked-workspace"],
-  ].map(([id, pane_id, tab_id, workspace_id]) => ({
-    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
-    pane_id,
-    tab_id,
-    workspace_id,
-  }));
-  const exec = (_command: string, args: string[]) => {
-    let result: unknown = {};
-    if (isApiSnapshot(args))
-      result = { snapshot: { agents, panes: [], workspaces: [] } };
-    else if (isAgentList(args))
-      result = {
-        agents: managerIdentityUnavailable
-          ? agents.filter((agent) => agent.pane_id !== "manager-pane")
-          : agents,
-      };
-    else if (args[0] === "agent" && args[1] === "get")
-      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
-    else if (args[0] === "workspace" && args[1] === "get")
-      result = {
-        workspace: {
-          worktree: { repo_key: "repo-key", is_linked_worktree: true },
-        },
-      };
-    else if (args[0] === "worktree" && args[1] === "list")
-      result = malformedWorktreeTopology
-        ? {
-            source: {
-              repo_key: "repo-key",
-              repo_name: "project",
-              source_workspace_id: WORKSPACE,
-            },
-            worktrees: null,
-          }
-        : {
-            source: {
-              repo_key: "repo-key",
-              repo_name: "project",
-              source_workspace_id: WORKSPACE,
-            },
-            worktrees: [{ open_workspace_id: "linked-workspace" }],
-          };
-    return {
-      stdout: JSON.stringify({ id: AGENT_ID, result }),
-      stderr: "",
-      code: 0,
-    };
-  };
-  const pi = fakeChiefPi({ exec });
-  registerExtension!(pi.pi as never);
-  const ctx = fakeContext(pi.entries, []) as any;
-  ctx.sessionManager = {
-    ...ctx.sessionManager,
-    getSessionId: () => leadId,
-    getSessionFile: () => `/tmp/${leadId}.jsonl`,
-  };
-  assert.equal(process.env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
-  ctx.hasUI = true;
-  let statusWidget: StatusWidget | undefined;
-  ctx.ui.setWidget = (_key: string, content: unknown) => {
-    if (typeof content === "function")
-      statusWidget = (content as any)(
-        { requestRender: () => undefined },
-        {
-          fg: (_color: string, text: string) => text,
-          bold: (text: string) => text,
-        },
-      );
-  };
-  try {
-    writeProjectAssignment(runtime, {
-      version: 2,
-      id: leadId,
-      repoKey: "repo-key",
-      branch: "smoke/routing",
-      text: "routing assignment",
+test(
+  "a manually continued assigned Lead rejects stale Manager messages and structures the malformed-topology probe error",
+  { timeout: 20_000 },
+  async (t) => {
+    setLeadEnvironment();
+    const socket = join(
+      realpathSync(tmpdir()),
+      `manager-routing-${randomUUID()}.sock`,
+    );
+    process.env.HERDR_SOCKET_PATH = socket;
+    process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+    process.env.HERDR_PANE_ID = "lead-pane";
+    process.env.HERDR_TAB_ID = "lead-tab";
+    const chiefId = randomUUID();
+    const managerId = randomUUID();
+    const leadId = randomUUID();
+    const runtime = supervisionRuntime();
+    const chief = claimChiefLease({
+      piSessionId: chiefId,
+      paneId: "chief-pane",
+      tabId: "chief-tab",
+      workspaceId: WORKSPACE,
     });
-    writeLeadCoordinationState(runtime, {
-      version: 1,
-      role: "manager",
-      instanceId: randomUUID(),
+    const manager = claimManagerLease({
       piSessionId: managerId,
-      updatedAt: Date.now(),
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      workspaceId: WORKSPACE,
+      repoKey: realpathSync(tmpdir()),
     });
-    await pi.events.get("session_start")![0](undefined, ctx);
-    await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
-    );
-    const supervisorTool = pi.tools.find(
-      (tool) => tool.name === "message_supervisor",
-    )!;
-    const projectMessagesBeforeProbe = listProjectMessages(
-      runtime,
-      "repo-key",
-      "smoke/routing",
-    );
-    malformedWorktreeTopology = true;
-    const malformedTopologyResult = await supervisorTool.execute(
-      "malformed-topology-probe",
-      { message: "MUST_NOT_PUBLISH" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.equal(malformedTopologyResult.isError, true);
-    assert.deepEqual(malformedTopologyResult.content, [
-      { type: "text", text: "Herdr project topology is unavailable" },
-    ]);
-    assert.deepEqual(malformedTopologyResult.details, {
-      error: {
-        branchStatus: "operation_error_returned",
-        category: "internal_failure",
-      },
-    });
-    assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", "smoke/routing"),
-      projectMessagesBeforeProbe,
-    );
-    malformedWorktreeTopology = false;
-    ctx.isIdle = () => false;
-    const managerMessage = {
-      version: 2,
-      id: randomUUID(),
-      leaseId: manager.descriptor.leaseId,
-      kind: "manager_message",
-      fromSessionId: managerId,
-      toSessionId: leadId,
-      leadSessionId: leadId,
-      branch: "smoke/routing",
-      text: "change direction now",
-      createdAt: Date.now(),
-    } as const;
-    const managerMessagePath = writeChiefMessage(managerMessage, runtime);
-    await t.waitFor(() => {
-      const call = pi.sentMessageCalls.find(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-manager_message" &&
-          message?.content?.includes("change direction now"),
-      );
-      assert.ok(call);
-      assert.deepEqual(call.options, {
-        deliverAs: "steer",
-        triggerTurn: true,
-      });
-    });
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    assert.equal(
-      pi.sentMessageCalls.filter(
-        ({ message }: any) => message?.details?.id === managerMessage.id,
-      ).length,
-      1,
-    );
-    assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
-      managerMessagePath,
-    ]);
-    for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler({ aborted: true }, ctx);
-    ctx.isIdle = () => true;
-    await t.waitFor(() =>
-      assert.equal(
-        pi.sentMessageCalls.filter(
-          ({ message }: any) => message?.details?.id === managerMessage.id,
-        ).length,
-        2,
-      ),
-    );
-    const sentMessage = pi.sentMessageCalls.find(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-manager_message" &&
-        message?.details?.id === managerMessage.id,
-    )!.message as any;
-    pi.entries.push({ type: "custom", ...sentMessage });
-    assert.equal(ctx.sessionManager.getBranch().length, 0);
-    await t.waitFor(() =>
-      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-    );
-    const fallbackMessage = {
-      ...managerMessage,
-      id: randomUUID(),
-      text: "retry after Pi pre-run failure",
-      createdAt: Date.now(),
+    const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
+    const descriptor = readFileSync(descriptorPath, "utf8");
+    let managerReleased = false;
+    let managerIdentityUnavailable = false;
+    let malformedWorktreeTopology = false;
+    const agents = [
+      [chiefId, "chief-pane", "chief-tab", WORKSPACE],
+      [managerId, "manager-pane", "manager-tab", WORKSPACE],
+      [leadId, "lead-pane", "lead-tab", "linked-workspace"],
+    ].map(([id, pane_id, tab_id, workspace_id]) => ({
+      agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+      pane_id,
+      tab_id,
+      workspace_id,
+    }));
+    const exec = (_command: string, args: string[]) => {
+      if (_command === "git")
+        return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
+      let result: unknown = {};
+      if (isApiSnapshot(args))
+        result = { snapshot: { agents, panes: [], workspaces: [] } };
+      else if (isAgentList(args))
+        result = {
+          agents: managerIdentityUnavailable
+            ? agents.filter((agent) => agent.pane_id !== "manager-pane")
+            : agents,
+        };
+      else if (args[0] === "agent" && args[1] === "get")
+        result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+      else if (args[0] === "workspace" && args[1] === "get")
+        result = {
+          workspace: { workspace_id: args[2], worktree: null },
+        };
+      else if (args[0] === "worktree" && args[1] === "list")
+        result = malformedWorktreeTopology
+          ? {
+              source: {
+                repo_key: realpathSync(tmpdir()),
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: null,
+            }
+          : {
+              source: {
+                repo_key: realpathSync(tmpdir()),
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [{ open_workspace_id: "linked-workspace" }],
+            };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result }),
+        stderr: "",
+        code: 0,
+      };
     };
-    writeChiefMessage(fallbackMessage, runtime);
-    await t.waitFor(() =>
-      assert.equal(
-        pi.sentMessageCalls.filter(
-          ({ message }: any) => message?.details?.id === fallbackMessage.id,
-        ).length,
-        1,
-      ),
-    );
-    const originalNow = Date.now;
+    const pi = fakeChiefPi({ exec });
+    registerExtension!(pi.pi as never);
+    const ctx = fakeContext(pi.entries, []) as any;
+    ctx.sessionManager = {
+      ...ctx.sessionManager,
+      getSessionId: () => leadId,
+      getSessionFile: () => `/tmp/${leadId}.jsonl`,
+    };
+    assert.equal(process.env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
+    ctx.hasUI = true;
+    let statusWidget: StatusWidget | undefined;
+    ctx.ui.setWidget = (_key: string, content: unknown) => {
+      if (typeof content === "function")
+        statusWidget = (content as any)(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          },
+        );
+    };
     try {
-      let pending = true;
-      ctx.hasPendingMessages = () => pending;
-      Date.now = () => originalNow() + 30_001;
-      await new Promise((resolve) => setTimeout(resolve, 650));
-      assert.equal(
-        pi.sentMessageCalls.filter(
-          ({ message }: any) => message?.details?.id === fallbackMessage.id,
-        ).length,
-        1,
-      );
-      pending = false;
+      writeProjectAssignment(runtime, {
+        version: 2,
+        id: leadId,
+        repoKey: realpathSync(tmpdir()),
+        branch: "smoke/routing",
+        text: "routing assignment",
+      });
+      writeLeadCoordinationState(runtime, {
+        version: 1,
+        role: "manager",
+        instanceId: randomUUID(),
+        piSessionId: managerId,
+        updatedAt: Date.now(),
+      });
+      await pi.events.get("session_start")![0](undefined, ctx);
       await t.waitFor(() =>
-        assert.equal(
-          pi.sentMessageCalls.filter(
-            ({ message }: any) => message?.details?.id === fallbackMessage.id,
-          ).length,
-          2,
-        ),
+        assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
       );
-    } finally {
-      Date.now = originalNow;
-    }
-    const fallbackReceipt = pi.sentMessageCalls.find(
-      ({ message }: any) => message?.details?.id === fallbackMessage.id,
-    )!.message as any;
-    pi.entries.push({ type: "custom", ...fallbackReceipt });
-    await t.waitFor(() =>
-      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-    );
-    const tool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
-    )!;
-    const send = (message: string) =>
-      tool.execute("message", { message }, undefined, undefined, ctx);
-    const records = (id: string) =>
-      listChiefMessagePaths(runtime, id).map((path) => readChiefMessage(path));
-
-    const identityEntry = pi.entries.find(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-session-kind" &&
-        entry.data?.sessionId === leadId,
-    ) as any;
-    const managedIdentity = identityEntry.data;
-    const beforeContradictoryIdentity = listProjectMessages(
-      runtime,
-      "repo-key",
-      "smoke/routing",
-    );
-    identityEntry.data = { version: 1, sessionId: leadId, kind: "ordinary" };
-    const ordinaryResult = await send("ORDINARY_CANNOT_USE_PROJECT_ROUTE");
-    assert.equal(
-      JSON.stringify(ordinaryResult).includes(
-        "Project message saved for Manager",
-      ),
-      false,
-    );
-    assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", "smoke/routing"),
-      beforeContradictoryIdentity,
-    );
-    identityEntry.data = managedIdentity;
-    const saved = await send("SMOKE_READY_1");
-    assert.match(JSON.stringify(saved), /Project message saved for Manager/);
-    assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", "smoke/routing").map(
-        ({ repoKey, branch, fromSessionId, text }) => ({
-          repoKey,
-          branch,
-          fromSessionId,
-          text,
-        }),
-      ),
-      [
-        {
-          repoKey: "repo-key",
-          branch: "smoke/routing",
-          fromSessionId: leadId,
-          text: "SMOKE_READY_1",
+      const supervisorTool = pi.tools.find(
+        (tool) => tool.name === "message_supervisor",
+      )!;
+      const projectMessagesBeforeProbe = listProjectMessages(
+        runtime,
+        realpathSync(tmpdir()),
+        "smoke/routing",
+      );
+      malformedWorktreeTopology = true;
+      const malformedTopologyResult = await supervisorTool.execute(
+        "malformed-topology-probe",
+        { message: "MUST_NOT_PUBLISH" },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(malformedTopologyResult.isError, true);
+      assert.deepEqual(malformedTopologyResult.content, [
+        { type: "text", text: "Herdr project topology is unavailable" },
+      ]);
+      assert.deepEqual(malformedTopologyResult.details, {
+        error: {
+          branchStatus: "operation_error_returned",
+          category: "internal_failure",
         },
-      ],
-    );
-    const staleText = "must be rejected after retirement";
-    writeChiefMessage(
-      {
+      });
+      assert.deepEqual(
+        listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing"),
+        projectMessagesBeforeProbe,
+      );
+      malformedWorktreeTopology = false;
+      ctx.isIdle = () => false;
+      const managerMessage = {
         version: 2,
         id: randomUUID(),
         leaseId: manager.descriptor.leaseId,
@@ -569,185 +425,490 @@ test("a manually continued assigned Lead rejects stale Manager messages and stru
         toSessionId: leadId,
         leadSessionId: leadId,
         branch: "smoke/routing",
-        text: staleText,
+        text: "change direction now",
         createdAt: Date.now(),
-      },
-      runtime,
-    );
-    removeProjectAssignment(runtime, "repo-key", "smoke/routing");
-    const unavailableProjectMessages = listProjectMessages(
-      runtime,
-      "repo-key",
-      "smoke/routing",
-    );
-    const unavailableRoute = await send("MUST_NOT_FALL_BACK");
-    assert.equal(unavailableRoute.isError, true);
-    assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", "smoke/routing"),
-      unavailableProjectMessages,
-    );
-    await t.waitFor(() =>
-      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-    );
-    assert.equal(
-      pi.sentMessageCalls.some(({ message }: any) =>
-        message?.content?.includes(staleText),
-      ),
-      false,
-    );
-    writeProjectAssignment(runtime, {
-      version: 2,
-      id: leadId,
-      repoKey: "repo-key",
-      branch: "smoke/routing",
-      text: "routing assignment",
-    });
-    const inconclusiveText = "retain while scope is unavailable";
-    const inconclusive = {
-      ...managerMessage,
-      id: randomUUID(),
-      text: inconclusiveText,
-    };
-    managerIdentityUnavailable = true;
-    const inconclusivePath = writeChiefMessage(inconclusive, runtime);
-    await new Promise((resolve) => setTimeout(resolve, 650));
-    assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
-      inconclusivePath,
-    ]);
-    assert.equal(
-      pi.sentMessageCalls.some(({ message }: any) =>
-        message?.content?.includes(inconclusiveText),
-      ),
-      false,
-    );
-    managerIdentityUnavailable = false;
-    await t.waitFor(() =>
-      assert.ok(
+      } as const;
+      const managerMessagePath = writeChiefMessage(managerMessage, runtime);
+      await t.waitFor(() => {
+        const call = pi.sentMessageCalls.find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-manager_message" &&
+            message?.content?.includes("change direction now"),
+        );
+        assert.ok(call);
+        assert.deepEqual(call.options, {
+          deliverAs: "steer",
+          triggerTurn: true,
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === managerMessage.id,
+        ).length,
+        1,
+      );
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+        managerMessagePath,
+      ]);
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler({ aborted: true }, ctx);
+      ctx.isIdle = () => true;
+      await t.waitFor(() =>
+        assert.equal(
+          pi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === managerMessage.id,
+          ).length,
+          2,
+        ),
+      );
+      const sentMessage = pi.sentMessageCalls.find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.details?.id === managerMessage.id,
+      )!.message as any;
+      pi.entries.push({ type: "custom", ...sentMessage });
+      assert.equal(ctx.sessionManager.getBranch().length, 0);
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
+      for (const field of ["toSessionId", "leadSessionId"] as const) {
+        const mismatched = { ...managerMessage, id: randomUUID() };
+        const path = writeChiefMessage(mismatched, runtime);
+        writeFileSync(
+          path,
+          JSON.stringify({
+            ...mismatched,
+            build: HERDSMAN_BUILD,
+            [field]: randomUUID(),
+          }),
+        );
+        await t.waitFor(() =>
+          assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+        );
+        assert.equal(
+          pi.sentMessageCalls.some(
+            ({ message }: any) => message?.details?.id === mismatched.id,
+          ),
+          false,
+        );
+      }
+      const secondId = randomUUID();
+      const second = claimManagerLease({
+        piSessionId: secondId,
+        paneId: "second-manager-pane",
+        tabId: "second-manager-tab",
+        workspaceId: "second-manager-workspace",
+        repoKey: realpathSync(tmpdir()),
+      });
+      agents.push({
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: secondId,
+        },
+        pane_id: "second-manager-pane",
+        tab_id: "second-manager-tab",
+        workspace_id: "second-manager-workspace",
+      });
+      try {
+        writeLeadCoordinationState(runtime, {
+          version: 1,
+          role: "manager",
+          instanceId: randomUUID(),
+          piSessionId: secondId,
+          updatedAt: Date.now(),
+        });
+        const secondMessage = {
+          ...managerMessage,
+          id: randomUUID(),
+          fromSessionId: secondId,
+          leaseId: second.descriptor.leaseId,
+        };
+        const secondDescriptorPath = managerDescriptorPath(
+          runtime,
+          "second-manager-workspace",
+        );
+        const secondDescriptor = readFileSync(secondDescriptorPath, "utf8");
+        writeFileSync(secondDescriptorPath, "{");
+        const secondPath = writeChiefMessage(secondMessage, runtime);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        assert.deepEqual(listChiefMessagePaths(runtime, leadId), [secondPath]);
+        assert.equal(
+          pi.sentMessageCalls.some(
+            ({ message }: any) => message?.details?.id === secondMessage.id,
+          ),
+          false,
+        );
+        writeFileSync(secondDescriptorPath, secondDescriptor);
+        await t.waitFor(() =>
+          assert.ok(
+            pi.sentMessageCalls.some(
+              ({ message }: any) => message?.details?.id === secondMessage.id,
+            ),
+          ),
+        );
+        assert.deepEqual(listChiefMessagePaths(runtime, leadId), [secondPath]);
+        const receipt = pi.sentMessageCalls.find(
+          ({ message }: any) => message?.details?.id === secondMessage.id,
+        )!.message as any;
+        pi.entries.push({ type: "custom", ...receipt });
+        await t.waitFor(() =>
+          assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+        );
+      } finally {
+        second.release();
+      }
+      const fallbackMessage = {
+        ...managerMessage,
+        id: randomUUID(),
+        text: "retry after Pi pre-run failure",
+        createdAt: Date.now(),
+      };
+      writeChiefMessage(fallbackMessage, runtime);
+      await t.waitFor(() =>
+        assert.equal(
+          pi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === fallbackMessage.id,
+          ).length,
+          1,
+        ),
+      );
+      const originalNow = Date.now;
+      try {
+        let pending = true;
+        ctx.hasPendingMessages = () => pending;
+        Date.now = () => originalNow() + 30_001;
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(
+          pi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === fallbackMessage.id,
+          ).length,
+          1,
+        );
+        pending = false;
+        await t.waitFor(() =>
+          assert.equal(
+            pi.sentMessageCalls.filter(
+              ({ message }: any) => message?.details?.id === fallbackMessage.id,
+            ).length,
+            2,
+          ),
+        );
+      } finally {
+        Date.now = originalNow;
+      }
+      const fallbackReceipt = pi.sentMessageCalls.find(
+        ({ message }: any) => message?.details?.id === fallbackMessage.id,
+      )!.message as any;
+      pi.entries.push({ type: "custom", ...fallbackReceipt });
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
+      const tool = pi.tools.find(
+        (candidate) => candidate.name === "message_supervisor",
+      )!;
+      const send = (message: string) =>
+        tool.execute("message", { message }, undefined, undefined, ctx);
+      const records = (id: string) =>
+        listChiefMessagePaths(runtime, id).map((path) =>
+          readChiefMessage(path),
+        );
+
+      const identityEntry = pi.entries.find(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-session-kind" &&
+          entry.data?.sessionId === leadId,
+      ) as any;
+      const managedIdentity = identityEntry.data;
+      const beforeContradictoryIdentity = listProjectMessages(
+        runtime,
+        realpathSync(tmpdir()),
+        "smoke/routing",
+      );
+      identityEntry.data = { version: 1, sessionId: leadId, kind: "ordinary" };
+      const ordinaryResult = await send("ORDINARY_CANNOT_USE_PROJECT_ROUTE");
+      assert.equal(
+        JSON.stringify(ordinaryResult).includes(
+          "Project message saved for Manager",
+        ),
+        false,
+      );
+      assert.deepEqual(
+        listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing"),
+        beforeContradictoryIdentity,
+      );
+      identityEntry.data = managedIdentity;
+      const saved = await send("SMOKE_READY_1");
+      assert.match(JSON.stringify(saved), /Project message saved for Manager/);
+      assert.deepEqual(
+        listProjectMessages(
+          runtime,
+          realpathSync(tmpdir()),
+          "smoke/routing",
+        ).map(({ repoKey, branch, fromSessionId, text }) => ({
+          repoKey,
+          branch,
+          fromSessionId,
+          text,
+        })),
+        [
+          {
+            repoKey: realpathSync(tmpdir()),
+            branch: "smoke/routing",
+            fromSessionId: leadId,
+            text: "SMOKE_READY_1",
+          },
+        ],
+      );
+      const staleText = "must be rejected after retirement";
+      writeChiefMessage(
+        {
+          version: 2,
+          id: randomUUID(),
+          leaseId: manager.descriptor.leaseId,
+          kind: "manager_message",
+          fromSessionId: managerId,
+          toSessionId: leadId,
+          leadSessionId: leadId,
+          branch: "smoke/routing",
+          text: staleText,
+          createdAt: Date.now(),
+        },
+        runtime,
+      );
+      removeProjectAssignment(runtime, realpathSync(tmpdir()), "smoke/routing");
+      identityEntry.data = { version: 1, sessionId: leadId, kind: "ordinary" };
+      const otherId = randomUUID();
+      const other = claimManagerLease({
+        piSessionId: otherId,
+        paneId: "other-manager-pane",
+        tabId: "other-manager-tab",
+        workspaceId: "other-manager-workspace",
+        repoKey: realpathSync(tmpdir()),
+      });
+      agents.push({
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: otherId,
+        },
+        pane_id: "other-manager-pane",
+        tab_id: "other-manager-tab",
+        workspace_id: "other-manager-workspace",
+      });
+      writeLeadCoordinationState(runtime, {
+        version: 1,
+        role: "manager",
+        instanceId: randomUUID(),
+        piSessionId: otherId,
+        updatedAt: Date.now(),
+      });
+      const ordinaryMessage = {
+        ...managerMessage,
+        id: randomUUID(),
+        fromSessionId: otherId,
+        leaseId: other.descriptor.leaseId,
+        branch: undefined,
+      };
+      const ordinaryPath = writeChiefMessage(ordinaryMessage, runtime);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      assert.equal(
+        pi.sentMessageCalls.some(
+          ({ message }: any) => message?.details?.id === ordinaryMessage.id,
+        ),
+        false,
+      );
+      rmSync(ordinaryPath, { force: true });
+      other.release();
+      identityEntry.data = managedIdentity;
+      const unavailableProjectMessages = listProjectMessages(
+        runtime,
+        realpathSync(tmpdir()),
+        "smoke/routing",
+      );
+      const unavailableRoute = await send("MUST_NOT_FALL_BACK");
+      assert.equal(unavailableRoute.isError, true);
+      assert.deepEqual(
+        listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing"),
+        unavailableProjectMessages,
+      );
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
+      assert.equal(
+        pi.sentMessageCalls.some(({ message }: any) =>
+          message?.content?.includes(staleText),
+        ),
+        false,
+      );
+      writeProjectAssignment(runtime, {
+        version: 2,
+        id: leadId,
+        repoKey: realpathSync(tmpdir()),
+        branch: "smoke/routing",
+        text: "routing assignment",
+      });
+      const inconclusiveText = "retain while scope is unavailable";
+      const inconclusive = {
+        ...managerMessage,
+        id: randomUUID(),
+        text: inconclusiveText,
+      };
+      managerIdentityUnavailable = true;
+      const inconclusivePath = writeChiefMessage(inconclusive, runtime);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+        inconclusivePath,
+      ]);
+      assert.equal(
         pi.sentMessageCalls.some(({ message }: any) =>
           message?.content?.includes(inconclusiveText),
         ),
-      ),
-    );
-    const inconclusiveReceipt = pi.sentMessageCalls.find(({ message }: any) =>
-      message?.content?.includes(inconclusiveText),
-    )!.message as any;
-    pi.entries.push({ type: "custom", ...inconclusiveReceipt });
-    await t.waitFor(() =>
-      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-    );
-    manager.release();
-    managerReleased = true;
-    const replacementManager = claimManagerLease({
-      piSessionId: managerId,
-      paneId: "manager-pane",
-      tabId: "manager-tab",
-      workspaceId: WORKSPACE,
-      repoKey: "repo-key",
-    });
-    const replacedText = "reject replaced Manager generation";
-    writeChiefMessage(
-      { ...managerMessage, id: randomUUID(), text: replacedText },
-      runtime,
-    );
-    await t.waitFor(() =>
-      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-    );
-    assert.equal(
-      pi.sentMessageCalls.some(({ message }: any) =>
-        message?.content?.includes(replacedText),
-      ),
-      false,
-    );
-    replacementManager.release();
-    const withoutManager = await send("MANAGER_ABSENT_OK");
-    assert.match(
-      JSON.stringify(withoutManager),
-      /Project message saved for Manager/,
-    );
-    assert.deepEqual(
-      listProjectMessages(runtime, "repo-key", "smoke/routing").map(
-        (record) => record.text,
-      ),
-      ["SMOKE_READY_1", "MANAGER_ABSENT_OK"],
-    );
-
-    const branchEntries = ctx.sessionManager.getBranch() as any[];
-    const turnStart = Date.now();
-    for (const handler of pi.events.get("agent_start") ?? [])
-      await handler(undefined, ctx);
-    const continuationResponse = {
-      role: "assistant",
-      timestamp: turnStart + 1,
-      content: [{ type: "text", text: "Manual continuation result." }],
-    };
-    branchEntries.push({
-      type: "message",
-      message: continuationResponse,
-    });
-    for (const handler of pi.events.get("turn_end") ?? [])
-      await handler(
-        {
-          outcome: "completed",
-          message: continuationResponse,
-          messageEntryId: "manual-continuation-response",
-        },
-        ctx,
+        false,
       );
-    for (const handler of pi.events.get("agent_before_settle") ?? [])
-      await handler({ outcome: "completed" }, ctx);
-    for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler({ aborted: false }, ctx);
-    await t.waitFor(() =>
-      assert.equal(
-        listProjectMessages(runtime, "repo-key", "smoke/routing").length,
-        3,
-      ),
-    );
-    assert.equal(
-      listProjectMessages(runtime, "repo-key", "smoke/routing")[2].text,
-      "Manual continuation result.",
-    );
-
-    assert.equal(pi.commandOptions.has("takeover"), false);
-    const current = listProjectAssignments(runtime, "repo-key")[0]!;
-    assert.equal(retireProjectAssignment(runtime, current), true);
-    recoverStaleProjectMessages(runtime, "repo-key");
-    assert.equal(ctx.sessionManager.getSessionId(), leadId);
-    assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
-    await pi.commandOptions.get("lead")!.handler("flexible", ctx);
-    await t.waitFor(() =>
-      assert.match(statusWidget!.render(160)[0], /managed/),
-    );
-
-    for (const handler of pi.events.get("agent_start") ?? [])
-      await handler(undefined, ctx);
-    branchEntries.push({
-      type: "message",
-      message: {
-        role: "assistant",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "Historical managed result." }],
-      },
-    });
-    for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler({ aborted: false }, ctx);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(
-      listProjectMessages(runtime, "repo-key", "smoke/routing").length,
-      0,
-    );
-  } finally {
-    await pi.events.get("session_shutdown")?.[0]();
-    if (!managerReleased) {
-      if (!realFs.existsSync(descriptorPath))
-        writeFileSync(descriptorPath, descriptor);
+      managerIdentityUnavailable = false;
+      await t.waitFor(() =>
+        assert.ok(
+          pi.sentMessageCalls.some(({ message }: any) =>
+            message?.content?.includes(inconclusiveText),
+          ),
+        ),
+      );
+      const inconclusiveReceipt = pi.sentMessageCalls.find(({ message }: any) =>
+        message?.content?.includes(inconclusiveText),
+      )!.message as any;
+      pi.entries.push({ type: "custom", ...inconclusiveReceipt });
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
       manager.release();
+      managerReleased = true;
+      const replacementManager = claimManagerLease({
+        piSessionId: managerId,
+        paneId: "manager-pane",
+        tabId: "manager-tab",
+        workspaceId: WORKSPACE,
+        repoKey: realpathSync(tmpdir()),
+      });
+      const replacedText = "reject replaced Manager generation";
+      writeChiefMessage(
+        { ...managerMessage, id: randomUUID(), text: replacedText },
+        runtime,
+      );
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
+      assert.equal(
+        pi.sentMessageCalls.some(({ message }: any) =>
+          message?.content?.includes(replacedText),
+        ),
+        false,
+      );
+      replacementManager.release();
+      const withoutManager = await send("MANAGER_ABSENT_OK");
+      assert.match(
+        JSON.stringify(withoutManager),
+        /Project message saved for Manager/,
+      );
+      assert.deepEqual(
+        listProjectMessages(
+          runtime,
+          realpathSync(tmpdir()),
+          "smoke/routing",
+        ).map((record) => record.text),
+        ["SMOKE_READY_1", "MANAGER_ABSENT_OK"],
+      );
+
+      const branchEntries = ctx.sessionManager.getBranch() as any[];
+      const turnStart = Date.now();
+      for (const handler of pi.events.get("agent_start") ?? [])
+        await handler(undefined, ctx);
+      const continuationResponse = {
+        role: "assistant",
+        timestamp: turnStart + 1,
+        content: [{ type: "text", text: "Manual continuation result." }],
+      };
+      branchEntries.push({
+        type: "message",
+        message: continuationResponse,
+      });
+      for (const handler of pi.events.get("turn_end") ?? [])
+        await handler(
+          {
+            outcome: "completed",
+            message: continuationResponse,
+            messageEntryId: "manual-continuation-response",
+          },
+          ctx,
+        );
+      for (const handler of pi.events.get("agent_before_settle") ?? [])
+        await handler({ outcome: "completed" }, ctx);
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler({ aborted: false }, ctx);
+      await t.waitFor(() =>
+        assert.equal(
+          listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing")
+            .length,
+          3,
+        ),
+      );
+      assert.equal(
+        listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing")[2]
+          .text,
+        "Manual continuation result.",
+      );
+
+      assert.equal(pi.commandOptions.has("takeover"), false);
+      const current = listProjectAssignments(
+        runtime,
+        realpathSync(tmpdir()),
+      )[0]!;
+      assert.equal(retireProjectAssignment(runtime, current), true);
+      recoverStaleProjectMessages(runtime, realpathSync(tmpdir()));
+      assert.equal(ctx.sessionManager.getSessionId(), leadId);
+      assert.equal(
+        listProjectAssignments(runtime, realpathSync(tmpdir())).length,
+        0,
+      );
+      await pi.commandOptions.get("lead")!.handler("flexible", ctx);
+      await t.waitFor(() =>
+        assert.match(statusWidget!.render(160)[0], /managed/),
+      );
+
+      for (const handler of pi.events.get("agent_start") ?? [])
+        await handler(undefined, ctx);
+      branchEntries.push({
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: Date.now(),
+          content: [{ type: "text", text: "Historical managed result." }],
+        },
+      });
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler({ aborted: false }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(
+        listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing")
+          .length,
+        0,
+      );
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+      if (!managerReleased) {
+        if (!realFs.existsSync(descriptorPath))
+          writeFileSync(descriptorPath, descriptor);
+        manager.release();
+      }
+      chief.release();
+      delete process.env.HERDR_SOCKET_PATH;
+      setLeadEnvironment();
     }
-    chief.release();
-    delete process.env.HERDR_SOCKET_PATH;
-    setLeadEnvironment();
-  }
-});
+  },
+);
 
 test("worktree removal does not retire an assignment without Manager-scoped Git evidence", async () => {
   setLeadEnvironment();
@@ -2302,7 +2463,7 @@ test("Managed supervisor messages never fall through when the active role is not
 });
 
 for (const reachable of [true, false]) {
-  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async (t) => {
+  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rejects unproven remote identity"}`, async (t) => {
     setLeadEnvironment();
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
@@ -2332,15 +2493,19 @@ for (const reachable of [true, false]) {
     let resumeWorktreeList!: () => void;
     let worktreeListGate: Promise<void> | undefined;
     const exec = async (_command: string, args: string[]) => {
+      if (_command === "git")
+        return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
       let result: unknown = {};
-      if (args[0] === "worktree" && args[1] === "list") {
+      if (args[0] === "workspace" && args[1] === "get")
+        result = { workspace: { workspace_id: args[2], worktree: null } };
+      else if (args[0] === "worktree" && args[1] === "list") {
         if (pauseThirdWorktreeList && ++worktreeListsSincePause === 3) {
           worktreeListPaused();
           await worktreeListGate;
         }
         result = {
           source: {
-            repo_key: "repo-key",
+            repo_key: realpathSync(tmpdir()),
             repo_name: "project",
             source_workspace_id: WORKSPACE,
           },
@@ -2408,7 +2573,7 @@ for (const reachable of [true, false]) {
         const liveRecord = {
           version: 2 as const,
           id: randomUUID(),
-          repoKey: "repo-key",
+          repoKey: realpathSync(tmpdir()),
           branch,
           fromSessionId: leadId,
           text: "project-review-evidence-478\n".repeat(1_500),
@@ -2417,7 +2582,7 @@ for (const reachable of [true, false]) {
         writeProjectAssignment(runtime, {
           version: 2,
           id: leadId,
-          repoKey: "repo-key",
+          repoKey: realpathSync(tmpdir()),
           branch,
           text: "project assignment",
         });
@@ -2466,7 +2631,10 @@ for (const reachable of [true, false]) {
         );
         await new Promise((resolve) => setTimeout(resolve, 650));
         assert.equal(projectDeliveries(liveRecord.id).length, 1);
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+        assert.deepEqual(
+          listProjectMessages(runtime, realpathSync(tmpdir()), branch),
+          [],
+        );
 
         const cleanupRecord = { ...liveRecord, id: randomUUID() };
         const stateErrors = () =>
@@ -2487,22 +2655,24 @@ for (const reachable of [true, false]) {
             errorsBefore + 1,
             "repeated cleanup retries report one durable error",
           );
-          assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
-            cleanupRecord,
-          ]);
+          assert.deepEqual(
+            listProjectMessages(runtime, realpathSync(tmpdir()), branch),
+            [cleanupRecord],
+          );
         } finally {
           failRemovalForId = undefined;
         }
         await t.waitFor(() =>
           assert.deepEqual(
-            listProjectMessages(runtime, "repo-key", branch),
+            listProjectMessages(runtime, realpathSync(tmpdir()), branch),
             [],
           ),
         );
 
-        const retired = listProjectAssignments(runtime, "repo-key").find(
-          (assignment) => assignment.id === leadId,
-        )!;
+        const retired = listProjectAssignments(
+          runtime,
+          realpathSync(tmpdir()),
+        ).find((assignment) => assignment.id === leadId)!;
         managerHistory.push({
           type: "message",
           message: {
@@ -2537,7 +2707,10 @@ for (const reachable of [true, false]) {
         assert.deepEqual(noticeCall.options, { triggerTurn: false });
         managerHistory.push({ ...notice, type: "custom_message" });
         await t.waitFor(() =>
-          assert.deepEqual(listPendingRetirements(runtime, "repo-key"), []),
+          assert.deepEqual(
+            listPendingRetirements(runtime, realpathSync(tmpdir())),
+            [],
+          ),
         );
         // Preserve the original handoff/replacement fixture after the retirement regression.
         writeProjectAssignment(runtime, { ...retired, id: leadId });
@@ -2572,7 +2745,10 @@ for (const reachable of [true, false]) {
             (message as any)?.details?.id === backlogRecord.id,
         )!;
         assert.equal((backlogSend.options as any).triggerTurn, false);
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+        assert.deepEqual(
+          listProjectMessages(runtime, realpathSync(tmpdir()), branch),
+          [],
+        );
 
         await pi.commandOptions.get("manager").handler("leave", ctx);
         const managerCId = randomUUID();
@@ -2593,7 +2769,7 @@ for (const reachable of [true, false]) {
         assert.equal(projectDeliveries(liveRecord.id).length, 0);
         assert.equal(projectDeliveries(backlogRecord.id).length, 0);
         assert.equal(
-          listProjectAssignments(runtime, "repo-key").some(
+          listProjectAssignments(runtime, realpathSync(tmpdir())).some(
             (assignment) => assignment.branch === branch,
           ),
           true,
@@ -2608,7 +2784,7 @@ for (const reachable of [true, false]) {
             version: 1,
             sessionId: leadId,
             kind: "managed",
-            repoKey: "repo-key",
+            repoKey: realpathSync(tmpdir()),
             branch,
           },
         });
@@ -2635,9 +2811,11 @@ for (const reachable of [true, false]) {
           realFs.unlinkSync(planPath);
           assert.equal(result.details.branch, branch, JSON.stringify(result));
           assert.ok(typeof result.details.id === "string");
-          const saved = listProjectMessages(runtime, "repo-key", branch).find(
-            (message) => message.id === result.details.id,
-          );
+          const saved = listProjectMessages(
+            runtime,
+            realpathSync(tmpdir()),
+            branch,
+          ).find((message) => message.id === result.details.id);
           assert.ok(saved);
           assert.equal(saved.id, result.details.id);
           assert.equal(saved.fromSessionId, leadId);
@@ -2655,7 +2833,7 @@ for (const reachable of [true, false]) {
       } else {
         assert.ok(
           notices.some((message) =>
-            message.includes("Manager could not be verified in Herdr"),
+            message.includes("Manager identity changed during activation"),
           ),
         );
         assert.equal(state.role, "lead");
@@ -3091,6 +3269,7 @@ for (const scenario of [
 
 test("Manager does not publish an assignment when worktree creation fails", async () => {
   setLeadEnvironment();
+  const repoKey = realpathSync(tmpdir());
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -3130,17 +3309,17 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
     tab_id: "root-tab",
   };
   const exec = async (command: string, args: string[]) => {
+    if (command === "git" && args[0] === "rev-parse")
+      return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
           workspace_id: args[2],
           worktree: {
-            repo_key: "repo-key",
+            repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
             checkout_path:
-              args[2] === childWorkspace
-                ? "/tmp/manager-child"
-                : "/tmp/manager-root",
+              args[2] === childWorkspace ? "/tmp/manager-child" : repoKey,
           },
         },
       });
@@ -3148,11 +3327,11 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "repo-key",
+          repo_key: repoKey,
           repo_name: "project",
         },
         worktrees: topologyCreated
-          ? listProjectAssignments(supervisionRuntime(), "repo-key").map(
+          ? listProjectAssignments(supervisionRuntime(), repoKey).map(
               (assignment) => ({
                 ...(openCalls || topologyCreated
                   ? { open_workspace_id: childWorkspace }
@@ -3237,7 +3416,7 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
       started = true;
       const assignment = listProjectAssignments(
         supervisionRuntime(),
-        "repo-key",
+        repoKey,
       )[0]!;
       childSession = assignment.id;
       writeLeadCoordinationState(supervisionRuntime(), {
@@ -3335,10 +3514,7 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
       ),
       /transport closed/,
     );
-    assert.deepEqual(
-      listProjectAssignments(supervisionRuntime(), "repo-key"),
-      [],
-    );
+    assert.deepEqual(listProjectAssignments(supervisionRuntime(), repoKey), []);
     assert.equal(createCalls, 1);
     assert.equal(started, false);
   } finally {
@@ -3552,6 +3728,12 @@ async function runManagerStartupScenario(
         return { stdout: `${options?.cwd ?? gitCwd}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
         return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+      if (
+        args[0] === "rev-parse" &&
+        args.includes("--git-dir") &&
+        options?.cwd === childPath
+      )
+        return { stdout: `${childPath}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse")
         return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
       if (args[0] === "symbolic-ref")
@@ -3642,8 +3824,7 @@ async function runManagerStartupScenario(
           worktree: {
             repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
-            checkout_path:
-              args[2] === childWorkspace ? childPath : "/tmp/manager-root",
+            checkout_path: args[2] === childWorkspace ? childPath : gitCwd,
           },
         },
       });
@@ -3655,7 +3836,7 @@ async function runManagerStartupScenario(
           worktreeListCalls === invalidTopologyCall
             ? {
                 source_workspace_id: "wrong-workspace",
-                repo_key: repoKey,
+                repo_key: "wrong-repository",
                 repo_name: "project",
                 source_checkout_path: gitCwd,
               }
@@ -4727,7 +4908,7 @@ async function runManagerStartupScenario(
       );
     }
     const execute = () => (
-      (invalidTopologyCall = worktreeListCalls + 4),
+      (invalidTopologyCall = worktreeListCalls + 2),
       (resumeMode ? staffResume : staff).execute(
         resumeMode ? "resume" : "delegate",
         resumeMode

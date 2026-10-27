@@ -2754,6 +2754,10 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       ),
       false,
     );
+    assert.throws(
+      () => listManagerDescriptors(runtime, true),
+      /generation changed/,
+    );
     first.release();
     assert.equal(statSync(path).isFile(), true);
     assert.equal(

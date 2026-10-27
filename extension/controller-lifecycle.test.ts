@@ -7817,6 +7817,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
 
 test("replacement Manager wakes once for exact-assignment failure backlog only", async (t) => {
   setLeadEnvironment();
+  const repoKey = realpathSync(process.cwd());
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -7829,7 +7830,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   writeProjectAssignment(runtime, {
     version: 2,
     id: leadId,
-    repoKey: "repo-key",
+    repoKey,
     branch,
     text: "current assignment",
   });
@@ -7837,7 +7838,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   const failure = {
     version: 2 as const,
     id: randomUUID(),
-    repoKey: "repo-key",
+    repoKey,
     branch,
     fromSessionId: leadId,
     text: "Lead execution failed; inspect before resuming.",
@@ -7852,7 +7853,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   };
   writeProjectMessage(corrupt, runtime);
   writeFileSync(
-    `${projectAssignmentPath(runtime, "repo-key", branch).replace(/\.json$/, ".messages")}/${corrupt.id}.json.body`,
+    `${projectAssignmentPath(runtime, repoKey, branch).replace(/\.json$/, ".messages")}/${corrupt.id}.json.body`,
     "corrupt overflow payload",
   );
   writeProjectMessage(failure, runtime);
@@ -7872,12 +7873,15 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     tab_id: "root-tab",
     workspace_id: WORKSPACE,
   };
-  const exec = async (_command: string, args: string[]) => {
+  const exec = async (command: string, args: string[]) => {
+    if (command === "git") return { stdout: repoKey, stderr: "", code: 0 };
     let result: unknown = {};
-    if (args[0] === "worktree" && args[1] === "list")
+    if (args[0] === "workspace" && args[1] === "get")
+      result = { workspace: { workspace_id: WORKSPACE, worktree: null } };
+    else if (args[0] === "worktree" && args[1] === "list")
       result = {
         source: {
-          repo_key: "repo-key",
+          repo_key: repoKey,
           repo_name: "project",
           source_workspace_id: WORKSPACE,
         },
@@ -7922,7 +7926,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       "a corrupt overflow candidate is not delivered",
     );
     assert.ok(
-      listProjectMessageHeaders(runtime, "repo-key", branch).some(
+      listProjectMessageHeaders(runtime, repoKey, branch).some(
         (message) => message.id === corrupt.id,
       ),
       "the corrupt candidate remains pending while the valid message delivers",
@@ -8000,9 +8004,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     await pi.events.get("before_agent_start")![0](customStartup, ctx);
     assert.equal(deliveries(activeFailure.id).length, 0);
     assert.deepEqual(
-      listProjectMessageHeaders(runtime, "repo-key", branch).map(
-        ({ id }) => id,
-      ),
+      listProjectMessageHeaders(runtime, repoKey, branch).map(({ id }) => id),
       [corrupt.id, activeFailure.id],
       "busy custom startup preserves the authorized durable message",
     );
@@ -8035,7 +8037,7 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       "the exact owner transcript contains one delivery receipt",
     );
     assert.equal(
-      listProjectMessageHeaders(runtime, "repo-key", branch).some(
+      listProjectMessageHeaders(runtime, repoKey, branch).some(
         ({ id }) => id === activeFailure.id,
       ),
       false,

@@ -2212,6 +2212,7 @@ export function readManagerDescriptor(
 
 export function listManagerDescriptors(
   runtime = supervisionRuntime(),
+  strict = false,
 ): ManagerDescriptor[] {
   let entries: string[];
   try {
@@ -2226,17 +2227,22 @@ export function listManagerDescriptors(
     .flatMap((entry) => {
       try {
         const path = join(runtime.managers, entry);
-        if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES) return [];
+        if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
+          throw new Error("Manager descriptor too large");
         const candidate: unknown = JSON.parse(readFileSync(path, "utf8"));
         if (
           !validManagerDescriptor(candidate) ||
           basename(managerDescriptorPath(runtime, candidate.workspaceId)) !==
             entry
         )
-          return [];
-        const verified = readManagerDescriptor(runtime, candidate.workspaceId);
-        return verified ? [verified] : [];
-      } catch {
+          throw new Error("Invalid Manager descriptor");
+        const status = readManagerDescriptorStatus(
+          runtime,
+          candidate.workspaceId,
+        );
+        return status?.live ? [status.descriptor] : [];
+      } catch (error) {
+        if (strict) throw error;
         return [];
       }
     });

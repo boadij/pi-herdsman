@@ -120,7 +120,25 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   const lockKeys: string[] = [];
   const signal = new AbortController().signal;
   const runtime = createLeadProjectRuntime({
-    pi: {} as any,
+    pi: {
+      exec: async (command: string, args: string[]) => ({
+        stdout:
+          command === "git"
+            ? repoKey
+            : JSON.stringify({
+                id: AGENT_ID,
+                result:
+                  args[0] === "workspace"
+                    ? { workspace: { workspace_id: WORKSPACE } }
+                    : {
+                        source: { repo_key: repoKey, repo_name: "project" },
+                        worktrees: [],
+                      },
+              }),
+        stderr: "",
+        code: 0,
+      }),
+    } as any,
     leadRuntime: { managerLease: { descriptor: manager } } as any,
     managerLease: () => ({ descriptor: manager }),
     currentManager: async () => manager,
@@ -176,7 +194,7 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   await assert.rejects(
     runtime.activateProjectLead(
       { action: "delegate", task: "test" },
-      {} as any,
+      { cwd: repoKey } as any,
       signal,
     ),
     /stop after observing create options/,
@@ -4707,27 +4725,29 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
   const pi = fakePi({
     activeTools: ["read", "bash"],
     allTools: REGISTERED_ROLE_TOOLS,
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerIdentity()] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({ agent: managerIdentity() })
-              : isApiSnapshot(args)
-                ? respond({
-                    snapshot: { agents: [], panes: [], workspaces: [] },
-                  })
-                : respond({}),
+    exec: (command, args) =>
+      command === "git"
+        ? { stdout: realFs.realpathSync(process.cwd()), stderr: "", code: 0 }
+        : args[0] === "workspace" && args[1] === "get"
+          ? respond({ workspace: { workspace_id: WORKSPACE, worktree: null } })
+          : args[0] === "worktree" && args[1] === "list"
+            ? respond({
+                source: {
+                  source_workspace_id: WORKSPACE,
+                  repo_key: realFs.realpathSync(process.cwd()),
+                  repo_name: "project",
+                },
+                worktrees: [],
+              })
+            : isAgentList(args)
+              ? respond({ agents: [managerIdentity()] })
+              : args[0] === "agent" && args[1] === "get"
+                ? respond({ agent: managerIdentity() })
+                : isApiSnapshot(args)
+                  ? respond({
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    })
+                  : respond({}),
   });
   const context = fakeContext(pi.entries) as any;
   const notices: string[] = [];

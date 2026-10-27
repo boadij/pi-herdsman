@@ -32,6 +32,7 @@ import {
   removePendingRetirement,
   removeProjectMessagesForAssignment,
   listProjectAssignments,
+  listManagerDescriptors,
   listProjectMessages,
   readChiefMessage,
   removeChiefMessage,
@@ -61,7 +62,11 @@ import {
 } from "./supervision.ts";
 
 import { OperationError } from "./errors.ts";
-import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
+import {
+  localRepositoryScope,
+  sameObservedSessionPath,
+  verifiedHerdrAgent,
+} from "./herdr.ts";
 import {
   claimSessionActivationLock,
   ProcessLockOccupiedError,
@@ -4992,7 +4997,10 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
   };
   const remoteChiefAgent = async (
     ctx: ExtensionContext,
-    descriptor: ChiefDescriptor,
+    descriptor: Pick<
+      ChiefDescriptor,
+      "piSessionId" | "piSessionFile" | "paneId" | "tabId" | "workspaceId"
+    >,
   ): Promise<HerdrRecord | undefined> =>
     verifiedHerdrAgent(descriptor, {
       listAgents: async () => (await host.listAgents(ctx)).agents,
@@ -5061,10 +5069,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         manager.workspaceId,
         ctx.signal,
       );
-      if (
-        group.repoKey !== manager.repoKey ||
-        group.primaryWorkspaceId !== manager.workspaceId
-      )
+      if (group.repoKey !== manager.repoKey)
         throw new Error("Manager workspace is not the assigned project");
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
       const [leads, topology] = await Promise.all([
@@ -5086,7 +5091,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         await host.reconcileProjectAssignments?.(
           ctx,
           group.repoKey,
-          group.primaryWorkspaceId,
+          manager.workspaceId,
           topology.source.source_checkout_path,
         );
       const assignments = host.listProjectAssignments(
@@ -5263,8 +5268,38 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const sessions = new Set(assignments.map((assignment) => assignment.id));
       if (sessions.size !== assignments.length)
         throw new Error("Multiple project assignments match a Lead session");
-      return snapshot.leads
-        .filter((lead) => scope.workspaceIds.includes(lead.workspaceId))
+      const leads = await Promise.all(
+        snapshot.leads.map(async (lead) => {
+          try {
+            const descriptor = {
+              piSessionId: lead.lead,
+              piSessionFile: lead.piSessionFile,
+              paneId: lead.paneId,
+              tabId: lead.tabId,
+              workspaceId: lead.workspaceId,
+            };
+            const agent = await host.remoteChiefAgent(ctx, descriptor);
+            if (typeof agent?.cwd !== "string" || !agent.cwd) return undefined;
+            const repository = await localRepositoryScope(
+              host.pi,
+              { ...ctx, cwd: agent.cwd },
+              lead.workspaceId,
+              ctx.signal,
+            );
+            if (repository.repoKey !== manager.repoKey) return undefined;
+            const current = await host.remoteChiefAgent(ctx, descriptor);
+            if (!current || current.cwd !== agent.cwd) return undefined;
+            return lead;
+          } catch (error) {
+            if (ctx.signal?.aborted) throw ctx.signal.reason;
+            if (error instanceof Error && error.name === "AbortError")
+              throw error;
+            return undefined;
+          }
+        }),
+      );
+      return leads
+        .filter((lead): lead is NonNullable<typeof lead> => lead !== undefined)
         .map((lead) => ({
           ...lead,
           relationship: sessions.has(lead.lead)
@@ -7621,11 +7656,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.workspaceId,
       signal,
     );
-    if (
-      group.repoKey !== manager.repoKey ||
-      group.primaryWorkspaceId !== manager.workspaceId
-    )
+    if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
+    const localScope = await localRepositoryScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      signal,
+    );
+    if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
+      throw new Error("Manager checkout is not the verified primary checkout");
     const topology = await host.runHerdr(
       host.pi,
       ctx,
@@ -7633,9 +7673,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       { signal },
     );
     if (
-      topology?.source?.source_workspace_id !== manager.workspaceId ||
       topology?.source?.repo_key !== manager.repoKey ||
       typeof topology?.source?.source_checkout_path !== "string" ||
+      realpathSync(topology.source.source_checkout_path) !==
+        localScope.checkoutPath ||
       !Array.isArray(topology?.worktrees)
     )
       throw new Error("Herdr worktree topology is not authoritative");
@@ -8413,6 +8454,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       branch,
     );
     if (!before) throw new Error("No project assignment exists on this branch");
+    const localScope = await localRepositoryScope(
+      host.pi,
+      ctx,
+      initialManager.workspaceId,
+      operationSignal,
+    );
+    if (!localScope.isPrimary || localScope.repoKey !== initialManager.repoKey)
+      throw new Error("Manager checkout is not the verified primary checkout");
     const initialTopology = await host.runHerdr(
       host.pi,
       ctx,
@@ -8421,9 +8470,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     );
     if (
       initialTopology?.source?.repo_key !== initialManager.repoKey ||
-      initialTopology?.source?.source_workspace_id !==
-        initialManager.workspaceId ||
-      typeof initialTopology?.source?.source_checkout_path !== "string"
+      typeof initialTopology?.source?.source_checkout_path !== "string" ||
+      realpathSync(initialTopology.source.source_checkout_path) !==
+        localScope.checkoutPath
     )
       throw new Error("Herdr worktree topology is unavailable or inconsistent");
     await host.reconcileProjectAssignments(
@@ -8475,11 +8524,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         manager.workspaceId,
         operationSignal,
       );
-      if (
-        group.repoKey !== manager.repoKey ||
-        group.primaryWorkspaceId !== manager.workspaceId
-      )
+      if (group.repoKey !== manager.repoKey)
         throw new Error("Manager worktree group is not authoritative");
+      const localScope = await localRepositoryScope(
+        host.pi,
+        ctx,
+        manager.workspaceId,
+        operationSignal,
+      );
+      if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
+        throw new Error(
+          "Manager checkout is not the verified primary checkout",
+        );
       const topology = await host.runHerdr(
         host.pi,
         ctx,
@@ -8488,8 +8544,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
       if (
         topology?.source?.repo_key !== manager.repoKey ||
-        topology?.source?.source_workspace_id !== manager.workspaceId ||
         typeof topology?.source?.source_checkout_path !== "string" ||
+        realpathSync(topology.source.source_checkout_path) !==
+          localScope.checkoutPath ||
         !Array.isArray(topology.worktrees) ||
         topology.worktrees.some(
           (worktree: any) =>
@@ -8691,10 +8748,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.workspaceId,
       ctx.signal,
     );
-    if (
-      group.repoKey !== manager.repoKey ||
-      group.primaryWorkspaceId !== manager.workspaceId
-    )
+    if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
     if (enabled) {
       const answer = await ctx.ui.input(
@@ -8720,10 +8774,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.workspaceId,
       ctx.signal,
     );
-    if (
-      group.repoKey !== manager.repoKey ||
-      group.primaryWorkspaceId !== manager.workspaceId
-    )
+    if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
     const current = await host.currentManager(ctx);
     if (!current || !host.sameManagerDescriptor(current, manager))
@@ -8929,6 +8980,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         )
       )
         throw sourceError;
+      const localScope = await localRepositoryScope(
+        host.pi,
+        ctx,
+        manager.workspaceId,
+        operationSignal,
+      );
+      if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
+        throw new Error(
+          "Manager checkout is not the verified primary checkout",
+        );
       const topology = await host.runHerdr(
         host.pi,
         ctx,
@@ -8936,9 +8997,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         { signal: operationSignal },
       );
       if (
-        topology?.source?.source_workspace_id !== manager.workspaceId ||
         topology?.source?.repo_key !== manager.repoKey ||
-        typeof topology?.source?.source_checkout_path !== "string"
+        typeof topology?.source?.source_checkout_path !== "string" ||
+        realpathSync(topology.source.source_checkout_path) !==
+          localScope.checkoutPath
       )
         throw sourceError;
       const targetPath = topology.source.source_checkout_path;
@@ -9585,30 +9647,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
       throw new Error("Manager lease is no longer active");
-    const group = await worktreeGroupScope(
+    const localScope = await localRepositoryScope(
       pi,
       ctx,
       manager.workspaceId,
       signal,
     );
-    if (
-      group.repoKey !== manager.repoKey ||
-      group.primaryWorkspaceId !== manager.workspaceId
-    )
-      throw new Error(
-        "Manager workspace is not the primary workspace of its Herdr worktree group",
-      );
-    const primaryWorkspaceId = group.primaryWorkspaceId;
+    if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
+      throw new Error("Manager checkout is not the verified primary checkout");
+    const primaryWorkspaceId = manager.workspaceId;
     const runtime = supervisionRuntime();
     const branch = operation.branch;
     const topology = await runHerdr(
       pi,
       ctx,
-      ["worktree", "list", "--workspace", primaryWorkspaceId],
+      ["worktree", "list", "--cwd", localScope.checkoutPath],
       { signal },
     );
     if (
-      topology?.source?.source_workspace_id !== primaryWorkspaceId ||
       topology?.source?.repo_key !== manager.repoKey ||
       !Array.isArray(topology?.worktrees)
     )
@@ -9838,6 +9894,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     }
     const promptPaths: string[] = [];
     try {
+      const currentScope = await localRepositoryScope(
+        pi,
+        ctx,
+        manager.workspaceId,
+        signal,
+      );
+      const current = await currentManager(ctx);
+      if (
+        !currentScope.isPrimary ||
+        currentScope.repoKey !== manager.repoKey ||
+        currentScope.checkoutPath !== localScope.checkoutPath ||
+        !current ||
+        !sameManagerDescriptor(current, manager)
+      )
+        throw new Error("Manager identity changed before project activation");
       let workspaceId: string | undefined;
       let paneId: string | undefined;
       let tabId: string | undefined;
@@ -9863,8 +9934,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             [
               "worktree",
               "open",
-              "--workspace",
-              primaryWorkspaceId,
+              "--cwd",
+              localScope.checkoutPath,
               "--branch",
               assignment.branch,
               "--no-focus",
@@ -9889,8 +9960,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         const args = [
           "worktree",
           "create",
-          "--workspace",
-          primaryWorkspaceId,
+          "--cwd",
+          localScope.checkoutPath,
           "--branch",
           assignment.branch,
           "--no-focus",
@@ -10620,6 +10691,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         currentAuthority.leaseId !== authority.leaseId ||
         !currentLead ||
         !sameLeadIdentity(currentLead, lead) ||
+        currentLead.relationship !== lead.relationship ||
         !currentLead.availableActions.includes("inspect")
       )
         throw new Error("Lead changed during inspection");
@@ -10884,10 +10956,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.workspaceId,
       ctx.signal,
     );
-    if (
-      scope.repoKey !== manager.repoKey ||
-      scope.primaryWorkspaceId !== manager.workspaceId
-    )
+    if (scope.repoKey !== manager.repoKey)
       throw new Error("Manager workspace authority could not be verified");
     const assignment = host.readProjectAssignment(
       host.supervisionRuntime(),
@@ -10948,10 +11017,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           currentManager.workspaceId,
           ctx.signal,
         );
-        if (
-          currentScope.repoKey !== assignment.repoKey ||
-          currentScope.primaryWorkspaceId !== currentManager.workspaceId
-        )
+        if (currentScope.repoKey !== assignment.repoKey)
           throw new Error(
             "Manager workspace authority changed before required evidence was updated",
           );
@@ -13839,7 +13905,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       const chief = await currentChiefAuthority(ctx, true);
       if (
         !chief ||
-        record.leaseId !== chief.leaseId ||
+        (record.kind !== "manager_message" &&
+          record.leaseId !== chief.leaseId) ||
         record.leadSessionId !== record.fromSessionId
       )
         return false;
@@ -13880,27 +13947,36 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         );
       }
       if (record.kind !== "manager_message") return false;
-      const manager = listManagerDescriptors(supervisionRuntime()).find(
-        (x) => x.piSessionId === record.fromSessionId,
+      const senders = listManagerDescriptors(supervisionRuntime(), true).filter(
+        (manager) => manager.piSessionId === record.fromSessionId,
       );
+      if (senders.length !== 1) return false;
+      const manager = senders[0];
+      if (record.leaseId !== manager.leaseId) return false;
+      const managerState = readLeadCoordinationState(
+        supervisionRuntime(),
+        manager.piSessionId,
+      );
+      if (!managerState)
+        throw new Error(
+          "Manager coordination state is temporarily unavailable",
+        );
       if (
-        !manager ||
-        listManagerDescriptors(supervisionRuntime()).filter(
-          (x) => x.piSessionId === manager.piSessionId,
-        ).length !== 1 ||
-        !(await remoteChiefAgent(ctx, manager))
+        managerState.role !== "manager" ||
+        managerState.piSessionId !== manager.piSessionId ||
+        !sameRuntimeBuild(manager.build, HERDSMAN_BUILD) ||
+        !sameRuntimeBuild(managerState.build, HERDSMAN_BUILD)
       )
         return false;
+      if (!(await remoteChiefAgent(ctx, manager)))
+        throw new Error("Manager live identity is temporarily unavailable");
       const scope = await worktreeGroupScope(
         pi,
         ctx,
         manager.workspaceId,
         ctx.signal,
       );
-      return (
-        scope.primaryWorkspaceId === manager.workspaceId &&
-        scope.repoKey === manager.repoKey
-      );
+      return scope.repoKey === manager.repoKey;
     }
     if (activeRole() === "manager" && !leadRuntime.roleSuspended) {
       if (record.kind === "chief_message") {
@@ -13972,23 +14048,58 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       );
     }
     if (record.kind !== "manager_message") return false;
+    const senders = listManagerDescriptors(supervisionRuntime(), true).filter(
+      (manager) => manager.piSessionId === record.fromSessionId,
+    );
+    if (senders.length !== 1) return false;
+    const manager = senders[0];
+    if (
+      record.leaseId !== manager.leaseId ||
+      record.leadSessionId !== sessionId
+    )
+      return false;
+    const managerState = readLeadCoordinationState(
+      supervisionRuntime(),
+      manager.piSessionId,
+    );
+    if (!managerState)
+      throw new Error("Manager coordination state is temporarily unavailable");
+    if (
+      managerState.role !== "manager" ||
+      managerState.piSessionId !== manager.piSessionId ||
+      !sameRuntimeBuild(manager.build, HERDSMAN_BUILD) ||
+      !sameRuntimeBuild(managerState.build, HERDSMAN_BUILD)
+    )
+      return false;
+    if (!(await remoteChiefAgent(ctx, manager)))
+      throw new Error("Manager live identity is temporarily unavailable");
     const workspaceId = host.workspaceId();
     if (!workspaceId) throw new Error("Project scope cannot be verified");
+    const localScope = await localRepositoryScope(
+      pi,
+      ctx,
+      workspaceId,
+      ctx.signal,
+    );
+    if (localScope.repoKey !== manager.repoKey) return false;
     const supervisor = await host.resolveEffectiveSupervisor(
       ctx,
       sessionId,
       workspaceId,
     );
-    const manager =
-      supervisor.kind === "assigned"
-        ? await currentManager(ctx, supervisor.scope)
-        : supervisor.kind === "manager"
-          ? supervisor.manager
-          : undefined;
+    if (!supervisor.scope || supervisor.scope.repoKey !== manager.repoKey)
+      return false;
+    if (
+      supervisor.kind !== "assigned" &&
+      (supervisor.kind !== "manager" ||
+        supervisor.manager.piSessionId !== manager.piSessionId ||
+        supervisor.manager.leaseId !== manager.leaseId)
+    )
+      return false;
     if (
       supervisor.kind === "assigned"
         ? supervisor.assignment.branch !== record.branch
-        : record.branch !== undefined || supervisor.kind !== "manager"
+        : record.branch !== undefined
     )
       return false;
     let state: ReturnType<typeof readLeadCoordinationState>;
@@ -14006,8 +14117,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         return false;
       throw error;
     }
-    if (!manager)
-      throw new Error("Manager authority is temporarily unavailable");
     if (!state)
       throw new Error("Lead coordination state is temporarily unavailable");
     return (
@@ -14161,7 +14270,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           if (record.kind === "peer_message")
             return authorizePeerRecord(record, ctx);
           try {
-            if (verifyLease) {
+            if (
+              verifyLease &&
+              !(
+                record.kind === "manager_message" &&
+                (activeRole() === "lead" || activeRole() === "chief")
+              )
+            ) {
               const chief =
                 activeRole() === "chief" ||
                 (activeRole() === "manager" && record.kind === "chief_message")
@@ -14872,15 +14987,16 @@ export async function resolveLeadControllerRole(
     build: Parameters<
       typeof import("./supervision.ts").claimManagerLease
     >[0]["build"];
-    worktreeGroupScope: (
+    localRepositoryScope: (
       workspaceId: string,
       signal: AbortSignal,
-    ) => Promise<{ primaryWorkspaceId: string; repoKey: string }>;
+    ) => Promise<{ isPrimary: boolean; repoKey: string }>;
     claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
     coordinationHealthy(): boolean;
     verifyManagerIdentity(
       descriptor: import("./supervision.ts").ManagerDescriptor,
     ): Promise<unknown>;
+    verifyCurrentIdentity(): Promise<unknown>;
     unresolvedManagerLease(): void;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
@@ -14898,11 +15014,11 @@ export async function resolveLeadControllerRole(
     !workspaceId
   )
     return;
-  if (optional)
-    deps.activationGuard(ctx.sessionManager.getSessionId(), "Manager");
+  const sessionId = ctx.sessionManager.getSessionId();
+  deps.activationGuard(sessionId, "Manager");
   let scope;
   try {
-    scope = await deps.worktreeGroupScope(workspaceId, ctx.signal);
+    scope = await deps.localRepositoryScope(workspaceId, ctx.signal);
   } catch (error) {
     if (!deps.isCurrent()) return;
     if (
@@ -14915,25 +15031,44 @@ export async function resolveLeadControllerRole(
     if (!optional) state.roleSuspended = true;
     throw error;
   }
-  if (!deps.isCurrent()) return;
-  if (scope.primaryWorkspaceId !== workspaceId) {
+  if (!deps.isCurrent() || ctx.sessionManager.getSessionId() !== sessionId)
+    return;
+  if (!scope.isPrimary) {
     if (!optional) deps.persistLeadRole();
     return;
   }
+  if (
+    !(await deps.verifyCurrentIdentity()) ||
+    !deps.isCurrent() ||
+    ctx.sessionManager.getSessionId() !== sessionId
+  )
+    return;
+  deps.activationGuard(sessionId, "Manager");
   try {
     const lease = deps.claimManagerLease({
       build: deps.build,
-      piSessionId: ctx.sessionManager.getSessionId(),
+      piSessionId: sessionId,
       piSessionFile: ctx.sessionManager.getSessionFile(),
       paneId,
       tabId,
       workspaceId,
       repoKey: scope.repoKey,
     });
-    if (optional) {
+    {
       let verified: unknown;
       try {
         verified = await deps.verifyManagerIdentity(lease.descriptor);
+        const currentScope = await deps.localRepositoryScope(
+          workspaceId,
+          ctx.signal,
+        );
+        if (
+          !currentScope.isPrimary ||
+          currentScope.repoKey !== scope.repoKey ||
+          !(await deps.verifyCurrentIdentity()) ||
+          ctx.sessionManager.getSessionId() !== sessionId
+        )
+          throw new Error("Manager identity changed during restoration");
       } catch (error) {
         if (!deps.isCurrent()) {
           lease.release();
@@ -15327,24 +15462,38 @@ export function createLeadRoleTransitions(
       Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | undefined,
   ): ManagerDescriptor | undefined => {
     if (!scope) return undefined;
-    const status = host.readManagerDescriptorStatus(
+    const managers = listManagerDescriptors(
       host.supervisionRuntime(),
-      scope.primaryWorkspaceId,
-    );
-    if (!status || !status.live) return undefined;
-    if (status.descriptor.repoKey !== scope.repoKey)
-      throw new Error("Manager authority does not match project");
-    return status.descriptor;
+      true,
+    ).filter((manager) => manager.repoKey === scope.repoKey);
+    if (managers.length > 1)
+      throw new Error("Manager supervisor is ambiguous for this repository");
+    return managers[0];
   };
   const currentManager = async (
     ctx: ExtensionContext,
     scope?: Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | null,
   ): Promise<ManagerDescriptor | undefined> => {
-    const descriptor = managerForScope(
-      scope === null || scope === undefined
-        ? await currentWorktreeScope(ctx)
-        : scope,
-    );
+    const ownLease =
+      activeLeadRole(state) === "manager" && !state.roleSuspended
+        ? state.managerLease
+        : undefined;
+    const ownStatus =
+      ownLease &&
+      host.readManagerDescriptorStatus(
+        host.supervisionRuntime(),
+        ownLease.descriptor.workspaceId,
+      );
+    const descriptor = ownLease
+      ? ownStatus?.live &&
+        host.sameManagerDescriptor(ownStatus.descriptor, ownLease.descriptor)
+        ? ownStatus.descriptor
+        : undefined
+      : managerForScope(
+          scope === null || scope === undefined
+            ? await currentWorktreeScope(ctx)
+            : scope,
+        );
     if (!descriptor) return undefined;
     verifyManagerCoordinationAuthority(
       descriptor,
@@ -15554,11 +15703,7 @@ export function createLeadRoleTransitions(
         primaryWorkspaceId,
         ctx.signal,
       );
-      if (
-        scope.repoKey !== repoKey ||
-        scope.primaryWorkspaceId !== primaryWorkspaceId
-      )
-        return undefined;
+      if (scope.repoKey !== repoKey) return undefined;
       const rootResult = await host.pi.exec(
         "git",
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -15811,7 +15956,6 @@ export function createLeadRoleTransitions(
     );
     if (
       topology?.source?.repo_key !== manager.repoKey ||
-      topology?.source?.source_workspace_id !== manager.workspaceId ||
       typeof topology?.source?.source_checkout_path !== "string"
     )
       throw new Error("Manager worktree topology is not authoritative");
@@ -16190,9 +16334,9 @@ export function createLeadRoleTransitions(
     if (!paneId || !tabId || !workspaceId)
       throw new Error("/manager requires a Herdr Lead identity");
     const sessionId = ctx.sessionManager.getSessionId();
-    let scope: WorktreeGroupScope | undefined;
+    let scope: Awaited<ReturnType<typeof localRepositoryScope>> | undefined;
     try {
-      scope = await host.worktreeGroupScope(ctx, workspaceId);
+      scope = await localRepositoryScope(host.pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
         !(error instanceof OperationError) ||
@@ -16442,10 +16586,15 @@ export function createLeadRoleTransitions(
           "--path-format=absolute",
           "--git-common-dir",
         ]);
-        scope = await host.worktreeGroupScope(ctx, workspaceId);
+        scope = await localRepositoryScope(
+          host.pi,
+          ctx,
+          workspaceId,
+          ctx.signal,
+        );
         if (
           !scope ||
-          scope.primaryWorkspaceId !== workspaceId ||
+          !scope.isPrimary ||
           !sameDirectory(scope.repoKey, gitCommonDir)
         )
           throw new Error(
@@ -16457,8 +16606,18 @@ export function createLeadRoleTransitions(
     }
     if (!scope)
       throw new Error("Manager workspace could not be verified in Herdr");
-    if (scope.primaryWorkspaceId !== workspaceId)
+    if (!scope.isPrimary)
       throw new Error("/manager is available only in the primary workspace");
+    if (
+      !(await host.remoteChiefAgent(ctx, {
+        piSessionId: sessionId,
+        piSessionFile: ctx.sessionManager.getSessionFile(),
+        paneId,
+        tabId,
+        workspaceId,
+      }))
+    )
+      throw new Error("Manager identity changed during activation");
     if (ctx.sessionManager.getSessionId() !== sessionId)
       throw new Error(
         "Manager activation cancelled because the session changed",
@@ -16495,6 +16654,19 @@ export function createLeadRoleTransitions(
         throw new Error("Manager coordination state could not be persisted");
       if (!(await host.remoteChiefAgent(ctx, lease.descriptor)))
         throw new Error("Manager could not be verified in Herdr");
+      const currentScope = await localRepositoryScope(
+        host.pi,
+        ctx,
+        workspaceId,
+        ctx.signal,
+      );
+      if (
+        !currentScope.isPrimary ||
+        currentScope.repoKey !== scope.repoKey ||
+        !(await host.remoteChiefAgent(ctx, lease.descriptor)) ||
+        ctx.sessionManager.getSessionId() !== sessionId
+      )
+        throw new Error("Manager identity changed during activation");
       host.reconcileRoleTools();
       host.clearNormalUI();
       host.startSupervisionUI(ctx);
@@ -16806,12 +16978,25 @@ export function createLeadRoleTransitions(
         {
           identity: host.identity,
           build: host.build,
-          worktreeGroupScope: (workspaceId, signal) =>
-            host.worktreeGroupScope(ctx, workspaceId, signal),
+          localRepositoryScope: (workspaceId, signal) =>
+            localRepositoryScope(host.pi, ctx, workspaceId, signal),
           claimManagerLease: host.claimManagerLease,
           coordinationHealthy: host.coordinationHealthy,
           verifyManagerIdentity: (descriptor) =>
             host.remoteChiefAgent(ctx, descriptor),
+          verifyCurrentIdentity: () =>
+            host.remoteChiefAgent(ctx, {
+              piSessionId: ctx.sessionManager.getSessionId(),
+              piSessionFile: ctx.sessionManager.getSessionFile(),
+              ...host.identity,
+            } as Pick<
+              ChiefDescriptor,
+              | "piSessionId"
+              | "piSessionFile"
+              | "paneId"
+              | "tabId"
+              | "workspaceId"
+            >),
           unresolvedManagerLease: () => {
             host.markLeadCoordinationUnhealthy(ctx);
             reconcileRoleTools();

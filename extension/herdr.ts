@@ -14,7 +14,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { createConnection, type Socket } from "node:net";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
@@ -533,6 +533,79 @@ export type WorktreeGroupScope = Readonly<{
   primaryWorkspaceId: string;
   workspaceIds: readonly string[];
 }>;
+
+export async function localRepositoryScope(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  signal?: AbortSignal,
+) {
+  const listed = await runHerdr(
+    pi,
+    ctx,
+    ["worktree", "list", "--cwd", ctx.cwd],
+    { signal },
+  );
+  const workspace = (
+    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
+  )?.workspace;
+  const source = listed?.source;
+  if (
+    workspace?.workspace_id !== workspaceId ||
+    typeof source?.repo_key !== "string" ||
+    !isAbsolute(source.repo_key) ||
+    typeof source?.repo_name !== "string" ||
+    !source.repo_name ||
+    !Array.isArray(listed?.worktrees)
+  )
+    throw new Error("Herdr local repository identity is unavailable");
+  const gitPath = async (argument: string) => {
+    const result = await pi.exec(
+      "git",
+      ["rev-parse", "--path-format=absolute", argument],
+      {
+        cwd: ctx.cwd,
+        signal,
+        timeout: 10_000,
+      },
+    );
+    const path = String(result.stdout ?? "").trim();
+    if (
+      result.code !== 0 ||
+      result.killed ||
+      result.stderr?.trim() ||
+      !isAbsolute(path)
+    )
+      throw new Error("Git local repository identity is unavailable");
+    return realpathSync(path);
+  };
+  const [checkoutPath, gitDir, commonDir] = await Promise.all([
+    gitPath("--show-toplevel"),
+    gitPath("--git-dir"),
+    gitPath("--git-common-dir"),
+  ]);
+  if (commonDir !== realpathSync(source.repo_key))
+    throw new Error("Herdr repository does not match the current checkout");
+  const membership = workspace.worktree;
+  if (
+    membership != null &&
+    (typeof membership.repo_key !== "string" ||
+      typeof membership.checkout_path !== "string" ||
+      typeof membership.is_linked_worktree !== "boolean" ||
+      realpathSync(membership.repo_key) !== commonDir ||
+      realpathSync(membership.checkout_path) !== checkoutPath ||
+      membership.is_linked_worktree !== (gitDir !== commonDir))
+  )
+    throw new Error(
+      "Herdr workspace association does not match the current checkout",
+    );
+  return {
+    repoKey: source.repo_key as string,
+    repoName: source.repo_name as string,
+    checkoutPath,
+    isPrimary: gitDir === commonDir,
+  };
+}
 
 export async function worktreeGroupScope(
   pi: ExtensionAPI,

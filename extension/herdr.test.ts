@@ -23,6 +23,7 @@ import {
   listAllHerdrAgents,
   herdrSessionSnapshot,
   worktreeGroupScope,
+  localRepositoryScope,
   watchHerdrLifecycle,
   leadMetadataArgs,
   reportLeadMetadata,
@@ -6511,6 +6512,90 @@ test("worktree group scope propagates native Herdr errors", async () => {
         return true;
       },
     );
+  }
+});
+
+test("local repository discovery ignores inherited topology but checks explicit membership", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-local-repo-"));
+  try {
+    const checkout = join(root, "checkout");
+    const common = join(checkout, ".git");
+    const linked = join(root, "linked");
+    const linkedGit = join(common, "worktrees", "linked");
+    fs.mkdirSync(linkedGit, { recursive: true });
+    fs.mkdirSync(linked);
+    let membership: unknown = null;
+    let cwd = checkout;
+    let reportedRepo = common;
+    let sourceWorkspace: string | undefined = "unrelated";
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (command: string, args: string[]) => {
+        calls.push([command, ...args]);
+        if (command === "git") {
+          const value =
+            args[2] === "--show-toplevel"
+              ? cwd
+              : args[2] === "--git-dir" && cwd === linked
+                ? linkedGit
+                : common;
+          return { code: 0, stdout: value, stderr: "" };
+        }
+        const result =
+          args[0] === "workspace"
+            ? { workspace: { workspace_id: "w", worktree: membership } }
+            : {
+                source: {
+                  repo_key: reportedRepo,
+                  repo_name: "repo",
+                  source_workspace_id: sourceWorkspace,
+                },
+                worktrees: [],
+              };
+        return {
+          code: 0,
+          stdout: JSON.stringify({ id: 1, result }),
+          stderr: "",
+        };
+      },
+    } as any;
+    assert.equal(
+      (await localRepositoryScope(pi, { cwd } as any, "w")).isPrimary,
+      true,
+    );
+    assert.ok(
+      calls.some(
+        (call) => call.join(" ") === `herdr worktree list --cwd ${cwd}`,
+      ),
+    );
+    sourceWorkspace = undefined;
+    assert.equal(
+      (await localRepositoryScope(pi, { cwd } as any, "w")).repoKey,
+      common,
+    );
+    reportedRepo = linked;
+    await assert.rejects(
+      localRepositoryScope(pi, { cwd } as any, "w"),
+      /repository does not match/,
+    );
+    reportedRepo = common;
+    membership = {
+      repo_key: common,
+      checkout_path: linked,
+      is_linked_worktree: true,
+    };
+    await assert.rejects(
+      localRepositoryScope(pi, { cwd } as any, "w"),
+      /association/,
+    );
+    membership = null;
+    cwd = linked;
+    assert.equal(
+      (await localRepositoryScope(pi, { cwd } as any, "w")).isPrimary,
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

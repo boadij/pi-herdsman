@@ -128,7 +128,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
       left.piSessionId === right.piSessionId && left.leaseId === right.leaseId,
     worktreeGroupScope: async () => ({
       repoKey: manager.repoKey,
-      primaryWorkspaceId: manager.workspaceId,
+      primaryWorkspaceId: "unrelated-repository-workspace",
     }),
     supervisionRuntime: () => ({}),
     readProjectAssignment: () => current,
@@ -589,12 +589,13 @@ test("registered Manager command removes persisted required evidence through the
   const assignmentId = randomUUID();
   const evidenceId = randomUUID();
   const fixtureDir = mkdtempSync(join(tmpdir(), "manager-evidence-bridge-"));
+  const repoKey = fixtureDir;
   const snapshotPath = join(fixtureDir, "required.md");
   writeFileSync(snapshotPath, "required evidence\n");
   writeProjectAssignment(storage, {
     version: 2,
     id: assignmentId,
-    repoKey: "evidence-repo",
+    repoKey,
     branch: "feature/evidence-bridge",
     text: "work",
     requiredEvidence: [
@@ -616,18 +617,21 @@ test("registered Manager command removes persisted required evidence through the
   });
   const pi = fakeChiefPi({
     activeTools: ["read"],
-    exec: async (_command, args) => {
+    exec: async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return { stdout: fixtureDir, stderr: "", code: 0 };
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "evidence-repo", is_linked_worktree: false },
+            workspace_id: WORKSPACE,
+            worktree: null,
           },
         });
       if (args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "evidence-repo",
+            repo_key: repoKey,
             repo_name: "project",
           },
           worktrees: [],
@@ -1922,17 +1926,17 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     code: 0,
   });
   const baseline = ["read", "bash"];
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: baseline,
     allTools: [{ name: "history" }, { name: "notes" }],
     exec: (_command, args) =>
       args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
               source: {
                 source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
+                repo_key: "/tmp",
                 repo_name: "project",
               },
               worktrees: [],
@@ -2213,19 +2217,19 @@ test("Manager peer messages deliver to a live Manager without changing its role"
         value: manager.sessionId,
       },
     };
-    const pi = fakeChiefPi({
+    const pi = fakeRepositoryChiefPi({
       entries: recipient ? recipientEntries : undefined,
       activeTools: ["read", "bash"],
       exec: (_command, args) =>
         args[0] === "workspace" && args[1] === "get"
           ? respond({
-              workspace: { worktree: { repo_key: manager.workspaceId } },
+              workspace: { worktree: { repo_key: "/tmp" } },
             })
           : args[0] === "worktree" && args[1] === "list"
             ? respond({
                 source: {
                   source_workspace_id: manager.workspaceId,
-                  repo_key: manager.workspaceId,
+                  repo_key: "/tmp",
                   repo_name: manager.workspaceId,
                   source_checkout_path: manager.workspaceId,
                 },
@@ -2372,6 +2376,35 @@ test("Manager peer messages deliver to a live Manager without changing its role"
   }
 });
 
+test("Manager restoration does not claim a lease when identity changes during discovery", async () => {
+  const { createLeadRuntimeState, resolveLeadControllerRole } =
+    await import("./lead-runtime.ts");
+  const state = createLeadRuntimeState();
+  let identityCurrent = true;
+  let claims = 0;
+  await resolveLeadControllerRole(state, fakeContext() as any, "manager", {
+    identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
+    build: "test",
+    localRepositoryScope: async () => {
+      identityCurrent = false;
+      return { isPrimary: true, repoKey: "repo" };
+    },
+    claimManagerLease: (() => {
+      claims++;
+      throw new Error("unexpected claim");
+    }) as any,
+    coordinationHealthy: () => true,
+    verifyManagerIdentity: async () => true,
+    verifyCurrentIdentity: async () => identityCurrent,
+    unresolvedManagerLease() {},
+    activationGuard() {},
+    persistLeadRole() {},
+    isCurrent: () => true,
+  });
+  assert.equal(claims, 0);
+  assert.equal(state.controllerRole, "lead");
+});
+
 test("superseded Manager restoration releases its lease without replacing current state", async () => {
   const { createLeadRuntimeState, resolveLeadControllerRole } =
     await import("./lead-runtime.ts");
@@ -2380,6 +2413,10 @@ test("superseded Manager restoration releases its lease without replacing curren
   let releaseOldVerification!: (value: unknown) => void;
   const oldVerification = new Promise((resolve) => {
     releaseOldVerification = resolve;
+  });
+  let oldVerificationStarted!: () => void;
+  const oldVerificationReady = new Promise<void>((resolve) => {
+    oldVerificationStarted = resolve;
   });
   const released = new Set<string>();
   let profileOwner: string | undefined;
@@ -2401,8 +2438,8 @@ test("superseded Manager restoration releases its lease without replacing curren
       {
         identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
         build: "test",
-        worktreeGroupScope: async () => ({
-          primaryWorkspaceId: "workspace",
+        localRepositoryScope: async () => ({
+          isPrimary: true,
           repoKey: "repo",
         }),
         claimManagerLease: (() => ({
@@ -2411,6 +2448,7 @@ test("superseded Manager restoration releases its lease without replacing curren
         })) as any,
         coordinationHealthy: () => true,
         verifyManagerIdentity,
+        verifyCurrentIdentity: async () => true,
         unresolvedManagerLease() {},
         activationGuard() {},
         persistLeadRole() {},
@@ -2424,8 +2462,11 @@ test("superseded Manager restoration releases its lease without replacing curren
     });
   };
 
-  const old = resolve("old-session", () => oldVerification);
-  await Promise.resolve();
+  const old = resolve("old-session", () => {
+    oldVerificationStarted();
+    return oldVerification;
+  });
+  await oldVerificationReady;
   generation++;
   const current = resolve("current-session", async () => true);
   await current;
@@ -2841,12 +2882,12 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
   });
   const exec = (_command: string, args: string[]) => {
     if (args[0] === "workspace" && args[1] === "get")
-      return respond({ workspace: { worktree: { repo_key: "repo-key" } } });
+      return respond({ workspace: { worktree: { repo_key: "/tmp" } } });
     if (args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "repo-key",
+          repo_key: "/tmp",
           repo_name: "project",
         },
         worktrees: [],
@@ -2866,7 +2907,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     totalTokens: amount,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
-  const manager = fakeChiefPi({ activeTools: ["read"], exec });
+  const manager = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
   const context = fakeContext([
     {
       type: "usage",
@@ -2972,13 +3013,13 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
         id,
-        repoKey: "repo-key",
+        repoKey: "/tmp",
         branch,
         text: branch,
         ...(branch !== "branch-a-alias" ? { piSessionFile: paths[id]! } : {}),
       });
     assert.deepEqual(
-      listProjectAssignments(supervisionRuntime(), "repo-key").map(
+      listProjectAssignments(supervisionRuntime(), "/tmp").map(
         ({ id, piSessionFile }) => [id, piSessionFile],
       ),
       [
@@ -3026,7 +3067,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadA,
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       branch: "branch-a-alias",
       text: "branch-a-alias",
       piSessionFile: conflictPath,
@@ -3038,7 +3079,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadA,
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       branch: "branch-a-alias",
       text: "branch-a-alias",
       piSessionFile: paths[leadA]!,
@@ -3047,7 +3088,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadB,
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       branch: "branch-b",
       text: "branch-b",
     });
@@ -3063,7 +3104,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadB,
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       branch: "branch-b",
       text: "branch-b",
       piSessionFile: paths[leadB]!,
@@ -3195,20 +3236,20 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   let maxActive = 0;
   let gateRefresh = false;
   let refreshSnapshotBase = 0;
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     exec: async (_command, args) => {
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            worktree: { repo_key: "/tmp", is_linked_worktree: false },
           },
         });
       if (args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
@@ -3296,6 +3337,36 @@ function nonGitWorkspaceResponse() {
     code: 1,
   };
 }
+function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
+  return fakeChiefPi({
+    ...options,
+    exec: async (command, args, extra) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return {
+          stdout: args.includes("--show-toplevel") ? extra.cwd : "/tmp",
+          stderr: "",
+          code: 0,
+        };
+      const response = await options.exec?.(command, args, extra);
+      if (
+        command === "herdr" &&
+        args[0] === "workspace" &&
+        args[1] === "get" &&
+        response
+      ) {
+        const parsed = JSON.parse(response.stdout);
+        if (parsed.result?.workspace) {
+          parsed.result.workspace.workspace_id = args[2];
+          if (args[2] === process.env.HERDR_WORKSPACE_ID)
+            parsed.result.workspace.worktree = null;
+          return { ...response, stdout: JSON.stringify(parsed) };
+        }
+      }
+      return response;
+    },
+  });
+}
+
 function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   let fixture: ReturnType<typeof fakePi>;
   const initialTools = Array.isArray(options.activeTools)
@@ -3418,6 +3489,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     (resolve) => (releaseDeferredPaneGet = resolve),
   );
   let failManagerMetadata = false;
+  let identitySessionId = LEAD_SESSION_ID;
   const exec = (command: string, args: string[]) => {
     if (
       command === "herdr" &&
@@ -3489,27 +3561,45 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
-          worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          worktree: { repo_key: "/tmp", is_linked_worktree: false },
         },
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "repo-key",
+          repo_key: "/tmp",
           repo_name: "project",
         },
         worktrees: [],
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgentIdentity()] });
+      return respond({
+        agents: [
+          {
+            ...managerAgentIdentity(),
+            agent_session: {
+              ...managerAgentIdentity().agent_session,
+              value: identitySessionId,
+            },
+          },
+        ],
+      });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-      return respond({ agent: managerAgentIdentity() });
+      return respond({
+        agent: {
+          ...managerAgentIdentity(),
+          agent_session: {
+            ...managerAgentIdentity().agent_session,
+            value: identitySessionId,
+          },
+        },
+      });
     if (command === "herdr" && isApiSnapshot(args))
       return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
     return respond({});
   };
-  const first = fakeChiefPi({
+  const first = fakeRepositoryChiefPi({
     entries: [
       {
         type: "custom",
@@ -3521,7 +3611,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     exec,
     sessionName: "current lead name",
   });
-  const second = fakeChiefPi({ activeTools: ["read"], exec });
+  const second = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
   const projectCwd = realFs.mkdtempSync(
     join(tmpdir(), "herdsman-root-manager-project-"),
   );
@@ -3798,6 +3888,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.deepEqual(first.pi.getActiveTools(), managerTools);
     const collisionNotices: string[] = [];
     ctx2.ui.notify = (message: string) => collisionNotices.push(message);
+    identitySessionId = secondSessionId;
     await second.events.get("session_start")![0](undefined, ctx2);
     assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
     assert.ok(
@@ -3819,8 +3910,9 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         /already has an active Manager/.test(message),
       ),
     );
+    identitySessionId = LEAD_SESSION_ID;
 
-    persistedManager = fakeChiefPi({
+    persistedManager = fakeRepositoryChiefPi({
       activeTools: ["read"],
       entries: [
         {
@@ -3833,7 +3925,22 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
           },
         },
       ],
-      exec,
+      exec: (command, args) => {
+        if (
+          command === "herdr" &&
+          (isAgentList(args) || (args[0] === "agent" && args[1] === "get"))
+        ) {
+          const agent = {
+            ...managerAgentIdentity(),
+            agent_session: {
+              ...managerAgentIdentity().agent_session,
+              value: persistedManagerSessionId,
+            },
+          };
+          return respond(isAgentList(args) ? { agents: [agent] } : { agent });
+        }
+        return exec(command, args);
+      },
     });
     registerExtension!(persistedManager.pi as never);
     persistedManagerContext = fakeContext(persistedManager.entries) as any;
@@ -4008,7 +4115,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     await persistedManager?.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")![0]();
-    const replacement = fakeChiefPi({ activeTools: ["read"], exec });
+    const replacement = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
     registerExtension!(replacement.pi as never);
     try {
       const replacementContext = fakeContext() as any;
@@ -4054,24 +4161,30 @@ test("failed Manager activation preserves late inherited tools through rollback"
     code: 0,
   });
   let verifyManager = true;
+  let activationIdentityChecks = 0;
   const baseline = ["read", "bash"];
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: baseline,
     allTools: [{ name: "history" }, { name: "notes" }],
     exec: (_command, args) =>
       args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
               source: {
                 source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
+                repo_key: "/tmp",
                 repo_name: "project",
               },
               worktrees: [],
             })
           : isAgentList(args)
-            ? respond({ agents: verifyManager ? [managerAgentIdentity()] : [] })
+            ? respond({
+                agents:
+                  verifyManager || ++activationIdentityChecks === 1
+                    ? [managerAgentIdentity()]
+                    : [],
+              })
             : args[0] === "agent" && args[1] === "get"
               ? respond({ agent: managerAgentIdentity() })
               : isApiSnapshot(args)
@@ -4150,16 +4263,16 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     stderr: "",
     code: 0,
   });
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     exec: (_command, args) =>
       args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
               source: {
                 source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
+                repo_key: "/tmp",
                 repo_name: "project",
               },
               worktrees: [],
@@ -4192,7 +4305,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       id: randomUUID(),
       sessionId: LEAD_SESSION_ID,
       branch: "fix/pending-removal",
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       assignmentId: "assignment-id",
       checkoutPath: "/tmp/fix-pending-removal",
     };
@@ -4302,16 +4415,16 @@ test("Manager leave suspends authority when lease release fails", async () => {
     stderr: "",
     code: 0,
   });
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     exec: (_command, args) =>
       args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
               source: {
                 source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
+                repo_key: "/tmp",
                 repo_name: "project",
               },
               worktrees: [],
@@ -4396,6 +4509,7 @@ test("Manager leave suspends authority when lease release fails", async () => {
 test("restored Manager registers supervision tools and restores Manager tools", async () => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);
+  const sessionId = `manager-${randomUUID()}`;
   process.env.HERDR_PANE_ID = "manager-pane";
   process.env.HERDR_TAB_ID = "manager-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -4421,23 +4535,35 @@ test("restored Manager registers supervision tools and restores Manager tools", 
       },
     ],
     exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return { stdout: "/tmp", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            workspace_id: WORKSPACE,
+            worktree: null,
           },
         });
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
         });
+      const agent = {
+        ...managerAgentIdentity(),
+        agent_session: {
+          ...managerAgentIdentity().agent_session,
+          value: sessionId,
+        },
+      };
       if (command === "herdr" && isAgentList(args))
-        return respond({ agents: [] });
+        return respond({ agents: [agent] });
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+        return respond({ agent });
       if (command === "herdr" && isApiSnapshot(args))
         return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
       return respond({});
@@ -4446,7 +4572,6 @@ test("restored Manager registers supervision tools and restores Manager tools", 
   registerExtension!(pi.pi as never);
   try {
     const context = fakeContext(pi.entries) as any;
-    const sessionId = `manager-${randomUUID()}`;
     context.sessionManager.getSessionId = () => sessionId;
     for (const entry of pi.entries as any[])
       if (entry.customType === "pi-herdsman-role")
@@ -4457,7 +4582,7 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
-      false,
+      true,
     );
     assert.equal(
       pi.entries
@@ -4514,7 +4639,7 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
     intervals.push({ callback, delay });
     return { unref: () => undefined } as any;
   }) as typeof setInterval;
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     entries: [
       {
@@ -4535,19 +4660,22 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            worktree: { repo_key: "/tmp", is_linked_worktree: false },
           },
         });
       if (args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
         });
-      if (isAgentList(args)) return respond({ agents: [] });
+      if (isAgentList(args))
+        return respond({ agents: [managerAgentIdentity()] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: managerAgentIdentity() });
       return respond({});
     },
   });
@@ -4621,7 +4749,7 @@ test("Manager auto-start activates after identity and coordination verification 
     },
   };
   let healthyLeadCoordinationBeforeIdentityCheck = false;
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     entries: [
       {
@@ -4634,14 +4762,14 @@ test("Manager auto-start activates after identity and coordination verification 
       if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            worktree: { repo_key: "/tmp", is_linked_worktree: false },
           },
         });
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
@@ -4769,6 +4897,9 @@ function managerBootstrapHarness(
     omitPaneCwd?: boolean;
     assertLockDuringFinalScope?: boolean;
     onFinalHerdrVerification?: () => void;
+    onCommittedWorktreeList?: () => void;
+    workspaceWorktree?: unknown;
+    sourceWorkspace?: string;
     initializeBeforeProbe?: boolean;
     failRootRediscovery?: boolean;
   } = {},
@@ -4903,7 +5034,12 @@ function managerBootstrapHarness(
       }
       if (command !== "herdr") return undefined;
       if (args[0] === "workspace" && args[1] === "get")
-        return respond({ workspace: { workspace_id: evidenceWorkspaceId } });
+        return respond({
+          workspace: {
+            workspace_id: evidenceWorkspaceId,
+            worktree: options.workspaceWorktree,
+          },
+        });
       if (args[0] === "pane" && args[1] === "get") {
         const pane = {
           pane_id: evidencePaneId,
@@ -4931,7 +5067,12 @@ function managerBootstrapHarness(
           }).status === 0;
         if (hasCommittedHead && ++committedWorktreeListResponses === 1)
           options.onFinalHerdrVerification?.();
-        if (hasCommittedHead && options.assertLockDuringFinalScope) {
+        if (hasCommittedHead) options.onCommittedWorktreeList?.();
+        if (
+          hasCommittedHead &&
+          committedWorktreeListResponses === 1 &&
+          options.assertLockDuringFinalScope
+        ) {
           assert.equal(
             readLiveProcessLock(managerBootstrapLockPath(cwd)).pid,
             process.pid,
@@ -4941,7 +5082,7 @@ function managerBootstrapHarness(
         return hasCommittedHead
           ? respond({
               source: {
-                source_workspace_id: WORKSPACE,
+                source_workspace_id: options.sourceWorkspace ?? WORKSPACE,
                 repo_key: join(cwd, ".git"),
                 repo_name: "project",
               },
@@ -4959,10 +5100,13 @@ function managerBootstrapHarness(
               code: 1,
             };
       }
-      if (isAgentList(args))
-        return respond({ agents: [managerAgentIdentity()] });
-      if (args[0] === "agent" && args[1] === "get")
-        return respond({ agent: managerAgentIdentity() });
+      const agent = {
+        ...managerAgentIdentity(),
+        pane_id: evidencePaneId,
+        workspace_id: evidenceWorkspaceId,
+      };
+      if (isAgentList(args)) return respond({ agents: [agent] });
+      if (args[0] === "agent" && args[1] === "get") return respond({ agent });
       if (isApiSnapshot(args))
         return respond({ snapshot: { agents: [], panes: [] } });
       return respond({});
@@ -5239,7 +5383,9 @@ test("Manager activation of an existing Git primary does not initialize Git", as
   await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
   assert.equal(harness.confirmations, 0);
   assert.equal(
-    harness.invocations.some(({ command }) => command === "git"),
+    harness.invocations.some(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ),
     false,
   );
   assert.equal(
@@ -5247,6 +5393,118 @@ test("Manager activation of an existing Git primary does not initialize Git", as
     "1",
     harness.gitDiagnostic(),
   );
+});
+
+test("Manager activation rejects identity changes during repository discovery", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-discovery-identity-"));
+  let harness: ReturnType<typeof managerBootstrapHarness>;
+  let armed = false;
+  harness = managerBootstrapHarness(cwd, {
+    onCommittedWorktreeList: () => {
+      if (armed) harness.setHerdrIdentity("replacement-pane", WORKSPACE);
+    },
+  });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  assert.equal(harness.git(["init"]).status, 0);
+  assert.equal(
+    harness.git(["commit", "--allow-empty", "-m", "initial"]).status,
+    0,
+  );
+  armed = true;
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.notEqual(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+  assert.ok(harness.notices.some((notice) => /identity/i.test(notice)));
+});
+
+test("Manager activation ignores inherited workspace source but rejects explicit cross-repository association", async (t) => {
+  for (const conflicting of [false, true]) {
+    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-cross-repo-"));
+    const association = {
+      repo_key: "/different-repository/.git",
+      checkout_path: "/different-repository",
+      is_linked_worktree: false,
+    };
+    const harness = managerBootstrapHarness(cwd, {
+      sourceWorkspace: "inherited-from-another-repository",
+      ...(conflicting ? { workspaceWorktree: association } : {}),
+    });
+    try {
+      await harness.pi.events.get("session_start")![0](
+        undefined,
+        harness.context,
+      );
+      assert.equal(harness.git(["init"]).status, 0);
+      assert.equal(
+        harness.git(["commit", "--allow-empty", "-m", "initial"]).status,
+        0,
+      );
+      await harness.pi.commandOptions
+        .get("manager")!
+        .handler("", harness.context);
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+          ?.role === "manager",
+        !conflicting,
+      );
+      assert.deepEqual(association, {
+        repo_key: "/different-repository/.git",
+        checkout_path: "/different-repository",
+        is_linked_worktree: false,
+      });
+      assert.equal(
+        harness.invocations.some(
+          ({ command, args }) =>
+            command === "herdr" &&
+            ["close", "remove", "stop"].includes(args[1]),
+        ),
+        false,
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }
+});
+
+test("Manager activation from an unassociated workspace inherited from a linked checkout uses the current repository", async (t) => {
+  const root = realFs.mkdtempSync(join(tmpdir(), "manager-linked-origin-"));
+  const origin = join(root, "origin");
+  const linked = join(root, "linked");
+  const current = join(root, "current");
+  realFs.mkdirSync(origin);
+  realFs.mkdirSync(current);
+  const harness = managerBootstrapHarness(current, {
+    sourceWorkspace: "linked-origin-workspace",
+  });
+  t.after(async () => {
+    await harness.cleanup();
+    realFs.rmSync(root, { recursive: true, force: true });
+  });
+  for (const [cwd, args] of [
+    [origin, ["init"]],
+    [origin, ["commit", "--allow-empty", "-m", "origin"]],
+    [origin, ["worktree", "add", "-b", "linked", linked]],
+    [current, ["init"]],
+    [current, ["commit", "--allow-empty", "-m", "current"]],
+  ] as const)
+    assert.equal(harness.git([...args], cwd).status, 0);
+  const originHead = harness.git(["rev-parse", "HEAD"], origin).stdout;
+  const linkedHead = harness.git(["rev-parse", "HEAD"], linked).stdout;
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+  assert.equal(
+    readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.repoKey,
+    join(current, ".git"),
+  );
+  assert.equal(harness.git(["rev-parse", "HEAD"], origin).stdout, originHead);
+  assert.equal(harness.git(["rev-parse", "HEAD"], linked).stdout, linkedHead);
 });
 
 test("Manager bootstrap rejects a changed target and leaves no repository", async (t) => {
@@ -5805,7 +6063,7 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
     },
   };
   let coordinationRestoredBeforeIdentityCheck = false;
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     entries: [
       {
@@ -5818,14 +6076,14 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
       if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            worktree: { repo_key: "/tmp", is_linked_worktree: false },
           },
         });
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
@@ -5904,7 +6162,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
       value: sessionId,
     },
   };
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     entries: [
       {
@@ -5915,25 +6173,27 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
     ],
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
-        return respond({ workspace: { worktree: { repo_key: "repo-key" } } });
+        return respond({ workspace: { worktree: { repo_key: "/tmp" } } });
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
           },
           worktrees: [],
         });
       if (command === "herdr" && isAgentList(args)) {
         const lock = `${managerDescriptorPath(supervisionRuntime(), WORKSPACE)}.lock`;
+        if (!realFs.existsSync(lock))
+          return respond({ agents: [{ ...agent, pane_id: "manager-pane" }] });
         const owner = realFs.readdirSync(lock)[0];
         assert.ok(owner);
         realFs.writeFileSync(join(lock, owner), "{}");
         return respond({ agents: [agent] });
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        return respond({ agent });
+        return respond({ agent: { ...agent, pane_id: "manager-pane" } });
       }
       if (command === "herdr" && isApiSnapshot(args))
         return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
@@ -6355,6 +6615,20 @@ async function managerRemovalFixture(
         sessionEntries.push({ type: "custom", customType, data });
       },
       exec: async (command: string, args: string[], runOptions: any) => {
+        if (command === "herdr") {
+          const result =
+            args[0] === "workspace"
+              ? { workspace: { workspace_id: manager.workspaceId } }
+              : {
+                  source: { repo_key: repoKey, repo_name: "project" },
+                  worktrees: [],
+                };
+          return {
+            code: 0,
+            stdout: JSON.stringify({ id: AGENT_ID, result }),
+            stderr: "",
+          };
+        }
         assert.equal(command, "git");
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
           return {
@@ -6636,6 +6910,7 @@ async function managerRemovalFixture(
     HERDSMAN_BUILD: {} as any,
   } as any);
   const ctx = fakeContext([]) as any;
+  ctx.cwd = repoKey;
   ctx.sessionManager.getSessionId = () => "manager-session";
   ctx.sessionManager.getBranch = () => activeBranch;
   ctx.hasUI = true;
@@ -8021,7 +8296,11 @@ async function managerDelegateAssignmentTest(
     pane_id: "root-pane",
     tab_id: "root-tab",
   };
-  const exec = (command: string, args: string[]) => {
+  const exec = (
+    command: string,
+    args: string[],
+    options?: { cwd?: string },
+  ) => {
     if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
       tabCommands.push(args);
       const tabId = args[3] === childWorkspace ? "child-tab" : "root-tab";
@@ -8046,7 +8325,11 @@ async function managerDelegateAssignmentTest(
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
         return { stdout: `${childCwd}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
-        return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+        return {
+          stdout: `${options?.cwd === childCwd && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : repoKey}\n`,
+          stderr: "",
+          code: 0,
+        };
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: [
@@ -8276,6 +8559,7 @@ async function managerDelegateAssignmentTest(
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
+                  cwd: childCwd,
                 },
               ]
             : [],
@@ -8316,6 +8600,7 @@ async function managerDelegateAssignmentTest(
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
+                  cwd: childCwd,
                 },
               ]
             : []),
@@ -8323,11 +8608,31 @@ async function managerDelegateAssignmentTest(
       });
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-      return respond({ agent: managerAgent });
+      return respond({
+        agent:
+          args[2] === "child-pane"
+            ? {
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "path",
+                  value: childSessionPath(),
+                },
+                workspace_id: childWorkspace,
+                pane_id: "child-pane",
+                tab_id: "child-tab",
+                cwd: childCwd,
+              }
+            : managerAgent,
+      });
     return respond({});
   };
   let mutateRetainedSource: (() => void) | undefined;
-  const managerExec = async (command: string, args: string[]) => {
+  const managerExec = async (
+    command: string,
+    args: string[],
+    options?: { cwd?: string },
+  ) => {
     mutateRetainedSource?.();
     if (
       managerUsesRootPane &&
@@ -8344,7 +8649,7 @@ async function managerDelegateAssignmentTest(
           cwd: "/tmp/manager-root",
         },
       });
-    const result = await exec(command, args);
+    const result = await exec(command, args, options);
     if (
       lockOrder === "lead-first" &&
       command === "herdr" &&
@@ -9413,6 +9718,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     workspace_id: WORKSPACE,
     pane_id: "manager-pane",
     tab_id: "manager-tab",
+    cwd: "/tmp",
   };
   const incompatibleManagerSession = randomUUID();
   const incompatibleWorkspace = `workspace-${randomUUID()}`;
@@ -9433,7 +9739,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     paneId: incompatibleManager.pane_id,
     tabId: incompatibleManager.tab_id,
     workspaceId: incompatibleWorkspace,
-    repoKey: "repo-key",
+    repoKey: "/var",
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -9494,7 +9800,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     workspace_id: assignedWorkspace,
     pane_id: "assigned-pane",
     tab_id: "assigned-tab",
-    cwd: "/tmp/assigned-project",
+    cwd: "/tmp",
   };
   const ordinaryLeadSession = randomUUID();
   const ordinaryWorkspace = `workspace-${randomUUID()}`;
@@ -9571,7 +9877,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   writeProjectAssignment(supervisionRuntime(), {
     version: 2,
     id: assignedLeadSession,
-    repoKey: "repo-key",
+    repoKey: "/tmp",
     branch: "assigned-branch",
     text: "assigned work",
   });
@@ -9608,18 +9914,13 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       return respond({
         workspace:
           args[2] === WORKSPACE
-            ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
+            ? { worktree: { repo_key: "/tmp", is_linked_worktree: false } }
             : args[2] === incompatibleWorkspace
               ? {
-                  worktree: { repo_key: "repo-key", is_linked_worktree: false },
+                  worktree: { repo_key: "/var", is_linked_worktree: false },
                 }
               : args[2] === assignedWorkspace || args[2] === ordinaryWorkspace
-                ? {
-                    worktree: {
-                      repo_key: "repo-key",
-                      is_linked_worktree: true,
-                    },
-                  }
+                ? { worktree: null }
                 : {},
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
@@ -9630,7 +9931,11 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
             args[args.indexOf("--workspace") + 1] === incompatibleWorkspace
               ? incompatibleWorkspace
               : WORKSPACE,
-          repo_key: "repo-key",
+          repo_key:
+            args.includes("--workspace") &&
+            args[args.indexOf("--workspace") + 1] === incompatibleWorkspace
+              ? "/var"
+              : "/tmp",
           repo_name: "project",
         },
         worktrees: [
@@ -9666,7 +9971,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     return respond({});
   };
   let overview: any;
-  const manager = fakeChiefPi({ activeTools: ["read"], exec });
+  const manager = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
   const managerCtx = fakeContext() as any;
   managerCtx.hasUI = true;
   managerCtx.ui.custom = async (factory: any) => {
@@ -9696,17 +10001,25 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       managerCtx,
     );
     assert.deepEqual(
-      managerListing.details.reports.map((report: any) => report.session),
-      [assignedLeadSession, ordinaryLeadSession],
+      managerListing.details.reports
+        .map((report: any) => report.session)
+        .sort(),
+      [assignedLeadSession, ordinaryLeadSession].sort(),
       "all eligible Leads in the verified project group are Manager reports",
     );
-    assert.equal(managerListing.details.reports[0].relationship, "assigned");
-    assert.deepEqual(managerListing.details.reports[0].available_tools, [
+    const assignedReport = managerListing.details.reports.find(
+      (report: any) => report.session === assignedLeadSession,
+    );
+    const ordinaryReport = managerListing.details.reports.find(
+      (report: any) => report.session === ordinaryLeadSession,
+    );
+    assert.equal(assignedReport.relationship, "assigned");
+    assert.deepEqual(assignedReport.available_tools, [
       "inspect_staff",
       "message_staff",
     ]);
-    assert.equal(managerListing.details.reports[1].relationship, "supervised");
-    assert.deepEqual(managerListing.details.reports[1].available_tools, [
+    assert.equal(ordinaryReport.relationship, "supervised");
+    assert.deepEqual(ordinaryReport.available_tools, [
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
@@ -9819,13 +10132,13 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     };
     const duplicatePath = projectAssignmentPath(
       supervisionRuntime(),
-      "repo-key",
+      "/tmp",
       "duplicate-assignment",
     );
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: assignedLeadSession,
-      repoKey: "repo-key",
+      repoKey: "/tmp",
       branch: "duplicate-assignment",
       text: "ambiguous duplicate",
     });
@@ -9893,7 +10206,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     process.env.HERDR_WORKSPACE_ID = "chief-workspace";
     process.env.HERDR_PANE_ID = "chief-pane";
     process.env.HERDR_TAB_ID = "chief-tab";
-    const chief = fakeChiefPi({ activeTools: ["read"], exec });
+    const chief = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
     const chiefCtx = fakeContext() as any;
     chiefCtx.sessionManager.getSessionId = () => `chief-${randomUUID()}`;
     const chiefSession = chiefCtx.sessionManager.getSessionId();
@@ -10127,11 +10440,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       resetAgentMailbox(agentMailboxPath(WORKSPACE, mailboxLabel));
       await chief.events.get("session_shutdown")![0]();
       rmSync(
-        projectAssignmentPath(
-          supervisionRuntime(),
-          "repo-key",
-          "assigned-branch",
-        ),
+        projectAssignmentPath(supervisionRuntime(), "/tmp", "assigned-branch"),
         { force: true },
       );
     }
@@ -10174,7 +10483,7 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     workspace_id: leadWorkspace,
     pane_id: "ordinary-inbox-pane",
     tab_id: "ordinary-inbox-tab",
-    cwd: "/tmp/ordinary-worktree",
+    cwd: "/tmp",
   };
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
@@ -10186,16 +10495,16 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
       return respond({
         workspace:
           args[2] === WORKSPACE
-            ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
+            ? { worktree: { repo_key: "/tmp", is_linked_worktree: false } }
             : args[2] === leadWorkspace
-              ? { worktree: { repo_key: "repo-key", is_linked_worktree: true } }
+              ? { worktree: null }
               : {},
       });
     if (args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "repo-key",
+          repo_key: "/tmp",
           repo_name: "project",
           source_checkout_path: "/tmp/project-root",
         },
@@ -10204,7 +10513,9 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     if (isAgentList(args))
       return respond({ agents: [managerAgent, leadAgent] });
     if (args[0] === "agent" && args[1] === "get")
-      return respond({ agent: managerAgent });
+      return respond({
+        agent: args[2] === leadAgent.pane_id ? leadAgent : managerAgent,
+      });
     if (isApiSnapshot(args))
       return respond({
         snapshot: {
@@ -10233,7 +10544,7 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
   let lead: ReturnType<typeof fakeChiefPi> | undefined;
   try {
     useManagerIdentity();
-    manager = fakeChiefPi({
+    manager = fakeRepositoryChiefPi({
       activeTools: ["read"],
       exec: managerExec,
       persistMessages: true,
@@ -10245,7 +10556,7 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     await manager.commandOptions.get("manager").handler("", managerCtx);
 
     useLeadIdentity();
-    lead = fakeChiefPi({
+    lead = fakeRepositoryChiefPi({
       activeTools: ["read"],
       exec: leadExec,
       persistMessages: true,
@@ -10444,7 +10755,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     paneId: managerPane,
     tabId: managerTab,
     workspaceId: WORKSPACE,
-    repoKey: "repo-key",
+    repoKey: "/tmp",
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10496,20 +10807,20 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     stderr: "",
     code: 0,
   });
-  const pi = fakeChiefPi({
+  const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     exec: (_command, args) => {
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
-            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+            worktree: { repo_key: "/tmp", is_linked_worktree: false },
           },
         });
       if (args[0] === "worktree" && args[1] === "list")
         return respond({
           source: {
             source_workspace_id: WORKSPACE,
-            repo_key: "repo-key",
+            repo_key: "/tmp",
             repo_name: "project",
             source_checkout_path: "/tmp/project-root",
           },
@@ -11931,6 +12242,135 @@ test("competing Lead focuses Chief with an absent prospective session path", asy
   }
 });
 
+test("Chief accepts a recorded Manager sender independently of source workspace", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-manager-inbox-${randomUUID()}.sock`,
+  );
+  const senderId = randomUUID();
+  const sender = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: senderId,
+    },
+    pane_id: "sender-pane",
+    tab_id: "sender-tab",
+    workspace_id: "sender-workspace",
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    exec: (_command, args) => {
+      if (isAgentList(args)) return respond({ agents: [sender] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: sender });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: "other-workspace",
+            repo_key: "/tmp",
+            repo_name: "project",
+          },
+          worktrees: [{ open_workspace_id: sender.workspace_id }],
+        });
+      return undefined;
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.mode = "rpc";
+  registerExtension!(pi.pi as never);
+  const lease = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: senderId,
+    paneId: sender.pane_id,
+    tabId: sender.tab_id,
+    workspaceId: sender.workspace_id,
+    repoKey: "/tmp",
+  });
+  try {
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: senderId,
+      updatedAt: Date.now(),
+    });
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
+    const record = {
+      version: 2,
+      id: randomUUID(),
+      leaseId: lease.descriptor.leaseId,
+      kind: "manager_message",
+      fromSessionId: senderId,
+      toSessionId: LEAD_SESSION_ID,
+      leadSessionId: senderId,
+      text: "recorded sender",
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(record, supervisionRuntime());
+    await t.waitFor(
+      () =>
+        assert.ok(
+          pi.sentMessageCalls.some(
+            ({ message }: any) => message?.details?.id === record.id,
+          ),
+        ),
+      { timeout: 5000 },
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
+        .length,
+      1,
+    );
+    const receipt = pi.sentMessageCalls.find(
+      ({ message }: any) => message?.details?.id === record.id,
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...receipt });
+    await t.waitFor(
+      () =>
+        assert.equal(
+          listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
+            .length,
+          0,
+        ),
+      { timeout: 5000 },
+    );
+    const stale = { ...record, id: randomUUID(), leaseId: randomUUID() };
+    writeChiefMessage(stale, supervisionRuntime());
+    await t.waitFor(
+      () =>
+        assert.equal(
+          listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
+            .length,
+          0,
+        ),
+      { timeout: 5000 },
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }: any) => message?.details?.id === stale.id,
+      ),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    lease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Chief shutdown releases its lease when ordinary tool restoration fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -13166,6 +13606,89 @@ test("Chief activation replaces the lead widget and overview selection is intera
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
+});
+
+test("Manager direct reports verify remote repository membership rather than topology workspace order", async (t) => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const root = mkdtempSync(join(tmpdir(), "manager-reports-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, "repo");
+  const other = join(root, "other");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  mkdirSync(join(other, ".git"), { recursive: true });
+  const manager = { repoKey: join(repo, ".git"), workspaceId: "manager" };
+  const leads = ["same", "other", "missing", "changed"].map((id) => ({
+    lead: id,
+    workspaceId: id,
+    paneId: id,
+    tabId: id,
+  }));
+  const calls = new Map<string, number>();
+  let abort: AbortController | undefined;
+  const runtime = createLeadSupervisionRuntime({
+    activeRole: () => "manager",
+    state: { managerLease: { descriptor: manager } },
+    currentManager: async () => manager,
+    sameManagerDescriptor: () => true,
+    worktreeGroupScope: async () => ({ workspaceIds: ["manager"] }),
+    herdrSessionSnapshot: async () => ({ agents: [], workspaces: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    workspacePresentationProvenance: async () => ({}),
+    projectSupervision: () => ({ leads }),
+    listManagerDescriptors: () => [],
+    currentChief: () => undefined,
+    supervisionRuntime: () => ({}),
+    listProjectAssignments: () => [{ id: "same" }],
+    remoteChiefAgent: async (_ctx: unknown, descriptor: any) => {
+      if (abort) {
+        abort.abort(new Error("verification cancelled"));
+        throw abort.signal.reason;
+      }
+      const id = descriptor.piSessionId;
+      calls.set(id, (calls.get(id) ?? 0) + 1);
+      if (id === "missing") return undefined;
+      return {
+        cwd:
+          id === "other" || (id === "changed" && calls.get(id)! > 1)
+            ? other
+            : repo,
+      };
+    },
+    pi: {
+      exec: async (command: string, args: string[], options: any) => {
+        const cwd = options.cwd;
+        if (command === "git")
+          return {
+            code: 0,
+            stdout: args.includes("--show-toplevel") ? cwd : join(cwd, ".git"),
+            stderr: "",
+          };
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            id: 1,
+            result:
+              args[0] === "workspace"
+                ? { workspace: { workspace_id: args[2] } }
+                : {
+                    source: { repo_key: join(cwd, ".git"), repo_name: "repo" },
+                    worktrees: [],
+                  },
+          }),
+        };
+      },
+    },
+  } as any);
+  const reports = await runtime.directReports(fakeContext() as any);
+  assert.deepEqual(
+    reports.map((lead: any) => [lead.lead, lead.relationship]),
+    [["same", "assigned"]],
+  );
+  abort = new AbortController();
+  await assert.rejects(
+    runtime.directReports({ ...fakeContext(), signal: abort.signal } as any),
+    /verification cancelled/,
+  );
 });
 
 test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async () => {
@@ -20155,7 +20678,8 @@ test("Manager initialization cannot recover messages under stale or invalid loca
       requireCompatibleBuild: () => {
         if (scenario === "build") throw new Error("incompatible build");
       },
-      sameManagerDescriptor: () => scenario !== "replacement",
+      sameManagerDescriptor: () =>
+        scenario !== "replacement" && scenario !== "repository",
       recoverStaleProjectMessages: () => {
         recovered = true;
       },
@@ -20178,7 +20702,7 @@ test("Manager initialization cannot recover messages under stale or invalid loca
     const ctx: any = fakeContext();
     ctx.sessionManager.getSessionId = () =>
       scenario === "session" ? randomUUID() : sessionId;
-    if (["repository", "coordinator", "build"].includes(scenario))
+    if (["coordinator", "build"].includes(scenario))
       await assert.rejects(() =>
         transitions.reconcileCurrentManagerAssignments(ctx),
       );
