@@ -8338,7 +8338,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         agentStates.states.some(
           ({ state }) =>
             state.ownerSessionId === current.id ||
-            state.piSessionId === current.id,
+            state.piSessionId === current.id ||
+            state.projectAssignmentId === current.id,
         )
       )
         throw new Error(

@@ -6399,6 +6399,7 @@ async function managerRemovalFixture(
     preserveAssignmentDuringReconciliation?: boolean;
     confirmationResponse?: string;
     agentStateIssues?: boolean;
+    extraAgentStates?: any[];
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -6734,7 +6735,10 @@ async function managerRemovalFixture(
     isPiAgent: () => true,
     herdrSessionId: (agent: any) => agent.pi_session_id ?? "assigned-lead",
     scanAgentStates: () => ({
-      states: [],
+      states: (options.extraAgentStates ?? []).map((state, index) => ({
+        path: `state-${index}`,
+        state,
+      })),
       issues: options.agentStateIssues
         ? [{ path: "unavailable", diagnostic: "test" }]
         : [],
@@ -6961,6 +6965,32 @@ test("legacy assignment release refuses incomplete durable Agent ownership inven
       fixture.ctx,
     ),
     /Agent ownership inventory is incomplete/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses a nested Agent retained by project assignment identity", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    extraAgentStates: [
+      {
+        ownerSessionId: "intermediate-agent",
+        piSessionId: "nested-agent",
+        projectAssignmentId: "assigned-lead",
+      },
+    ],
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
   );
   assert.ok(fixture.assignment());
   assert.equal(fixture.confirmationCount(), 0);
