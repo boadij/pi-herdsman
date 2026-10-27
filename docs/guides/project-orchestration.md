@@ -38,6 +38,18 @@ unresolved Agent work. Only one live Manager can hold authority for a project
 scope at a time. No prior chat turn or existing linked worktree is required in
 an ordinary Git primary workspace.
 
+For a non-Git workspace, explicitly running `/manager` or choosing
+**Project Manager > Start Manager mode** asks you to confirm the exact
+directory by default. The global **Skip Manager Git setup confirmation**
+setting disables that prompt for explicit activation. Initialization creates a
+local repository with an empty initial commit; existing files are not
+committed. Manager activation then uses its normal verification and eligibility
+checks. Declining or a failed initialization leaves the session outside
+Manager mode. Automatic Manager startup and restoration remain non-mutating:
+they never initialize Git or request this confirmation. Create the repository
+through an explicit activation before relying on Manager for a non-Git
+workspace.
+
 Manager's work projection reports `active`, `paused`, or `conflict`. A live
 Lead's runtime state is separate from project status.
 

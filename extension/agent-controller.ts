@@ -3485,7 +3485,10 @@ export type AgentControllerOptions = {
   rootDelegationPolicy?(): RootDelegationPolicy;
   /** Stable authority/profile generation captured across assignment preflight. */
   rootDelegationGeneration?(): RootDelegationGeneration;
-  projectEvidence?(ctx: ExtensionContext): Promise<
+  projectEvidence?(
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<
     | {
         assignment: import("./supervision.ts").ProjectAssignment;
         revalidate(operation: () => Promise<void> | void): Promise<void>;
@@ -3494,7 +3497,7 @@ export type AgentControllerOptions = {
             assignment:
               import("./supervision.ts").ProjectAssignment | undefined,
           ) => void,
-        ): void;
+        ): Promise<void>;
       }
     | undefined
   >;
@@ -6821,7 +6824,7 @@ export function createAgentController(
         >;
         projectEvidence =
           scope.kind === "root"
-            ? await options.projectEvidence?.(ctx)
+            ? await options.projectEvidence?.(ctx, signal)
             : nestedEvidence && projectAssignmentId
               ? await options.managedProjectEvidence?.(
                   ctx,
@@ -7972,7 +7975,7 @@ export function createAgentController(
                 await projectEvidence.revalidate(async () => {
                   const current =
                     scope.kind === "root"
-                      ? await options.projectEvidence?.(ctx)
+                      ? await options.projectEvidence?.(ctx, signal)
                       : nestedEvidence && projectAssignmentId
                         ? await options.managedProjectEvidence?.(
                             ctx,
@@ -7999,7 +8002,7 @@ export function createAgentController(
                       "Project assignment or required evidence changed during Agent startup; retry delegation",
                     );
                   if (scope.kind === "root")
-                    current.publishIfCurrent((latest) => {
+                    await current.publishIfCurrent((latest) => {
                       if (
                         !latest ||
                         latest.id !== current.assignment.id ||
@@ -8673,7 +8676,7 @@ export function createAgentController(
       name: "close_agent",
       label: "close agent",
       description:
-        "Destructively close an eligible directly owned Agent generation.",
+        "Destructively close the verified eligible directly owned Agent generation and cascade through its owned descendants, child-first.",
       parameters: agentTargetParameters,
       promptSnippet: undefined,
       promptGuidelines: undefined,

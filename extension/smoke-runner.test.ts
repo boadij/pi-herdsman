@@ -16,7 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
@@ -67,6 +67,8 @@ import {
   parseHerdrOutput,
   parseSmokeArgs,
   formatSmokeFailure,
+  managerBootstrapDelegationProjection,
+  managerBootstrapDelegationState,
   herdrErrorCode,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
@@ -124,6 +126,10 @@ import {
   runScenario,
   sanitizedFailureEvidence,
   preserveFailureEvidence,
+  retainScenarioFailureEvidence,
+  updateFailureEvidenceAfterCleanup,
+  reportFinalFailureEvidence,
+  reportFailureEvidenceWriteError,
   descendantCleanupStatus,
   verifyParentShutdown,
   startParent,
@@ -132,6 +138,447 @@ import {
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
 } from "../scripts/smoke.mjs";
+
+test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
+  const cases = [
+    [
+      "no call",
+      {
+        delegateCalls: 0,
+        expectedBranchDelegateCalls: 0,
+        resultState: "absent",
+      },
+      "absent",
+    ],
+    [
+      "call error",
+      {
+        delegateCalls: 1,
+        expectedBranchDelegateCalls: 1,
+        resultState: "error",
+      },
+      "error",
+    ],
+    [
+      "missing child",
+      {
+        delegateCalls: 1,
+        expectedBranchDelegateCalls: 1,
+        resultState: "success",
+      },
+      "success",
+    ],
+    [
+      "missing worktree",
+      {
+        expectedBranchDelegateCalls: 1,
+        delegateCalls: 1,
+        resultState: "success",
+        correlatedChild: true,
+        childSessionSaved: true,
+      },
+      "success",
+    ],
+  ];
+  for (const [name, input, resultState] of cases) {
+    const result = managerBootstrapDelegationProjection(input);
+    assert.equal(result.resultState, resultState, name);
+    assert.equal(
+      result.expectedBranchDelegateCalls,
+      input.expectedBranchDelegateCalls,
+      name,
+    );
+    assert.equal(
+      result.linkedWorktreeObserved,
+      input.linkedWorktreeObserved === true,
+      name,
+    );
+    assert.deepEqual(Object.keys(result).sort(), [
+      "childSessionSaved",
+      "correlatedChild",
+      "delegateCalls",
+      "expectedBranchDelegateCalls",
+      "linkedWorktreeObserved",
+      "resultState",
+    ]);
+  }
+});
+
+test("manager bootstrap wrong-branch success remains absent in diagnostics", () => {
+  const contents = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "wrong-branch-call",
+            name: "delegate_project",
+            arguments: { branch: "smoke/wrong" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_project",
+        toolCallId: "wrong-branch-call",
+        content: JSON.stringify({
+          ok: true,
+          action: "delegate",
+          branch: "smoke/wrong",
+          session: "child",
+        }),
+      },
+    },
+  ]
+    .map(JSON.stringify)
+    .join("\n");
+  const state = managerBootstrapDelegationState(contents, "smoke/expected");
+  assert.deepEqual(state, {
+    delegateCalls: 1,
+    expectedBranchDelegateCalls: 0,
+    resultState: "absent",
+  });
+});
+
+test("manager bootstrap timeout omits raw session evidence", () => {
+  const output = formatSmokeFailure({
+    name: "Error",
+    message: "timed out",
+    code: "SMOKE_TIMEOUT",
+    smoke: {
+      stage: "manager-bootstrap-correlated-child",
+      lastProgress: { expectedBranchDelegateCalls: 1, resultState: "success" },
+      lastEvidence: "PRIVATE SESSION CONTENT",
+      lastObservationError: "PRIVATE ERROR",
+    },
+  });
+  assert.match(output, /resultState.*success/);
+  assert.doesNotMatch(output, /PRIVATE/);
+});
+
+test("manager bootstrap run reference resolves to its exact retained artifact", async () => {
+  const evidence = { scenario: "manager-bootstrap", safe: true };
+  const artifact = await preserveFailureEvidence(evidence);
+  const reference = `${evidence.runReference}/result.json`;
+  assert.match(reference, /^pi-herdsman-smoke-evidence-[^/]+\/result\.json$/);
+  assert.equal(isAbsolute(reference), false);
+  const ownedDirectory = join(tmpdir(), evidence.runReference);
+  const [directoryInfo, realDirectory, artifactPath, retained] =
+    await Promise.all([
+      stat(ownedDirectory),
+      realpath(ownedDirectory),
+      realpath(artifact),
+      readFile(join(tmpdir(), reference), "utf8"),
+    ]);
+  assert.ok(directoryInfo.isDirectory());
+  assert.equal(artifactPath, join(realDirectory, "result.json"));
+  assert.deepEqual(JSON.parse(retained), evidence);
+  assert.equal(reference.includes(tmpdir()), false);
+  await rm(ownedDirectory, { recursive: true });
+});
+
+test("scenario failure reporting uses an exact relative run reference", async () => {
+  const evidence = { scenario: "test", outcome: "FAIL" };
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  let artifact;
+  try {
+    artifact = await retainScenarioFailureEvidence(ctx, evidence);
+  } finally {
+    console.error = originalError;
+  }
+  const expected = `${basename(dirname(artifact))}/result.json`;
+  try {
+    assert.equal(ctx.failureArtifact, artifact);
+    assert.deepEqual(errors, [
+      `failure evidence reference: ${expected} (under system temp directory)`,
+    ]);
+    assert.equal(isAbsolute(errors[0]), false);
+    assert.equal(errors[0].includes(tmpdir()), false);
+    assert.equal(
+      await readFile(join(dirname(artifact), "result.json"), "utf8"),
+      `${JSON.stringify({ ...evidence, runReference: basename(dirname(artifact)) }, null, 2)}\n`,
+    );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
+test("consumer receives only the finalized failure artifact through process output", async () => {
+  const evidence = {
+    scenario: "manager-bootstrap",
+    outcome: "EVIDENCE_FAIL",
+    mode: "simulated",
+    errorCode: "SMOKE_TIMEOUT",
+    stage: "manager-bootstrap-correlated-child",
+    managerBootstrapDelegation: {
+      delegateCalls: 3,
+      expectedBranchDelegateCalls: 2,
+      resultState: "success",
+      correlatedChild: true,
+      childSessionSaved: true,
+      linkedWorktreeObserved: true,
+      session: "SENSITIVE_SESSION_SENTINEL",
+      path: "/SENSITIVE_PATH_SENTINEL",
+    },
+    sessionStartObserved: true,
+    firstRequestObserved: false,
+    firstRequestVerified: false,
+    cleanup: "PENDING",
+    parentOwnership: {
+      session: "SENSITIVE_SESSION_SENTINEL",
+      workspaceId: "SENSITIVE_WORKSPACE_SENTINEL",
+      childPid: "SENSITIVE_PID_SENTINEL",
+      childExitObserved: true,
+    },
+    managerBootstrapFailureDiagnostics: "SENSITIVE_DIAGNOSTIC_SENTINEL",
+    diagnostics: { message: "SENSITIVE_MESSAGE_SENTINEL" },
+    toolOutput: "SENSITIVE_TOOL_OUTPUT_SENTINEL",
+    prompt: "SENSITIVE_PROMPT_SENTINEL",
+    env: { SECRET_SENTINEL: "SENSITIVE_SECRET_SENTINEL" },
+  };
+  const artifact = await preserveFailureEvidence(evidence);
+  const output = [];
+  try {
+    assert.equal(
+      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      false,
+    );
+    assert.deepEqual(output, []);
+
+    evidence.cleanup = "PASS";
+    await preserveFailureEvidence(evidence, artifact);
+    assert.equal(
+      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      true,
+    );
+
+    const prefix = "SMOKE_FAILURE_ARTIFACT_JSON ";
+    assert.equal(output.length, 1);
+    assert.ok(output[0].startsWith(prefix));
+    const consumed = JSON.parse(output[0].slice(prefix.length));
+    assert.equal(consumed.runReference, basename(dirname(artifact)));
+    assert.equal(
+      consumed.artifactReference,
+      `${consumed.runReference}/result.json`,
+    );
+    assert.equal(consumed.scenario, "manager-bootstrap");
+    assert.equal(consumed.outcome, "EVIDENCE_FAIL");
+    assert.equal(consumed.cleanup, "PASS");
+    assert.equal(consumed.errorCode, "SMOKE_TIMEOUT");
+    assert.equal(consumed.failureStage, "manager-bootstrap-correlated-child");
+    assert.deepEqual(consumed.managerBootstrapDelegation, {
+      delegateCalls: 3,
+      expectedBranchDelegateCalls: 2,
+      resultState: "success",
+      correlatedChild: true,
+      childSessionSaved: true,
+      linkedWorktreeObserved: true,
+    });
+    assert.equal(consumed.sessionStartObserved, true);
+    assert.equal(consumed.firstRequestObserved, false);
+    assert.equal(consumed.firstRequestVerified, false);
+    assert.deepEqual(
+      Object.keys(consumed).sort(),
+      [
+        "artifactReference",
+        "cleanup",
+        "errorCode",
+        "failureStage",
+        "firstRequestObserved",
+        "firstRequestVerified",
+        "mode",
+        "outcome",
+        "runReference",
+        "scenario",
+        "sessionStartObserved",
+        "managerBootstrapDelegation",
+      ].sort(),
+    );
+    assert.doesNotMatch(output[0], /SENSITIVE_|SECRET_SENTINEL|\/tmp\//);
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
+test("evidence write failure reporting omits raw filesystem paths", () => {
+  const sentinel = "/private/fixture/smoke/result.json";
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    reportFailureEvidenceWriteError(
+      Object.assign(
+        new Error(`EACCES: permission denied, open '${sentinel}'`),
+        {
+          code: "EACCES",
+        },
+      ),
+    );
+    reportFailureEvidenceWriteError(
+      Object.assign(new Error(`EIO writing '${sentinel}'`), { code: "EIO" }),
+      "update",
+    );
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(errors, [
+    "failure evidence: could not save (filesystem error EACCES)",
+    "failure evidence: could not update cleanup result (filesystem error EIO)",
+  ]);
+  assert.match(errors[0], /filesystem error EACCES/);
+  assert.match(errors[1], /filesystem error EIO/);
+  assert.doesNotMatch(errors.join("\n"), /private\/fixture|result\.json/);
+});
+
+test("scenario failure evidence save catch reports code without its path", async () => {
+  const sentinel = "/private/fixture/smoke/result.json";
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  let result;
+  try {
+    result = await retainScenarioFailureEvidence(
+      ctx,
+      { scenario: "test", outcome: "FAIL" },
+      async () => {
+        throw Object.assign(
+          new Error(`EACCES: permission denied, open '${sentinel}'`),
+          { code: "EACCES" },
+        );
+      },
+    );
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(result, null);
+  assert.equal(ctx.evidenceSaveFailed, true);
+  assert.deepEqual(errors, [
+    "failure evidence: could not save (filesystem error EACCES)",
+  ]);
+  assert.doesNotMatch(
+    errors.join("\n"),
+    /private\/fixture|result\.json|EACCES: permission denied/,
+  );
+});
+
+test("cleanup evidence retry records and reports a recovered artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-cleanup-retry-"));
+  const artifact = join(root, "result.json");
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    await updateFailureEvidenceAfterCleanup(
+      ctx,
+      { scenario: "test", cleanup: "PASS" },
+      async (evidence) => {
+        await writeFile(artifact, JSON.stringify(evidence));
+        return artifact;
+      },
+    );
+  } finally {
+    console.error = originalError;
+  }
+  try {
+    assert.equal(ctx.failureArtifact, artifact);
+    assert.equal(ctx.evidenceSaveFailed, undefined);
+    assert.deepEqual(errors, [
+      `failure evidence reference: ${basename(root)}/result.json (under system temp directory)`,
+    ]);
+    assert.deepEqual(JSON.parse(await readFile(artifact, "utf8")), {
+      scenario: "test",
+      cleanup: "PASS",
+    });
+    assert.equal(isAbsolute(errors[0]), false);
+    assert.equal(errors[0].includes(tmpdir()), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup retry artifact is delivered after its initial save failed", async () => {
+  const ctx = {};
+  const evidence = {
+    scenario: "manager-bootstrap",
+    outcome: "SCENARIO_FAIL",
+    cleanup: "PASS",
+  };
+  const output = [];
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(
+      await retainScenarioFailureEvidence(ctx, evidence, async () => {
+        throw Object.assign(new Error("private failure path"), {
+          code: "EACCES",
+        });
+      }),
+      null,
+    );
+    assert.equal(ctx.evidenceSaveFailed, true);
+    await updateFailureEvidenceAfterCleanup(ctx, evidence);
+    assert.ok(ctx.failureArtifact);
+    assert.equal(
+      await reportFinalFailureEvidence(ctx.failureArtifact, (line) =>
+        output.push(line),
+      ),
+      true,
+    );
+    assert.equal(output.length, 1);
+    const payload = JSON.parse(
+      output[0].replace("SMOKE_FAILURE_ARTIFACT_JSON ", ""),
+    );
+    assert.equal(payload.outcome, "SCENARIO_FAIL");
+    assert.equal(payload.cleanup, "PASS");
+  } finally {
+    console.error = originalError;
+    if (ctx.failureArtifact)
+      await rm(dirname(ctx.failureArtifact), { recursive: true, force: true });
+  }
+});
+
+test("cleanup evidence retry failure reports sanitized error without undefined reference", async () => {
+  const sentinel = "/private/fixture/smoke/result.json";
+  const ctx = {};
+  const errors = [];
+  const originalError = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    await assert.doesNotReject(
+      updateFailureEvidenceAfterCleanup(
+        ctx,
+        { scenario: "test", cleanup: "PASS" },
+        async () => {
+          throw Object.assign(
+            new Error(`EACCES: permission denied, open '${sentinel}'`),
+            { code: "EACCES" },
+          );
+        },
+      ),
+    );
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(ctx.failureArtifact, undefined);
+  assert.equal(ctx.evidenceSaveFailed, true);
+  assert.deepEqual(errors, [
+    "failure evidence: could not update cleanup result (filesystem error EACCES)",
+  ]);
+  assert.doesNotMatch(
+    errors.join("\n"),
+    /undefined|private\/fixture|result\.json|permission denied/,
+  );
+});
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
 
 test("package read identity accepts equivalent paths and rejects other files", () => {
@@ -1636,6 +2083,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     "core",
     "continuation",
     "chief-tree",
+    "manager-bootstrap",
     "manager-recovery",
     "terminal-failure",
   ])
@@ -1684,6 +2132,11 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     () => parseSmokeArgs(["manager-recovery", "--simulated"]),
     /does not support --simulated/,
   );
+  assert.throws(
+    () => parseSmokeArgs(["manager-bootstrap", "--simulated"]),
+    /requires a live model/,
+  );
+  assert.equal(initialPromptForScenario("manager-bootstrap", {}), undefined);
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
   for (const scenario of ["agent-terminal-failure", "manager-handoff"]) {
@@ -3865,7 +4318,7 @@ test("continuation first-generation stalls if completed child retires before obs
   );
   const start = source.indexOf("async function runContinuationSmoke(ctx) {");
   const end = source.indexOf(
-    "\nasync function runManagerRecoverySmoke(ctx) {",
+    "\nasync function runManagerBootstrapSmoke(ctx) {",
     start,
   );
   assert.ok(start >= 0 && end > start);
@@ -4027,7 +4480,7 @@ test("simulated continuation releases completion only after full live evidence",
     );
     const start = source.indexOf("async function runContinuationSmoke(ctx) {");
     const end = source.indexOf(
-      "\nasync function runManagerRecoverySmoke(ctx) {",
+      "\nasync function runManagerBootstrapSmoke(ctx) {",
       start,
     );
     assert.ok(start >= 0 && end > start);

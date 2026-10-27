@@ -232,8 +232,18 @@ existing linked worktree is required; the first project delegation can create
 the first linked worktree. Leads in linked-worktree workspaces cannot enter
 Manager mode. If another live Manager
 holds the lease, activation fails and the
-caller remains an ordinary Lead. Role activation does not abandon the session's
-directly owned Agent work. A restored Manager uses the same profile,
+caller remains an ordinary Lead. When an eligible `/manager` activation is
+requested in a non-Git workspace, `/manager` and **Start Manager mode** ask for
+confirmation naming the exact directory by default. The global Settings option
+**Skip Manager Git setup confirmation** is off by default; when enabled it skips
+only this prompt for explicit starts. Either way, initialization creates a local
+Git repository and one empty initial commit; existing files remain uncommitted
+and absent from new worktrees until separately committed. Automatic startup and
+restoration never bootstrap Git.
+Declining or a failed initialization does not activate Manager. Role activation
+does not abandon the session's directly owned Agent work.
+
+A restored Manager uses the same profile,
 supervision UI, context, and applicable ownership/recovery access as explicit
 activation. `/manager leave` preserves project work
 and is refused only when a Lead is waiting for this Manager's answer or the
@@ -257,6 +267,8 @@ override the global default. Explicit persisted Lead, Manager, or Chief intent
 takes precedence. Ineligible or contended optional startup remains an ordinary
 Lead; successful automatic startup does not persist Manager intent. Changing
 the setting affects only a later `session_start`, not the running role.
+Automatic startup and Manager restoration do not initialize Git or ask for
+confirmation; Git initialization is limited to explicit Manager activation.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
 live assigned Lead, plus `Remove worktree…` for assigned projects including

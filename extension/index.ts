@@ -365,7 +365,7 @@ const LEAD_COORDINATION_TOOLS = [
 ] as const;
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
-  "Use message_supervisor for material nonblocking coordination with your direct supervisor. Use list_peers/message_peer for peer coordination.";
+  "Use message_supervisor for material coordination or evidence your direct supervisor needs. Use list_peers/message_peer for concrete, task-relevant coordination with eligible peers. Avoid unsolicited routine progress updates, unnecessary acknowledgments, and redundant result announcements. Continue work or report normally when no coordination is needed.";
 const COMMON_LEAD_GUIDANCE = `${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 ${FILE_HANDOFF_GUIDANCE}`;
@@ -751,10 +751,12 @@ type StopReportCallbacks = {
 type TestProjectAssignmentLockHooks = {
   afterAcquired?: (repoKey: string, branch: string) => Promise<void>;
   afterOccupied?: (repoKey: string, branch: string) => Promise<void>;
+  onAuthorityWaitOccupied?: () => void;
   afterRequestPublished?: (
     mailboxPath: string,
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
+  removeProjectMessage?: typeof removeProjectMessage;
 };
 
 export function registerExtensionForTest(
@@ -1367,6 +1369,8 @@ function registerExtensionImpl(
     writeProjectMessage,
     afterProjectAssignmentLockAcquired: lockHooks?.afterAcquired,
     afterProjectAssignmentLockOccupied: lockHooks?.afterOccupied,
+    onProjectAssignmentAuthorityWaitOccupied:
+      lockHooks?.onAuthorityWaitOccupied,
     retireProjectAssignment,
     removeProjectMessagesForAssignment,
     recoverStaleProjectMessages,
@@ -1461,6 +1465,8 @@ function registerExtensionImpl(
       resolveMessageFiles: controllerResolveMessageFiles,
       projectAssignmentBytes,
       writeProjectAssignment,
+      onProjectAssignmentAuthorityWaitOccupied:
+        lockHooks?.onAuthorityWaitOccupied,
       delay,
       startHerdrAgentInPane,
       sessionIdentity,
@@ -1968,7 +1974,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Send nonblocking material coordination to your direct supervisor",
         description:
-          "Send a nonblocking question, clarification, warning, risk, scope change, or other material coordination to your direct supervisor.",
+          "Send a nonblocking question, clarification, warning, risk, decision, scope change, or evidence only when it is material or needed by your direct supervisor. Avoid unsolicited routine progress updates and duplicate result announcements.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
         execute: (...args: any[]) =>
@@ -1992,7 +1998,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
-          "Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
+          "Send task-relevant communication needed by another eligible coordinator, not routine broadcasts or gratuitous acknowledgments. Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>
@@ -2163,7 +2169,7 @@ function registerExtensionImpl(
           name: "resume_project",
           label: "resume project",
           description:
-            "Resume existing unresolved project work by its exact Git branch.",
+            "Reuse an already-running Lead for the exact branch; otherwise resume its existing assignment without creating a duplicate.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (
@@ -2190,7 +2196,7 @@ function registerExtensionImpl(
           name: "remove_worktree",
           label: "remove worktree",
           description:
-            "Remove an explicitly requested assigned project's linked worktree. When project preauthorization is enabled, execute the guarded removal. Otherwise create an actionable human approval request and return promptly. Do not repeat or poll a pending request.",
+            "Remove an explicitly requested assigned project's linked worktree. After authorization, automatically stop any running assigned Lead and its owned Agents before removal; no separate stop call is needed. The Git branch and Pi conversation are preserved. Pending human approval performs no cleanup. When project preauthorization is enabled, execute the guarded removal. Otherwise create an actionable human approval request and return promptly. Do not repeat or poll a pending request.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (
@@ -2217,7 +2223,7 @@ function registerExtensionImpl(
           name: "merge_project",
           label: "merge project",
           description:
-            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may finalize and remove the source checkout when authorized.",
+            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may stop running managed execution before integration. If a later step fails after execution stops, it is not automatically restarted. Verified integration triggers guarded cleanup, but integration and cleanup can complete separately; do not treat integration alone as full finalization.",
           parameters: Type.Object(
             {
               branch: Type.String({
@@ -2426,7 +2432,8 @@ function registerExtensionImpl(
           listProjectMessageHeaders,
           readProjectMessage,
           listProjectMessages,
-          removeProjectMessage,
+          removeProjectMessage:
+            lockHooks?.removeProjectMessage ?? removeProjectMessage,
           readProjectAssignment,
           importResultBindings,
         },

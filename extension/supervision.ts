@@ -17,10 +17,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
+  ProcessLockOccupiedError,
   isProcessLockClaim,
   readLiveProcessLock,
   readProcessLockStatus,
@@ -1500,6 +1501,55 @@ function withProjectAssignmentLock<T>(operation: () => T): T {
   }
 }
 
+/** Wait briefly for global authority, but keep every lock-held operation synchronous. */
+export async function withProjectAssignmentAuthorityWait<T>(
+  operation: () => T,
+  signal?: AbortSignal,
+  onOccupied?: () => void,
+): Promise<T> {
+  // Match the existing project-lock contention budget; callers fail closed after brief contention.
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    signal?.throwIfAborted();
+    let lease: ReturnType<typeof acquireProcessLock>;
+    try {
+      lease = acquireProcessLock(projectAuthorityLock, {
+        name: "project assignment authority",
+      });
+    } catch (error) {
+      if (!(error instanceof ProcessLockOccupiedError)) throw error;
+      onOccupied?.();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, Math.min(25, remaining));
+        function done() {
+          signal?.removeEventListener("abort", aborted);
+          resolve();
+        }
+        function aborted() {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", aborted);
+          reject(signal?.reason ?? new Error("Operation aborted"));
+        }
+        signal?.addEventListener("abort", aborted, { once: true });
+        if (signal?.aborted) aborted();
+      });
+      continue;
+    }
+    try {
+      const result = operation();
+      if (result && typeof (result as { then?: unknown }).then === "function")
+        throw new Error(
+          "Project assignment authority operation must be synchronous",
+        );
+      return result;
+    } finally {
+      lease.release();
+    }
+  }
+}
+
 /** Run a synchronous final action against the exact branch assignment under global authority. */
 export function withCurrentProjectAssignment<T>(
   runtime: SupervisionRuntime,
@@ -2266,6 +2316,7 @@ export type ProjectAssignment = Readonly<{
   repoKey: string;
   branch: string;
   text: string;
+  checkoutPath?: string;
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
   requiredEvidence?: RequiredEvidence[];
@@ -2276,7 +2327,7 @@ export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
 const PROJECT_ASSIGNMENT_FILE_MAX_BYTES = PROJECT_ASSIGNMENT_MAX_BYTES * 2;
 
 export function projectAssignmentBytes(assignment: ProjectAssignment): number {
-  const { piSessionFile: _, ...payload } = assignment;
+  const { checkoutPath: _, piSessionFile: __, ...payload } = assignment;
   return Buffer.byteLength(`${JSON.stringify(payload)}\n`, "utf8");
 }
 
@@ -2299,6 +2350,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
   const optional = [
+    "checkoutPath",
     "piSessionFile",
     "resultBindings",
     "requiredEvidence",
@@ -2316,6 +2368,11 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.checkoutPath === undefined ||
+      (typeof r.checkoutPath === "string" &&
+        isAbsolute(r.checkoutPath) &&
+        normalize(r.checkoutPath) === r.checkoutPath &&
+        !/[\u0000-\u001f]/.test(r.checkoutPath))) &&
     (r.piSessionFile === undefined ||
       (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||
@@ -2349,6 +2406,33 @@ export function writeProjectAssignment(
 ): void {
   withProjectAssignmentLock(() =>
     writeProjectAssignmentUnlocked(runtime, assignment),
+  );
+}
+
+export function writeProjectAssignmentAfter(
+  runtime: SupervisionRuntime,
+  expected: ProjectAssignment,
+  assignment: ProjectAssignment,
+  signal?: AbortSignal,
+  verifyAuthority?: () => void,
+  onOccupied?: () => void,
+): Promise<void> {
+  return withProjectAssignmentAuthorityWait(
+    () => {
+      verifyAuthority?.();
+      const current = readProjectAssignment(
+        runtime,
+        expected.repoKey,
+        expected.branch,
+      );
+      if (!current || !isDeepStrictEqual(current, expected))
+        throw new Error(
+          "Project assignment changed before required evidence was updated",
+        );
+      writeProjectAssignmentUnlocked(runtime, assignment);
+    },
+    signal,
+    onOccupied,
   );
 }
 
@@ -2433,6 +2517,24 @@ export function migrateProjectAssignmentEvidence(
     if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
     return upgraded;
   });
+}
+
+export function migrateProjectAssignmentEvidenceAfter(
+  runtime: SupervisionRuntime,
+  expected: ProjectAssignment,
+  signal?: AbortSignal,
+): Promise<ProjectAssignment | undefined> {
+  return withProjectAssignmentAuthorityWait(() => {
+    const current = readProjectAssignment(
+      runtime,
+      expected.repoKey,
+      expected.branch,
+    );
+    if (!current || !isDeepStrictEqual(current, expected)) return undefined;
+    const upgraded = upgradeProjectAssignmentEvidence(current);
+    if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
+    return upgraded;
+  }, signal);
 }
 
 export function readProjectAssignment(

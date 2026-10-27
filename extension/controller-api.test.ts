@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
@@ -16,6 +17,7 @@ import { OperationError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-definitions.ts";
 import {
   readRequiredEvidenceSnapshot,
+  requiredEvidenceDirectory,
   resultPath,
   resultRef,
 } from "./storage.ts";
@@ -24,6 +26,7 @@ import {
   assignmentLockPath,
   claimProcessLock,
 } from "./lock.ts";
+import { projectAssignmentAuthorityLockPath } from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -105,6 +108,7 @@ const {
   recoverStaleProjectMessages,
   listProjectMessages,
   writeProjectMessage,
+  removeProjectMessage: removeProjectMessageRaw,
   projectAssignmentPath,
   writeChiefMessage: writeChiefMessageRaw,
   chiefMessageBytes,
@@ -757,6 +761,9 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   process.env.HERDR_TAB_ID = "lead-tab";
   const runtime = supervisionRuntime();
   const repoKey = realFs.mkdtempSync(join(tmpdir(), "pr334-removal-repo-"));
+  const removedCheckoutPath = join(repoKey, "removed-checkout");
+  const survivingCheckoutPath = join(repoKey, "surviving-checkout");
+  realFs.mkdirSync(survivingCheckoutPath);
   const managerId = randomUUID();
   const branch = "feat/retirement";
   const assignment = {
@@ -765,18 +772,36 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     repoKey,
     branch,
     text: "project assignment",
+    checkoutPath: removedCheckoutPath,
   };
-  const message = (id: string) => ({
+  const survivingAssignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey,
+    branch: "feat/surviving",
+    text: "unrelated project assignment",
+    checkoutPath: survivingCheckoutPath,
+  };
+  const message = (
+    id: string,
+    fromSessionId = assignment.id,
+    messageBranch = branch,
+  ) => ({
     version: 2 as const,
     id,
     repoKey,
-    branch,
-    fromSessionId: assignment.id,
+    branch: messageBranch,
+    fromSessionId,
     text: "retained project message",
     createdAt: Date.now(),
   });
   writeProjectAssignment(runtime, assignment);
+  writeProjectAssignment(runtime, survivingAssignment);
   writeProjectMessage(message(randomUUID()), runtime);
+  writeProjectMessage(
+    message(randomUUID(), survivingAssignment.id, survivingAssignment.branch),
+    runtime,
+  );
 
   const server = createServer();
   const sockets = new Set<Socket>();
@@ -882,7 +907,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     if (_command === "git" && args[0] === "worktree" && args[1] === "list") {
       notifyGitInventory();
       return {
-        stdout: `worktree ${repoKey}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
+        stdout: `worktree ${repoKey}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0worktree ${survivingCheckoutPath}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${survivingAssignment.branch}\0\0`,
         stderr: "",
         code: 0,
       };
@@ -964,12 +989,19 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     removedWorkspaceMissing = true;
     publishRemoval(branch);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (!listProjectAssignments(runtime, repoKey).length) break;
+      if (listProjectAssignments(runtime, repoKey).length === 2) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [assignment]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      assignment,
+      survivingAssignment,
+    ]);
     assert.deepEqual(listPendingRetirements(runtime, repoKey), []);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
+    assert.equal(
+      listProjectMessages(runtime, repoKey, survivingAssignment.branch).length,
+      1,
+    );
 
     const staleObserved = { ...assignment, id: randomUUID() };
     writeProjectAssignment(runtime, staleObserved);
@@ -988,7 +1020,10 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     writeProjectAssignment(runtime, replacement);
     releaseLock();
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      replacement,
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 2);
 
     removeProjectAssignment(runtime, repoKey, branch);
@@ -1033,16 +1068,25 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     await waitFor(worktreeListRequested, "worktree topology");
     await waitFor(gitInventoryRequested, "Git inventory");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      replacement,
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
     releaseRetirementLock();
     releaseRetirementLock = undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (!listProjectAssignments(runtime, repoKey).length) break;
+      if (listProjectAssignments(runtime, repoKey).length === 1) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.deepEqual(listProjectAssignments(runtime, repoKey), []);
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [
+      survivingAssignment,
+    ]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 0);
+    assert.equal(
+      listProjectMessages(runtime, repoKey, survivingAssignment.branch).length,
+      1,
+    );
     assert.deepEqual(listPendingRetirements(runtime, repoKey), [replacement]);
     assert.equal(
       pi.sentMessageCalls.some(
@@ -2327,7 +2371,14 @@ for (const reachable of [true, false]) {
       exec,
       sendMessage: (message) => managerHistory.push(message),
     });
-    registerExtension!(pi.pi as never);
+    let failRemovalForId: string | undefined;
+    registerExtensionForTest!(pi.pi as never, {
+      removeProjectMessage: (runtime, repoKey, branch, id) => {
+        if (id === failRemovalForId)
+          throw new Error("injected project message removal failure");
+        removeProjectMessageRaw(runtime, repoKey, branch, id);
+      },
+    });
     const ctx = fakeContext(pi.entries) as any;
     managerHistory = pi.entries;
     managerBranch = managerHistory;
@@ -2423,7 +2474,7 @@ for (const reachable of [true, false]) {
             (entry: any) => entry?.customType === "pi_herdsman_state_error",
           ).length;
         const errorsBefore = stateErrors();
-        support.failProjectMessageRemoval = true;
+        failRemovalForId = cleanupRecord.id;
         try {
           writeProjectMessage(cleanupRecord, runtime);
           await t.waitFor(() =>
@@ -2440,7 +2491,7 @@ for (const reachable of [true, false]) {
             cleanupRecord,
           ]);
         } finally {
-          support.failProjectMessageRemoval = false;
+          failRemovalForId = undefined;
         }
         await t.waitFor(() =>
           assert.deepEqual(
@@ -3304,6 +3355,9 @@ async function runManagerStartupScenario(
     | "missing-herdr-session"
     | "incompatible-build"
     | "staff-message-mismatch"
+    | "staff-message-contention"
+    | "staff-message-contention-replaced"
+    | "staff-message-timeout"
     | "delayed-herdr-session"
     | "conflict"
     | "managed-agent"
@@ -3346,8 +3400,10 @@ async function runManagerStartupScenario(
     | "reconcile-reassociated"
     | "reconcile-detached-unrelated"
     | "reconcile-session-unreadable"
+    | "reconcile-conflicting-provenance"
     | "reconcile-assignment-lock"
     | "verified-absence-resume"
+    | "delegate-reconciles-absent-assignment"
     | "close-resume"
     | "close-failure"
     | "close-retirement-race"
@@ -3391,6 +3447,10 @@ async function runManagerStartupScenario(
   const reconciliationId = randomUUID();
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const existingGitWorktree = join(tmpdir(), `git-worktree-${randomUUID()}`);
+  const survivingGitWorktree = join(
+    tmpdir(),
+    `git-worktree-survivor-${randomUUID()}`,
+  );
   const childPath = existingGitWorktree;
   const reconciliationBranch = "smoke/orphan";
   const attachmentPath = join(tmpdir(), `assignment-${randomUUID()}.md`);
@@ -3524,6 +3584,7 @@ async function runManagerStartupScenario(
         const hasManagedCheckout =
           ![
             "verified-absence-resume",
+            "delegate-reconciles-absent-assignment",
             "reconcile-absent",
             "reconcile-prunable-absent",
             "reconcile-stale-unprunable",
@@ -3531,6 +3592,7 @@ async function runManagerStartupScenario(
             "reconcile-replacement",
             "reconcile-detached-unrelated",
             "reconcile-session-unreadable",
+            "reconcile-conflicting-provenance",
             "reconcile-assignment-lock",
           ].includes(mode) && !mode.startsWith("active-missing");
         const worktrees = [
@@ -3549,6 +3611,7 @@ async function runManagerStartupScenario(
             "reconcile-detached",
             "reconcile-reassociated",
             "reconcile-detached-unrelated",
+            "reconcile-conflicting-provenance",
           ].includes(mode)
             ? [
                 mode === "reconcile-detached" ||
@@ -3556,6 +3619,12 @@ async function runManagerStartupScenario(
                   ? `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0detached\0\0`
                   : `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${mode === "reconcile-reassociated" ? "feat/reused" : reconciliationBranch}\0${mode === "reconcile-locked" ? "locked in progress\0" : mode === "reconcile-prunable-absent" ? "prunable missing directory\0" : ""}\0`,
               ]
+            : []),
+          ...(mode === "delegate-reconciles-absent-assignment"
+            ? (realFs.mkdirSync(survivingGitWorktree, { recursive: true }),
+              [
+                `worktree ${survivingGitWorktree}\0HEAD ${"c".repeat(40)}\0branch refs/heads/feat/surviving\0\0`,
+              ])
             : []),
         ];
         gitListOutput = worktrees.join("");
@@ -3630,6 +3699,8 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       createCalls++;
       created = true;
+      if (mode === "delegate-reconciles-absent-assignment")
+        realFs.mkdirSync(childPath, { recursive: true });
       const branch = args[args.indexOf("--branch") + 1];
       assert.ok(branch);
       if (mode === "existing-git-branch")
@@ -3955,6 +4026,7 @@ async function runManagerStartupScenario(
       );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
+        ...(starting.checkoutPath ? ["checkoutPath"] : []),
         ...(starting.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         ...(["active-missing", "active-missing-legacy"].includes(mode)
@@ -4289,8 +4361,22 @@ async function runManagerStartupScenario(
     activeTools: ["read"],
     exec,
   });
-  registerExtension!(pi.pi as never);
+  let resolveAuthorityWait!: () => void;
+  let authorityWaitArmed = false;
+  let authorityWaitSignaled = false;
+  const authorityWait = new Promise<void>((resolve) => {
+    resolveAuthorityWait = resolve;
+  });
+  registerExtensionForTest!(pi.pi as never, {
+    onAuthorityWaitOccupied: () => {
+      if (authorityWaitArmed && !authorityWaitSignaled) {
+        authorityWaitSignaled = true;
+        resolveAuthorityWait();
+      }
+    },
+  });
   let releaseAssignmentLock: (() => void) | undefined;
+  let contentionHolder: ReturnType<typeof spawn> | undefined;
   try {
     const activeBranch: any[] = pi.entries;
     const ctx = fakeContext(pi.entries, activeBranch) as any;
@@ -4324,13 +4410,26 @@ async function runManagerStartupScenario(
         ...([
           "reconcile-detached-unrelated",
           "reconcile-session-unreadable",
+          "reconcile-conflicting-provenance",
         ].includes(mode)
           ? { piSessionFile: `/tmp/${reconciliationId}.jsonl` }
           : {}),
+        ...([
+          "reconcile-present",
+          "reconcile-locked",
+          "reconcile-prunable-absent",
+        ].includes(mode)
+          ? { checkoutPath: existingGitWorktree }
+          : mode === "reconcile-conflicting-provenance"
+            ? { checkoutPath: `${existingGitWorktree}-conflict` }
+            : {}),
       });
       if (mode === "reconcile-reassociated") {
         realFs.mkdirSync(existingGitWorktree, { recursive: true });
-      } else if (mode === "reconcile-detached-unrelated") {
+      } else if (
+        mode === "reconcile-detached-unrelated" ||
+        mode === "reconcile-conflicting-provenance"
+      ) {
         nativeSessions.set(reconciliationId, {
           id: reconciliationId,
           path: `/tmp/${reconciliationId}.jsonl`,
@@ -4605,6 +4704,28 @@ async function runManagerStartupScenario(
         },
         supervisionRuntime(),
       );
+    if (mode === "delegate-reconciles-absent-assignment") {
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id: staleId,
+        repoKey,
+        branch: "smoke/recover",
+        text: "failed-start assignment",
+        checkoutPath: existingGitWorktree,
+      });
+      writeProjectMessage(
+        {
+          version: 2,
+          id: randomUUID(),
+          repoKey,
+          branch: "smoke/recover",
+          fromSessionId: staleId,
+          text: "pending failed-start message",
+          createdAt: Date.now(),
+        },
+        supervisionRuntime(),
+      );
+    }
     const execute = () => (
       (invalidTopologyCall = worktreeListCalls + 4),
       (resumeMode ? staffResume : staff).execute(
@@ -4636,6 +4757,9 @@ async function runManagerStartupScenario(
                 : {}),
               ...(mode === "existing-git-branch"
                 ? { branch: reconciliationBranch, base: reconciliationBranch }
+                : {}),
+              ...(mode === "delegate-reconciles-absent-assignment"
+                ? { branch: "smoke/recover" }
                 : {}),
               ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
               ...(mode === "invalid-topology"
@@ -4671,6 +4795,30 @@ async function runManagerStartupScenario(
       );
       assert.equal(createCalls, 0);
       assert.equal(startCalls, 0);
+      return;
+    }
+    if (mode === "delegate-reconciles-absent-assignment") {
+      const delegated = await execute();
+      assert.equal(delegated.details.ok, true);
+      assert.equal(delegated.details.action, "delegate");
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      )[0]!;
+      assert.notEqual(assignment.id, staleId);
+      assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
+      assert.equal(createCalls, 1);
+      assert.equal(startCalls, 1);
+      assert.deepEqual(
+        listPendingRetirements(supervisionRuntime(), repoKey).map(
+          ({ id }) => id,
+        ),
+        [staleId],
+      );
+      assert.deepEqual(
+        listProjectMessages(supervisionRuntime(), repoKey, "smoke/recover"),
+        [],
+      );
       return;
     }
     if (mode === "unassigned-close") {
@@ -5579,6 +5727,7 @@ async function runManagerStartupScenario(
       assert.equal(assignment.id, childSession);
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
@@ -5654,6 +5803,7 @@ async function runManagerStartupScenario(
       )[0]!;
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
+        "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
         "id",
         "repoKey",
@@ -5767,6 +5917,7 @@ async function runManagerStartupScenario(
     )[0]!;
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
+      "checkoutPath",
       ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
       "id",
       ...(["success", "unmaterialized-path"].includes(mode)
@@ -5777,6 +5928,7 @@ async function runManagerStartupScenario(
       "text",
       "version",
     ]);
+    assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
     if (["success", "unmaterialized-path"].includes(mode))
       assert.equal(
         assignment.piSessionFile,
@@ -5799,7 +5951,11 @@ async function runManagerStartupScenario(
       mode === "managed-agent" ? 2 : startupObservations,
     );
     assert.equal(started, true);
-    if (mode === "staff-message-mismatch") {
+    if (
+      mode === "staff-message-mismatch" ||
+      mode === "staff-message-contention" ||
+      mode === "staff-message-contention-replaced"
+    ) {
       const state = readLeadCoordinationState(
         supervisionRuntime(),
         childSession,
@@ -6094,7 +6250,42 @@ async function runManagerStartupScenario(
 
       const retainedPlan = completePlan.replaceAll("x", "y");
       realFs.writeFileSync(attachmentPath, retainedPlan);
-      const retained = await staffMessage.execute(
+      if (
+        mode === "staff-message-contention" ||
+        mode === "staff-message-contention-replaced" ||
+        mode === "staff-message-timeout"
+      ) {
+        contentionHolder = spawn(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `import { acquireProcessLock } from './extension/lock.ts'; const lease = acquireProcessLock(process.argv[1], { name: 'test authority holder' }); process.stdout.write('READY\\n'); process.stdin.once('data', () => lease.release());`,
+            projectAssignmentAuthorityLockPath(),
+          ],
+          { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] },
+        );
+        await new Promise<void>((resolve, reject) => {
+          let output = "";
+          contentionHolder!.stdout!.on("data", (chunk) => {
+            output += chunk.toString();
+            if (output.includes("READY")) resolve();
+          });
+          contentionHolder!.once("error", reject);
+          contentionHolder!.stderr!.on("data", (chunk) =>
+            reject(new Error(chunk.toString())),
+          );
+        });
+      }
+      const assignmentBeforeRetain = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      ).find((item) => item.branch === assignment.branch)!;
+      const evidenceFilesBefore = new Set(
+        readdirSync(requiredEvidenceDirectory(assignmentBeforeRetain.id)),
+      );
+      authorityWaitArmed = true;
+      const retainedPromise = staffMessage.execute(
         "complete-retained-text-evidence",
         {
           session: childSession,
@@ -6106,6 +6297,119 @@ async function runManagerStartupScenario(
         undefined,
         ctx,
       );
+      const waitForAuthorityContention =
+        mode === "staff-message-contention" ||
+        mode === "staff-message-contention-replaced"
+          ? Promise.race([
+              authorityWait,
+              retainedPromise.then(
+                () => {
+                  throw new Error(
+                    "retained handoff completed before contention",
+                  );
+                },
+                (error) => {
+                  throw error;
+                },
+              ),
+            ])
+          : undefined;
+      if (mode === "staff-message-timeout") {
+        const failure = await retainedPromise.then(
+          () => undefined,
+          (error) => error,
+        );
+        contentionHolder!.stdin!.end("release");
+        assert.ok(
+          failure instanceof Error &&
+            /Required evidence was retained, but the staff handoff failed: Project assignment authority is in progress/.test(
+              failure.message,
+            ),
+          `expected authority timeout rejection, received ${String(failure)}`,
+        );
+        const currentAssignment = listProjectAssignments(
+          supervisionRuntime(),
+          repoKey,
+        ).find((item) => item.branch === assignment.branch)!;
+        assert.deepEqual(
+          currentAssignment,
+          assignmentBeforeRetain,
+          "timed-out retention must not update the assignment or publish a reference",
+        );
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "timed-out retention must not publish a staff message",
+        );
+        const persistedSnapshots = readdirSync(
+          requiredEvidenceDirectory(assignmentBeforeRetain.id),
+        ).filter((file) => !evidenceFilesBefore.has(file));
+        assert.equal(
+          persistedSnapshots.length,
+          2,
+          "pre-wait preparation leaves immutable text and attachment snapshots even though assignment publication times out",
+        );
+        const snapshotContents = persistedSnapshots.map((file) =>
+          readFileSync(
+            join(requiredEvidenceDirectory(assignmentBeforeRetain.id), file),
+            "utf8",
+          ),
+        );
+        assert.ok(snapshotContents.includes(retainedPlan));
+        assert.ok(snapshotContents.includes("Review this retained plan."));
+      } else if (mode === "staff-message-contention-replaced") {
+        await waitForAuthorityContention;
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "message must not publish while another process owns assignment authority",
+        );
+        const descriptorPath = managerDescriptorPath(
+          supervisionRuntime(),
+          WORKSPACE,
+        );
+        const descriptor = readManagerDescriptor(
+          supervisionRuntime(),
+          WORKSPACE,
+        )!;
+        writeFileSync(
+          descriptorPath,
+          JSON.stringify({ ...descriptor, leaseId: randomUUID() }),
+        );
+        contentionHolder!.stdin!.end("release");
+        let rejected = false;
+        try {
+          await retainedPromise;
+        } catch {
+          rejected = true;
+        }
+        assert.equal(rejected, true, "replaced Manager must reject handoff");
+        const currentAssignment = listProjectAssignments(
+          supervisionRuntime(),
+          repoKey,
+        ).find((item) => item.branch === assignment.branch)!;
+        assert.deepEqual(
+          currentAssignment,
+          assignmentBeforeRetain,
+          "replaced Manager authority must not update assignment evidence",
+        );
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "replaced Manager authority must not publish a staff message",
+        );
+        return;
+      } else if (contentionHolder) {
+        await waitForAuthorityContention;
+        assert.equal(
+          listChiefMessagePaths(supervisionRuntime(), childSession).length,
+          1,
+          "message must not publish while another process owns assignment authority",
+        );
+        contentionHolder.stdin!.end("release");
+      }
+      if (mode === "staff-message-timeout") return;
+      const retained = await retainedPromise;
       assert.equal(retained.details.ok, true);
       realFs.unlinkSync(attachmentPath);
       await drainCoordinationInbox({
@@ -6133,6 +6437,13 @@ async function runManagerStartupScenario(
         "retained handoff is present in recipient Pi conversation context",
       );
       assert.equal(retainedMessage.customType, "pi-herdsman-manager_message");
+      if (mode === "staff-message-contention")
+        assert.equal(
+          recipientPi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === retained.details.id,
+          ).length,
+          1,
+        );
       assert.ok(retainedMessage.content.includes(retainedPlan));
       const retainedAssignment = listProjectAssignments(
         supervisionRuntime(),
@@ -6239,6 +6550,7 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
+    contentionHolder?.stdin?.end("release");
     for (const state of ownedTree) {
       resetAgentMailbox(agentMailboxPath(state.workspaceId, state.agentLabel));
       if (mode === "close-tree" || mode === "close-tree-failure") {
@@ -6274,6 +6586,12 @@ test("Manager preserves project assignment and skips notification for incompatib
   runManagerStartupScenario("incompatible-build"));
 test("Manager message_staff rejects incompatible Leads and delivers complete attachments", () =>
   runManagerStartupScenario("staff-message-mismatch"));
+test("Manager message_staff waits for cross-process assignment authority before retaining evidence", () =>
+  runManagerStartupScenario("staff-message-contention"));
+test("Manager message_staff rejects retained evidence after lease replacement while waiting for assignment authority", () =>
+  runManagerStartupScenario("staff-message-contention-replaced"));
+test("Manager message_staff timeout leaves prepared evidence unreferenced and publishes no message", () =>
+  runManagerStartupScenario("staff-message-timeout"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
     "success",
@@ -6440,6 +6758,8 @@ test("Manager retains placement when recovery topology is not authoritative", ()
   runManagerStartupScenario("invalid-topology"));
 test("resume_project retires verified-absent work instead of recreating it", () =>
   runManagerStartupScenario("verified-absence-resume"));
+test("delegate_project reconciles an absent failed-start assignment before branch reuse", () =>
+  runManagerStartupScenario("delegate-reconciles-absent-assignment"));
 for (const mode of [
   "reconcile-absent",
   "reconcile-present",
@@ -6452,6 +6772,7 @@ for (const mode of [
   "reconcile-reassociated",
   "reconcile-detached-unrelated",
   "reconcile-session-unreadable",
+  "reconcile-conflicting-provenance",
   "reconcile-assignment-lock",
 ] as const)
   test(`Manager startup reconciles orphan assignments safely (${mode})`, () =>
