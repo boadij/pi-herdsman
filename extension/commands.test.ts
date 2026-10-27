@@ -5151,6 +5151,7 @@ managerBootstrapTest(
     const activationCalls = harness.invocations.slice(activationStart);
     assert.equal(harness.confirmations, 1, harness.notices.join("\n"));
     assert.equal(git(["rev-list", "--count", "HEAD"]), "1");
+    assert.equal(git(["symbolic-ref", "--short", "HEAD"]), "main");
     assert.equal(
       git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(/\s+/).length,
       1,
