@@ -4797,7 +4797,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   assert.equal(parseSmokeArgs(["active-stop"]).scenario, "active-stop");
   assert.equal(
     initialPromptForScenario("active-stop", {}),
-    "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY.",
+    "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY",
   );
   const source = await readFile(
     new URL("../scripts/smoke.mjs", import.meta.url),
@@ -4837,7 +4837,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   );
   assert.match(
     body,
-    /assistantResultForSession\(\s*snapshot,\s*startupPrompt,\s*"PI_HERDSMAN_ACTIVE_STOP_READY\."/,
+    /assistantResultForSession\(\s*snapshot,\s*startupPrompt,\s*"PI_HERDSMAN_ACTIVE_STOP_READY"/,
   );
   assert.match(body, /terminalTail/);
   assert.match(

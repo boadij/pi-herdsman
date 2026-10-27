@@ -5114,7 +5114,7 @@ export function initialPromptForScenario(scenario, ctx) {
     case "manager-recovery":
       return undefined;
     case "active-stop":
-      return "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY.";
+      return "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY";
     case "manager-bootstrap":
       return undefined;
     case "terminal-failure":
@@ -8667,7 +8667,7 @@ async function runActiveStopSmoke(ctx) {
       const responseCompleted = !!assistantResultForSession(
         snapshot,
         startupPrompt,
-        "PI_HERDSMAN_ACTIVE_STOP_READY.",
+        "PI_HERDSMAN_ACTIVE_STOP_READY",
       );
       const startupHistory = responseCompleted
         ? undefined
