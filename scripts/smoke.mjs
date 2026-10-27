@@ -29,6 +29,11 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  readPendingAsk,
+  readRequest,
+  readUnacknowledgedRequest,
+} from "../extension/mailbox.ts";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2461,6 +2466,322 @@ export function rootDelegationDiagnostics(contents) {
           assistant.errorMessage.length > 0)),
     ),
   };
+}
+
+export function managerWaitingMailboxEvidence(mailbox, identity) {
+  const state = mailbox.state;
+  if (
+    !state.pendingAskId ||
+    !state.activeRequestId ||
+    state.ownerSessionId !== identity.ownerSessionId ||
+    state.piSessionId !== identity.sessionId ||
+    state.runId !== identity.runId ||
+    state.activeRequestId !== identity.requestId ||
+    state.pendingAskId !== identity.askId ||
+    state.lastAck?.requestId !== identity.requestId ||
+    state.lastAck.accepted !== true ||
+    state.workspaceId !== identity.workspaceId ||
+    state.agentLabel !== identity.label ||
+    state.paneId !== identity.paneId
+  )
+    return false;
+  try {
+    const request = readRequest(mailbox.directory, state.activeRequestId);
+    return (
+      request?.kind === "task" &&
+      request.runId === state.runId &&
+      request.ownerSessionId === state.ownerSessionId &&
+      request.workspaceId === state.workspaceId &&
+      request.agentLabel === state.agentLabel &&
+      request.paneId === state.paneId &&
+      !readUnacknowledgedRequest(mailbox.directory, state) &&
+      !!readPendingAsk(mailbox.directory, state)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function managerActiveDelegationEvidence(contents, prompt, identity) {
+  const entries = managerSessionRecords(contents);
+  if (!entries || entries[0].id !== identity.ownerSessionId) return null;
+  const prompts = entries.filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === prompt,
+  );
+  if (prompts.length !== 1) return null;
+  const byId = new Map(entries.slice(1).map((entry) => [entry.id, entry]));
+  const descendants = entries.filter((entry) => {
+    const seen = new Set();
+    let current = entry;
+    while (current?.id && !seen.has(current.id)) {
+      if (current.id === prompts[0].id) return true;
+      if (current.type === "message" && current.message?.role === "user")
+        return false;
+      seen.add(current.id);
+      current = byId.get(current.parentId);
+    }
+    return false;
+  });
+  const calls = descendants.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content
+          .filter(
+            (part) =>
+              part?.type === "toolCall" && part.name === "delegate_agent",
+          )
+          .map((call) => ({ call, entry }))
+      : [],
+  );
+  if (calls.length !== 1) return null;
+  const { call, entry: callEntry } = calls[0];
+  if (
+    !call.id ||
+    call.arguments?.label !== identity.label ||
+    call.arguments?.definition !== identity.definition ||
+    call.arguments?.task !== identity.task
+  )
+    return null;
+  const results = descendants.filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "delegate_agent" &&
+      entry.message.toolCallId === call.id,
+  );
+  if (results.length !== 1) return null;
+  let ancestor = byId.get(results[0].parentId);
+  const seen = new Set();
+  while (ancestor && ancestor.id !== callEntry.id && !seen.has(ancestor.id)) {
+    seen.add(ancestor.id);
+    ancestor = byId.get(ancestor.parentId);
+  }
+  if (!ancestor || ancestor.id !== callEntry.id) return null;
+  const result = results[0].message;
+  const details = result.details;
+  if (
+    result.isError !== false ||
+    details?.ok !== true ||
+    details.action !== "delegate" ||
+    details.owner_session_id !== identity.ownerSessionId ||
+    details.agent !== identity.label ||
+    details.definition !== identity.definition ||
+    details.session_id !== identity.sessionId ||
+    details.session_path !== identity.sessionPath ||
+    details.request_id !== identity.requestId ||
+    details.pane_id !== identity.paneId
+  )
+    return null;
+  return { promptId: prompts[0].id, callId: call.id, resultId: results[0].id };
+}
+
+export function managerStoppedAgentEvidence(lead, child, active, observations) {
+  const { identity, evidence, boundary, leadPath } = active;
+  const entries = lead && managerSessionRecords(lead.contents);
+  if (
+    !lead ||
+    lead.path !== leadPath ||
+    !entries ||
+    entries[0].id !== identity.ownerSessionId ||
+    !child ||
+    child.path !== identity.sessionPath ||
+    child.id !== identity.sessionId ||
+    !child.contents.startsWith(boundary)
+  )
+    return false;
+  const byId = new Map(entries.slice(1).map((entry) => [entry.id, entry]));
+  const proofs = entries.filter((entry) => {
+    const p = entry.data?.proof;
+    return (
+      entry.type === "custom" &&
+      entry.customType === "pi-herdsman-agent-closed-assignment" &&
+      entry.data?.version === 1 &&
+      p?.owner_session_id === identity.ownerSessionId &&
+      p.session_id === identity.sessionId &&
+      p.session_path === identity.sessionPath &&
+      p.run_id === identity.runId &&
+      p.request_id === identity.requestId &&
+      p.agent === identity.label &&
+      p.definition === identity.definition &&
+      p.pane_id === identity.paneId &&
+      p.workspace_id === identity.workspaceId
+    );
+  });
+  if (proofs.length !== 1) return false;
+  let entry = entries.at(-1);
+  const branch = new Set();
+  while (entry?.id && !branch.has(entry.id)) {
+    branch.add(entry.id);
+    entry = byId.get(entry.parentId);
+  }
+  if (!branch.has(proofs[0].id)) return false;
+  entry = proofs[0];
+  const seen = new Set();
+  while (entry && entry.id !== evidence.resultId && !seen.has(entry.id)) {
+    seen.add(entry.id);
+    entry = byId.get(entry.parentId);
+  }
+  return (
+    !!entry &&
+    observations.pidExited === true &&
+    observations.paneAbsent === true &&
+    observations.registrationAbsent === true &&
+    observations.mailboxClean === true &&
+    observations.noReplay === true
+  );
+}
+
+function managerSessionRecords(contents) {
+  if (typeof contents !== "string" || !contents) return null;
+  try {
+    const lines = contents.split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    const entries = lines.map((line) => JSON.parse(line));
+    const header = entries[0];
+    if (
+      !header ||
+      header.type !== "session" ||
+      typeof header.id !== "string" ||
+      !header.id
+    )
+      return null;
+    const ids = new Set();
+    for (const entry of entries.slice(1)) {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry) ||
+        typeof entry.type !== "string" ||
+        !entry.type ||
+        entry.type === "session" ||
+        typeof entry.id !== "string" ||
+        !entry.id ||
+        ids.has(entry.id) ||
+        (entry.parentId !== null &&
+          (typeof entry.parentId !== "string" || !ids.has(entry.parentId))) ||
+        (entry.type === "message" &&
+          (!entry.message ||
+            typeof entry.message !== "object" ||
+            Array.isArray(entry.message) ||
+            typeof entry.message.role !== "string" ||
+            !entry.message.role))
+      )
+        return null;
+      ids.add(entry.id);
+    }
+    return entries;
+  } catch {
+    return null;
+  }
+}
+
+export function managerNoReplay(contents, boundary) {
+  const before = managerSessionRecords(boundary);
+  const entries = managerSessionRecords(contents);
+  if (
+    !before ||
+    !entries ||
+    !contents.startsWith(boundary) ||
+    (contents.length > boundary.length &&
+      !boundary.endsWith("\n") &&
+      !/^\r?\n/.test(contents.slice(boundary.length)))
+  )
+    return false;
+  const appended = entries.slice(before.length);
+  if (
+    appended.some(
+      (entry) =>
+        entry.type === "custom_message" ||
+        (entry.type === "message" && entry.message.role === "user"),
+    )
+  )
+    return false;
+  const connected = new Set([before.length > 1 ? before.at(-1).id : null]);
+  for (const entry of appended) {
+    if (!connected.has(entry.parentId)) return false;
+    connected.add(entry.id);
+  }
+  return true;
+}
+
+export function managerContinuationEvidence(
+  lead,
+  child,
+  active,
+  leadBoundary,
+  childBoundary,
+  prompt,
+  marker,
+) {
+  if (
+    !lead ||
+    lead.path !== active.leadPath ||
+    !child ||
+    child.path !== active.identity.sessionPath ||
+    child.id !== active.identity.sessionId ||
+    !lead.contents.startsWith(leadBoundary) ||
+    !child.contents.startsWith(childBoundary)
+  )
+    return null;
+  const beforeLead = managerSessionRecords(leadBoundary);
+  const entries = managerSessionRecords(lead.contents);
+  const beforeChild = managerSessionRecords(childBoundary);
+  const childEntries = managerSessionRecords(child.contents);
+  if (
+    !beforeLead ||
+    !entries ||
+    entries[0].id !== active.identity.ownerSessionId ||
+    !beforeChild ||
+    !childEntries ||
+    !managerNoReplay(childBoundary, active.boundary)
+  )
+    return null;
+  const appended = entries.slice(beforeLead.length);
+  const calls = appended.flatMap((entry) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    Array.isArray(entry.message.content)
+      ? entry.message.content.filter(
+          (part) => part?.type === "toolCall" && part.name === "continue_agent",
+        )
+      : [],
+  );
+  const users = childEntries
+    .slice(beforeChild.length)
+    .filter(
+      (entry) => entry.type === "message" && entry.message?.role === "user",
+    );
+  const normalize = (value) => value.replace(/\s+/g, " ").trim().toLowerCase();
+  const replay = childEntries
+    .slice(beforeChild.length)
+    .some(
+      (entry) =>
+        (entry.type === "custom_message" ||
+          (entry.type === "message" && entry.message?.role === "user")) &&
+        normalize(
+          messageText(
+            entry.type === "custom_message"
+              ? entry.content
+              : entry.message.content,
+          ),
+        ).includes(normalize(active.identity.task)),
+    );
+  if (calls.length !== 1 || users.length !== 1 || replay) return null;
+  const results = continuationResultsForPrompt(lead.contents, prompt, marker);
+  if (results.length !== 1) return null;
+  return activeStopContinuationEvidence(
+    lead.contents,
+    child.contents,
+    results[0].id,
+    prompt,
+    marker,
+    active.identity,
+    childBoundary,
+  );
 }
 
 export function assertNoFailedAgentDelegation(contents) {
@@ -5203,6 +5524,159 @@ export function managerRecoveryResumeOnlyPrompt(branch) {
   return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_project exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_project succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
+export function managerRecoveryStopDiagnostics(
+  contents,
+  prompt,
+  expectedSession,
+  expectedBranch,
+  marker,
+) {
+  const entries = managerSessionRecords(contents);
+  if (!entries) return [];
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const prompts = entries.filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === prompt,
+  );
+  const promptEntry = prompts.length === 1 ? prompts[0] : null;
+  if (!promptEntry?.id) return [];
+  const descendsFrom = (entry, id) => {
+    const visited = new Set();
+    let parent = entry.parentId;
+    while (parent && !visited.has(parent)) {
+      if (parent === id) return true;
+      visited.add(parent);
+      const ancestor = byId.get(parent);
+      if (ancestor?.type === "message" && ancestor.message?.role === "user")
+        return false;
+      parent = ancestor?.parentId;
+    }
+    return false;
+  };
+  const calls = [];
+  for (const entry of entries) {
+    if (
+      entry.type !== "message" ||
+      entry.message?.role !== "assistant" ||
+      !descendsFrom(entry, promptEntry.id)
+    )
+      continue;
+    for (const call of Array.isArray(entry.message.content)
+      ? entry.message.content
+      : []) {
+      if (call?.type !== "toolCall" || call.name !== "stop_lead") continue;
+      const matches =
+        typeof call.id === "string" && call.id
+          ? entries.filter(
+              (result) =>
+                result.type === "message" &&
+                result.message?.role === "toolResult" &&
+                result.message.toolName === "stop_lead" &&
+                result.message.toolCallId === call.id &&
+                descendsFrom(result, entry.id) &&
+                descendsFrom(result, promptEntry.id),
+            )
+          : [];
+      const result = matches.length === 1 ? matches[0].message : null;
+      const validArguments =
+        call.arguments !== null &&
+        typeof call.arguments === "object" &&
+        !Array.isArray(call.arguments);
+      const session = validArguments ? call.arguments.session : undefined;
+      calls.push({
+        session: session === expectedSession ? expectedSession : null,
+        sessionStatus: !validArguments
+          ? "malformed"
+          : session === expectedSession &&
+              Object.keys(call.arguments).length === 1
+            ? "exact"
+            : typeof session === "string"
+              ? "different"
+              : "missing",
+        resultStatus:
+          matches.length > 1
+            ? "ambiguous"
+            : !result
+              ? "missing"
+              : result.isError === true || result.details?.ok === false
+                ? "error"
+                : (result.isError === undefined || result.isError === false) &&
+                    result.details?.ok === true &&
+                    result.details?.action === "stop" &&
+                    typeof result.details?.session === "string" &&
+                    typeof result.details?.branch === "string"
+                  ? "success"
+                  : "unknown",
+        resultIdentity:
+          result?.details?.session === expectedSession &&
+          result?.details?.branch === expectedBranch
+            ? "exact"
+            : "different_or_missing",
+        errorCategory:
+          result &&
+          STRUCTURED_TOOL_ERROR_CATEGORIES.has(result.details?.error?.category)
+            ? result.details.error.category
+            : null,
+        ...(marker === undefined
+          ? {}
+          : {
+              markerCompleted:
+                matches.length === 1 &&
+                !!matches[0].id &&
+                entries.some(
+                  (candidate) =>
+                    candidate.type === "message" &&
+                    candidate.message?.role === "assistant" &&
+                    candidate.message.stopReason === "stop" &&
+                    descendsFrom(candidate, matches[0].id) &&
+                    messageText(candidate.message.content) === marker &&
+                    (typeof candidate.message.content === "string" ||
+                      (Array.isArray(candidate.message.content) &&
+                        candidate.message.content.length === 1 &&
+                        candidate.message.content[0]?.type === "text")),
+                ),
+            }),
+      });
+      if (calls.length === 10) return calls;
+    }
+  }
+  return calls;
+}
+
+export async function managerRecoveryPidsAbsent(candidatePids, paneId, pid) {
+  const pids = await candidatePids(paneId);
+  return pid === undefined ? pids.length === 0 : !pids.includes(pid);
+}
+
+export function managerRecoveryCandidatePids(info, extension, integration) {
+  const processes = info?.process_info?.foreground_processes;
+  assert.ok(
+    Number.isSafeInteger(info?.process_info?.shell_pid) &&
+      info.process_info.shell_pid > 0 &&
+      Array.isArray(processes) &&
+      processes.every(
+        (proc) =>
+          proc &&
+          typeof proc === "object" &&
+          !Array.isArray(proc) &&
+          Number.isSafeInteger(proc.pid) &&
+          proc.pid > 0 &&
+          (proc.argv0 === undefined || typeof proc.argv0 === "string") &&
+          (proc.argv === undefined ||
+            (Array.isArray(proc.argv) &&
+              proc.argv.every((arg) => typeof arg === "string"))) &&
+          (proc.cmdline === undefined || typeof proc.cmdline === "string") &&
+          (proc.state === undefined || typeof proc.state === "string"),
+      ),
+    "malformed foreground process records",
+  );
+  return candidateProcess(info, extension, integration).map((proc) => proc.pid);
+}
+
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
   const entries = sessionEntries(contents);
   const byId = new Map(
@@ -5581,7 +6055,11 @@ async function smokeMailbox(
   throw new Error(`mailbox not found for ${smokeAgentLabel(agent)}`);
 }
 
-async function smokeManagedAgentRecords(ctx, agents) {
+export async function smokeManagedAgentRecords(
+  ctx,
+  agents,
+  exactActiveMailbox = false,
+) {
   return Promise.all(
     agents.map(async (agent) => {
       const session = await isolatedSessionDetails(ctx, agent);
@@ -5600,6 +6078,7 @@ async function smokeManagedAgentRecords(ctx, agents) {
           return { agent, session, mailbox: undefined };
         throw error;
       }
+      let matchedMailbox;
       for (const dir of mailboxDirs) {
         if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
         if (dir.isSymbolicLink() || !dir.isDirectory())
@@ -5620,13 +6099,20 @@ async function smokeManagedAgentRecords(ctx, agents) {
           throw new Error("smoke mailbox state is not a bounded regular file");
         const state = JSON.parse(await readFile(statePath, "utf8"));
         if (state.piSessionId !== session.id) continue;
+        if (exactActiveMailbox) {
+          if (!state.activeRequestId) continue;
+          if (matchedMailbox)
+            throw new Error("multiple active mailboxes for Agent session");
+          matchedMailbox = { directory: join(root, dir.name), state };
+          continue;
+        }
         return {
           agent,
           session,
           mailbox: await smokeMailbox(ctx, agent, state.agentLabel),
         };
       }
-      return { agent, session, mailbox: undefined };
+      return { agent, session, mailbox: matchedMailbox };
     }),
   );
 }
@@ -7445,13 +7931,11 @@ async function runManagerRecoverySmoke(ctx) {
     );
   const candidatePids = async (paneId) => {
     const info = await paneInfo(paneId);
-    return candidateProcess(
+    return managerRecoveryCandidatePids(
       info,
       ctx.candidateExtension,
       ctx.herdrStateExtension,
-    )
-      .map((proc) => proc.pid)
-      .filter((pid) => pid != null);
+    );
   };
   const waitFor = async (label, inspect, timeout = 6 * 60_000) => {
     try {
@@ -7911,34 +8395,141 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
+  const agentLabel = `manager-stop-${randomUUID().slice(0, 12)}`;
+  const agentTask = `Ask your owner whether to report READY or NOT_READY, wait for the answer, then report it. Do not modify files.`;
+  const delegationPrompt = `Delegate exactly one Agent with label ${agentLabel} to do this task: ${agentTask} Use an available Agent definition. Do not delegate any other Agent or answer its question.`;
+  markStage(ctx, "manager-lead-agent-ready");
+  await promptAgent(paneId, delegationPrompt);
+  const active = await waitForEvidence(
+    ctx,
+    "manager-lead-agent-ready",
+    async () => {
+      const listed = await tryNestedCommand(ctx, ["agent", "list"]);
+      if (!listed.ok) return { done: false, observationError: listed.error };
+      const records = await smokeManagedAgentRecords(
+        ctx,
+        (listed.value.agents ?? []).filter(
+          (item) =>
+            item.pane_id &&
+            item.pane_id !== paneId &&
+            item.pane_id !== ctx.rootPaneId,
+        ),
+        true,
+      );
+      const owned = records.filter(
+        ({ mailbox }) =>
+          mailbox?.state.ownerSessionId === first.session &&
+          mailbox.state.activeRequestId,
+      );
+      if (owned.length > 1)
+        throw new Error("expected exactly one active Lead-owned Agent");
+      const match = owned[0];
+      if (!match || match.mailbox.state.agentLabel !== agentLabel)
+        return { done: false, progress: { owned: owned.length } };
+      const { agent, session, mailbox } = match;
+      const state = mailbox.state;
+      const identity = {
+        ownerSessionId: first.session,
+        label: agentLabel,
+        definition: state.agentDefinition,
+        task: agentTask,
+        sessionId: session.id,
+        sessionPath: session.path,
+        requestId: state.activeRequestId,
+        askId: state.pendingAskId,
+        runId: state.runId,
+        paneId: agent.pane_id,
+        workspaceId,
+      };
+      if (
+        !Object.values(identity).every(Boolean) ||
+        !managerWaitingMailboxEvidence(mailbox, identity) ||
+        agent.workspace_id !== workspaceId
+      )
+        return { done: false };
+      const lead = await exactIsolatedSession(ctx, first.session);
+      const evidence =
+        lead &&
+        managerActiveDelegationEvidence(
+          lead.contents,
+          delegationPrompt,
+          identity,
+        );
+      const process = await tryNestedCommand(ctx, [
+        "pane",
+        "process-info",
+        "--pane",
+        agent.pane_id,
+      ]);
+      if (!process.ok) return { done: false, observationError: process.error };
+      const processes = candidateProcess(
+        process.value,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      );
+      if (
+        !evidence ||
+        processes.length !== 1 ||
+        !Number.isSafeInteger(processes[0].pid) ||
+        processes[0].pid <= 0 ||
+        !managerNoReplay(session.contents, session.contents)
+      )
+        return {
+          done: false,
+          progress: { evidence: !!evidence, processes: processes.length },
+        };
+      return {
+        done: true,
+        value: {
+          identity,
+          evidence,
+          pid: processes[0].pid,
+          boundary: session.contents,
+          leadPath: lead.path,
+          mailboxPath: mailbox.directory,
+        },
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  assert.ok(active.boundary && active.leadPath && active.evidence.resultId);
   const closePrompt = managerRecoveryStopPrompt(first.session);
   markStage(ctx, "graceful-close");
   await promptRoot(closePrompt);
-  await waitFor(
-    "graceful-close",
-    async () => {
-      const session = await rootSnapshot();
-      if (!session) return null;
-      const closes = staffActionResults(session.contents, "stop_lead", "stop");
-      if (closes.length !== 1) return null;
-      const close = closes[0];
-      if (
-        close.branch !== branch ||
-        !assistantResultForSession(
-          session,
+  let stopDiagnostics = [];
+  try {
+    await waitFor(
+      "graceful-close",
+      async () => {
+        const session = await rootSnapshot();
+        if (!session) return null;
+        stopDiagnostics = managerRecoveryStopDiagnostics(
+          session.contents,
           closePrompt,
+          first.session,
+          branch,
           "PI_HERDSMAN_MANAGER_RECOVERY_PAUSED",
+        );
+        if (
+          stopDiagnostics.length !== 1 ||
+          stopDiagnostics[0].sessionStatus !== "exact" ||
+          stopDiagnostics[0].resultStatus !== "success" ||
+          stopDiagnostics[0].resultIdentity !== "exact" ||
+          !stopDiagnostics[0].markerCompleted
         )
-      )
-        return null;
-      const pids = await candidatePids(paneId).catch(() => []);
-      if (pids.length !== 0) return null;
-      for (const agent of await agents())
-        if ((await agentSessionId(ctx, agent)) === first.session) return null;
-      return close;
-    },
-    30_000,
-  );
+          return null;
+        if (!(await managerRecoveryPidsAbsent(candidatePids, paneId)))
+          return null;
+        for (const agent of await agents())
+          if ((await agentSessionId(ctx, agent)) === first.session) return null;
+        return true;
+      },
+      30_000,
+    );
+  } catch (error) {
+    ctx.managerRecovery.stopDiagnostics = stopDiagnostics;
+    throw error;
+  }
   markStage(ctx, "graceful-close-validation");
   await assertUnchangedAssignment();
   assert.ok(
@@ -7951,6 +8542,117 @@ async function runManagerRecoverySmoke(ctx) {
     pausedWorktrees[0].path ?? pausedWorktrees[0].worktree_path,
     worktreePath,
   );
+
+  const stoppedObservation = async () => {
+    const listed = await tryNestedCommand(ctx, ["agent", "list"]);
+    const panes = await tryNestedCommand(ctx, ["pane", "list"]);
+    if (!listed.ok || !panes.ok || !Array.isArray(listed.value.agents))
+      throw observationFailure("Agent or pane inventory unavailable");
+    const matches = await agentsForPiSession(
+      ctx,
+      listed.value.agents,
+      active.identity.sessionId,
+    );
+    const child = await isolatedSessionDetails(ctx, {
+      agent_session: { kind: "path", value: active.identity.sessionPath },
+    });
+    const lead = await exactIsolatedSession(ctx, first.session);
+    const names = await readdir(active.mailboxPath).catch((error) =>
+      error.code === "ENOENT" ? [] : Promise.reject(error),
+    );
+    const mailboxRoot = join(
+      ctx.paths.piAgent,
+      "pi-herdsman",
+      "runtime",
+      "mailboxes-v5",
+    );
+    const dirs = await readdir(mailboxRoot, { withFileTypes: true }).catch(
+      (error) => (error.code === "ENOENT" ? [] : Promise.reject(error)),
+    );
+    let sessionMailbox = false;
+    for (const dir of dirs) {
+      if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
+      if (dir.isSymbolicLink() || !dir.isDirectory())
+        throw new Error("unsafe Agent mailbox inventory");
+      const statePath = join(mailboxRoot, dir.name, "state.json");
+      const details = await lstat(statePath).catch((error) =>
+        error.code === "ENOENT" ? null : Promise.reject(error),
+      );
+      if (!details) continue;
+      if (
+        !details.isFile() ||
+        details.isSymbolicLink() ||
+        details.size > 64 * 1024
+      )
+        throw new Error("unsafe Agent mailbox state");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      if (state.piSessionId === active.identity.sessionId)
+        sessionMailbox = true;
+    }
+    let pidExited = false;
+    try {
+      process.kill(active.pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") pidExited = true;
+      else throw error;
+    }
+    const observations = {
+      pidExited,
+      paneAbsent: !listedPanes(panes.value).some(
+        (item) => item.paneId === active.identity.paneId,
+      ),
+      registrationAbsent:
+        matches.length === 0 &&
+        !listed.value.agents.some(
+          (item) => item.pane_id === active.identity.paneId,
+        ),
+      mailboxClean:
+        !sessionMailbox && names.every((name) => name === ".starting"),
+      noReplay: managerNoReplay(child?.contents, active.boundary),
+    };
+    return { lead, child, observations };
+  };
+  await waitForEvidence(
+    ctx,
+    "manager-agent-stop-proof",
+    async () => {
+      const observed = await stoppedObservation();
+      return {
+        done: managerStoppedAgentEvidence(
+          observed.lead,
+          observed.child,
+          active,
+          observed.observations,
+        ),
+        progress: observed.observations,
+      };
+    },
+    { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
+  );
+  markStage(ctx, "manager-agent-no-replay");
+  const observeUntil = Date.now() + 5_000;
+  let stoppedBoundary;
+  while (true) {
+    const observed = await stoppedObservation();
+    assert.ok(
+      managerStoppedAgentEvidence(
+        observed.lead,
+        observed.child,
+        active,
+        observed.observations,
+      ),
+      "stopped Agent evidence changed during no-replay observation",
+    );
+    stoppedBoundary ??= observed.child.contents;
+    assert.equal(
+      observed.child.contents,
+      stoppedBoundary,
+      "stopped Agent session changed during no-replay observation",
+    );
+    const remaining = observeUntil - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(POLL_MS, remaining));
+  }
 
   if (ctx.managerRemovalAcceptance) {
     const removalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
@@ -8406,7 +9108,10 @@ async function runManagerRecoverySmoke(ctx) {
         ctx.candidateExtension,
         ctx.herdrStateExtension,
       );
-      return processes.length === 1 && processes[0].pid !== initialPid
+      return processes.length === 1 &&
+        Number.isSafeInteger(processes[0].pid) &&
+        processes[0].pid > 0 &&
+        processes[0].pid !== initialPid
         ? processes
         : null;
     },
@@ -8414,6 +9119,58 @@ async function runManagerRecoverySmoke(ctx) {
   );
   const resumedPid = resumedProcesses[0].pid;
   ctx.managerRecovery.resumedPid = resumedPid;
+  markStage(ctx, "manager-resumed-no-replay");
+  const resumedObserveUntil = Date.now() + 5_000;
+  let continuationBoundary;
+  while (true) {
+    const observed = await stoppedObservation();
+    assert.ok(
+      managerStoppedAgentEvidence(
+        observed.lead,
+        observed.child,
+        active,
+        observed.observations,
+      ),
+      "Agent replayed after Lead resume",
+    );
+    continuationBoundary ??= observed.child.contents;
+    assert.equal(
+      observed.child.contents,
+      continuationBoundary,
+      "Agent session changed after Lead resume",
+    );
+    const remaining = resumedObserveUntil - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(POLL_MS, remaining));
+  }
+  const leadBeforeContinuation = await exactIsolatedSession(ctx, first.session);
+  assert.equal(leadBeforeContinuation?.path, active.leadPath);
+  const marker = "PI_HERDSMAN_MANAGER_AGENT_CONTINUED";
+  const followup = `Continue the exact Agent saved at ${active.identity.sessionPath}. Call continue_agent exactly once for that session with a new task to return ${marker}. Do not repeat the original task or delegate another Agent. After receiving its result, include ${marker} in your final answer.`;
+  markStage(ctx, "manager-agent-continuation");
+  await promptAgent(paneId, followup);
+  const continuation = await waitForEvidence(
+    ctx,
+    "manager-agent-continuation",
+    async () => {
+      const lead = await exactIsolatedSession(ctx, first.session);
+      const child = await isolatedSessionDetails(ctx, {
+        agent_session: { kind: "path", value: active.identity.sessionPath },
+      });
+      const evidence = managerContinuationEvidence(
+        lead,
+        child,
+        active,
+        leadBeforeContinuation.contents,
+        continuationBoundary,
+        followup,
+        marker,
+      );
+      return { done: !!evidence, value: evidence };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  ctx.managerRecovery.agentContinuation = continuation;
   const previousLease = await managerLease();
   markStage(ctx, "manager-turnover-leave");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
@@ -8547,7 +9304,11 @@ async function runManagerRecoverySmoke(ctx) {
   await waitFor(
     "executor-loss",
     async () => {
-      const currentPids = await candidatePids(paneId).catch(() => []);
+      const absent = await managerRecoveryPidsAbsent(
+        candidatePids,
+        paneId,
+        resumedPid,
+      );
       let stillLive = false;
       for (const agent of await agents())
         if (
@@ -8558,7 +9319,7 @@ async function runManagerRecoverySmoke(ctx) {
           stillLive = true;
           break;
         }
-      return !currentPids.includes(resumedPid) && !stillLive;
+      return absent && !stillLive;
     },
     30_000,
   );
