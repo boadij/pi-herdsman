@@ -1811,15 +1811,17 @@ function registerExtensionImpl(
       if (process.env.HERDR_PANE_ID)
         pi.registerCommand("manager", {
           description:
-            "Activate Manager mode, open its overview, or remove an assigned worktree",
+            "Activate Manager mode, open its overview, remove a worktree, or forget a legacy assignment",
           getArgumentCompletions: (prefix: string) => {
             const input = prefix.trimStart();
             const [command, branchPrefix] = input.split(/\s+/u);
             if (!command)
-              return ["leave", "remove", "remove-preapproval"].map((value) => ({
-                value,
-                label: value,
-              }));
+              return ["leave", "remove", "forget", "remove-preapproval"].map(
+                (value) => ({
+                  value,
+                  label: value,
+                }),
+              );
             if (command === "remove-preapproval")
               return input.trim().split(/\s+/u).length === 2
                 ? ["on", "off"]
@@ -1829,10 +1831,10 @@ function registerExtensionImpl(
                       label: value,
                     }))
                 : null;
-            if (command !== "remove")
+            if (command !== "remove" && command !== "forget")
               return input.includes(" ")
                 ? null
-                : ["leave", "remove", "remove-preapproval"]
+                : ["leave", "remove", "forget", "remove-preapproval"]
                     .filter((value) => value.startsWith(command))
                     .map((value) => ({ value, label: value }));
             if (input === "remove") return [];
@@ -1847,7 +1849,7 @@ function registerExtensionImpl(
                 .map(({ branch }) => branch)
                 .filter((branch) => branch.startsWith(branchPrefix ?? ""))
                 .map((branch) => ({
-                  value: `remove ${branch}`,
+                  value: `${command} ${branch}`,
                   label: branch,
                 }));
             } catch {
@@ -1946,6 +1948,23 @@ function registerExtensionImpl(
               const result = await projectRuntime.removeWorktree(args[1]!, ctx);
               ctx.ui.notify(
                 result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
+                result.details.ok || result.details.cancelled
+                  ? "info"
+                  : "warning",
+              );
+              return;
+            }
+            if (args[0] === "forget") {
+              if (args.length !== 2) {
+                ctx.ui.notify("Usage: /manager forget <branch>", "error");
+                return;
+              }
+              const result = await projectRuntime.forgetLegacyProjectAssignment(
+                args[1]!,
+                ctx,
+              );
+              ctx.ui.notify(
+                result.content[0]?.text ?? `Forget of ${args[1]} finished.`,
                 result.details.ok || result.details.cancelled
                   ? "info"
                   : "warning",

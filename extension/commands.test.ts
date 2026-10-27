@@ -4759,13 +4759,6 @@ type ManagerBootstrapGitRun = {
   stderr: string;
 };
 
-function managerBootstrapTest(
-  name: string,
-  body: (t: TestContext) => Promise<void> | void,
-): void {
-  test(name, body);
-}
-
 function managerBootstrapHarness(
   cwd: string,
   options: {
@@ -5087,212 +5080,116 @@ function managerBootstrapLockPath(cwd: string): string {
   );
 }
 
-managerBootstrapTest(
-  "Manager bootstrap Git diagnostics redact config arguments but retain failed operation status",
-  (t) => {
+test("Manager bootstrap Git diagnostics redact config arguments but retain failed operation status", (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-diagnostic-"),
+  );
+  const harness = managerBootstrapHarness(cwd);
+  t.after(harness.cleanup);
+  assert.equal(harness.git(["init"]).status, 0);
+  assert.equal(
+    harness.git(["config", "user.name", "Synthetic User"]).status,
+    0,
+  );
+  assert.equal(
+    harness.git(["config", "user.email", "synthetic@example.invalid"]).status,
+    0,
+  );
+  assert.notEqual(
+    harness.git(["rev-parse", "--verify", "missing-ref"]).status,
+    0,
+  );
+
+  const diagnostic = harness.gitDiagnostic();
+  assert.match(diagnostic, /\["config","<args redacted>"\]/);
+  assert.doesNotMatch(
+    diagnostic,
+    /user\.name|user\.email|Synthetic User|synthetic@example\.invalid/,
+  );
+  assert.match(
+    diagnostic,
+    /"args":\["rev-parse","--verify","<omitted>"\],"status":128/,
+  );
+});
+
+test("Manager explicit bootstrap confirms, checks Herdr through Pi, and creates one empty commit", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-"));
+  realFs.writeFileSync(join(cwd, "preexisting.txt"), "existing data\n");
+  realFs.writeFileSync(join(cwd, "untracked.txt"), "untracked data\n");
+  const harness = managerBootstrapHarness(cwd);
+  const git = (args: string[]) => {
+    const result = harness.git(args);
+    assert.equal(
+      result.status,
+      0,
+      result.status === 0
+        ? undefined
+        : `git ${args[0]} exited ${result.status}: ${harness.gitDiagnostic()}`,
+    );
+    return result.stdout.trim();
+  };
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  const activationStart = harness.invocations.length;
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  const activationCalls = harness.invocations.slice(activationStart);
+  assert.equal(harness.confirmations, 1, harness.notices.join("\n"));
+  assert.equal(git(["rev-list", "--count", "HEAD"]), "1");
+  assert.equal(git(["symbolic-ref", "--short", "HEAD"]), "main");
+  assert.equal(
+    git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(/\s+/).length,
+    1,
+  );
+  assert.equal(git(["ls-tree", "-r", "--name-only", "HEAD"]), "");
+  assert.equal(git(["rev-parse", "HEAD^{tree}"]), git(["mktree"]));
+  assert.equal(git(["diff", "--cached", "--name-only"]), "");
+  assert.equal(
+    realFs.readFileSync(join(cwd, "preexisting.txt"), "utf8"),
+    "existing data\n",
+  );
+  assert.equal(
+    realFs.readFileSync(join(cwd, "untracked.txt"), "utf8"),
+    "untracked data\n",
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "commit",
+    ).length,
+    1,
+  );
+  assert.ok(
+    activationCalls.filter(
+      ({ command, args }) =>
+        command === "herdr" && args[0] === "pane" && args[1] === "get",
+    ).length >= 2,
+  );
+  assert.ok(
+    activationCalls.filter(
+      ({ command, args }) =>
+        command === "herdr" && args[0] === "workspace" && args[1] === "get",
+    ).length >= 2,
+  );
+  assert.equal(
+    realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
+    false,
+  );
+  assert.equal(realFs.existsSync(managerBootstrapLockPath(cwd)), false);
+});
+
+test("Manager explicit bootstrap cancellation and unexpected Herdr failure do not run Git", async (t) => {
+  for (const scenario of ["cancel", "herdr"] as const) {
     const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-diagnostic-"),
+      join(tmpdir(), `manager-bootstrap-${scenario}-`),
     );
-    const harness = managerBootstrapHarness(cwd);
-    t.after(harness.cleanup);
-    assert.equal(harness.git(["init"]).status, 0);
-    assert.equal(
-      harness.git(["config", "user.name", "Synthetic User"]).status,
-      0,
-    );
-    assert.equal(
-      harness.git(["config", "user.email", "synthetic@example.invalid"]).status,
-      0,
-    );
-    assert.notEqual(
-      harness.git(["rev-parse", "--verify", "missing-ref"]).status,
-      0,
-    );
-
-    const diagnostic = harness.gitDiagnostic();
-    assert.match(diagnostic, /\["config","<args redacted>"\]/);
-    assert.doesNotMatch(
-      diagnostic,
-      /user\.name|user\.email|Synthetic User|synthetic@example\.invalid/,
-    );
-    assert.match(
-      diagnostic,
-      /"args":\["rev-parse","--verify","<omitted>"\],"status":128/,
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager explicit bootstrap confirms, checks Herdr through Pi, and creates one empty commit",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-"));
-    realFs.writeFileSync(join(cwd, "preexisting.txt"), "existing data\n");
-    realFs.writeFileSync(join(cwd, "untracked.txt"), "untracked data\n");
-    const harness = managerBootstrapHarness(cwd);
-    const git = (args: string[]) => {
-      const result = harness.git(args);
-      assert.equal(
-        result.status,
-        0,
-        result.status === 0
-          ? undefined
-          : `git ${args[0]} exited ${result.status}: ${harness.gitDiagnostic()}`,
-      );
-      return result.stdout.trim();
-    };
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    const activationStart = harness.invocations.length;
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    const activationCalls = harness.invocations.slice(activationStart);
-    assert.equal(harness.confirmations, 1, harness.notices.join("\n"));
-    assert.equal(git(["rev-list", "--count", "HEAD"]), "1");
-    assert.equal(
-      git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(/\s+/).length,
-      1,
-    );
-    assert.equal(git(["ls-tree", "-r", "--name-only", "HEAD"]), "");
-    assert.equal(git(["rev-parse", "HEAD^{tree}"]), git(["mktree"]));
-    assert.equal(git(["diff", "--cached", "--name-only"]), "");
-    assert.equal(
-      realFs.readFileSync(join(cwd, "preexisting.txt"), "utf8"),
-      "existing data\n",
-    );
-    assert.equal(
-      realFs.readFileSync(join(cwd, "untracked.txt"), "utf8"),
-      "untracked data\n",
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-    assert.equal(
-      harness.invocations.filter(
-        ({ command, args }) => command === "git" && args[0] === "commit",
-      ).length,
-      1,
-    );
-    assert.ok(
-      activationCalls.filter(
-        ({ command, args }) =>
-          command === "herdr" && args[0] === "pane" && args[1] === "get",
-      ).length >= 2,
-    );
-    assert.ok(
-      activationCalls.filter(
-        ({ command, args }) =>
-          command === "herdr" && args[0] === "workspace" && args[1] === "get",
-      ).length >= 2,
-    );
-    assert.equal(
-      realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
-      false,
-    );
-    assert.equal(realFs.existsSync(managerBootstrapLockPath(cwd)), false);
-  },
-);
-
-managerBootstrapTest(
-  "Manager explicit bootstrap cancellation and unexpected Herdr failure do not run Git",
-  async (t) => {
-    for (const scenario of ["cancel", "herdr"] as const) {
-      const cwd = realFs.mkdtempSync(
-        join(tmpdir(), `manager-bootstrap-${scenario}-`),
-      );
-      const harness = managerBootstrapHarness(cwd, {
-        unexpectedHerdr: scenario === "herdr",
-      });
-      t.after(harness.cleanup);
-      if (scenario === "cancel") harness.confirm(false);
-      await harness.pi.events.get("session_start")![0](
-        undefined,
-        harness.context,
-      );
-      await harness.pi.commandOptions
-        .get("manager")!
-        .handler("", harness.context);
-      assert.equal(
-        harness.invocations.some(({ command }) => command === "git"),
-        false,
-        scenario,
-      );
-      assert.equal(realFs.existsSync(join(cwd, ".git")), false, scenario);
-      assert.equal(
-        harness.confirmations,
-        scenario === "cancel" ? 1 : 0,
-        scenario,
-      );
-      assert.equal(
-        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-        "lead",
-        scenario,
-      );
-    }
-  },
-);
-
-managerBootstrapTest(
-  "Manager activation of an existing Git primary does not initialize Git",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-existing-repo-"));
-    const harness = managerBootstrapHarness(cwd);
-    const git = (args: string[]) => {
-      const result = harness.git(args);
-      assert.equal(result.status, 0, `git ${args[0]} exited ${result.status}`);
-    };
-    git(["init"]);
-    git([
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "initial",
-    ]);
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(harness.confirmations, 0);
-    assert.equal(
-      harness.invocations.some(({ command }) => command === "git"),
-      false,
-    );
-    assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap rejects a changed target and leaves no repository",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-target-"));
-    const changedCwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-changed-"),
-    );
-    const harness = managerBootstrapHarness(cwd);
-    t.after(async () => {
-      await harness.cleanup();
-      realFs.rmSync(changedCwd, { recursive: true, force: true });
+    const harness = managerBootstrapHarness(cwd, {
+      unexpectedHerdr: scenario === "herdr",
     });
-    harness.setConfirm(async () => {
-      harness.context.cwd = changedCwd;
-      return true;
-    });
+    t.after(harness.cleanup);
+    if (scenario === "cancel") harness.confirm(false);
     await harness.pi.events.get("session_start")![0](
       undefined,
       harness.context,
@@ -5303,266 +5200,98 @@ managerBootstrapTest(
     assert.equal(
       harness.invocations.some(({ command }) => command === "git"),
       false,
+      scenario,
     );
-    assert.equal(realFs.existsSync(join(cwd, ".git")), false);
-    assert.ok(
-      harness.notices.some((notice) => /workspace changed/.test(notice)),
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap rejects changed Herdr pane and workspace evidence after confirmation",
-  async (t) => {
-    for (const changed of ["pane", "workspace", "cwd"] as const) {
-      const cwd = realFs.mkdtempSync(
-        join(tmpdir(), `manager-bootstrap-${changed}-`),
-      );
-      const other = realFs.mkdtempSync(
-        join(tmpdir(), `manager-bootstrap-${changed}-other-`),
-      );
-      const harness = managerBootstrapHarness(cwd);
-      t.after(async () => {
-        await harness.cleanup();
-        realFs.rmSync(other, { recursive: true, force: true });
-      });
-      harness.setConfirm(async () => {
-        harness.setHerdrIdentity(
-          changed === "pane" ? "replacement-pane" : process.env.HERDR_PANE_ID!,
-          changed === "workspace" ? "replacement-workspace" : WORKSPACE,
-          changed === "cwd" ? other : cwd,
-        );
-        return true;
-      });
-      await harness.pi.events.get("session_start")![0](
-        undefined,
-        harness.context,
-      );
-      await harness.pi.commandOptions
-        .get("manager")!
-        .handler("", harness.context);
-      assert.equal(harness.confirmations, 1, changed);
-      assert.equal(
-        harness.invocations.some(({ command }) => command === "git"),
-        false,
-        changed,
-      );
-      assert.equal(realFs.existsSync(join(cwd, ".git")), false, changed);
-      assert.equal(
-        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-        "lead",
-        changed,
-      );
-      assert.ok(
-        harness.notices.some((notice) => /identity/.test(notice)),
-        changed,
-      );
-    }
-  },
-);
-
-managerBootstrapTest(
-  "Project Manager menu Start uses the composed bootstrap transition",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-menu-bootstrap-"));
-    const harness = managerBootstrapHarness(cwd);
-    updateConfig("managerGitBootstrapWithoutConfirmation", true);
-    const selected: Array<{ title: string; options: string[] }> = [];
-    const choices: Array<string | undefined> = [
-      "Project manager",
-      "Start Manager mode",
-      undefined,
-    ];
-    harness.context.ui.select = async (title: string, options: string[]) => {
-      selected.push({ title, options });
-      const choice = choices.shift();
-      return options.find((option) => option === choice);
-    };
-    t.after(() => {
-      updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
-      return harness.cleanup();
-    });
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("herdsman")!
-      .handler("", harness.context);
-    assert.deepEqual(
-      selected.map(({ title }) =>
-        title === "Project manager" ? title : "root",
-      ),
-      ["root", "Project manager", "root"],
-    );
-    assert.equal(harness.confirmations, 0);
+    assert.equal(realFs.existsSync(join(cwd, ".git")), false, scenario);
     assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
+      harness.confirmations,
+      scenario === "cancel" ? 1 : 0,
+      scenario,
     );
-    assert.equal(
-      harness.git(["rev-parse", "HEAD^{tree}"]).stdout.trim(),
-      harness.git(["mktree"]).stdout.trim(),
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-  },
-);
-
-managerBootstrapTest(
-  "enabled explicit /manager skips confirmation and bootstraps",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-command-bootstrap-"),
-    );
-    updateConfig("autoActivateManager", false);
-    updateConfig("managerGitBootstrapWithoutConfirmation", true);
-    const harness = managerBootstrapHarness(cwd);
-    t.after(() => {
-      updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
-      updateConfig("autoActivateManager", undefined);
-      return harness.cleanup();
-    });
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    updateConfig("managerGitBootstrapWithoutConfirmation", true);
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(harness.confirmations, 0);
-    assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-  },
-);
-
-managerBootstrapTest(
-  "explicit /manager bootstraps without UI only when confirmation is opted out",
-  async (t) => {
-    t.after(() =>
-      updateConfig("managerGitBootstrapWithoutConfirmation", undefined),
-    );
-    const enabledCwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-command-bootstrap-no-ui-enabled-"),
-    );
-    updateConfig("managerGitBootstrapWithoutConfirmation", true);
-    const enabled = managerBootstrapHarness(enabledCwd);
-    enabled.context.hasUI = false;
-    t.after(() => enabled.cleanup());
-    await enabled.pi.events.get("session_start")![0](
-      undefined,
-      enabled.context,
-    );
-    await enabled.pi.commandOptions
-      .get("manager")!
-      .handler("", enabled.context);
-    assert.equal(enabled.confirmations, 0);
-    assert.equal(
-      enabled.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      enabled.gitDiagnostic(),
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-
-    const disabledCwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-command-bootstrap-no-ui-disabled-"),
-    );
-    updateConfig("managerGitBootstrapWithoutConfirmation", false);
-    const disabled = managerBootstrapHarness(disabledCwd);
-    disabled.context.hasUI = false;
-    t.after(() => disabled.cleanup());
-    await disabled.pi.events.get("session_start")![0](
-      undefined,
-      disabled.context,
-    );
-    await disabled.pi.commandOptions
-      .get("manager")!
-      .handler("", disabled.context);
-    assert.equal(disabled.confirmations, 0);
-    assert.equal(
-      disabled.invocations.some(({ command }) => command === "git"),
-      false,
-    );
-    assert.equal(realFs.existsSync(join(disabledCwd, ".git")), false);
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "lead",
+      scenario,
     );
-  },
-);
+  }
+});
 
-managerBootstrapTest(
-  "Manager bootstrap rejects absent, null, malformed, and mismatched PaneInfo.cwd",
-  async (t) => {
+test("Manager activation of an existing Git primary does not initialize Git", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-existing-repo-"));
+  const harness = managerBootstrapHarness(cwd);
+  const git = (args: string[]) => {
+    const result = harness.git(args);
+    assert.equal(result.status, 0, `git ${args[0]} exited ${result.status}`);
+  };
+  git(["init"]);
+  git([
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.confirmations, 0);
+  assert.equal(
+    harness.invocations.some(({ command }) => command === "git"),
+    false,
+  );
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+});
+
+test("Manager bootstrap rejects a changed target and leaves no repository", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-target-"));
+  const changedCwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-changed-"),
+  );
+  const harness = managerBootstrapHarness(cwd);
+  t.after(async () => {
+    await harness.cleanup();
+    realFs.rmSync(changedCwd, { recursive: true, force: true });
+  });
+  harness.setConfirm(async () => {
+    harness.context.cwd = changedCwd;
+    return true;
+  });
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    harness.invocations.some(({ command }) => command === "git"),
+    false,
+  );
+  assert.equal(realFs.existsSync(join(cwd, ".git")), false);
+  assert.ok(harness.notices.some((notice) => /workspace changed/.test(notice)));
+});
+
+test("Manager bootstrap rejects changed Herdr pane and workspace evidence after confirmation", async (t) => {
+  for (const changed of ["pane", "workspace", "cwd"] as const) {
+    const cwd = realFs.mkdtempSync(
+      join(tmpdir(), `manager-bootstrap-${changed}-`),
+    );
     const other = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-pane-other-"),
+      join(tmpdir(), `manager-bootstrap-${changed}-other-`),
     );
-    t.after(() => realFs.rmSync(other, { recursive: true, force: true }));
-    const cases = [
-      { label: "missing", options: { omitPaneCwd: true } },
-      { label: "null", options: { paneCwd: null } },
-      { label: "malformed", options: { paneCwd: 42 } },
-      { label: "mismatched", options: { paneCwd: other } },
-    ] as const;
-    for (const { label, options } of cases) {
-      const cwd = realFs.mkdtempSync(
-        join(tmpdir(), `manager-bootstrap-pane-${label}-`),
-      );
-      const harness = managerBootstrapHarness(cwd, options);
-      t.after(harness.cleanup);
-      await harness.pi.events.get("session_start")![0](
-        undefined,
-        harness.context,
-      );
-      await harness.pi.commandOptions
-        .get("manager")!
-        .handler("", harness.context);
-      assert.equal(harness.confirmations, 0, label);
-      assert.equal(
-        harness.invocations.some(({ command }) => command === "git"),
-        false,
-        label,
-      );
-      assert.equal(realFs.existsSync(join(cwd, ".git")), false, label);
-      assert.equal(
-        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-        "lead",
-        label,
-      );
-    }
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap accepts a valid repository committed before its locked inspection",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-race-"));
     const harness = managerBootstrapHarness(cwd);
-    t.after(harness.cleanup);
+    t.after(async () => {
+      await harness.cleanup();
+      realFs.rmSync(other, { recursive: true, force: true });
+    });
     harness.setConfirm(async () => {
-      assert.equal(harness.git(["init"]).status, 0);
-      assert.equal(harness.git(["config", "user.name", "Test"]).status, 0);
-      assert.equal(
-        harness.git(["config", "user.email", "test@example.invalid"]).status,
-        0,
+      harness.setHerdrIdentity(
+        changed === "pane" ? "replacement-pane" : process.env.HERDR_PANE_ID!,
+        changed === "workspace" ? "replacement-workspace" : WORKSPACE,
+        changed === "cwd" ? other : cwd,
       );
-      realFs.writeFileSync(join(cwd, "concurrent.txt"), "already committed\n");
-      assert.equal(harness.git(["add", "concurrent.txt"]).status, 0);
-      assert.equal(harness.git(["commit", "-m", "concurrent"]).status, 0);
       return true;
     });
     await harness.pi.events.get("session_start")![0](
@@ -5572,334 +5301,157 @@ managerBootstrapTest(
     await harness.pi.commandOptions
       .get("manager")!
       .handler("", harness.context);
-    assert.equal(harness.confirmations, 1);
+    assert.equal(harness.confirmations, 1, changed);
     assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-    assert.equal(
-      harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout.trim(),
-      "concurrent.txt",
-    );
-    assert.equal(
-      harness.invocations.filter(
-        ({ command, args }) => command === "git" && args[0] === "commit",
-      ).length,
-      0,
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap rejects corrupt, bare, and enclosing repository metadata",
-  async (t) => {
-    const corruptCwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-corrupt-git-"),
-    );
-    realFs.writeFileSync(join(corruptCwd, ".git"), "not git metadata");
-    const corrupt = managerBootstrapHarness(corruptCwd);
-    t.after(corrupt.cleanup);
-    await corrupt.pi.events.get("session_start")![0](
-      undefined,
-      corrupt.context,
-    );
-    await corrupt.pi.commandOptions
-      .get("manager")!
-      .handler("", corrupt.context);
-    assert.equal(
-      corrupt.invocations.some(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ),
+      harness.invocations.some(({ command }) => command === "git"),
       false,
+      changed,
     );
-
-    const bareCwd = realFs.mkdtempSync(join(tmpdir(), "manager-bare-git-"));
-    assert.equal(
-      spawnSync("git", ["init", "--bare"], { cwd: bareCwd }).status,
-      0,
-    );
-    const bare = managerBootstrapHarness(bareCwd);
-    t.after(bare.cleanup);
-    await bare.pi.events.get("session_start")![0](undefined, bare.context);
-    await bare.pi.commandOptions.get("manager")!.handler("", bare.context);
-    assert.equal(
-      bare.invocations.some(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ),
-      false,
-    );
-    assert.equal(realFs.existsSync(join(bareCwd, ".git")), false);
-
-    const parent = realFs.mkdtempSync(join(tmpdir(), "manager-enclosing-git-"));
-    assert.equal(spawnSync("git", ["init"], { cwd: parent }).status, 0);
-    const child = join(parent, "child");
-    realFs.mkdirSync(child);
-    const enclosing = managerBootstrapHarness(child);
-    t.after(enclosing.cleanup);
-    await enclosing.pi.events.get("session_start")![0](
-      undefined,
-      enclosing.context,
-    );
-    await enclosing.pi.commandOptions
-      .get("manager")!
-      .handler("", enclosing.context);
-    assert.equal(
-      enclosing.invocations.some(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ),
-      false,
-    );
-    realFs.rmSync(parent, { recursive: true, force: true });
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap does not repeat init when root rediscovery fails",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-root-rediscovery-"));
-    const harness = managerBootstrapHarness(cwd, { failRootRediscovery: true });
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(
-      harness.invocations.filter(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ).length,
-      1,
-      harness.gitDiagnostic(),
-    );
-    assert.equal(realFs.existsSync(join(cwd, ".git")), true);
-    assert.ok(
-      harness.notices.some((notice) =>
-        /verify its working-tree root/.test(notice),
-      ),
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap releases its lock after Git failure and retries once",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-retry-"));
-    const lockPath = managerBootstrapLockPath(cwd);
-    realFs.writeFileSync(join(cwd, "keep.txt"), "not committed\n");
-    const harness = managerBootstrapHarness(cwd, { failCommitOnce: true });
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(realFs.existsSync(join(cwd, ".git")), true);
-    assert.equal(
-      realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
-      false,
-    );
-    assert.equal(realFs.existsSync(lockPath), false);
-    assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-    assert.equal(
-      harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout,
-      "",
-    );
-    assert.equal(
-      realFs.readFileSync(join(cwd, "keep.txt"), "utf8"),
-      "not committed\n",
-    );
-    assert.equal(
-      harness.invocations.filter(
-        ({ command, args }) => command === "git" && args[0] === "commit",
-      ).length,
-      2,
-    );
-    assert.equal(
-      realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
-      false,
-    );
-    assert.equal(realFs.existsSync(lockPath), false);
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap acquires its shared target lock before running Git",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-contended-"),
-    );
-    const harness = managerBootstrapHarness(cwd);
-    const heldLock = acquireProcessLock(managerBootstrapLockPath(cwd));
-    t.after(async () => {
-      heldLock.release();
-      await harness.cleanup();
-    });
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    const start = harness.invocations.length;
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(
-      harness.invocations.slice(start).some(({ command }) => command === "git"),
-      false,
-      harness.notices.join("\n"),
-    );
-    assert.equal(realFs.existsSync(join(cwd, ".git")), false);
-
-    heldLock.release();
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.ok(
-      harness.invocations.some(
-        ({ command, args }) => command === "git" && args[0] === "init",
-      ),
-    );
-    assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap safely recovers a dead shared-lock owner on retry",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-crash-retry-"),
-    );
-    const lockPath = managerBootstrapLockPath(cwd);
-    const lockModule = new URL("./lock.ts", import.meta.url).href;
-    const crashedOwner = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { acquireProcessLock } from ${JSON.stringify(lockModule)}; acquireProcessLock(process.argv[1]); process.exit(0);`,
-        lockPath,
-      ],
-      { encoding: "utf8" },
-    );
-    assert.equal(crashedOwner.status, 0, crashedOwner.stderr);
-    assert.equal(realFs.existsSync(lockPath), true);
-    const harness = managerBootstrapHarness(cwd);
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(realFs.existsSync(join(cwd, ".git")), true);
-    assert.equal(
-      realFs.existsSync(lockPath),
-      false,
-      harness.notices.join("\n"),
-    );
-    assert.equal(
-      harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
-      "1",
-      harness.gitDiagnostic(),
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap holds its lock through final Herdr repository verification",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-final-scope-"),
-    );
-    const harness = managerBootstrapHarness(cwd, {
-      assertLockDuringFinalScope: true,
-    });
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(harness.finalScopeLockVerified, true);
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
-    );
-  },
-);
-
-managerBootstrapTest(
-  "Manager bootstrap rejects a session change during final Herdr verification",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(
-      join(tmpdir(), "manager-bootstrap-session-change-"),
-    );
-    const replacementSessionId = randomUUID();
-    let sessionChangedDuringFinalHerdrResponse = false;
-    let harness: ReturnType<typeof managerBootstrapHarness>;
-    harness = managerBootstrapHarness(cwd, {
-      onFinalHerdrVerification: () => {
-        sessionChangedDuringFinalHerdrResponse = true;
-        harness.context.sessionManager.getSessionId = () =>
-          replacementSessionId;
-      },
-    });
-    t.after(harness.cleanup);
-    await harness.pi.events.get("session_start")![0](
-      undefined,
-      harness.context,
-    );
-    await harness.pi.commandOptions
-      .get("manager")!
-      .handler("", harness.context);
-    assert.equal(sessionChangedDuringFinalHerdrResponse, true);
-    assert.ok(harness.notices.some((notice) => /session changed/.test(notice)));
+    assert.equal(realFs.existsSync(join(cwd, ".git")), false, changed);
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "lead",
+      changed,
     );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), replacementSessionId),
-      undefined,
+    assert.ok(
+      harness.notices.some((notice) => /identity/.test(notice)),
+      changed,
     );
-    assert.equal(
-      harness.pi.pi.getActiveTools().includes("delegate_project"),
-      false,
-    );
-  },
-);
+  }
+});
 
-managerBootstrapTest(
-  "Manager bootstrap rejects and preserves a concurrent staged index",
-  async (t) => {
-    const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-staged-"));
-    realFs.writeFileSync(join(cwd, "staged.txt"), "preserve staged file\n");
-    const harness = managerBootstrapHarness(cwd, {
-      stageAfterInit: "staged.txt",
-    });
+test("Project Manager menu Start uses the composed bootstrap transition", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-menu-bootstrap-"));
+  const harness = managerBootstrapHarness(cwd);
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
+  const selected: Array<{ title: string; options: string[] }> = [];
+  const choices: Array<string | undefined> = [
+    "Project manager",
+    "Start Manager mode",
+    undefined,
+  ];
+  harness.context.ui.select = async (title: string, options: string[]) => {
+    selected.push({ title, options });
+    const choice = choices.shift();
+    return options.find((option) => option === choice);
+  };
+  t.after(() => {
+    updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
+    return harness.cleanup();
+  });
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("herdsman")!.handler("", harness.context);
+  assert.deepEqual(
+    selected.map(({ title }) => (title === "Project manager" ? title : "root")),
+    ["root", "Project manager", "root"],
+  );
+  assert.equal(harness.confirmations, 0);
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+  assert.equal(
+    harness.git(["rev-parse", "HEAD^{tree}"]).stdout.trim(),
+    harness.git(["mktree"]).stdout.trim(),
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+});
+
+test("enabled explicit /manager skips confirmation and bootstraps", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-command-bootstrap-"));
+  updateConfig("autoActivateManager", false);
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
+  const harness = managerBootstrapHarness(cwd);
+  t.after(() => {
+    updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
+    updateConfig("autoActivateManager", undefined);
+    return harness.cleanup();
+  });
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.confirmations, 0);
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+});
+
+test("explicit /manager bootstraps without UI only when confirmation is opted out", async (t) => {
+  t.after(() =>
+    updateConfig("managerGitBootstrapWithoutConfirmation", undefined),
+  );
+  const enabledCwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-command-bootstrap-no-ui-enabled-"),
+  );
+  updateConfig("managerGitBootstrapWithoutConfirmation", true);
+  const enabled = managerBootstrapHarness(enabledCwd);
+  enabled.context.hasUI = false;
+  t.after(() => enabled.cleanup());
+  await enabled.pi.events.get("session_start")![0](undefined, enabled.context);
+  await enabled.pi.commandOptions.get("manager")!.handler("", enabled.context);
+  assert.equal(enabled.confirmations, 0);
+  assert.equal(
+    enabled.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    enabled.gitDiagnostic(),
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+
+  const disabledCwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-command-bootstrap-no-ui-disabled-"),
+  );
+  updateConfig("managerGitBootstrapWithoutConfirmation", false);
+  const disabled = managerBootstrapHarness(disabledCwd);
+  disabled.context.hasUI = false;
+  t.after(() => disabled.cleanup());
+  await disabled.pi.events.get("session_start")![0](
+    undefined,
+    disabled.context,
+  );
+  await disabled.pi.commandOptions
+    .get("manager")!
+    .handler("", disabled.context);
+  assert.equal(disabled.confirmations, 0);
+  assert.equal(
+    disabled.invocations.some(({ command }) => command === "git"),
+    false,
+  );
+  assert.equal(realFs.existsSync(join(disabledCwd, ".git")), false);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "lead",
+  );
+});
+
+test("Manager bootstrap rejects absent, null, malformed, and mismatched PaneInfo.cwd", async (t) => {
+  const other = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-pane-other-"),
+  );
+  t.after(() => realFs.rmSync(other, { recursive: true, force: true }));
+  const cases = [
+    { label: "missing", options: { omitPaneCwd: true } },
+    { label: "null", options: { paneCwd: null } },
+    { label: "malformed", options: { paneCwd: 42 } },
+    { label: "mismatched", options: { paneCwd: other } },
+  ] as const;
+  for (const { label, options } of cases) {
+    const cwd = realFs.mkdtempSync(
+      join(tmpdir(), `manager-bootstrap-pane-${label}-`),
+    );
+    const harness = managerBootstrapHarness(cwd, options);
     t.after(harness.cleanup);
     await harness.pi.events.get("session_start")![0](
       undefined,
@@ -5908,28 +5460,321 @@ managerBootstrapTest(
     await harness.pi.commandOptions
       .get("manager")!
       .handler("", harness.context);
-    assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
+    assert.equal(harness.confirmations, 0, label);
     assert.equal(
-      harness.git(["diff", "--cached", "--name-only"]).stdout.trim(),
-      "staged.txt",
+      harness.invocations.some(({ command }) => command === "git"),
+      false,
+      label,
     );
+    assert.equal(realFs.existsSync(join(cwd, ".git")), false, label);
     assert.equal(
-      realFs.readFileSync(join(cwd, "staged.txt"), "utf8"),
-      "preserve staged file\n",
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "lead",
+      label,
     );
+  }
+});
+
+test("Manager bootstrap accepts a valid repository committed before its locked inspection", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-race-"));
+  const harness = managerBootstrapHarness(cwd);
+  t.after(harness.cleanup);
+  harness.setConfirm(async () => {
+    assert.equal(harness.git(["init"]).status, 0);
+    assert.equal(harness.git(["config", "user.name", "Test"]).status, 0);
     assert.equal(
-      harness.invocations.filter(
-        ({ command, args }) => command === "git" && args[0] === "commit",
-      ).length,
+      harness.git(["config", "user.email", "test@example.invalid"]).status,
       0,
     );
-    assert.equal(
-      realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
-      false,
-    );
-    assert.ok(harness.notices.some((notice) => /index/.test(notice)));
-  },
-);
+    realFs.writeFileSync(join(cwd, "concurrent.txt"), "already committed\n");
+    assert.equal(harness.git(["add", "concurrent.txt"]).status, 0);
+    assert.equal(harness.git(["commit", "-m", "concurrent"]).status, 0);
+    return true;
+  });
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.confirmations, 1);
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+  assert.equal(
+    harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout.trim(),
+    "concurrent.txt",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "commit",
+    ).length,
+    0,
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+});
+
+test("Manager bootstrap rejects corrupt, bare, and enclosing repository metadata", async (t) => {
+  const corruptCwd = realFs.mkdtempSync(join(tmpdir(), "manager-corrupt-git-"));
+  realFs.writeFileSync(join(corruptCwd, ".git"), "not git metadata");
+  const corrupt = managerBootstrapHarness(corruptCwd);
+  t.after(corrupt.cleanup);
+  await corrupt.pi.events.get("session_start")![0](undefined, corrupt.context);
+  await corrupt.pi.commandOptions.get("manager")!.handler("", corrupt.context);
+  assert.equal(
+    corrupt.invocations.some(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ),
+    false,
+  );
+
+  const bareCwd = realFs.mkdtempSync(join(tmpdir(), "manager-bare-git-"));
+  assert.equal(
+    spawnSync("git", ["init", "--bare"], { cwd: bareCwd }).status,
+    0,
+  );
+  const bare = managerBootstrapHarness(bareCwd);
+  t.after(bare.cleanup);
+  await bare.pi.events.get("session_start")![0](undefined, bare.context);
+  await bare.pi.commandOptions.get("manager")!.handler("", bare.context);
+  assert.equal(
+    bare.invocations.some(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ),
+    false,
+  );
+  assert.equal(realFs.existsSync(join(bareCwd, ".git")), false);
+
+  const parent = realFs.mkdtempSync(join(tmpdir(), "manager-enclosing-git-"));
+  assert.equal(spawnSync("git", ["init"], { cwd: parent }).status, 0);
+  const child = join(parent, "child");
+  realFs.mkdirSync(child);
+  const enclosing = managerBootstrapHarness(child);
+  t.after(enclosing.cleanup);
+  await enclosing.pi.events.get("session_start")![0](
+    undefined,
+    enclosing.context,
+  );
+  await enclosing.pi.commandOptions
+    .get("manager")!
+    .handler("", enclosing.context);
+  assert.equal(
+    enclosing.invocations.some(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ),
+    false,
+  );
+  realFs.rmSync(parent, { recursive: true, force: true });
+});
+
+test("Manager bootstrap does not repeat init when root rediscovery fails", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-root-rediscovery-"));
+  const harness = managerBootstrapHarness(cwd, { failRootRediscovery: true });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ).length,
+    1,
+    harness.gitDiagnostic(),
+  );
+  assert.equal(realFs.existsSync(join(cwd, ".git")), true);
+  assert.ok(
+    harness.notices.some((notice) =>
+      /verify its working-tree root/.test(notice),
+    ),
+  );
+});
+
+test("Manager bootstrap releases its lock after Git failure and retries once", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-retry-"));
+  const lockPath = managerBootstrapLockPath(cwd);
+  realFs.writeFileSync(join(cwd, "keep.txt"), "not committed\n");
+  const harness = managerBootstrapHarness(cwd, { failCommitOnce: true });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(realFs.existsSync(join(cwd, ".git")), true);
+  assert.equal(
+    realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
+    false,
+  );
+  assert.equal(realFs.existsSync(lockPath), false);
+  assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+  assert.equal(
+    harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout,
+    "",
+  );
+  assert.equal(
+    realFs.readFileSync(join(cwd, "keep.txt"), "utf8"),
+    "not committed\n",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "commit",
+    ).length,
+    2,
+  );
+  assert.equal(
+    realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
+    false,
+  );
+  assert.equal(realFs.existsSync(lockPath), false);
+});
+
+test("Manager bootstrap acquires its shared target lock before running Git", async (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-contended-"),
+  );
+  const harness = managerBootstrapHarness(cwd);
+  const heldLock = acquireProcessLock(managerBootstrapLockPath(cwd));
+  t.after(async () => {
+    heldLock.release();
+    await harness.cleanup();
+  });
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  const start = harness.invocations.length;
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    harness.invocations.slice(start).some(({ command }) => command === "git"),
+    false,
+    harness.notices.join("\n"),
+  );
+  assert.equal(realFs.existsSync(join(cwd, ".git")), false);
+
+  heldLock.release();
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.ok(
+    harness.invocations.some(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ),
+  );
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+});
+
+test("Manager bootstrap safely recovers a dead shared-lock owner on retry", async (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-crash-retry-"),
+  );
+  const lockPath = managerBootstrapLockPath(cwd);
+  const lockModule = new URL("./lock.ts", import.meta.url).href;
+  const crashedOwner = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { acquireProcessLock } from ${JSON.stringify(lockModule)}; acquireProcessLock(process.argv[1]); process.exit(0);`,
+      lockPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(crashedOwner.status, 0, crashedOwner.stderr);
+  assert.equal(realFs.existsSync(lockPath), true);
+  const harness = managerBootstrapHarness(cwd);
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(realFs.existsSync(join(cwd, ".git")), true);
+  assert.equal(realFs.existsSync(lockPath), false, harness.notices.join("\n"));
+  assert.equal(
+    harness.git(["rev-list", "--count", "HEAD"]).stdout.trim(),
+    "1",
+    harness.gitDiagnostic(),
+  );
+});
+
+test("Manager bootstrap holds its lock through final Herdr repository verification", async (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-final-scope-"),
+  );
+  const harness = managerBootstrapHarness(cwd, {
+    assertLockDuringFinalScope: true,
+  });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.finalScopeLockVerified, true);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+});
+
+test("Manager bootstrap rejects a session change during final Herdr verification", async (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-session-change-"),
+  );
+  const replacementSessionId = randomUUID();
+  let sessionChangedDuringFinalHerdrResponse = false;
+  let harness: ReturnType<typeof managerBootstrapHarness>;
+  harness = managerBootstrapHarness(cwd, {
+    onFinalHerdrVerification: () => {
+      sessionChangedDuringFinalHerdrResponse = true;
+      harness.context.sessionManager.getSessionId = () => replacementSessionId;
+    },
+  });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(sessionChangedDuringFinalHerdrResponse, true);
+  assert.ok(harness.notices.some((notice) => /session changed/.test(notice)));
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "lead",
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), replacementSessionId),
+    undefined,
+  );
+  assert.equal(
+    harness.pi.pi.getActiveTools().includes("delegate_project"),
+    false,
+  );
+});
+
+test("Manager bootstrap rejects and preserves a concurrent staged index", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-bootstrap-staged-"));
+  realFs.writeFileSync(join(cwd, "staged.txt"), "preserve staged file\n");
+  const harness = managerBootstrapHarness(cwd, {
+    stageAfterInit: "staged.txt",
+  });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
+  assert.equal(
+    harness.git(["diff", "--cached", "--name-only"]).stdout.trim(),
+    "staged.txt",
+  );
+  assert.equal(
+    realFs.readFileSync(join(cwd, "staged.txt"), "utf8"),
+    "preserve staged file\n",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "commit",
+    ).length,
+    0,
+  );
+  assert.equal(
+    realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
+    false,
+  );
+  assert.ok(harness.notices.some((notice) => /index/.test(notice)));
+});
 
 test("Manager auto-start rejects mismatched Herdr identity and releases its lease", async () => {
   setLeadEnvironment();
@@ -6395,16 +6240,26 @@ async function managerRemovalFixture(
     revokeRemovalPreapprovalAfterPreflight?: boolean;
     replaceManagerBeforeFinalReconcile?: boolean;
     replaceAssignmentBeforeFinalReconcile?: boolean;
+    unrelatedCheckout?: boolean;
+    unrelatedDetachedCheckout?: boolean;
+    preserveAssignmentDuringReconciliation?: boolean;
+    confirmationResponse?: string;
+    agentStateIssues?: boolean;
+    extraAgentStates?: any[];
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
   const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  const unrelatedPath = realFs.mkdtempSync(
+    join(PI_AGENT_ROOT, "remove-unrelated-"),
+  );
   if (options.absentCheckout) rmSync(checkoutPath, { recursive: true });
   const persistedCheckoutPath = options.persistedCheckoutPath
     ? realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-original-"))
     : undefined;
   t.after(() => rmSync(repoKey, { recursive: true, force: true }));
   t.after(() => rmSync(checkoutPath, { recursive: true, force: true }));
+  t.after(() => rmSync(unrelatedPath, { recursive: true, force: true }));
   if (persistedCheckoutPath)
     t.after(() =>
       rmSync(persistedCheckoutPath, { recursive: true, force: true }),
@@ -6468,6 +6323,22 @@ async function managerRemovalFixture(
             "",
           ]
         : []),
+      ...(options.unrelatedCheckout
+        ? [
+            `worktree ${unrelatedPath}`,
+            `HEAD ${"3".repeat(40)}`,
+            "branch refs/heads/feat/unrelated",
+            "",
+          ]
+        : []),
+      ...(options.unrelatedDetachedCheckout
+        ? [
+            `worktree ${unrelatedPath}`,
+            `HEAD ${"3".repeat(40)}`,
+            "detached",
+            "",
+          ]
+        : []),
       "",
     ];
     return worktrees.join("\0");
@@ -6486,7 +6357,11 @@ async function managerRemovalFixture(
       exec: async (command: string, args: string[], runOptions: any) => {
         assert.equal(command, "git");
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
-          return { code: 0, stdout: `${checkoutPath}\n`, stderr: "" };
+          return {
+            code: 0,
+            stdout: `${runOptions.cwd === repoKey ? repoKey : checkoutPath}\n`,
+            stderr: "",
+          };
         if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
           return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
         if (
@@ -6575,7 +6450,8 @@ async function managerRemovalFixture(
       join(repoKey, `${name}.assignment`),
     acquireProcessLock: () => ({ release: () => {} }),
     listProjectAssignments: () => (assignment ? [assignment] : []),
-    readProjectAssignment: () => assignment,
+    readProjectAssignment: (_runtime: unknown, _repo: string, name: string) =>
+      assignment?.branch === name ? assignment : undefined,
     SessionManager: {
       open: () => ({
         getSessionId: () => options.persistedSessionId ?? assignment?.id,
@@ -6614,16 +6490,30 @@ async function managerRemovalFixture(
             repo_key: repoKey,
             source_checkout_path: repoKey,
           },
-          worktrees: checkoutPresent
-            ? [
-                {
-                  open_workspace_id: topologyWorkspaceId,
-                  branch,
-                  path: checkoutPath,
-                  is_linked_worktree: true,
-                },
-              ]
-            : [],
+          worktrees: [
+            ...(checkoutPresent
+              ? [
+                  {
+                    open_workspace_id: topologyWorkspaceId,
+                    branch,
+                    path: checkoutPath,
+                    is_linked_worktree: true,
+                  },
+                ]
+              : []),
+            ...(options.unrelatedCheckout
+              ? [
+                  {
+                    branch: "feat/unrelated",
+                    path: unrelatedPath,
+                    is_linked_worktree: true,
+                  },
+                ]
+              : []),
+            ...(options.unrelatedDetachedCheckout
+              ? [{ path: unrelatedPath, is_linked_worktree: true }]
+              : []),
+          ],
         };
       if (args[1] === "open") {
         workspaceId =
@@ -6690,7 +6580,15 @@ async function managerRemovalFixture(
     },
     isPiAgent: () => true,
     herdrSessionId: (agent: any) => agent.pi_session_id ?? "assigned-lead",
-    scanAgentStates: () => ({ states: [] }),
+    scanAgentStates: () => ({
+      states: (options.extraAgentStates ?? []).map((state, index) => ({
+        path: `state-${index}`,
+        state,
+      })),
+      issues: options.agentStateIssues
+        ? [{ path: "unavailable", diagnostic: "test" }]
+        : [],
+    }),
     stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
     stopProjectLeadPane: async () => {
       stoppedLeadCount++;
@@ -6721,9 +6619,20 @@ async function managerRemovalFixture(
       reconciliationAssignmentId = args[7];
       reconciliationProjectWorkLocked = args[4];
       if (options.reconcileError) throw new Error("reconcile uncertain");
-      if (!checkoutPresent && (!args[7] || assignment?.id === args[7]))
+      if (
+        !options.preserveAssignmentDuringReconciliation &&
+        !checkoutPresent &&
+        (!args[7] || assignment?.id === args[7])
+      )
         assignment = undefined;
     },
+    retireProjectAssignment: (_runtime: unknown, current: any) => {
+      if (assignment?.id !== current.id) return false;
+      assignment = undefined;
+      return true;
+    },
+    removeProjectMessagesForAssignment: () => {},
+    appendDurableError: () => {},
     HERDSMAN_BUILD: {} as any,
   } as any);
   const ctx = fakeContext([]) as any;
@@ -6740,7 +6649,7 @@ async function managerRemovalFixture(
       assignment = { ...assignment, id: "replacement-assignment" };
     if (options.primaryWorkspaceAfterConfirmation)
       topologyWorkspaceId = "manager-workspace";
-    return "remove";
+    return options.confirmationResponse ?? "remove";
   };
   return {
     runtime,
@@ -6767,6 +6676,208 @@ async function managerRemovalFixture(
     reconciliationProjectWorkLocked: () => reconciliationProjectWorkLocked,
   };
 }
+
+test("Manager explicitly releases a legacy assignment without touching an unrelated checkout", async (t) => {
+  const branch = "feat/remove-test";
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedDetachedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: `forget ${branch}`,
+  });
+  const result = await fixture.runtime.forgetLegacyProjectAssignment(
+    branch,
+    fixture.ctx,
+  );
+  assert.equal(result.details.ok, true);
+  assert.equal(fixture.assignment(), undefined);
+  assert.deepEqual(fixture.removals, []);
+  assert.equal(fixture.confirmationCount(), 1);
+  assert.equal(fixture.reconciliationAssignmentId(), "assigned-lead");
+});
+
+test("Manager refuses to forget a branch with no durable assignment", async (t) => {
+  const fixture = await managerRemovalFixture(t);
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment("feat/unknown", fixture.ctx),
+    /No project assignment exists on this branch/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.equal(fixture.reconciliationAssignmentId(), undefined);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("legacy assignment release refuses a branch checkout and preserves authority", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    missingSessionProvenance: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Checkout provenance exists|checkout still uses this branch/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("legacy assignment release cancellation and stale Manager leave authority intact", async (t) => {
+  const cancelled = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: "cancel",
+  });
+  const result = await cancelled.runtime.forgetLegacyProjectAssignment(
+    "feat/remove-test",
+    cancelled.ctx,
+  );
+  assert.equal(result.details.cancelled, true);
+  assert.ok(cancelled.assignment());
+
+  const stale = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    confirmationResponse: "forget feat/remove-test",
+    replaceManagerAfterConfirmation: true,
+  });
+  await assert.rejects(
+    stale.runtime.forgetLegacyProjectAssignment("feat/remove-test", stale.ctx),
+    /Manager authority changed/u,
+  );
+  assert.ok(stale.assignment());
+});
+
+test("legacy assignment release refuses known live execution before confirmation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    runningLead: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses the exact live Pi session without Lead coordination", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    targetOccupants: [{ pi_session_id: "assigned-lead" }],
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses incomplete durable Agent ownership inventory", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    agentStateIssues: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Agent ownership inventory is incomplete/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release refuses a nested Agent retained by project assignment identity", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    extraAgentStates: [
+      {
+        ownerSessionId: "intermediate-agent",
+        piSessionId: "nested-agent",
+        projectAssignmentId: "assigned-lead",
+      },
+    ],
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    fixture.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      fixture.ctx,
+    ),
+    /Live or potentially active execution is known/u,
+  );
+  assert.ok(fixture.assignment());
+  assert.equal(fixture.confirmationCount(), 0);
+});
+
+test("legacy assignment release preserves authority on unavailable observations or replaced assignment", async (t) => {
+  const unavailable = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    snapshotErrorAfterStop: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    unavailable.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      unavailable.ctx,
+    ),
+    /snapshot failed/u,
+  );
+  assert.ok(unavailable.assignment());
+  assert.equal(unavailable.confirmationCount(), 0);
+
+  const replaced = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    missingSessionProvenance: true,
+    unrelatedCheckout: true,
+    preserveAssignmentDuringReconciliation: true,
+    changeAssignmentAfterConfirmation: true,
+    confirmationResponse: "forget feat/remove-test",
+  });
+  await assert.rejects(
+    replaced.runtime.forgetLegacyProjectAssignment(
+      "feat/remove-test",
+      replaced.ctx,
+    ),
+    /Project assignment changed/u,
+  );
+  assert.equal(replaced.assignment()?.id, "replacement-assignment");
+});
 
 test("Manager merge runtime rejects disabled permission and stale accepted HEAD before mutation", async (t) => {
   const disabled = await managerRemovalFixture(t, { mergeEnabled: false });
@@ -8731,6 +8842,7 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions(""), [
       { value: "leave", label: "leave" },
       { value: "remove", label: "remove" },
+      { value: "forget", label: "forget" },
       { value: "remove-preapproval", label: "remove-preapproval" },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
@@ -8746,6 +8858,12 @@ async function managerDelegateAssignmentTest(
     );
     assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
       { value: `remove ${assignment.branch}`, label: assignment.branch },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("forget herds"), [
+      { value: `forget ${assignment.branch}`, label: assignment.branch },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("forget "), [
+      { value: `forget ${assignment.branch}`, label: assignment.branch },
     ]);
     assert.deepEqual(managerCommand.getArgumentCompletions("remove"), []);
     assert.deepEqual(managerCommand.getArgumentCompletions("remove "), [

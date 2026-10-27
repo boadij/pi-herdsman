@@ -74,6 +74,15 @@ pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
 the remaining Git branch. Retirement does not delete branches or Pi sessions.
 
+For paused legacy assignments without usable checkout provenance, an active
+Manager can choose `Forget orphaned assignment…` in the overview or run
+`/manager forget <branch>`. This explicitly relinquishes Manager authority; it
+does not delete a checkout, stop execution, or alter Agent ownership. Fresh
+Git/Herdr observations, no matching branch checkout, no known live target
+execution, and exact confirmation are required. The confirmation explains that
+unobserved execution cannot be ruled out. Unavailable or conflicting evidence
+or changed assignment/Manager identity leaves the assignment intact.
+
 A Lead with a verified project assignment receives a native Pi session name
 from its branch. Existing names, including names explicitly cleared in Pi, are
 preserved; use Pi's `/name` command to choose or change a name.

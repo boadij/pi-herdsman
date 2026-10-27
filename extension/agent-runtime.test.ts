@@ -1048,20 +1048,11 @@ test("terminal Pi execution error discards partial text as an execution failure"
   registerExtension!(agent.pi as never);
   agent.events.get("session_start")![0](undefined, context);
   await new Promise((resolve) => setImmediate(resolve));
-  const state = readAgentState(mailbox)!;
-  const request: RequestRecord = {
-    version: 5,
-    runId: state.runId,
-    requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-    ownerSessionId: state.ownerSessionId,
-    workspaceId: state.workspaceId,
-    agentLabel: state.agentLabel,
-    paneId: state.paneId,
-    kind: "task",
-    text: "do the work",
-    createdAt: Date.now(),
-  };
-  writeRequest(mailbox, request);
+  const request = writeMetadataTask(
+    mailbox,
+    "do the work",
+    "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  );
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,
@@ -1093,20 +1084,11 @@ test("a completed retry supersedes an earlier Pi error candidate", async () => {
   registerExtension!(agent.pi as never);
   agent.events.get("session_start")![0](undefined, context);
   await new Promise((resolve) => setImmediate(resolve));
-  const state = readAgentState(mailbox)!;
-  const request: RequestRecord = {
-    version: 5,
-    runId: state.runId,
-    requestId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
-    ownerSessionId: state.ownerSessionId,
-    workspaceId: state.workspaceId,
-    agentLabel: state.agentLabel,
-    paneId: state.paneId,
-    kind: "task",
-    text: "retry the work",
-    createdAt: Date.now(),
-  };
-  writeRequest(mailbox, request);
+  const request = writeMetadataTask(
+    mailbox,
+    "retry the work",
+    "ffffffff-ffff-4fff-8fff-ffffffffffff",
+  );
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,
@@ -1145,20 +1127,11 @@ test("aborted settlement fails an assignment despite meaningful assistant text",
   registerExtension!(agent.pi as never);
   agent.events.get("session_start")![0](undefined, context);
   await new Promise((resolve) => setImmediate(resolve));
-  const state = readAgentState(mailbox)!;
-  const request: RequestRecord = {
-    version: 5,
-    runId: state.runId,
-    requestId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-    ownerSessionId: state.ownerSessionId,
-    workspaceId: state.workspaceId,
-    agentLabel: state.agentLabel,
-    paneId: state.paneId,
-    kind: "task",
-    text: "do the work",
-    createdAt: Date.now(),
-  };
-  writeRequest(mailbox, request);
+  const request = writeMetadataTask(
+    mailbox,
+    "do the work",
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  );
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,
@@ -2615,20 +2588,11 @@ test("startup and completion metadata omit unavailable model and thinking values
   assert.equal(hasClear("model"), true);
   assert.equal(hasClear("thinking"), true);
 
-  const started = readAgentState(mailbox)!;
-  const request: RequestRecord = {
-    version: 5,
-    runId: started.runId,
-    requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccd",
-    ownerSessionId: started.ownerSessionId,
-    workspaceId: started.workspaceId,
-    agentLabel: started.agentLabel,
-    paneId: started.paneId,
-    kind: "task",
-    text: "check unavailable metadata",
-    createdAt: Date.now(),
-  };
-  writeRequest(mailbox, request);
+  const request = writeMetadataTask(
+    mailbox,
+    "check unavailable metadata",
+    "cccccccc-cccc-4ccc-8ccc-cccccccccccd",
+  );
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,
@@ -2688,20 +2652,11 @@ test("startup and completion metadata preserve available model and thinking valu
     .find((args) => args.includes("model=openai/gpt-5.1"));
   assert.ok(changed?.includes("thinking=low"));
 
-  const started = readAgentState(mailbox)!;
-  const request: RequestRecord = {
-    version: 5,
-    runId: started.runId,
-    requestId: "cccccccc-cccc-4ccc-8ccc-ccccccccccce",
-    ownerSessionId: started.ownerSessionId,
-    workspaceId: started.workspaceId,
-    agentLabel: started.agentLabel,
-    paneId: started.paneId,
-    kind: "task",
-    text: "check available metadata",
-    createdAt: Date.now(),
-  };
-  writeRequest(mailbox, request);
+  const request = writeMetadataTask(
+    mailbox,
+    "check available metadata",
+    "cccccccc-cccc-4ccc-8ccc-ccccccccccce",
+  );
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,

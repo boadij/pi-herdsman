@@ -284,6 +284,16 @@ not authority. Successful Herdr worktree removal or verified checkout absence
 retires an assignment; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, though new work may use the remaining Git branch.
 
+For a legacy assignment with no usable checkout provenance, the Manager
+overview also offers `Forget orphaned assignment…` for paused work. The direct
+command is `/manager forget <branch>`. This releases Manager authority only; it
+does not remove a worktree, stop a process, or change Agent ownership. The
+operation requires fresh Git/Herdr observations, no checkout on the branch, no
+known live target execution, and typing `forget <branch>` to acknowledge that
+unobserved execution cannot be ruled out. Conflicting identity, unavailable
+observations, or changed Manager/assignment identity refuses release. This
+action is not authorized by worktree-removal preapproval.
+
 An active Manager can remove an assigned project checkout with:
 
 ```text
@@ -305,9 +315,9 @@ effective policy for the verified current Manager repository. The opt-in waives
 only the extra prompt.
 
 This command does not activate Manager mode. Completion suggests `leave`,
-`remove`, and `remove-preapproval`, with `on` and `off` after the latter;
-assigned branches are suggested after `remove ` (with a trailing space), not
-after the exact bare `remove`. Suggestions are advisory and
+`remove`, `forget`, and `remove-preapproval`, with `on` and `off` after the
+latter; assigned branches are suggested after `remove ` and `forget ` (with a
+trailing space), not after the exact bare commands. Suggestions are advisory and
 are not required. Before removal, the shared operation verifies the exact assignment
 and linked checkout, checks that the checkout is clean, and asks for interactive
 confirmation. Type `remove` to confirm. Running owned project execution may be

@@ -1148,7 +1148,6 @@ test("startup timeout budget reserves the full bounded diagnostic window", () =>
     diagnosticTimeout: 2000,
   });
   const defaultBudget = startupTimeoutBudget();
-  assert.equal(defaultBudget.totalTimeout, 302_000);
   assert.deepEqual(defaultBudget, {
     totalTimeout: 302_000,
     childTimeout: 300_000,
@@ -1660,14 +1659,6 @@ test("start injects mandatory extensions before definition args and configures t
     "Unicode-路径",
     "--approve",
   ]);
-  const piArgs = startArgs.slice(startArgs.indexOf("--") + 1);
-  const herdsmanExtension = piArgs.indexOf(
-    join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
-  );
-  const providedExtension = piArgs.indexOf(definitionExtension);
-  assert.ok(herdsmanExtension >= 0);
-  assert.ok(providedExtension >= 0);
-  assert.ok(herdsmanExtension < providedExtension);
   assert.equal(startArgs[startArgs.indexOf("--timeout") + 1], "300000");
   assert.equal(execTimeouts[start], 302_000);
   assert.equal(

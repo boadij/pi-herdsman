@@ -254,7 +254,7 @@ jobs:
           retention-days: 3
 
   peer-federation:
-    name: Peer federation (${{ matrix.phase }})
+    name: Peer federation
     needs: scope
     if: ${{ needs.scope.outputs.peer == 'true' }}
     runs-on: ubuntu-latest

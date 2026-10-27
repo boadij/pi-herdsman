@@ -110,8 +110,9 @@ test("mailbox observer reconciles an atomically published relevant file", async 
     rmSync(directory, { recursive: true, force: true });
   }
 });
-test("runtime build identity includes exact executable bytes", () => {
+test("runtime build identity includes exact executable bytes", (t) => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
+  t.after(() => rmSync(path, { force: true }));
   writeFileSync(path, "export default 1;\n");
   const first = runtimeBuild("0.0.0-pr.149.gabc123", path);
   const same = runtimeBuild("0.0.0-pr.149.gabc123", path);

@@ -16,11 +16,6 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
-  runtimeBuild,
-  sameRuntimeBuild,
-  isRuntimeBuild,
-} from "./compatibility.ts";
-import {
   COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
@@ -195,18 +190,6 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   );
   assert.deepEqual(calls[0]?.options, { signal });
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
-});
-
-test("runtime build identity includes exact executable bytes", () => {
-  const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
-  writeFileSync(path, "export default 1;\n");
-  const first = runtimeBuild("0.0.0-pr.149.gabc", path);
-  const same = runtimeBuild("0.0.0-pr.149.gabc", path);
-  writeFileSync(path, "export default 2;\n");
-  const changed = runtimeBuild("0.0.0-pr.149.gabc", path);
-  assert.equal(sameRuntimeBuild(first, same), true);
-  assert.equal(sameRuntimeBuild(first, changed), false);
-  assert.equal(isRuntimeBuild(first), true);
 });
 
 function assertToolResult(result: any): asserts result is {
