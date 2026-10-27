@@ -15768,7 +15768,7 @@ export function createLeadRoleTransitions(
             throw new Error(
               "Refusing to initialize: existing Git metadata is invalid or conflicting",
             );
-          await runGit(["init"]);
+          await runGit(["init", "--initial-branch=main"]);
           root = await probeRoot();
         }
         if (root && !sameDirectory(root, target))
