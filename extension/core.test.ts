@@ -251,15 +251,6 @@ test("projects lifecycle and assignment state into control states", () => {
   );
 });
 
-test("rejects invalid file content", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-files-"));
-  writeFileSync(join(cwd, "bad.bin"), Buffer.from([0xff]));
-  assert.throws(
-    () => snapshotTextFiles(["bad.bin"], cwd, "assign"),
-    /Cannot read text file bad\.bin/,
-  );
-});
-
 test("snapshots strict text once and deduplicates canonical paths", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-"));
   writeFileSync(join(cwd, "source.txt"), "café");

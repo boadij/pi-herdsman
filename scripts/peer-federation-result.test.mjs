@@ -179,7 +179,7 @@ test("embedded reader returns only bounded delivery and binding projections", ()
   )?.[1];
   assert.ok(embeddedSource, "embedded reader script exists");
   const embeddedScript = runInNewContext(`\`${embeddedSource}\``);
-  const artifact = "EXPECTED_ARTIFACT_CONTENT";
+  const artifact = "EXPECTED_ARTIFACT_CONTENT\nsecond line";
   const messageId = "message-1";
   const ref = "result:source#1";
   const canonicalRef = "result:canonical";
@@ -408,13 +408,6 @@ test("ordinary Lead delivery wait does not accept an initially empty inbox", () 
     ordinaryLeadDeliveryReady([delivered], messageId, "pending"),
     false,
   );
-});
-
-test("ordinary Lead artifact matching uses delivered content with multiline text", () => {
-  const artifact = "first line\nsecond line";
-  const delivered = { content: `<file>\n${artifact}\n</file>` };
-  assert.equal(delivered.content.includes(artifact), true);
-  assert.equal(JSON.stringify(delivered).includes(artifact), false);
 });
 
 test("live correspondence recipient matches role, session, generation, and Lead eligibility", () => {

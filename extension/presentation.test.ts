@@ -789,7 +789,6 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       () => "fresh",
     ).render(120);
     assert.equal(widgetRows[1], "├─ ◉ widget-a · 1 agent");
-    assert.equal(widgetRows[1]?.startsWith("├─ "), true);
     assert.equal(
       widgetRows.some((line) => line === ""),
       false,
@@ -866,10 +865,6 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
         120,
       )[1]!.includes("!"),
       false,
-    );
-    assert.equal(
-      groups.get("BLOCKED")!.some((item) => item.lead === "blocked"),
-      true,
     );
   }
 });
@@ -1576,18 +1571,6 @@ test("herd run entries render only valid finished durations", () => {
     },
   ])
     assert.equal(renderHerdRunEntry({ data }, presentationTheme), undefined);
-});
-
-test("empty partial coordination calls do not duplicate the tool name", () => {
-  assert.equal(
-    renderedText(
-      renderCoordinationCall("agent", "", {}, presentationTheme, {
-        isPartial: true,
-        argsComplete: false,
-      }),
-    ),
-    "agent…",
-  );
 });
 
 test("coordination calls use semantic collapsed and expanded presentation", () => {

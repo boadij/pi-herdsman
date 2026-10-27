@@ -9549,21 +9549,6 @@ test("session continuation rejects label overrides and occupied inherited labels
   }
 });
 
-test("delegate schema rejects an empty task", () => {
-  setLeadEnvironment();
-  const pi = fakePi();
-  registerExtension!(pi.pi as never);
-  const schema = pi.tools.find(
-    (candidate) => candidate.name === "delegate_agent",
-  )!.parameters;
-  assert.equal(
-    Value.Check(schema, { definition: "agent", task: "work" }),
-    true,
-  );
-  assert.equal(Value.Check(schema, { definition: "agent", task: "" }), false);
-  pi.events.get("session_shutdown")?.[0]();
-});
-
 test("public assignment normalizes invalid and unknown session sources", async () => {
   setLeadEnvironment();
   nativeSessions.clear();

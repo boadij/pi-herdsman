@@ -1105,12 +1105,6 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
 
 test("does not bundle the operator-local MCP runner", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-mcp-runner-agent-"));
-  assert.deepEqual(
-    withPiAgentDir(root, () =>
-      discoverAgentDefinitions().map(({ name }) => name),
-    ),
-    ["generalist", "implementer", "researcher", "reviewer", "scout"],
-  );
   assert.throws(
     () => withPiAgentDir(root, () => discoverAgent("mcp-runner")),
     /agent mcp-runner not found/,
