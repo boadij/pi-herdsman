@@ -5393,6 +5393,11 @@ test("Manager activation of an existing Git primary does not initialize Git", as
     "1",
     harness.gitDiagnostic(),
   );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+    harness.notices.join("\n"),
+  );
 });
 
 test("Manager activation rejects identity changes during repository discovery", async (t) => {

@@ -12,6 +12,7 @@ import {
   readFileSync,
   readSync,
   realpathSync,
+  statSync,
 } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { isAbsolute, join, resolve } from "node:path";
@@ -534,6 +535,26 @@ export type WorktreeGroupScope = Readonly<{
   workspaceIds: readonly string[];
 }>;
 
+export function sameDirectory(left: string, right: string): boolean {
+  try {
+    const leftPath = realpathSync(left);
+    const rightPath = realpathSync(right);
+    const leftStat = statSync(leftPath, { bigint: true });
+    const rightStat = statSync(rightPath, { bigint: true });
+    if (!leftStat.isDirectory() || !rightStat.isDirectory()) return false;
+    if (
+      leftStat.dev !== 0n &&
+      rightStat.dev !== 0n &&
+      leftStat.ino !== 0n &&
+      rightStat.ino !== 0n
+    )
+      return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+    return leftPath === rightPath;
+  } catch {
+    return false;
+  }
+}
+
 export async function localRepositoryScope(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -584,7 +605,8 @@ export async function localRepositoryScope(
     gitPath("--git-dir"),
     gitPath("--git-common-dir"),
   ]);
-  if (commonDir !== realpathSync(source.repo_key))
+  const isPrimary = sameDirectory(gitDir, commonDir);
+  if (!sameDirectory(commonDir, source.repo_key))
     throw new Error("Herdr repository does not match the current checkout");
   const membership = workspace.worktree;
   if (
@@ -592,9 +614,9 @@ export async function localRepositoryScope(
     (typeof membership.repo_key !== "string" ||
       typeof membership.checkout_path !== "string" ||
       typeof membership.is_linked_worktree !== "boolean" ||
-      realpathSync(membership.repo_key) !== commonDir ||
-      realpathSync(membership.checkout_path) !== checkoutPath ||
-      membership.is_linked_worktree !== (gitDir !== commonDir))
+      !sameDirectory(membership.repo_key, commonDir) ||
+      !sameDirectory(membership.checkout_path, checkoutPath) ||
+      membership.is_linked_worktree !== !isPrimary)
   )
     throw new Error(
       "Herdr workspace association does not match the current checkout",
@@ -603,7 +625,7 @@ export async function localRepositoryScope(
     repoKey: source.repo_key as string,
     repoName: source.repo_name as string,
     checkoutPath,
-    isPrimary: gitDir === commonDir,
+    isPrimary,
   };
 }
 

@@ -64,6 +64,7 @@ import {
 import { OperationError } from "./errors.ts";
 import {
   localRepositoryScope,
+  sameDirectory,
   sameObservedSessionPath,
   verifiedHerdrAgent,
 } from "./herdr.ts";
@@ -16357,24 +16358,6 @@ export function createLeadRoleTransitions(
         targetStat.ino === 0n
       )
         throw new Error("Manager Git target is not a directory");
-      const sameDirectory = (leftPath: string, rightPath: string): boolean => {
-        try {
-          const left = statSync(leftPath, { bigint: true });
-          const right = statSync(rightPath, { bigint: true });
-          return (
-            left.isDirectory() &&
-            right.isDirectory() &&
-            left.dev !== 0n &&
-            right.dev !== 0n &&
-            left.ino !== 0n &&
-            right.ino !== 0n &&
-            left.dev === right.dev &&
-            left.ino === right.ino
-          );
-        } catch {
-          return false;
-        }
-      };
       const verifyHerdrTarget = async () => {
         const pane = (
           await host.runHerdr(host.pi, ctx, ["pane", "get", paneId], {
@@ -16662,7 +16645,7 @@ export function createLeadRoleTransitions(
       );
       if (
         !currentScope.isPrimary ||
-        currentScope.repoKey !== scope.repoKey ||
+        !sameDirectory(currentScope.repoKey, scope.repoKey) ||
         !(await host.remoteChiefAgent(ctx, lease.descriptor)) ||
         ctx.sessionManager.getSessionId() !== sessionId
       )

@@ -33,6 +33,7 @@ import {
   sameRunningProcessOwner,
   terminalOccupierSurvived,
   sameCwd,
+  sameDirectory,
   stopHerdrAgentPreservingPane,
   closeHerdrPane,
   rollbackHerdrStart,
@@ -6526,7 +6527,9 @@ test("local repository discovery ignores inherited topology but checks explicit 
     fs.mkdirSync(linked);
     let membership: unknown = null;
     let cwd = checkout;
-    let reportedRepo = common;
+    const pathCaseVariant =
+      process.platform === "win32" ? common.toUpperCase() : common;
+    let reportedRepo = pathCaseVariant;
     let sourceWorkspace: string | undefined = "unrelated";
     const calls: string[][] = [];
     const pi = {
@@ -6538,7 +6541,9 @@ test("local repository discovery ignores inherited topology but checks explicit 
               ? cwd
               : args[2] === "--git-dir" && cwd === linked
                 ? linkedGit
-                : common;
+                : args[2] === "--git-dir" && cwd === checkout
+                  ? pathCaseVariant
+                  : common;
           return { code: 0, stdout: value, stderr: "" };
         }
         const result =
@@ -6569,6 +6574,7 @@ test("local repository discovery ignores inherited topology but checks explicit 
       ),
     );
     sourceWorkspace = undefined;
+    reportedRepo = common;
     assert.equal(
       (await localRepositoryScope(pi, { cwd } as any, "w")).repoKey,
       common,
@@ -6596,6 +6602,48 @@ test("local repository discovery ignores inherited topology but checks explicit 
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  "directory identity accepts Windows case variants",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "herdsman-directory-identity-"));
+    const directory = join(root, "CaseSensitiveDirectory");
+    fs.mkdirSync(directory);
+    try {
+      const caseVariant = directory.toLowerCase();
+      assert.notEqual(directory, caseVariant);
+      assert.equal(sameDirectory(directory, caseVariant), true);
+      assert.equal(sameDirectory(directory, root), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("directory identity fails closed when filesystem IDs are unavailable", (t) => {
+  let statCalls = 0;
+  t.mock.method(fs, "realpathSync", ((path: fs.PathLike) =>
+    String(path)) as typeof fs.realpathSync);
+  t.mock.method(fs, "statSync", (() => {
+    statCalls++;
+    return {
+      dev: 0n,
+      ino: 0n,
+      isDirectory: () => true,
+    } as ReturnType<typeof fs.statSync>;
+  }) as typeof fs.statSync);
+  syncBuiltinESMExports();
+  try {
+    assert.equal(sameDirectory("C:\\Repo", "c:\\repo"), false);
+    assert.equal(statCalls, 2, "path fallback was reached");
+    assert.equal(sameDirectory("C:\\Repo", "C:\\Repo"), true);
+    assert.equal(statCalls, 4, "path fallback was reached");
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
   }
 });
 
