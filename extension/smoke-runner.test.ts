@@ -2085,6 +2085,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     "chief-tree",
     "manager-bootstrap",
     "manager-recovery",
+    "active-stop",
     "terminal-failure",
   ])
     assert.equal(parseSmokeArgs([scenario]).scenario, scenario);
@@ -4790,6 +4791,84 @@ test("chief-tree startup prompt creates one ordinary Lead branch for harness con
 
 test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
+});
+
+test("active-stop is registered as an interactive no-initial-prompt scenario", async () => {
+  assert.equal(parseSmokeArgs(["active-stop"]).scenario, "active-stop");
+  assert.equal(initialPromptForScenario("active-stop", {}), undefined);
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const manager = source.indexOf("async function runManagerRecoverySmoke");
+  const active = source.indexOf("async function runActiveStopSmoke");
+  const next = source.indexOf("async function runChiefTreeSmoke");
+  assert.ok(
+    manager >= 0 && manager < active && active < next,
+    "active-stop must preserve manager continuation source-extraction boundary",
+  );
+  const body = source.slice(active, next);
+  const markerIndex = (pattern) => body.search(pattern);
+  const rootReady = markerIndex(/"active-stop-root-ready"/);
+  const agentReady = markerIndex(/"active-stop-agent-ready"/);
+  const stopInput = markerIndex(
+    /"pane",\s*"send-text",\s*ctx\.rootPaneId,\s*"\/agents stop"/,
+  );
+  const confirmation = markerIndex(/"active-stop-confirmation"/);
+  const confirmEnter = markerIndex(
+    /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/,
+  );
+  const beforeConfirmEnter = body.slice(0, confirmEnter);
+  assert.ok(
+    rootReady >= 0 && agentReady >= 0 && stopInput >= 0,
+    "root readiness, Agent readiness, and stop input must all exist",
+  );
+  assert.ok(
+    rootReady < stopInput,
+    "root snapshot and candidate readiness must precede terminal input",
+  );
+  assert.match(body, /rootSessionSnapshot\(ctx\)/);
+  assert.match(
+    body,
+    /typeof\s+header\?\.id\s*!==\s*"string"\s*\|\|\s*!header\.id\.trim\(\)/,
+  );
+  assert.match(body, /"pane",\s*"process-info",\s*"--pane",\s*ctx\.rootPaneId/);
+  assert.match(body, /matches\.length !== 1/);
+  assert.match(
+    body,
+    /matches\.length\s*!==\s*1\s*\|\|\s*!Number\.isSafeInteger\(matches\[0\]\?\.pid\)\s*\|\|\s*matches\[0\]\.pid\s*<=\s*0/,
+  );
+  assert.match(body, /value: \{ snapshot, pid: matches\[0\]\.pid \}/);
+  assert.match(
+    body,
+    /processes\.length\s*===\s*1\s*&&\s*Number\.isSafeInteger\(processes\[0\]\?\.pid\)\s*&&\s*processes\[0\]\.pid\s*>\s*0/,
+  );
+  assert.match(body, /pid: processes\[0\]\.pid/);
+  assert.doesNotMatch(body, /smoke-faux-provenance\.jsonl|matchPiProvenance/);
+  assert.ok(
+    agentReady < stopInput,
+    "active Agent readiness must precede stop input",
+  );
+  assert.ok(
+    confirmation >= 0 && confirmEnter >= 0,
+    "confirmation marker and confirmation Enter must both exist",
+  );
+  assert.ok(
+    stopInput < confirmation && confirmation < confirmEnter,
+    "stop input, confirmation evidence, and Enter must occur in order",
+  );
+  assert.match(
+    beforeConfirmEnter,
+    /normalized\.includes\("Stop all agents\?"\)/,
+  );
+  assert.match(beforeConfirmEnter, /normalized\.includes\("1 working"\)/);
+  assert.match(beforeConfirmEnter, /\/discard\/i\.test\(normalized\)/);
+  assert.match(body, /pi-herdsman-agent-closed-assignment/);
+  assert.match(
+    body,
+    /continuationResultsForPrompt\(snapshot\.contents, followup, marker\)/,
+  );
+  assert.match(body, /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/);
 });
 
 test("terminal-failure evidence remains actionable and Manager uses only delegate_project", () => {
