@@ -4793,9 +4793,12 @@ test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
 });
 
-test("active-stop is registered as an interactive no-initial-prompt scenario", async () => {
+test("active-stop preflights startup and verifies interactive stop cleanup", async () => {
   assert.equal(parseSmokeArgs(["active-stop"]).scenario, "active-stop");
-  assert.equal(initialPromptForScenario("active-stop", {}), undefined);
+  assert.equal(
+    initialPromptForScenario("active-stop", {}),
+    "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY.",
+  );
   const source = await readFile(
     new URL("../scripts/smoke.mjs", import.meta.url),
     "utf8",
@@ -4812,7 +4815,7 @@ test("active-stop is registered as an interactive no-initial-prompt scenario", a
   const rootReady = markerIndex(/"active-stop-root-ready"/);
   const agentReady = markerIndex(/"active-stop-agent-ready"/);
   const stopInput = markerIndex(
-    /"pane",\s*"send-text",\s*ctx\.rootPaneId,\s*"\/agents stop"/,
+    /submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/agents stop"\)/,
   );
   const confirmation = markerIndex(/"active-stop-confirmation"/);
   const confirmEnter = markerIndex(
@@ -4828,6 +4831,26 @@ test("active-stop is registered as an interactive no-initial-prompt scenario", a
     "root snapshot and candidate readiness must precede terminal input",
   );
   assert.match(body, /rootSessionSnapshot\(ctx\)/);
+  assert.match(
+    body,
+    /const label = `stop-\$\{randomUUID\(\)\.slice\(0, 12\)\}`/,
+  );
+  assert.match(
+    body,
+    /assistantResultForSession\(\s*snapshot,\s*startupPrompt,\s*"PI_HERDSMAN_ACTIVE_STOP_READY\."/,
+  );
+  assert.match(body, /terminalTail/);
+  assert.match(
+    body,
+    /const processObservationError = sanitizeManagerBootstrapText\(\s*observed\.error,\s*ctx,?\s*\)\.slice\(0,\s*300\)/,
+  );
+  assert.match(body, /observationError: processObservationError/);
+  assert.match(body, /candidateProcess: processObservationError/);
+  assert.match(
+    body,
+    /sanitizeManagerBootstrapText\(error\.message,\s*ctx\)\.slice\(0,\s*300\)/,
+  );
+  assert.match(body, /candidateProcess:/);
   assert.match(
     body,
     /typeof\s+header\?\.id\s*!==\s*"string"\s*\|\|\s*!header\.id\.trim\(\)/,
@@ -4863,12 +4886,40 @@ test("active-stop is registered as an interactive no-initial-prompt scenario", a
   );
   assert.match(beforeConfirmEnter, /normalized\.includes\("1 working"\)/);
   assert.match(beforeConfirmEnter, /\/discard\/i\.test\(normalized\)/);
+  assert.match(beforeConfirmEnter, /selectedYes = \/\(\?:\^\|\\s\)→\\s\*Yes/);
+  assert.match(beforeConfirmEnter, /done: exact && selectedYes/);
+  assert.match(beforeConfirmEnter, /selectedYes,/);
   assert.match(body, /pi-herdsman-agent-closed-assignment/);
   assert.match(
     body,
     /continuationResultsForPrompt\(snapshot\.contents, followup, marker\)/,
   );
+  assert.match(
+    body,
+    /correlatedContinuationTask\(\s*snapshot\.contents,\s*result\.id,\s*identity\.sessionId,\s*followup,?\s*\)\s*!==\s*null/,
+  );
+  assert.match(body, /sessionId === identity\.sessionId/);
+  assert.match(body, /typeof runId === "string"\s*&&\s*!!runId\.trim\(\)/);
+  assert.match(body, /runId !== identity\.runId/);
+  assert.match(
+    body,
+    /typeof requestId === "string"\s*&&\s*!!requestId\.trim\(\)/,
+  );
+  assert.match(body, /requestId !== identity\.requestId/);
+  assert.match(
+    body,
+    /sessionId: resumed\.sessionId,\s*runId: resumed\.runId,\s*requestId: resumed\.requestId/,
+  );
   assert.match(body, /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/);
+  assert.match(body, /process\.kill\(pid, 0\)/);
+  assert.match(body, /error\?\.code !== "ESRCH"/);
+  assert.match(body, /panePresent/);
+  assert.ok(
+    markerIndex(/"active-stop-pane-removed"/) <
+      markerIndex(/process\.kill\(pid, 0\)/),
+    "Agent pane absence must be established before checking the captured PID",
+  );
+  assert.doesNotMatch(body, /"process-info",\s*"--pane",\s*identity\.paneId/);
 });
 
 test("terminal-failure evidence remains actionable and Manager uses only delegate_project", () => {

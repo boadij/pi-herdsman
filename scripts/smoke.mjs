@@ -5114,7 +5114,7 @@ export function initialPromptForScenario(scenario, ctx) {
     case "manager-recovery":
       return undefined;
     case "active-stop":
-      return undefined;
+      return "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY.";
     case "manager-bootstrap":
       return undefined;
     case "terminal-failure":
@@ -8621,7 +8621,8 @@ async function runManagerRecoverySmoke(ctx) {
 }
 
 async function runActiveStopSmoke(ctx) {
-  const label = `active-stop-${randomUUID()}`;
+  const label = `stop-${randomUUID().slice(0, 12)}`;
+  const startupPrompt = initialPromptForScenario("active-stop", ctx);
   const marker = `ACTIVE_STOP_CONTINUED_${randomUUID()}`;
   const promptRoot = (prompt) =>
     nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
@@ -8630,11 +8631,44 @@ async function runActiveStopSmoke(ctx) {
     "active-stop-root-ready",
     async () => {
       const snapshot = await rootSessionSnapshot(ctx);
-      if (!snapshot)
+      if (!snapshot) {
+        let terminalTail = "";
+        try {
+          terminalTail = sanitizeManagerBootstrapText(
+            await nestedPaneText(ctx, ctx.rootPaneId, "visible"),
+            ctx,
+          ).slice(-1000);
+        } catch (error) {
+          terminalTail = `terminal read failed: ${sanitizeManagerBootstrapText(error.message, ctx).slice(0, 300)}`;
+        }
+        const processObservation = await tryNestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          ctx.rootPaneId,
+        ]);
         return {
           done: false,
           observationError: "isolated root Pi session snapshot is unavailable",
+          progress: {
+            candidateProcess: sanitizeManagerBootstrapText(
+              JSON.stringify(
+                processObservation.ok
+                  ? processObservation.value
+                  : processObservation.error,
+              ).slice(-1000),
+              ctx,
+            ),
+            terminalTail,
+          },
+          evidence: terminalTail,
         };
+      }
+      const responseCompleted = !!assistantResultForSession(
+        snapshot,
+        startupPrompt,
+        "PI_HERDSMAN_ACTIVE_STOP_READY.",
+      );
       const header = sessionEntries(snapshot.contents).find(
         (entry) => entry.type === "session",
       );
@@ -8649,14 +8683,49 @@ async function runActiveStopSmoke(ctx) {
         "--pane",
         ctx.rootPaneId,
       ]);
-      if (!observed.ok)
-        return { done: false, observationError: observed.error };
+      if (!observed.ok) {
+        const processObservationError = sanitizeManagerBootstrapText(
+          observed.error,
+          ctx,
+        ).slice(0, 300);
+        let terminalTail = "";
+        try {
+          terminalTail = sanitizeManagerBootstrapText(
+            await nestedPaneText(ctx, ctx.rootPaneId, "visible"),
+            ctx,
+          ).slice(-1000);
+        } catch (error) {
+          terminalTail = `terminal read failed: ${sanitizeManagerBootstrapText(error.message, ctx).slice(0, 300)}`;
+        }
+        return {
+          done: false,
+          observationError: processObservationError,
+          progress: {
+            responseCompleted,
+            candidateProcess: processObservationError,
+            terminalTail,
+          },
+          evidence: terminalTail,
+        };
+      }
       const matches = candidateProcess(
         observed.value,
         ctx.candidateExtension,
         ctx.herdrStateExtension,
       );
+      let terminalTail = "";
+      if (!responseCompleted || matches.length !== 1) {
+        try {
+          terminalTail = sanitizeManagerBootstrapText(
+            await nestedPaneText(ctx, ctx.rootPaneId, "visible"),
+            ctx,
+          ).slice(-1000);
+        } catch (error) {
+          terminalTail = `terminal read failed: ${sanitizeManagerBootstrapText(error.message, ctx).slice(0, 300)}`;
+        }
+      }
       if (
+        !responseCompleted ||
         matches.length !== 1 ||
         !Number.isSafeInteger(matches[0]?.pid) ||
         matches[0].pid <= 0
@@ -8666,10 +8735,16 @@ async function runActiveStopSmoke(ctx) {
           observationError: `expected exactly one candidate foreground process with a positive PID in root pane (observed ${matches.length})`,
           progress: {
             snapshot: true,
+            responseCompleted,
             candidatePids: matches
               .map(({ pid }) => pid)
               .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
               .sort((a, b) => a - b),
+            candidateProcess: sanitizeManagerBootstrapText(
+              JSON.stringify(observed.value).slice(-1000),
+              ctx,
+            ),
+            terminalTail,
           },
         };
       return {
@@ -8773,12 +8848,7 @@ async function runActiveStopSmoke(ctx) {
     Object.values(identity).every(Boolean),
     "active-stop initial generation identity incomplete",
   );
-  await nestedPaneInput(ctx, [
-    "pane",
-    "send-text",
-    ctx.rootPaneId,
-    "/agents stop",
-  ]);
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/agents stop");
   const confirmation = await waitForEvidence(
     ctx,
     "active-stop-confirmation",
@@ -8789,13 +8859,15 @@ async function runActiveStopSmoke(ctx) {
         normalized.includes("Stop all agents?") &&
         normalized.includes("1 working") &&
         /discard/i.test(normalized);
+      const selectedYes = /(?:^|\s)→\s*Yes(?:\s|$)/u.test(normalized);
       return {
-        done: exact,
+        done: exact && selectedYes,
         value: normalized,
         progress: {
           title: normalized.includes("Stop all agents?"),
           summary: normalized.includes("1 working"),
           warning: /discard/i.test(normalized),
+          selectedYes,
         },
         evidence: normalized.slice(-1000),
       };
@@ -8805,6 +8877,7 @@ async function runActiveStopSmoke(ctx) {
   assert.match(confirmation, /Stop all agents\?/);
   assert.match(confirmation, /1 working/);
   assert.match(confirmation, /discard/i);
+  assert.match(confirmation, /(?:^|\s)→\s*Yes(?:\s|$)/u);
   await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
   const proof = await waitForEvidence(
     ctx,
@@ -8844,34 +8917,44 @@ async function runActiveStopSmoke(ctx) {
   assert.ok(proof);
   await waitForEvidence(
     ctx,
+    "active-stop-pane-removed",
+    async () => {
+      const panes = await tryNestedCommand(ctx, ["pane", "list"]);
+      if (!panes.ok)
+        return {
+          done: false,
+          observationError: "Agent pane observation unavailable",
+        };
+      const panePresent = listedPanes(panes.value).some(
+        (item) => item.paneId === identity.paneId,
+      );
+      return { done: !panePresent, progress: { panePresent } };
+    },
+    { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
+  );
+  await waitForEvidence(
+    ctx,
     "active-stop-cleanup",
     async () => {
       const listed = await tryNestedCommand(ctx, ["agent", "list"]);
-      const panes = await tryNestedCommand(ctx, ["pane", "list"]);
-      const proc = await tryNestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        identity.paneId,
-      ]);
-      if (!listed.ok || !panes.ok || !proc.ok)
+      if (!listed.ok)
         return {
           done: false,
-          observationError: "cleanup observation unavailable",
+          observationError:
+            "Agent registration cleanup observation unavailable",
         };
-      const alive =
-        candidateProcess(
-          proc.value,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        ).length > 0;
+      const alive = (() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (error) {
+          return error?.code !== "ESRCH";
+        }
+      })();
       return {
         done:
           !(listed.value.agents ?? []).some(
             (item) => item.pane_id === identity.paneId,
-          ) &&
-          !listedPanes(panes.value).some(
-            (item) => item.paneId === identity.paneId,
           ) &&
           !alive &&
           !(await exactAgentMailboxPending(ctx, {
@@ -8881,7 +8964,7 @@ async function runActiveStopSmoke(ctx) {
             paneId: identity.paneId,
             workspaceId: identity.workspaceId,
           })),
-        progress: { alive },
+        progress: { alive, pid },
       };
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
@@ -8987,32 +9070,56 @@ async function runActiveStopSmoke(ctx) {
       const results =
         snapshot &&
         continuationResultsForPrompt(snapshot.contents, followup, marker);
+      const continued =
+        results?.filter(
+          (result) =>
+            correlatedContinuationTask(
+              snapshot.contents,
+              result.id,
+              identity.sessionId,
+              followup,
+            ) !== null,
+        ) ?? [];
       if (results?.length > 1)
         throw new Error("active-stop produced multiple descendant responses");
-      if (results?.length === 1) {
+      if (continued.length === 1) {
         const descendants = await smokeManagedAgentRecords(
           ctx,
           (await tryNestedCommand(ctx, ["agent", "list"])).value.agents ?? [],
         );
-        const resumed = descendants.find(
-          ({ session: child, mailbox: box }) =>
-            child?.id === identity.sessionId &&
+        const resumed = descendants.find(({ session: child, mailbox: box }) => {
+          const sessionId = child?.id;
+          const runId = box?.state.runId;
+          const requestId = box?.state.activeRequestId;
+          return sessionId === identity.sessionId &&
             child.path === identity.sessionPath &&
             box?.state.agentLabel === label &&
-            box.state.runId !== identity.runId &&
-            box.state.activeRequestId !== identity.requestId,
-        );
+            typeof runId === "string" &&
+            !!runId.trim() &&
+            runId !== identity.runId &&
+            typeof requestId === "string" &&
+            !!requestId.trim() &&
+            requestId !== identity.requestId
+            ? { sessionId, runId, requestId }
+            : null;
+        });
         if (resumed)
           return {
             done: true,
             value: {
-              sessionId: resumed.session.id,
-              runId: resumed.mailbox.state.runId,
-              requestId: resumed.mailbox.state.activeRequestId,
+              sessionId: resumed.sessionId,
+              runId: resumed.runId,
+              requestId: resumed.requestId,
             },
           };
       }
-      return { done: false, progress: { results: results?.length ?? 0 } };
+      return {
+        done: false,
+        progress: {
+          results: results?.length ?? 0,
+          successfulCorrelatedContinueCalls: continued.length,
+        },
+      };
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
