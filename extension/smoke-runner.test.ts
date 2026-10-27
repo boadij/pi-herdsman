@@ -4814,6 +4814,28 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   const markerIndex = (pattern) => body.search(pattern);
   const rootReady = markerIndex(/"active-stop-root-ready"/);
   const agentReady = markerIndex(/"active-stop-agent-ready"/);
+  const agentReadiness = body.slice(
+    agentReady,
+    body.indexOf(
+      "const { agent, session, mailbox, pid } = initial;",
+      agentReady,
+    ),
+  );
+  assert.match(
+    agentReadiness,
+    /mailbox\?\.state\.ownerSessionId === ownerId\s*&&\s*mailbox\.state\.activeRequestId/,
+  );
+  assert.match(agentReadiness, /mailbox\.state\.agentLabel === label/);
+  assert.match(
+    agentReadiness,
+    /const \{ agent, session, mailbox \} = matches\[0\]/,
+  );
+  assert.match(agentReadiness, /"process-info",\s*"--pane",\s*agent\.pane_id/);
+  assert.doesNotMatch(agentReadiness, /isolatedSessionDetails\(ctx, agent\)/);
+  assert.match(
+    agentReadiness,
+    /listed: listed\.value\.agents\?\.length \?\? 0,\s*owned: owned\.length,\s*delegation: root \? rootDelegationDiagnostics\(root\.contents\) : null/,
+  );
   const stopInput = markerIndex(
     /submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/agents stop"\)/,
   );

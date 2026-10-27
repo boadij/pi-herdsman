@@ -8810,14 +8810,23 @@ async function runActiveStopSmoke(ctx) {
         throw new Error(
           `active-stop expected one active Lead-owned Agent, observed ${owned.length}`,
         );
-      const matches = owned
-        .filter(({ mailbox }) => mailbox.state.agentLabel === label)
-        .map(({ agent, session, mailbox }) => ({ agent, session, mailbox }));
+      const matches = owned.filter(
+        ({ mailbox }) => mailbox.state.agentLabel === label,
+      );
       if (matches.length > 1)
         throw new Error("active-stop observed duplicate Agent label");
-      if (!matches.length) return { done: false, progress: { count: 0 } };
-      const agent = matches[0];
-      const session = await isolatedSessionDetails(ctx, agent);
+      if (!matches.length) {
+        const root = await rootSessionSnapshot(ctx);
+        return {
+          done: false,
+          progress: {
+            listed: listed.value.agents?.length ?? 0,
+            owned: owned.length,
+            delegation: root ? rootDelegationDiagnostics(root.contents) : null,
+          },
+        };
+      }
+      const { agent, session, mailbox } = matches[0];
       const observed = await tryNestedCommand(ctx, [
         "pane",
         "process-info",
