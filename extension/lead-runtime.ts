@@ -10474,6 +10474,36 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (!authority || leadRuntime.roleSuspended)
       throw new Error("Supervisor lease is no longer active");
     const params = raw as StaffOperation;
+    const resolveActiveAssignedBranch = async (branch: string) => {
+      const manager = await currentManager(ctx);
+      const assignment =
+        manager &&
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          branch,
+        );
+      if (!assignment) throw new Error("Project assignment was not found");
+      const snapshot = await loadSupervisionSnapshot(ctx);
+      const matches = snapshot.work?.filter(
+        (work: any) =>
+          work.branch === assignment.branch && work.session === assignment.id,
+      );
+      if (matches?.length !== 1 || matches[0]?.status !== "active") {
+        const incompatible = snapshot.incompatible?.find(
+          (report) => report.session === assignment.id,
+        );
+        if (incompatible)
+          requireCompatibleBuild(
+            HERDSMAN_BUILD,
+            incompatible.build,
+            "staff action",
+            `lead ${incompatible.session}`,
+          );
+        throw new Error("Assigned work is not uniquely active");
+      }
+      return assignment;
+    };
     if (params.action === "delegate" || params.action === "resume") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can control project work");
@@ -10567,15 +10597,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error("Only Managers can control project work");
       if (!params.branch?.trim())
         throw new Error("Provide the exact assigned branch");
-      const manager = await currentManager(ctx);
-      const assignment =
-        manager &&
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          params.branch,
-        );
-      if (!assignment) throw new Error("Project assignment was not found");
+      const assignment = await resolveActiveAssignedBranch(params.branch);
       const matches = (await directReports(ctx)).filter(
         (report: any) =>
           (report.session ?? report.lead) === assignment.id &&
@@ -10596,16 +10618,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action !== "list" && params.branch !== undefined) {
       if (activeRole() !== "manager" || !params.branch.trim())
         throw new Error("Only Managers can target an exact assigned branch");
-      const manager = await currentManager(ctx);
-      selectedAssignment =
-        manager &&
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          params.branch,
-        );
-      if (!selectedAssignment)
-        throw new Error("Project assignment was not found");
+      selectedAssignment = await resolveActiveAssignedBranch(params.branch);
     }
     const refresh = async () => directReports(ctx);
     const result = (value: Record<string, unknown>) => {

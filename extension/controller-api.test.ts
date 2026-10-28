@@ -3573,6 +3573,7 @@ async function runManagerStartupScenario(
     | "active-live-inspect-revoked"
     | "active-live-inspect-lease-replaced"
     | "active-live-inspect-assignment-replaced"
+    | "active-live-wrong-worktree"
     | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
@@ -3663,6 +3664,7 @@ async function runManagerStartupScenario(
     mode === "active-live-inspect-revoked" ||
     mode === "active-live-inspect-lease-replaced" ||
     mode === "active-live-inspect-assignment-replaced" ||
+    mode === "active-live-wrong-worktree" ||
     [
       "close-resume",
       "close-failure",
@@ -3696,6 +3698,10 @@ async function runManagerStartupScenario(
   let gitListOutput = "";
   let gitBranchOutput = "smoke/recover";
   let gitCwd = "/tmp";
+  const observedLeadWorkspace = () =>
+    mode === "active-live-wrong-worktree" ? WORKSPACE : childWorkspace;
+  const observedLeadCwd = () =>
+    mode === "active-live-wrong-worktree" ? gitCwd : childPath;
   let worktreeListCalls = 0;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
   let inspectionReached!: () => void;
@@ -4125,6 +4131,7 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "send-keys") {
+      leadStopAttempts++;
       if (
         [
           "close-resume",
@@ -4143,8 +4150,6 @@ async function runManagerStartupScenario(
           "ctrl+d",
         ]);
       if (mode === "close-failure") throw new Error("stop refused");
-      if (mode === "close-tree" || mode === "close-tree-failure")
-        leadStopAttempts++;
       if (mode === "close-tree") {
         assert.equal(
           closedTreePanes.size,
@@ -4360,10 +4365,10 @@ async function runManagerStartupScenario(
                                     ? randomUUID()
                                     : childSession,
                               },
-                      workspace_id: childWorkspace,
+                      workspace_id: observedLeadWorkspace(),
                       pane_id: "child-pane",
                       tab_id: "child-tab",
-                      cwd: childPath,
+                      cwd: observedLeadCwd(),
                     },
                   ]
                 : []),
@@ -4472,6 +4477,7 @@ async function runManagerStartupScenario(
             : []),
           ...((mode === "active-live" && !hideActiveLead) ||
           mode.startsWith("active-live-inspect-") ||
+          mode === "active-live-wrong-worktree" ||
           mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
           ([
@@ -4487,10 +4493,10 @@ async function runManagerStartupScenario(
                 { length: mode === "identity-ambiguity" && delivered ? 2 : 1 },
                 () => ({
                   agent_session: childIdentity(),
-                  workspace_id: childWorkspace,
+                  workspace_id: observedLeadWorkspace(),
                   pane_id: "child-pane",
                   tab_id: "child-tab",
-                  cwd: childPath,
+                  cwd: observedLeadCwd(),
                 }),
               )
             : []),
@@ -4535,10 +4541,10 @@ async function runManagerStartupScenario(
         agent:
           args[2] === "lead" || args[2] === "child-pane"
             ? {
-                workspace_id: childWorkspace,
+                workspace_id: observedLeadWorkspace(),
                 pane_id: "child-pane",
                 tab_id: "child-tab",
-                cwd: childPath,
+                cwd: observedLeadCwd(),
                 agent_session: childIdentity(),
               }
             : managerAgent,
@@ -4754,6 +4760,7 @@ async function runManagerStartupScenario(
       "active-live-inspect-revoked",
       "active-live-inspect-lease-replaced",
       "active-live-inspect-assignment-replaced",
+      "active-live-wrong-worktree",
       "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
@@ -4837,6 +4844,7 @@ async function runManagerStartupScenario(
       if (
         mode === "active-live" ||
         mode.startsWith("active-live-inspect-") ||
+        mode === "active-live-wrong-worktree" ||
         mode === "active-live-mismatch"
       )
         writeLeadCoordinationState(supervisionRuntime(), {
@@ -5073,6 +5081,63 @@ async function runManagerStartupScenario(
       return;
     }
     if (activeMode) {
+      if (mode === "active-live-wrong-worktree") {
+        const listing = await pi.tools
+          .find((tool) => tool.name === "list_staff")!
+          .execute("list", {}, undefined, undefined, ctx);
+        assert.deepEqual(
+          listing.details.work
+            .filter((work: any) => work.branch === "smoke/recover")
+            .map((work: any) => work.status),
+          ["conflict"],
+        );
+        const before = listChiefMessagePaths(supervisionRuntime(), staleId).map(
+          (path) => readChiefMessage(path),
+        );
+        await assert.rejects(
+          pi.tools
+            .find((tool) => tool.name === "message_staff")!
+            .execute(
+              "message",
+              {
+                branch: "smoke/recover",
+                message: "CONFLICT_MUST_NOT_PUBLISH",
+              },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          /Assigned work is not uniquely active/,
+        );
+        await assert.rejects(
+          pi.tools
+            .find((tool) => tool.name === "stop_lead")!
+            .execute(
+              "stop",
+              { branch: "smoke/recover" },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          /Assigned work is not uniquely active/,
+        );
+        assert.deepEqual(
+          listChiefMessagePaths(supervisionRuntime(), staleId).map((path) =>
+            readChiefMessage(path),
+          ),
+          before,
+        );
+        assert.equal(started, true);
+        assert.equal(leadStopAttempts, 0);
+        assert.ok(
+          JSON.parse(
+            (await exec("herdr", ["agent", "list"])).stdout,
+          ).result.agents.some(
+            (agent: any) => agent.agent_session?.value === staleId,
+          ),
+        );
+        return;
+      }
       if (mode === "active-live-mismatch") {
         await assert.rejects(execute(), (error: any) => {
           assert.equal(error.detail.category, "incompatible_build");
@@ -6887,6 +6952,8 @@ test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
 test("Manager preserves project assignment and skips notification for incompatible Lead", () =>
   runManagerStartupScenario("incompatible-build"));
+test("Manager rejects branch messaging and stopping for conflicted assigned work", () =>
+  runManagerStartupScenario("active-live-wrong-worktree"));
 test("Manager message_staff rejects incompatible Leads and delivers complete attachments", () =>
   runManagerStartupScenario("staff-message-mismatch"));
 test("Manager message_staff waits for cross-process assignment authority before retaining evidence", () =>
