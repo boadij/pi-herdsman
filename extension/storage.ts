@@ -433,8 +433,7 @@ export function resultPath(requestId: string): string {
   return join(herdsmanDataRoot(), "results", requestId);
 }
 
-/** Persist a received text attachment as immutable recipient-local content. */
-export function persistPeerAttachment(name: string, text: string): string {
+export function peerAttachmentPath(name: string, text: string): string {
   if (
     typeof name !== "string" ||
     !name ||
@@ -452,10 +451,16 @@ export function persistPeerAttachment(name: string, text: string): string {
     "peers-v2",
     "received-evidence",
   );
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
   const digest = createHash("sha256").update(bytes).digest("hex");
-  const path = join(directory, `${digest}-${name}`);
+  return join(directory, `${digest}-${name}`);
+}
+
+/** Persist a received text attachment as immutable recipient-local content. */
+export function persistPeerAttachment(name: string, text: string): string {
+  const path = peerAttachmentPath(name, text);
+  const bytes = Buffer.from(text, "utf8");
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
   try {
     writeFileSync(path, bytes, { flag: "wx", mode: 0o600, flush: true });
   } catch (error) {

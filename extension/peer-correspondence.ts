@@ -243,6 +243,49 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
   }
   save({ ...c, role: c.role ?? "manager" });
 }
+export function readPeerCorrespondence(
+  id: string,
+): PeerCorrespondence | undefined {
+  if (!ID.test(id)) throw new Error("invalid peer correspondence id");
+  const path = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "peer-correspondences",
+    `${id}.json`,
+  );
+  let current: unknown;
+  try {
+    current = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!valid(current) || current.id !== id)
+    throw new Error("invalid peer correspondence");
+  return current;
+}
+export function verifyPeerCorrespondence(c: PeerCorrespondence): void {
+  if (!valid(c)) throw new Error("invalid peer correspondence");
+  const current = readPeerCorrespondence(c.id);
+  if (
+    !valid(current) ||
+    current.finalized ||
+    (current.role ?? "manager") !== (c.role ?? "manager") ||
+    [
+      "capability",
+      "originSession",
+      "originGeneration",
+      "recipientSession",
+      "recipientGeneration",
+      "acceptanceId",
+    ].some(
+      (key) =>
+        current[key as keyof PeerCorrespondence] !==
+        c[key as keyof PeerCorrespondence],
+    )
+  )
+    throw new Error("conflicting peer correspondence");
+}
 export function updatePeerOriginGeneration(
   id: string,
   capability: string,

@@ -12,8 +12,14 @@ import {
   writeSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import {
+  isRuntimeBuild,
+  runtimeBuild,
+  sameRuntimeBuild,
+} from "../extension/compatibility.ts";
 import { nodeOnlyAgentDir, herdsmanDataRoot } from "../extension/storage.ts";
 import {
   listPeerLeadRecords,
@@ -30,15 +36,19 @@ import {
 import {
   persistPeerAttachment,
   persistPeerResultArtifact,
+  peerAttachmentPath,
+  isCanonicalResultRef,
+  resultPath,
 } from "../extension/storage.ts";
 import {
   assertPeerDataRoot,
   acknowledgePeerReply,
   finalizePeerCorrespondence,
-  listPeerCorrespondences,
   peerPayloadDigest,
   pollPeerReplies,
   storePeerCorrespondence,
+  verifyPeerCorrespondence,
+  readPeerCorrespondence,
   updatePeerOriginGeneration,
   updatePeerRecipientGeneration,
   type PeerCorrespondence,
@@ -81,6 +91,28 @@ if (!isAbsolute(agentDir)) {
 }
 
 const runtime = peerRuntime();
+const bridgeDirectory = dirname(fileURLToPath(import.meta.url));
+const packageRoot = dirname(bridgeDirectory);
+const compatible = (peer: { build?: unknown }): boolean => {
+  try {
+    const metadata = JSON.parse(
+      readFileSync(join(packageRoot, "package.json"), "utf8"),
+    );
+    const build = runtimeBuild(
+      metadata.version,
+      basename(bridgeDirectory) === "bin"
+        ? join(packageRoot, "extension", "index.ts")
+        : join(packageRoot, "dist", "index.js"),
+    );
+    return (
+      isRuntimeBuild(build) &&
+      isRuntimeBuild(peer.build) &&
+      sameRuntimeBuild(build, peer.build)
+    );
+  } catch {
+    return false;
+  }
+};
 let recoveringStatus = false;
 const syncDirectory = (directory: string): void => {
   if (process.platform === "win32") return;
@@ -231,9 +263,7 @@ if (action === "probe") {
         import("../extension/supervision.ts").GlobalProjectAssignment[]
       >,
     ) => {
-      const correspondence = listPeerCorrespondences().find(
-        (item) => item.id === id,
-      );
+      const correspondence = readPeerCorrespondence(id);
       const correspondenceRole = correspondence?.role ?? "manager";
       const live = listPeerLeadRecords(runtime).find(
         (peer) =>
@@ -249,6 +279,7 @@ if (action === "probe") {
             isRemoteOrdinaryLead(live, assignments));
       if (
         !recipientIsLive ||
+        (action !== "poll" && !compatible(live!)) ||
         !correspondence ||
         correspondenceRole !== (correspondence?.role ?? "manager") ||
         correspondence.originSession !== originSession ||
@@ -311,9 +342,7 @@ if (action === "probe") {
           JSON.stringify({
             dataRoot: herdsmanDataRoot(),
             replies,
-            hasReplies:
-              (listPeerCorrespondences().find((item) => item.id === id)?.replies
-                .length ?? 0) > 0,
+            hasReplies: (readPeerCorrespondence(id)?.replies.length ?? 0) > 0,
           }),
         );
       } else if (action === "ack") {
@@ -346,9 +375,7 @@ if (action === "probe") {
     // Keep the live Lead check and every synchronous correspondence mutation/read
     // under the assignment authority lock; otherwise eligibility can be revoked
     // after the check but before an ACK discards the durable reply.
-    const role =
-      listPeerCorrespondences().find((item) => item.id === id)?.role ??
-      "manager";
+    const role = readPeerCorrespondence(id)?.role ?? "manager";
     if (role === "lead") {
       withProjectAssignmentAuthority((assignments) =>
         runCorrespondenceOperation(assignments),
@@ -399,8 +426,6 @@ if (action === "probe") {
     attachments: envelope.attachments,
   });
   const markerDir = join(runtime.root, "peer-acceptances");
-  mkdirSync(markerDir, { recursive: true, mode: 0o700 });
-  syncDirectory(runtime.root);
   const key = createHash("sha256")
     .update(`${record.fromSessionId}\0${record.id}`)
     .digest("hex");
@@ -451,10 +476,12 @@ if (action === "probe") {
         : withProjectAssignmentAuthority((assignments) =>
             isRemoteOrdinaryLead(liveRecipient, assignments),
           ));
-    if (!authorized)
+    if (!authorized || !compatible(liveRecipient))
       throw new Error(
         "exact correspondence recipient is not live or authorized",
       );
+    mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+    syncDirectory(runtime.root);
     const content = `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`;
     const temp = `${marker}.${randomUUID()}.tmp`;
     let fd: number | undefined;
@@ -569,9 +596,11 @@ if (action === "probe") {
       const binding = record.resultBindings?.find(
         (item: { ref?: unknown }) => item.ref === attachment.ref,
       );
+      if (binding && !isCanonicalResultRef(binding.canonicalRef))
+        throw new Error("invalid peer result artifact");
       const path = binding
-        ? persistPeerResultArtifact(binding.canonicalRef, attachment.text)
-        : persistPeerAttachment(attachment.name, attachment.text);
+        ? resultPath(binding.canonicalRef.slice("result:".length))
+        : peerAttachmentPath(attachment.name, attachment.text);
       receivedRefs.push(
         `${attachment.name}: ${binding ? `${binding.ref} (canonical ${binding.canonicalRef})` : path}`,
       );
@@ -613,7 +642,7 @@ if (action === "probe") {
       const liveRecipient = listPeerLeadRecords(runtime).find(
         (peer) => peer.piSessionId === record.toSessionId,
       );
-      if (!liveRecipient)
+      if (!liveRecipient || !compatible(liveRecipient))
         throw new Error(
           correspondenceRole === "manager"
             ? "exact destination Manager is not live"
@@ -641,10 +670,43 @@ if (action === "probe") {
         }
         syncDirectory(markerDir);
       }
+      for (const attachment of envelope.attachments) {
+        const binding = record.resultBindings?.find(
+          (item: { ref?: unknown }) => item.ref === attachment.ref,
+        );
+        if (binding)
+          persistPeerResultArtifact(
+            binding.canonicalRef,
+            attachment.text as string,
+          );
+        else
+          persistPeerAttachment(
+            attachment.name as string,
+            attachment.text as string,
+          );
+      }
+    } else {
+      for (const attachment of envelope.attachments) {
+        const binding = record.resultBindings?.find(
+          (item: { ref?: unknown }) => item.ref === attachment.ref,
+        );
+        const path = binding
+          ? resultPath(binding.canonicalRef.slice("result:".length))
+          : peerAttachmentPath(
+              attachment.name as string,
+              attachment.text as string,
+            );
+        if (
+          !readFileSync(path).equals(
+            Buffer.from(attachment.text as string, "utf8"),
+          )
+        )
+          throw new Error("peer attachment content identity collision");
+      }
+      verifyPeerCorrespondence(envelope.correspondence!);
     }
     const publish = () => {
       if (published && correspondenceRole === "manager") {
-        storePeerCorrespondence(envelope.correspondence!);
         return;
       }
       const current = listPeerLeadRecords(runtime).find(
@@ -657,21 +719,25 @@ if (action === "probe") {
         (correspondenceRole === "manager"
           ? current.role === "manager"
           : isRemoteOrdinaryLead(current, globalProjectAssignmentSnapshot()));
-      if (!authorized)
+      if (!authorized || (!published && !compatible(current)))
         throw new Error(
           "exact correspondence recipient is not live or authorized",
         );
-      storePeerCorrespondence(envelope.correspondence!);
-      if (
-        !published &&
-        !hasPeerDeliveryReceipt(
-          runtime,
-          record.toSessionId,
-          record.id,
-          acceptedDigest,
+      if (!published) {
+        if (
+          hasPeerDeliveryReceipt(
+            runtime,
+            record.toSessionId,
+            record.id,
+            acceptedDigest,
+          )
         )
-      )
-        writeCoordinationMessage(accepted, runtime);
+          verifyPeerCorrespondence(envelope.correspondence!);
+        else {
+          storePeerCorrespondence(envelope.correspondence!);
+          writeCoordinationMessage(accepted, runtime);
+        }
+      }
     };
     if (correspondenceRole === "lead") {
       withProjectAssignmentAuthority((assignments) => {
@@ -680,21 +746,29 @@ if (action === "probe") {
             peer.piSessionId === record.toSessionId &&
             peer.claim.id === envelope.recipientClaimId,
         );
-        if (!current || !isRemoteOrdinaryLead(current, assignments))
+        if (
+          !current ||
+          !isRemoteOrdinaryLead(current, assignments) ||
+          (!published && !compatible(current))
+        )
           throw new Error(
             "exact correspondence recipient is not live or authorized",
           );
-        storePeerCorrespondence(envelope.correspondence!);
-        if (
-          !published &&
-          !hasPeerDeliveryReceipt(
-            runtime,
-            record.toSessionId,
-            record.id,
-            acceptedDigest,
+        if (!published) {
+          if (
+            hasPeerDeliveryReceipt(
+              runtime,
+              record.toSessionId,
+              record.id,
+              acceptedDigest,
+            )
           )
-        )
-          writeCoordinationMessage(accepted, runtime);
+            verifyPeerCorrespondence(envelope.correspondence!);
+          else {
+            storePeerCorrespondence(envelope.correspondence!);
+            writeCoordinationMessage(accepted, runtime);
+          }
+        }
       });
     } else publish();
     if (!published) afterDurablePeerAcceptanceStep("inbox-publication-durable");

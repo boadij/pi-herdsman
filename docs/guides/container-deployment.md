@@ -81,12 +81,26 @@ Tailscale provides networking only. SSH remains normal OpenSSH.
 
 ## Update
 
+To update Herdsman inside the container, finish active coordination first, then run:
+
+```sh
+pi update npm:pi-herdsman
+```
+
+Run `/reload` in each affected Pi session to adopt the update; running sessions
+do not adopt it automatically. No container restart is needed. If builds
+overlap, incompatible coordination fails closed rather than proceeding.
+
+To update the image-owned Pi and Herdr runtimes:
+
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-Persistent state survives container replacement.
+Persistent state, including the npm-managed Herdsman version, survives container
+replacement. A Herdsman update may require a newer image for a compatible Pi and
+Herdr runtime.
 
 ## Use a host bind mount
 

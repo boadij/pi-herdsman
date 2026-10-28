@@ -813,7 +813,11 @@ try {
     ]);
     exec(
       side,
-      ["pi", "install", "/opt/pi-herdsman"],
+      [
+        "sh",
+        "-c",
+        `set -eu; cache=$(mktemp -d); trap 'rm -rf "$cache"' EXIT; cp -a /opt/pi-herdsman-npm-cache/. "$cache/"; npm install --prefix "$PI_CODING_AGENT_DIR/npm" --cache "$cache" --offline --legacy-peer-deps --ignore-scripts --no-audit --no-fund /opt/pi-herdsman-seed.tgz; npm pkg set --prefix "$PI_CODING_AGENT_DIR/npm" 'dependencies.pi-herdsman=*'; node -e 'require("fs").writeFileSync(process.env.PI_CODING_AGENT_DIR + "/settings.json", JSON.stringify({packages:["npm:pi-herdsman"]}))'`,
+      ],
       ["--user", "herdsman", ...herdrEnv(side)],
     );
     exec(

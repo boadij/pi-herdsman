@@ -7,13 +7,20 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
 import { acquireProcessLock } from "../extension/lock.ts";
-import { herdsmanDataRoot } from "../extension/storage.ts";
+import { HERDSMAN_BUILD } from "../extension/support.ts";
+import {
+  herdsmanDataRoot,
+  peerAttachmentPath,
+  resultPath,
+} from "../extension/storage.ts";
 import {
   chiefMessagePath,
   coordinationMessageDelivered,
@@ -57,7 +64,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
   const peers = peerRuntime();
   let manager = {
     version: 2 as const,
-    build: { version: "0.18.0", sha256: "a".repeat(64) },
+    build: HERDSMAN_BUILD,
     role: "manager" as const,
     sessionKind: "ordinary" as const,
     piSessionId: sessionId,
@@ -85,6 +92,22 @@ test("bridge recovers after process death at both durable acceptance cut points"
       retargetCrash = false,
     } of scenarios) {
       const messageId = id();
+      const withAttachments = cut === "inbox-publication-durable";
+      const binding = { ref: "result:scout#1", canonicalRef: `result:${id()}` };
+      const attachments = withAttachments
+        ? [
+            { name: "notes.txt", marker: "<notes>", text: "ordinary evidence" },
+            {
+              name: "result.txt",
+              ref: binding.ref,
+              marker: "<result>",
+              text: "result evidence",
+            },
+          ].map((attachment) => ({
+            ...attachment,
+            sha256: createHash("sha256").update(attachment.text).digest("hex"),
+          }))
+        : [];
       const record = {
         version: 2 as const,
         build: manager.build,
@@ -94,10 +117,19 @@ test("bridge recovers after process death at both durable acceptance cut points"
         fromSessionId: originSession,
         toSessionId: sessionId,
         leadSessionId: sessionId,
-        text: `message ${cut} ${consumed ? "consumed" : "queued"}`,
+        text: withAttachments
+          ? "message <notes> and <result>"
+          : `message ${cut} ${consumed ? "consumed" : "queued"}`,
+        ...(withAttachments ? { resultBindings: [binding] } : {}),
         peerSource: { role: "manager" as const },
         createdAt: Date.now(),
       };
+      const acceptedRecord = withAttachments
+        ? {
+            ...record,
+            text: `message ordinary evidence and result evidence\n\nForwardable received files:\nnotes.txt: ${peerAttachmentPath("notes.txt", "ordinary evidence")}\nresult.txt: ${binding.ref} (canonical ${binding.canonicalRef})`,
+          }
+        : record;
       const correspondence: PeerCorrespondence = {
         id: id(),
         capability: "c".repeat(64),
@@ -114,7 +146,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
       };
       const transfer = {
         record,
-        attachments: [],
+        attachments,
         correspondence,
         recipientClaimId: manager.claim.id,
         expectedDataRoot: herdsmanDataRoot(),
@@ -126,6 +158,56 @@ test("bridge recovers after process death at both durable acceptance cut points"
           .update(`${originSession}\0${messageId}`)
           .digest("hex")}.json`,
       );
+      if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
+        const peerPath = writePeerLeadRecord(runtime, {
+          ...manager,
+          build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
+        });
+        const rejectedAttachment = {
+          name: "new.txt",
+          marker: "<new>",
+          text: "new evidence",
+          sha256: createHash("sha256").update("new evidence").digest("hex"),
+        };
+        const rejectedTransfer = {
+          ...transfer,
+          record: { ...record, text: "<new>" },
+          attachments: [rejectedAttachment],
+        };
+        for (const missing of [false, true]) {
+          if (missing) {
+            const { build: _build, ...unverified } = manager;
+            writeFileSync(peerPath, JSON.stringify(unverified));
+          }
+          const stale = spawnSync(
+            process.execPath,
+            ["--experimental-strip-types", "bin/peer-bridge.ts", "accept"],
+            {
+              cwd: process.cwd(),
+              env: process.env,
+              input: JSON.stringify(rejectedTransfer),
+              encoding: "utf8",
+            },
+          );
+          assert.notEqual(stale.status, 0);
+          assert.equal(existsSync(marker), false);
+          assert.equal(
+            existsSync(join(runtime.root, "received-evidence")),
+            false,
+          );
+          assert.equal(
+            existsSync(
+              join(herdsmanDataRoot(), "runtime", "peer-correspondences"),
+            ),
+            false,
+          );
+          assert.equal(
+            existsSync(chiefMessagePath(runtime, sessionId, messageId)),
+            false,
+          );
+        }
+        writePeerLeadRecord(runtime, manager);
+      }
       const acceptCrash = spawnSync(
         process.execPath,
         [
@@ -162,7 +244,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           readCoordinationMessage(
             chiefMessagePath(runtime, sessionId, messageId),
           ),
-          record,
+          acceptedRecord,
           "inbox publication must be durable before process termination",
         );
       if (process.platform === "win32") {
@@ -177,7 +259,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           readCoordinationMessage(
             chiefMessagePath(runtime, sessionId, messageId),
           ),
-          record,
+          acceptedRecord,
         );
         let submitted = 0;
         const history = [
@@ -188,7 +270,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
               leaseId: record.leaseId,
               fromSessionId: record.fromSessionId,
               leadSessionId: record.leadSessionId,
-              digest: coordinationMessageDigest(record),
+              digest: coordinationMessageDigest(acceptedRecord),
             },
           },
         ];
@@ -197,7 +279,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           sessionId,
           isAuthorized: () => true,
           isDelivered: () =>
-            coordinationMessageDelivered(record, sessionId, history),
+            coordinationMessageDelivered(acceptedRecord, sessionId, history),
           sendMessage: () => submitted++,
           accepted: (delivered) => writePeerDeliveryReceipt(runtime, delivered),
         });
@@ -207,7 +289,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
             runtime,
             sessionId,
             messageId,
-            coordinationMessageDigest(record),
+            coordinationMessageDigest(acceptedRecord),
           ),
           true,
         );
@@ -231,7 +313,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
         updatedAt: Date.now(),
       };
       writePeerLeadRecord(runtime, manager);
-      const digest = peerPayloadDigest({ record, attachments: [] });
+      const digest = peerPayloadDigest({ record, attachments });
       const statusRequest = JSON.stringify({
         id: messageId,
         originSession,
@@ -239,6 +321,26 @@ test("bridge recovers after process death at both durable acceptance cut points"
         digest,
         expectedDataRoot: herdsmanDataRoot(),
       });
+      if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
+        const before = readFileSync(marker, "utf8");
+        writePeerLeadRecord(runtime, {
+          ...manager,
+          build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
+        });
+        const stale = spawnSync(
+          process.execPath,
+          ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
+          {
+            cwd: process.cwd(),
+            env: process.env,
+            input: statusRequest,
+            encoding: "utf8",
+          },
+        );
+        assert.notEqual(stale.status, 0);
+        assert.equal(readFileSync(marker, "utf8"), before);
+        writePeerLeadRecord(runtime, manager);
+      }
       if (retargetCrash) {
         const publishedCrash = spawnSync(
           process.execPath,
@@ -323,6 +425,82 @@ test("bridge recovers after process death at both durable acceptance cut points"
           "failed accepted-marker publication removes its exact temporary file",
         );
       }
+      if (cut === "inbox-publication-durable")
+        writePeerLeadRecord(runtime, {
+          ...manager,
+          build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
+        });
+      const correspondencePath = join(
+        herdsmanDataRoot(),
+        "runtime",
+        "peer-correspondences",
+        `${correspondence.id}.json`,
+      );
+      const correspondenceBefore = withAttachments
+        ? readFileSync(correspondencePath)
+        : undefined;
+      if (withAttachments) {
+        for (const path of [
+          peerAttachmentPath("notes.txt", "ordinary evidence"),
+          resultPath(binding.canonicalRef.slice("result:".length)),
+        ]) {
+          const original = readFileSync(path);
+          writeFileSync(path, "corrupt");
+          try {
+            const rejected = spawnSync(
+              process.execPath,
+              ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
+              {
+                cwd: process.cwd(),
+                env: process.env,
+                input: statusRequest,
+                encoding: "utf8",
+              },
+            );
+            assert.notEqual(rejected.status, 0);
+            assert.equal(readFileSync(path, "utf8"), "corrupt");
+            assert.deepEqual(
+              readFileSync(correspondencePath),
+              correspondenceBefore,
+            );
+            assert.equal(
+              JSON.parse(readFileSync(marker, "utf8")).status,
+              "pending",
+            );
+          } finally {
+            writeFileSync(path, original);
+          }
+        }
+      }
+      if (cut === "inbox-publication-durable" && !consumed) {
+        const path = join(
+          herdsmanDataRoot(),
+          "runtime",
+          "peer-correspondences",
+          `${correspondence.id}.json`,
+        );
+        renameSync(path, `${path}.saved`);
+        try {
+          const missing = spawnSync(
+            process.execPath,
+            ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
+            {
+              cwd: process.cwd(),
+              env: process.env,
+              input: statusRequest,
+              encoding: "utf8",
+            },
+          );
+          assert.notEqual(missing.status, 0);
+          assert.equal(existsSync(path), false);
+          assert.equal(
+            JSON.parse(readFileSync(marker, "utf8")).status,
+            "pending",
+          );
+        } finally {
+          renameSync(`${path}.saved`, path);
+        }
+      }
       const output = spawnSync(
         process.execPath,
         ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
@@ -348,6 +526,33 @@ test("bridge recovers after process death at both durable acceptance cut points"
         continue;
       }
       assert.equal(output.status, 0, output.stderr);
+      if (withAttachments) {
+        assert.deepEqual(
+          readFileSync(correspondencePath),
+          correspondenceBefore,
+        );
+        assert.equal(
+          JSON.parse(readFileSync(correspondencePath, "utf8"))
+            .recipientGeneration,
+          correspondence.recipientGeneration,
+        );
+        assert.equal(
+          readFileSync(
+            peerAttachmentPath("notes.txt", "ordinary evidence"),
+            "utf8",
+          ),
+          "ordinary evidence",
+        );
+        assert.equal(
+          readFileSync(
+            resultPath(binding.canonicalRef.slice("result:".length)),
+            "utf8",
+          ),
+          "result evidence",
+        );
+      }
+      if (cut === "inbox-publication-durable")
+        writePeerLeadRecord(runtime, manager);
       assert.deepEqual(JSON.parse(output.stdout), {
         dataRoot: herdsmanDataRoot(),
         id: messageId,
@@ -407,7 +612,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           readCoordinationMessage(
             chiefMessagePath(runtime, sessionId, messageId),
           ),
-          record,
+          acceptedRecord,
           "recovery accepts the exact still-published inbox record",
         );
       }
@@ -443,7 +648,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
     const runtime = peerRuntime();
     const manager = {
       version: 2 as const,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
@@ -560,7 +765,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
     const runtime = peerRuntime();
     const lead = {
       version: 2 as const,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "lead" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
@@ -637,6 +842,44 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       record,
     );
 
+    const buildRaceRecord = { ...record, id: id() };
+    const buildRaceCorrespondence = {
+      ...correspondence,
+      id: id(),
+      acceptanceId: buildRaceRecord.id,
+    };
+    const buildRaceTransfer = {
+      ...transfer,
+      record: buildRaceRecord,
+      correspondence: buildRaceCorrespondence,
+    };
+    const staleLead = {
+      ...lead,
+      build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
+    };
+    const buildHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writePeerLeadRecord, peerRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writePeerLeadRecord(peerRuntime(), ${JSON.stringify(staleLead)}); });`;
+    const buildRace = run(buildRaceTransfer, buildHook);
+    assert.notEqual(buildRace.status, 0);
+    assert.equal(
+      existsSync(chiefMessagePath(runtime, sessionId, buildRaceRecord.id)),
+      false,
+    );
+    assert.equal(
+      listPeerCorrespondences().some(
+        (item) => item.id === buildRaceCorrespondence.id,
+      ),
+      false,
+    );
+    writePeerLeadRecord(runtime, lead);
+    const recoveredBuildRace = run(buildRaceTransfer);
+    assert.equal(recoveredBuildRace.status, 0, recoveredBuildRace.stderr);
+    assert.deepEqual(
+      readCoordinationMessage(
+        chiefMessagePath(runtime, sessionId, buildRaceRecord.id),
+      ),
+      buildRaceRecord,
+    );
+
     const assignmentHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writeProjectAssignment, supervisionRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writeProjectAssignment(supervisionRuntime(), { version: 2, id: ${JSON.stringify(sessionId)}, repoKey: "race-repo", branch: "assigned-after-discovery", text: "assignment changed before publication" }); });`;
     const racedRecord = { ...record, id: id() };
     const raced = run(
@@ -704,7 +947,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
   }
 });
 
-test("probe preserves Manager results and marks failed Lead assignment scans incomplete", () => {
+test("probe preserves incompatible Managers and rejects their delivery before mutation", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-probe-scan-"));
@@ -713,6 +956,8 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
   process.env.HERDR_SOCKET_PATH = socket;
   const managerId = id();
   const leadId = id();
+  const staleId = id();
+  const runtime = peerRuntime();
   const managerClaim = acquireProcessLock(
     peerLeadLockPath(peerRuntime(), managerId),
     { name: "probe Manager" },
@@ -721,8 +966,12 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
     peerLeadLockPath(peerRuntime(), leadId),
     { name: "probe Lead" },
   );
+  const staleClaim = acquireProcessLock(
+    peerLeadLockPath(peerRuntime(), staleId),
+    { name: "stale probe Manager" },
+  );
   try {
-    const build = { version: "0.18.0", sha256: "a".repeat(64) };
+    const build = HERDSMAN_BUILD;
     for (const [session, role, claim] of [
       [managerId, "manager", managerClaim],
       [leadId, "lead", leadClaim],
@@ -740,6 +989,19 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
         claim: claim.claim,
         updatedAt: Date.now(),
       });
+    writePeerLeadRecord(peerRuntime(), {
+      version: 2,
+      build: { ...build, sha256: "a".repeat(64) },
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: staleId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: staleClaim.claim,
+      updatedAt: Date.now(),
+    });
     const assignments = supervisionRuntime().assignments;
     mkdirSync(assignments, { recursive: true });
     mkdirSync(join(assignments, "unexpected"));
@@ -760,12 +1022,75 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
     const result = JSON.parse(probe.stdout);
     assert.equal(result.ordinaryLeadsComplete, false);
     assert.deepEqual(
-      result.peers.map((peer: { piSessionId: string }) => peer.piSessionId),
-      [managerId],
+      result.peers
+        .map((peer: { piSessionId: string }) => peer.piSessionId)
+        .sort(),
+      [managerId, staleId].sort(),
     );
+
+    const messageId = id();
+    const originSession = id();
+    const leaseId = id();
+    const delivery = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "accept"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, SSH_CONNECTION: "test-ssh-connection" },
+        input: JSON.stringify({
+          record: {
+            version: 2,
+            build,
+            id: messageId,
+            leaseId,
+            kind: "peer_message",
+            fromSessionId: originSession,
+            toSessionId: staleId,
+            leadSessionId: staleId,
+            text: "incompatible peer delivery",
+            peerSource: { role: "manager" },
+            createdAt: Date.now(),
+          },
+          attachments: [],
+          correspondence: {
+            id: id(),
+            capability: "c".repeat(64),
+            originSession,
+            originGeneration: leaseId,
+            recipientSession: staleId,
+            recipientGeneration: staleClaim.claim.id,
+            acceptanceId: messageId,
+            originDisplay: {
+              name: "Test Manager",
+              workspaceLabel: "test/main",
+            },
+            replies: [],
+          },
+          recipientClaimId: staleClaim.claim.id,
+          expectedDataRoot: herdsmanDataRoot(),
+        }),
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(delivery.status, 0);
+    assert.match(
+      delivery.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.equal(existsSync(join(runtime.root, "peer-acceptances")), false);
+    assert.equal(
+      existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")),
+      false,
+    );
+    assert.equal(
+      existsSync(chiefMessagePath(runtime, staleId, messageId)),
+      false,
+    );
+    assert.equal(existsSync(join(runtime.root, "received-evidence")), false);
   } finally {
     managerClaim.release();
     leadClaim.release();
+    staleClaim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousData;
     if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
@@ -792,7 +1117,7 @@ test("Lead correspondence commands reject a recipient transitioned to Manager", 
   try {
     const manager = {
       version: 2 as const,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: recipient,
@@ -891,7 +1216,7 @@ test("live replacement Manager cannot recover prior Manager correspondence", () 
   try {
     writePeerLeadRecord(peerRuntime(), {
       version: 2,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "manager",
       sessionKind: "ordinary",
       piSessionId: replacementSession,
@@ -978,7 +1303,7 @@ test("Lead ACK does not complete after assignment authority changes", () => {
   try {
     const lead = {
       version: 2 as const,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "lead" as const,
       sessionKind: "ordinary" as const,
       piSessionId: recipient,
@@ -1084,7 +1409,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
     const runtime = peerRuntime();
     const manager = {
       version: 2 as const,
-      build: { version: "0.18.0", sha256: "a".repeat(64) },
+      build: HERDSMAN_BUILD,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
