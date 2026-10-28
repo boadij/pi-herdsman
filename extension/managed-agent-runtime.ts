@@ -118,8 +118,7 @@ import {
 } from "./agent-definitions.ts";
 
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
-${DELEGATING_AGENT_SCOPE_DESCRIPTION}
-${FILE_HANDOFF_GUIDANCE}`;
+${DELEGATING_AGENT_SCOPE_DESCRIPTION}`;
 
 export const AGENT_REQUIRED_EVIDENCE_ENTRY =
   "pi-herdsman-agent-required-evidence";

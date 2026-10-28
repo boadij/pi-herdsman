@@ -366,8 +366,7 @@ const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
   "Use message_supervisor for material coordination or evidence your direct supervisor needs. Use list_peers/message_peer for concrete, task-relevant coordination with eligible peers. Avoid unsolicited routine progress updates, unnecessary acknowledgments, and redundant result announcements. Continue work or report normally when no coordination is needed.";
 const COMMON_LEAD_GUIDANCE = `${LEAD_SCOPE_DESCRIPTION}
-${LEAD_SUPERVISOR_PEER_GUIDANCE}
-${FILE_HANDOFF_GUIDANCE}`;
+${LEAD_SUPERVISOR_PEER_GUIDANCE}`;
 const ORDINARY_LEAD_CHARTER = `## Lead role
 You are an ordinary Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}

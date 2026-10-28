@@ -228,6 +228,26 @@ function assertToolResult(result: any): asserts result is {
   );
 }
 
+function assertProtectedHandoff(charter: string): void {
+  const text = charter.replaceAll(/\s+/g, " ");
+  assert.match(text, /relevant available files and artifacts/);
+  assert.match(
+    text,
+    /completed(?: direct-agent|-Agent) result refs for dependent work/,
+  );
+  assert.match(text, /to the recipient through `files`/);
+  assert.match(
+    text,
+    /omit unrelated evidence and evidence already inherited as the same required version/,
+  );
+  assert.match(text, /explicitly forward changed versions/);
+  assert.match(text, /Summaries do not transfer evidence/);
+  assert.doesNotMatch(
+    text,
+    /Pass user-supplied or already-available artifacts relevant to the/,
+  );
+}
+
 function assertPortableToolSchema(tool: any): void {
   assert.equal(tool.exposure, "model-only");
   assert.equal(tool.parameters?.type, "object");
@@ -251,6 +271,11 @@ function assertPortableToolSchema(tool: any): void {
       tool.name,
     );
     assert.match(guidance, /omit unrelated evidence/, tool.name);
+    assert.match(
+      guidance,
+      /For dependent work, include relevant completed-Agent result refs/,
+      tool.name,
+    );
   }
   assert.equal(tool.parameters.properties.action, undefined, tool.name);
   // Provider constrained-sampling policy belongs to Pi, not Herdsman.
@@ -4224,7 +4249,11 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       charter,
       /Herdsman delivers it to the Manager automatically/,
     );
-    assert.match(charter, /`files` carries evidence, not runtime capability/);
+    assertProtectedHandoff(charter);
+    assert.match(
+      charter,
+      /a supervisor message does not transfer it to the child/,
+    );
     for (const name of [
       "delegate_agent",
       "continue_agent",
@@ -4235,6 +4264,17 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       assert.match(
         tool.promptGuidelines.join(" "),
         /unless the recipient already inherits the same evidence version as required evidence\. Forward changed versions explicitly\./,
+      );
+      const effectivePrompt = [charter, ...tool.promptGuidelines].join("\n");
+      assert.equal(
+        effectivePrompt.split(
+          "Pass user-supplied or already-available artifacts relevant to the",
+        ).length - 1,
+        1,
+      );
+      assert.match(
+        effectivePrompt,
+        /For dependent work, include relevant completed-Agent result refs/,
       );
     }
   } finally {
@@ -4318,13 +4358,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     ordinaryCharter,
     /Herdsman delivers it to the Manager automatically/,
   );
+  assertProtectedHandoff(ordinaryCharter);
   assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /integration, validation, or onward handoff/,
-  );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /carry relevant evidence into onward handoffs/,
+    ordinaryCharter,
+    /a supervisor message does not transfer it to the child/,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -4437,6 +4474,11 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
+    assertProtectedHandoff(charter);
+    assert.match(
+      charter,
+      /a supervisor message does not transfer it to the child/,
+    );
     assert.match(
       charter,
       /Only a current exact work assignment permits execution of that assignment/,
@@ -4637,6 +4679,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   };
   assert.equal(contextHandlers[0](ordinaryContext, context), undefined);
   const event: any = {
+    systemPrompt: "custom replacement prompt",
     systemPromptOptions: { sections: {}, contextFiles: [] },
   };
   const prompt = await pi.events.get("before_agent_start")![0](event, context);
@@ -4653,9 +4696,14 @@ test("delegating agents receive only their allowed definition roster", async () 
     event.systemPromptOptions.sections.delegating_agent_role,
     /## Delegating agent role/,
   );
-  assert.match(
+  assertProtectedHandoff(
     event.systemPromptOptions.sections.delegating_agent_role,
-    /integration, validation, or onward handoff/,
+  );
+  assert.doesNotMatch(
+    pi.tools
+      .find((tool) => tool.name === "list_agents")
+      ?.promptGuidelines?.join(" ") ?? "",
+    /Own the assigned objective and your direct permitted agents/,
   );
   assert.doesNotMatch(
     event.systemPromptOptions.sections.delegating_agent_role,
@@ -4760,25 +4808,30 @@ test("delegating agents receive only their allowed definition roster", async () 
       /\s+/g,
       " ",
     );
+  const role =
+    event.systemPromptOptions.sections.delegating_agent_role.replaceAll(
+      /\s+/g,
+      " ",
+    );
   assert.match(
-    description,
+    role,
     /ask_owner follows its normal eligibility rules when you have no unresolved direct-agent work/,
   );
   assert.match(
-    description,
+    role,
     /every such agent must itself be validly waiting on an owner answer/,
   );
   assert.match(
-    description,
+    role,
     /ordinary active or pending-result agent work still blocks escalation/,
   );
-  assert.match(description, /Own the assigned objective/);
+  assert.match(role, /Own the assigned objective/);
   assert.match(
-    description,
+    role,
     /execution scope is limited to the non-delegated remainder/,
   );
   assert.match(
-    description,
+    role,
     /Agent-started agents are leaves\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
   );
   assert.doesNotMatch(

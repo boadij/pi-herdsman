@@ -792,8 +792,12 @@ export const AGENT_HANDOFF_GUIDANCE =
   "Skills are separate; attach SKILL.md only when the task needs it and the " +
   "selected definition does not already provide that skill.";
 export const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution,
-and final technical decisions within your assigned objective. Integrate resolved Agent results and
-carry relevant evidence into onward handoffs. Decompose only as far as useful.
+and final technical decisions within your assigned objective. Integrate resolved Agent results.
+Pass relevant available files and artifacts, including completed-Agent result refs for
+dependent work, to the recipient through \`files\`; omit unrelated evidence and evidence already inherited as the same
+required version, but explicitly forward changed versions. Summaries do not transfer
+evidence; a supervisor message does not transfer it to the child.
+Decompose only as far as useful.
 Reuse adequate existing evidence instead of duplicating work.
 Your herd is your internal team: you and your recursively owned Agents.
 Any review conducted within the herd is internal feedback, not user or supervisor
@@ -803,7 +807,11 @@ agents are leaves. Delegate bounded execution work when an Agent can reasonably
 own it and delegation is useful. Keep work local when it is trivial,
 inseparable, otherwise unsuitable for an Agent, or delegation would add more
 coordination than value. Reuse adequate supplied evidence rather than
-rediscovering it. Integrate direct agent results after resolution.
+rediscovering it. Integrate direct agent results after resolution. Pass relevant available
+files and artifacts, including completed direct-agent result refs for dependent work,
+to the recipient through \`files\`;
+omit unrelated evidence and evidence already inherited as the same required version,
+but explicitly forward changed versions. Summaries do not transfer evidence.
 The lead retains architecture, approved scope, acceptance, and final-decision
 authority. Delegate only to definitions listed in your effective agents field.
 ask_owner follows its normal eligibility rules when you have no unresolved
@@ -8404,9 +8412,6 @@ export function createAgentController(
         AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,
-        ...(controllerScope.kind === "managed-agent"
-          ? [DELEGATING_AGENT_SCOPE_DESCRIPTION]
-          : []),
       ],
       description:
         "List current owned Agent state and refresh the Agent-definition roster. Do not use for progress polling.",
