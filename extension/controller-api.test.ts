@@ -2562,6 +2562,15 @@ for (const reachable of [true, false]) {
       };
     const notices: string[] = [];
     ctx.ui.notify = (message: string) => notices.push(message);
+    const waitFor = async (stage: string, condition: () => unknown) => {
+      try {
+        await t.waitFor(condition);
+      } catch (error) {
+        if (error instanceof Error)
+          error.message = `${stage}: ${error.message}`;
+        throw error;
+      }
+    };
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
       // No before_agent_start or conversation turn precedes Manager activation.
@@ -2599,7 +2608,7 @@ for (const reachable of [true, false]) {
               message?.customType === "pi-herdsman-project_message" &&
               message?.details?.id === id,
           );
-        await t.waitFor(() =>
+        await waitFor("live project-message delivery", () =>
           assert.equal(projectDeliveries(liveRecord.id).length, 1),
         );
         assert.ok(
@@ -2651,10 +2660,12 @@ for (const reachable of [true, false]) {
         failRemovalForId = cleanupRecord.id;
         try {
           writeProjectMessage(cleanupRecord, runtime);
-          await t.waitFor(() =>
+          await waitFor("cleanup-failure project-message delivery", () =>
             assert.equal(projectDeliveries(cleanupRecord.id).length, 1),
           );
-          await t.waitFor(() => assert.equal(stateErrors(), errorsBefore + 1));
+          await waitFor("durable cleanup error reporting", () =>
+            assert.equal(stateErrors(), errorsBefore + 1),
+          );
           await new Promise((resolve) => setTimeout(resolve, 1_100));
           assert.equal(
             stateErrors(),
@@ -2668,7 +2679,7 @@ for (const reachable of [true, false]) {
         } finally {
           failRemovalForId = undefined;
         }
-        await t.waitFor(() =>
+        await waitFor("failed project-message cleanup retry", () =>
           assert.deepEqual(
             listProjectMessages(runtime, realpathSync(tmpdir()), branch),
             [],
@@ -2695,7 +2706,7 @@ for (const reachable of [true, false]) {
           },
         });
         assert.equal(retireProjectAssignment(runtime, retired), true);
-        await t.waitFor(() =>
+        await waitFor("project-retirement notification delivery", () =>
           assert.equal(
             managerHistory.filter(
               (entry: any) =>
@@ -2712,7 +2723,7 @@ for (const reachable of [true, false]) {
         )!;
         assert.deepEqual(noticeCall.options, { triggerTurn: false });
         managerHistory.push({ ...notice, type: "custom_message" });
-        await t.waitFor(() =>
+        await waitFor("project-retirement acknowledgment", () =>
           assert.deepEqual(
             listPendingRetirements(runtime, realpathSync(tmpdir())),
             [],
@@ -2742,7 +2753,7 @@ for (const reachable of [true, false]) {
         writeProjectMessage(backlogRecord, runtime);
         await pi.events.get("session_start")![0](undefined, ctx);
         await pi.commandOptions.get("manager").handler("", ctx);
-        await t.waitFor(() =>
+        await waitFor("backlog delivery after Manager reactivation", () =>
           assert.equal(projectDeliveries(backlogRecord.id).length, 1),
         );
         assert.equal(projectDeliveries(liveRecord.id).length, 0);
@@ -2826,7 +2837,7 @@ for (const reachable of [true, false]) {
           assert.equal(saved.id, result.details.id);
           assert.equal(saved.fromSessionId, leadId);
           assert.ok(saved.text.includes(plan));
-          await t.waitFor(() =>
+          await waitFor("Managed Lead message delivery to Manager", () =>
             assert.ok(
               projectDeliveries(result.details.id)[0]?.content.includes(plan),
             ),
