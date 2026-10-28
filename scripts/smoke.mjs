@@ -4026,6 +4026,59 @@ export function coreAgentDefinitionsExpectations(sessions, rootId) {
   );
 }
 
+export function coreObservationReady({
+  assistantResult,
+  paneCount,
+  rootProcess,
+  simulated,
+  provenance = [],
+  sessionIds = new Set(),
+  observedPids = new Set(),
+}) {
+  if (!assistantResult || paneCount < 2 || !rootProcess) return false;
+  if (!simulated) return true;
+  return (
+    sessionIds.size > 0 &&
+    [...sessionIds].every((sessionId) => {
+      const record = provenance.find((item) => item.sessionId === sessionId);
+      return (
+        Number.isSafeInteger(record?.pid) &&
+        record.pid > 0 &&
+        observedPids.has(record.pid)
+      );
+    })
+  );
+}
+
+async function coreObservationProvenance(ctx) {
+  const provenancePath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "smoke-faux-provenance.jsonl",
+  );
+  let provenance = [];
+  try {
+    provenance = (await readFile(provenancePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const sessionFiles = (
+    await readdir(ctx.paths.piSessions, { recursive: true })
+  ).filter((file) => file.endsWith(".jsonl"));
+  const sessionIds = new Set();
+  for (const file of sessionFiles) {
+    const header = sessionEntries(
+      await readFile(join(ctx.paths.piSessions, file), "utf8"),
+    ).find((entry) => entry.type === "session");
+    if (typeof header?.id === "string" && header.id) sessionIds.add(header.id);
+  }
+  return { provenance, sessionIds };
+}
+
 async function runTerminalFailureSmoke(ctx) {
   const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
   const task =
@@ -6842,8 +6895,26 @@ async function runCoreSmoke(ctx) {
       const paneCount = distinctPaneCount([...observed.values()]);
       if (session && ctx.assistantResult)
         ctx.lastVerified = "scenario_session_result_observed";
+      const scenarioReady =
+        !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess;
+      const provenanceObservation =
+        ctx.simulated && scenarioReady
+          ? await coreObservationProvenance(ctx)
+          : undefined;
+      const observedPids = new Set([
+        ctx.coreRootProcess?.pid,
+        ...[...observed.values()].map(({ pid }) => pid),
+      ]);
+      const done = coreObservationReady({
+        assistantResult: !!ctx.assistantResult,
+        paneCount,
+        rootProcess: ctx.coreRootProcess,
+        simulated: ctx.simulated,
+        ...provenanceObservation,
+        observedPids,
+      });
       return {
-        done: !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess,
+        done,
         progress: {
           rootSessionBytes: session ? Buffer.byteLength(session.contents) : 0,
           verifiedProcesses: [...observed.keys()].sort(),

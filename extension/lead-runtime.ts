@@ -118,6 +118,7 @@ import type {
   WorktreeGroupScope,
 } from "./herdr.ts";
 import {
+  formatRuntimeBuild,
   isRuntimeBuild,
   sameRuntimeBuild,
   type RuntimeBuild,
@@ -12180,6 +12181,20 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   type PeerOperation =
     | { action: "list" }
     | { action: "message"; session: string; message: string; files?: string[] };
+  type RemoteDiagnostic = {
+    machine?: string;
+    reason:
+      | "machine_list_failed"
+      | "herdr_not_reachable"
+      | "probe_failed"
+      | "build_mismatch"
+      | "build_unverified"
+      | "eligibility_unverified";
+    peer?: string;
+    local_build?: string;
+    remote_build?: string;
+  };
+  const maxRemoteDiagnostics = 20;
   const remotePeerRoutes = new Map<
     string,
     {
@@ -12545,11 +12560,35 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           workspace_label: record.workspaceLabel ?? "",
         });
       }
-      const unavailableMachines: string[] = [];
+      const remoteDiagnostics: RemoteDiagnostic[] = [];
+      let remoteDiagnosticsOmitted = 0;
+      const addRemoteDiagnostic = (diagnostic: RemoteDiagnostic) => {
+        if (remoteDiagnostics.length < maxRemoteDiagnostics)
+          remoteDiagnostics.push(diagnostic);
+        else remoteDiagnosticsOmitted++;
+      };
+      const diagnosticLabel = (value: unknown, fallback: string): string => {
+        const text =
+          typeof value === "string"
+            ? value
+                .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+                .replace(/\s+/gu, " ")
+                .trim()
+            : "";
+        if (!text) return fallback;
+        const characters = Array.from(text);
+        return characters.length > 80
+          ? `${characters.slice(0, 79).join("")}…`
+          : text;
+      };
+      const diagnosticBuild = (build: RuntimeBuild): string =>
+        diagnosticLabel(formatRuntimeBuild(build), "unknown");
       const localPeerSessions = new Set(peers.map((peer) => peer.session));
       const discoveredRemotePeerRoutes = new Map(remotePeerRoutes);
       const previousAmbiguousSessions = new Set(ambiguousRemoteSessions);
       const discoveredAmbiguousSessions = new Set<string>();
+      let machineListingFailed = false;
+      let machineDiscoveryIncomplete = false;
       if (remoteDiscoveryEligible) {
         let machines: SavedPeerMachine[];
         let machineListingSucceeded = false;
@@ -12558,7 +12597,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           machineListingSucceeded = true;
         } catch {
           machines = [];
-          unavailableMachines.push("saved machines");
+          machineListingFailed = true;
+          machineDiscoveryIncomplete = true;
+          addRemoteDiagnostic({ reason: "machine_list_failed" });
         }
         if (machineListingSucceeded) {
           const listedMachines = new Map(
@@ -12578,7 +12619,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         for (const machine of machines) {
           if (signal?.aborted) break;
           if (!machine.reachable) {
-            unavailableMachines.push(machine.label);
+            machineDiscoveryIncomplete = true;
+            addRemoteDiagnostic({
+              machine: diagnosticLabel(machine.label, "machine"),
+              reason: "herdr_not_reachable",
+            });
             continue;
           }
           let identityEstablished = false;
@@ -12586,9 +12631,31 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             const snapshot = await probePeerEndpoint(machine, signal);
             if (signal?.aborted) break;
             identityEstablished = true;
+            const ordinaryLeadScanIncomplete =
+              activeRole() === "lead" &&
+              snapshot.ordinaryLeadsComplete !== true;
+            if (ordinaryLeadScanIncomplete) {
+              machineDiscoveryIncomplete = true;
+              addRemoteDiagnostic({
+                machine: diagnosticLabel(machine.label, "machine"),
+                reason: "eligibility_unverified",
+              });
+            }
             for (const [session, route] of discoveredRemotePeerRoutes)
-              if (route.machine.id === machine.id)
+              if (
+                route.machine.id === machine.id &&
+                (!ordinaryLeadScanIncomplete || route.role !== "lead")
+              )
                 discoveredRemotePeerRoutes.delete(session);
+            if (ordinaryLeadScanIncomplete)
+              for (const [session, route] of remotePeerRoutes) {
+                if (route.machine.id !== machine.id || route.role !== "lead")
+                  continue;
+                if (discoveredRemotePeerRoutes.has(session)) {
+                  discoveredAmbiguousSessions.add(session);
+                  discoveredRemotePeerRoutes.delete(session);
+                } else discoveredRemotePeerRoutes.set(session, route);
+              }
             for (const remote of snapshot.peers) {
               const remoteRole = activeRole();
               if (
@@ -12602,17 +12669,27 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 discoveredAmbiguousSessions.has(remote.piSessionId)
               )
                 continue;
-              if (remote.build) {
-                try {
-                  requireCompatibleBuild(
-                    HERDSMAN_BUILD,
-                    remote.build as RuntimeBuild,
-                    "peer_message",
-                    `remote ${remoteRole} ${remote.piSessionId}`,
-                  );
-                } catch {
-                  continue;
-                }
+              const peerHint = diagnosticLabel(
+                remote.name,
+                `peer-${remote.piSessionId.slice(0, 8)}`,
+              );
+              if (!isRuntimeBuild(remote.build)) {
+                addRemoteDiagnostic({
+                  machine: diagnosticLabel(machine.label, "machine"),
+                  reason: "build_unverified",
+                  peer: peerHint,
+                });
+                continue;
+              }
+              if (!sameRuntimeBuild(HERDSMAN_BUILD, remote.build)) {
+                addRemoteDiagnostic({
+                  machine: diagnosticLabel(machine.label, "machine"),
+                  reason: "build_mismatch",
+                  peer: peerHint,
+                  local_build: diagnosticBuild(HERDSMAN_BUILD),
+                  remote_build: diagnosticBuild(remote.build),
+                });
+                continue;
               }
               const route = discoveredRemotePeerRoutes.get(remote.piSessionId);
               if (route) {
@@ -12977,7 +13054,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             if (identityEstablished) {
               appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
             } else {
-              unavailableMachines.push(machine.label);
+              machineDiscoveryIncomplete = true;
+              addRemoteDiagnostic({
+                machine: diagnosticLabel(machine.label, "machine"),
+                reason: "probe_failed",
+              });
               for (const [session, route] of discoveredRemotePeerRoutes)
                 if (route.machine.id === machine.id)
                   discoveredRemotePeerRoutes.delete(session);
@@ -12994,7 +13075,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             }
           }
         }
-        if (unavailableMachines.length > 0) {
+        if (machineDiscoveryIncomplete) {
           for (const session of previousAmbiguousSessions)
             discoveredAmbiguousSessions.add(session);
         }
@@ -13011,7 +13092,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         (activeRole() === "manager" || activeRole() === "lead") &&
         discovery === latestPeerDiscovery &&
         !signal?.aborted &&
-        !unavailableMachines.includes("saved machines")
+        !machineListingFailed
       ) {
         remotePeerRoutes.clear();
         for (const [session, route] of discoveredRemotePeerRoutes)
@@ -13062,29 +13143,30 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             ? { workspace_label: correspondence.originDisplay.workspaceLabel }
             : {}),
         }));
+      const discoveryPayload = {
+        self,
+        peers,
+        ...(replyOnly.length ? { reply_only: replyOnly } : {}),
+        ...(remoteDiagnostics.length
+          ? {
+              remote_diagnostics: remoteDiagnostics,
+              ...(remoteDiagnosticsOmitted
+                ? { remote_diagnostics_omitted: remoteDiagnosticsOmitted }
+                : {}),
+            }
+          : {}),
+      };
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              self,
-              peers,
-              ...(replyOnly.length ? { reply_only: replyOnly } : {}),
-              ...(unavailableMachines.length
-                ? { unavailable_machines: [...new Set(unavailableMachines)] }
-                : {}),
-            }),
+            text: JSON.stringify(discoveryPayload),
           },
         ],
         details: {
           ok: true,
           action: "list",
-          self,
-          peers,
-          ...(replyOnly.length ? { reply_only: replyOnly } : {}),
-          ...(unavailableMachines.length
-            ? { unavailable_machines: [...new Set(unavailableMachines)] }
-            : {}),
+          ...discoveryPayload,
         },
       };
     }

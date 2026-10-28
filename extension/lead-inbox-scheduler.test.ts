@@ -94,7 +94,11 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
       attempts++;
       if (attempts === 1)
         return Promise.resolve({
-          details: { unavailable_machines: ["offline-peer"] },
+          details: {
+            remote_diagnostics: [
+              { machine: "offline-peer", reason: "herdr_not_reachable" },
+            ],
+          },
         });
       const request = deferred<unknown>();
       pending.push(request);
@@ -188,7 +192,11 @@ test("Manager peer reconciliation is automatic, fixed-cadence, and single-flight
     assert.equal(attempts, 3);
     const completedAt = Date.now();
     pending[1]!.resolve({
-      details: { unavailable_machines: ["still-offline"] },
+      details: {
+        remote_diagnostics: [
+          { machine: "still-offline", reason: "herdr_not_reachable" },
+        ],
+      },
     });
     await flush();
     assert.ok(Date.now() - failedAt >= 20_000);
