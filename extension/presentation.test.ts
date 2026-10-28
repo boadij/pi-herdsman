@@ -3592,6 +3592,15 @@ test("identity-only Agent headers retain freshness without Agent counts", (t) =>
   assert.equal(widget.render(160)[0], "● lead  stale");
   assert.doesNotMatch(widget.render(160)[0]!, /1 working/);
   assert.ok(warnings.includes("stale"));
+  for (let width = 5; width <= 10; width++) {
+    const header = widget.render(width)[0]!;
+    assert.ok(visibleWidth(header) <= width, `width ${width}`);
+    assert.match(header, /stale/, `width ${width}`);
+    if (width >= visibleWidth("● stale"))
+      assert.match(header, /●/, `identity marker at width ${width}`);
+    else assert.doesNotMatch(header, /●/, `identity marker at width ${width}`);
+  }
+  assert.equal(widget.render(7)[0], "● stale");
   widget.setSnapshot({
     agents: [{ label: "worker", definition: "agent", state: "working" }],
     stale: false,
@@ -6342,7 +6351,7 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
   };
   assert.ok(
     renderSupervisionLeads(snapshot, 120, { theme })[2]!.includes(
-      "<accent>◉ done</accent>",
+      "<accent>◉</accent> <muted>done</muted>",
     ),
   );
   assert.ok(
@@ -6968,7 +6977,22 @@ test("Manager work status outranks live Lead markers except when active", () => 
     undefined,
     (intent) => focused.push(intent),
   );
-  blockedWork.render(26);
+  const truncatedBlockedRow = blockedWork.render(25)[1]!;
+  assert.ok(visibleWidth(truncatedBlockedRow) <= 25);
+  assert.doesNotMatch(truncatedBlockedRow, /feat\/blocked/);
+  assert.equal(
+    blockedWork.handleMouse({
+      type: "click",
+      button: "left",
+      x: 0,
+      y: 1,
+      width: 25,
+    }),
+    undefined,
+  );
+  const fullBlockedRow = blockedWork.render(26)[1]!;
+  assert.ok(visibleWidth(fullBlockedRow) <= 26);
+  assert.match(fullBlockedRow, /feat\/blocked/);
   assert.equal(
     blockedWork.handleMouse({
       type: "click",
@@ -6976,17 +7000,6 @@ test("Manager work status outranks live Lead markers except when active", () => 
       x: 0,
       y: 1,
       width: 26,
-    }),
-    undefined,
-  );
-  blockedWork.render(27);
-  assert.equal(
-    blockedWork.handleMouse({
-      type: "click",
-      button: "left",
-      x: 0,
-      y: 1,
-      width: 27,
     })?.handled,
     true,
   );

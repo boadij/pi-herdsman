@@ -1199,14 +1199,7 @@ function renderSupervisionRows(
               : item.work.status === "active" && item.lead
                 ? supervisionLeadMarker(item.lead)
                 : workMarkers[item.work.status];
-          const removedWarningWidth =
-            item.work.status === "active" &&
-            item.lead?.compatibility !== "incompatible" &&
-            item.lead?.runtimeState === "blocked"
-              ? 1
-              : 0;
-          const prefixWidth =
-            visibleWidth(`${branch}  ${marker} `) + removedWarningWidth;
+          const prefixWidth = visibleWidth(`${branch}  ${marker} `);
           const suffixWidth = visibleWidth(
             item.lead?.compatibility === "incompatible"
               ? " · build mismatch"
@@ -1273,12 +1266,6 @@ function renderSupervisionRows(
           (total, value) => total + visibleWidth(value) + 2,
           0,
         );
-        const removedWarningWidth =
-          item.work.status === "active" &&
-          lead?.compatibility !== "incompatible" &&
-          lead?.runtimeState === "blocked"
-            ? 1
-            : 0;
         const markerColor =
           lead?.compatibility === "incompatible"
             ? "warning"
@@ -1291,11 +1278,7 @@ function renderSupervisionRows(
                   : "muted";
         const markerText = themed(options.theme, markerColor, marker);
         const branchWidth =
-          width -
-          visibleWidth(prefix) -
-          removedWarningWidth -
-          visibleWidth(suffix) -
-          telemetryWidth;
+          width - visibleWidth(prefix) - visibleWidth(suffix) - telemetryWidth;
         const displayedBranch = safeLine(item.work.branch, branchWidth);
         const branchText = themed(options.theme, "muted", displayedBranch);
         return {
@@ -1361,7 +1344,7 @@ function renderSupervisionRows(
             text: safeLine(
               child.compatibility === "incompatible"
                 ? `${themed(options.theme, "warning", `${childIndent}${childBranch} !`)} ${themed(options.theme, "muted", `${child.branch ?? child.display_name} · build mismatch`)}`
-                : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, childMarker === "◉" ? "accent" : lifecycleColor(child.runtime_state), `${childMarker} ${child.runtime_state}`)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
+                : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, childMarker === "◉" ? "accent" : lifecycleColor(child.runtime_state), childMarker)} ${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
               width,
             ),
             ...(status === "fresh" && child.compatibility !== "incompatible"
@@ -4295,7 +4278,14 @@ export class StatusWidget {
           ? `${includeCounts ? this.theme.fg("muted", `${breadcrumb ? "  " : ""}${counts} · `) : breadcrumb ? "  " : ""}${this.theme.fg("warning", "stale")}`
           : this.theme.fg("muted", suffixText);
     const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
-    const out = [truncateToWidth(header, availableWidth, "…")];
+    const compactStaleHeader =
+      s.stale &&
+      !s.unavailable &&
+      !breadcrumb &&
+      visibleWidth("● stale") <= availableWidth
+        ? `${this.theme.fg("success", "●")} ${this.theme.fg("warning", "stale")}`
+        : header;
+    const out = [truncateToWidth(compactStaleHeader, availableWidth, "…")];
     if (s.identityOnly) return out;
     const rows = renderStatusRows(s.agents, {
       now: observedNow,
