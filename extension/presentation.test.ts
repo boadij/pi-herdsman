@@ -1936,6 +1936,8 @@ test("expanded staff project results show resolved branches and resume scope", (
       ),
     );
     assert.match(output, /branch: feat\/recovery/);
+    if (action === "delegate") assert.match(output, /^work assigned\n/);
+    if (action === "resume") assert.match(output, /^work resumed\n/);
   }
 
   const resumed = renderedText(

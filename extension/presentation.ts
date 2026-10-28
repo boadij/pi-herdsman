@@ -3042,38 +3042,45 @@ function expandedResultLines(
     value(args.agent) ||
     value(args.label) ||
     "agent";
+  const staffWorkOutcome =
+    tool === "staff" && details.ok === true
+      ? action === "delegate"
+        ? "work assigned"
+        : action === "resume"
+          ? details.already_running === true
+            ? "work already running"
+            : "work resumed"
+          : undefined
+      : undefined;
   const heading =
-    tool === "staff" && action === "merge" && details.ok === true
+    staffWorkOutcome ??
+    (tool === "staff" && action === "merge" && details.ok === true
       ? "integrate branch"
-      : tool === "staff" &&
-          action === "resume" &&
-          details.already_running === true
-        ? "work already running"
-        : action === "list"
-          ? tool === "staff"
-            ? "staff"
-            : tool === "peer"
-              ? "peer"
-              : "agents"
-          : tool === "peer" && action === "message"
-            ? peerMessageStatus(details)
-            : action === "inspect"
-              ? `inspect ${display}`
-              : tool === "staff" && action === "remove"
-                ? "remove worktree"
-                : action === "delegate" || action === "continue"
-                  ? `${display} started`
-                  : tool === "supervisor"
-                    ? "sent to supervisor"
-                    : action === "steer"
-                      ? "steering queued"
-                      : action === "interrupt"
-                        ? "interrupt accepted"
-                        : tool === "agent" && action === "reply"
-                          ? `reply sent to ${display}`
-                          : action === "close"
-                            ? `${display} closed`
-                            : `${action} ${display}`;
+      : action === "list"
+        ? tool === "staff"
+          ? "staff"
+          : tool === "peer"
+            ? "peer"
+            : "agents"
+        : tool === "peer" && action === "message"
+          ? peerMessageStatus(details)
+          : action === "inspect"
+            ? `inspect ${display}`
+            : tool === "staff" && action === "remove"
+              ? "remove worktree"
+              : action === "delegate" || action === "continue"
+                ? `${display} started`
+                : tool === "supervisor"
+                  ? "sent to supervisor"
+                  : action === "steer"
+                    ? "steering queued"
+                    : action === "interrupt"
+                      ? "interrupt accepted"
+                      : tool === "agent" && action === "reply"
+                        ? `reply sent to ${display}`
+                        : action === "close"
+                          ? `${display} closed`
+                          : `${action} ${display}`);
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
