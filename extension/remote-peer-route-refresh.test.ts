@@ -10,6 +10,7 @@ const { acquireProcessLock } = await import("./lock.ts");
 type Machine = realTransport.SavedPeerMachine;
 type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
+let listMachinesImpl: () => Promise<Machine[]> = async () => machines;
 const correspondences: any[] = [];
 const queuedReplies: any[] = [];
 const diagnostics: unknown[] = [];
@@ -37,7 +38,7 @@ let outboundCorrespondence: any;
 mock.module("./peer-transport.ts", {
   namedExports: {
     ...realTransport,
-    listSavedPeerMachines: async () => machines,
+    listSavedPeerMachines: () => listMachinesImpl(),
     probePeerEndpoint: (machine: Machine) => probeImpl(machine),
     runPeerEndpoint: async (
       _machine: Machine,
@@ -177,6 +178,7 @@ function fixture(
   support.setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = "/test-route-refresh.sock";
   machines.length = 0;
+  listMachinesImpl = async () => machines;
   correspondences.length = 0;
   queuedReplies.length = 0;
   diagnostics.length = 0;
@@ -699,7 +701,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
       remote("peer-C", "generation-C"),
     ]);
   const first = await list(f.runtime, f.context);
-  assert.equal(first.details?.unavailable_machines, undefined);
+  assert.equal(first.details?.remote_diagnostics, undefined);
   assert.equal(diagnostics.length, 0, "failed diagnostic append is contained");
   assert.equal(deliveredReplies.length, 1);
   assert.equal(deliveredReplies[0].id, cReply.id);
@@ -792,7 +794,7 @@ test("aborted correspondence recovery stops later correspondence processing", as
   const result = await list(f.runtime, f.context, controller.signal);
 
   assert.equal(controller.signal.aborted, true);
-  assert.equal(result.details?.unavailable_machines, undefined);
+  assert.equal(result.details?.remote_diagnostics, undefined);
   assert.deepEqual(diagnostics, []);
   assert.ok(
     endpointCalls.some(
@@ -808,16 +810,178 @@ test("aborted correspondence recovery stops later correspondence processing", as
   assert.deepEqual(deliveredReplies, []);
 });
 
-test("genuine remote probe failure remains listed as unavailable", async (t) => {
+test("reachability and probe failures have distinct remote diagnostics", async (t) => {
   const f = fixture();
   t.after(f.close);
-  machines.push(machine("unreachable"));
-  probeImpl = async () => {
-    throw new Error("injected probe failure");
+  machines.push(machine("unreachable", false), machine("probe-failed"));
+  probeImpl = async (item) => {
+    if (item.id === "probe-failed") throw new Error("injected probe failure");
+    return snapshot([]);
   };
   const result = await list(f.runtime, f.context);
-  assert.deepEqual(result.details?.unavailable_machines, ["unreachable"]);
-  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(result.details?.remote_diagnostics, [
+    { machine: "unreachable", reason: "herdr_not_reachable" },
+    { machine: "probe-failed", reason: "probe_failed" },
+  ]);
+  assert.deepEqual(
+    JSON.parse(result.content[0].text).remote_diagnostics,
+    result.details?.remote_diagnostics,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(result.details?.remote_diagnostics),
+    /\.example|injected/u,
+  );
+});
+
+test("machine-list failures are reported without exposing transport details", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  listMachinesImpl = async () => {
+    throw new Error("ssh://user:secret@private-target");
+  };
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(result.details?.remote_diagnostics, [
+    { reason: "machine_list_failed" },
+  ]);
+  assert.doesNotMatch(result.content[0].text, /secret|private-target|ssh:/u);
+});
+
+test("build diagnostics exclude unverified and incompatible peers but retain compatible peers", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const mismatchedBuild = {
+    ...support.OTHER_HERDSMAN_BUILD,
+    version: "0.34.0\nuntrusted",
+  };
+  probeImpl = async () =>
+    snapshot([
+      {
+        ...remote("old-peer"),
+        name: "Old worker",
+        build: mismatchedBuild,
+      },
+      { ...remote("missing-build"), name: "Missing build", build: undefined },
+      {
+        ...remote("invalid-build"),
+        name: "Invalid build",
+        build: { version: "x", sha256: "bad" },
+      },
+      remote("compatible-peer"),
+    ]);
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(
+    result.details?.peers.map((peer: any) => peer.session),
+    ["compatible-peer"],
+  );
+  assert.deepEqual(result.details?.remote_diagnostics, [
+    {
+      machine: "one",
+      reason: "build_mismatch",
+      peer: "Old worker",
+      local_build: compatibility.formatRuntimeBuild(support.HERDSMAN_BUILD),
+      remote_build: `v0.34.0 untrusted · ${mismatchedBuild.sha256.slice(0, 12)}`,
+    },
+    { machine: "one", reason: "build_unverified", peer: "Missing build" },
+    { machine: "one", reason: "build_unverified", peer: "Invalid build" },
+  ]);
+  assert.deepEqual(
+    JSON.parse(result.content[0].text).remote_diagnostics,
+    result.details?.remote_diagnostics,
+  );
+  assert.equal("unavailable_machines" in result.details!, false);
+});
+
+test("remote diagnostics are capped and report the omitted count in both result projections", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  probeImpl = async () =>
+    snapshot(
+      Array.from({ length: 25 }, (_, index) => ({
+        ...remote(`missing-build-${index}`),
+        build: undefined,
+      })),
+    );
+
+  const result = await list(f.runtime, f.context);
+
+  assert.equal(result.details?.remote_diagnostics.length, 20);
+  assert.equal(result.details?.remote_diagnostics_omitted, 5);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    self,
+    peers: [],
+    remote_diagnostics: result.details?.remote_diagnostics,
+    remote_diagnostics_omitted: 5,
+  });
+});
+
+test("incomplete ordinary-Lead scans are diagnosed and complete empty scans are quiet", async (t) => {
+  const f = fixture("lead");
+  t.after(f.close);
+  machines.push(machine("one"));
+  const remoteLead = {
+    ...remote("unverified-lead"),
+    role: "lead",
+    sessionKind: "ordinary" as const,
+  };
+  probeImpl = async () => ({
+    ...snapshot([remoteLead]),
+    ordinaryLeadsComplete: false,
+  });
+  const incomplete = await list(f.runtime, f.context);
+  assert.deepEqual(incomplete.details?.peers, []);
+  assert.deepEqual(incomplete.details?.remote_diagnostics, [
+    { machine: "one", reason: "eligibility_unverified" },
+  ]);
+
+  probeImpl = async () => ({ ...snapshot([]), ordinaryLeadsComplete: true });
+  const complete = await list(f.runtime, f.context);
+  assert.equal(complete.details?.remote_diagnostics, undefined);
+});
+
+test("incomplete ordinary-Lead scans retain prior verified routes", async (t) => {
+  const f = fixture("lead");
+  t.after(f.close);
+  machines.push(machine("one"));
+  const remoteLead = {
+    ...remote("previously-verified-peer"),
+    role: "lead",
+    sessionKind: "ordinary" as const,
+  };
+  probeImpl = async () => ({
+    ...snapshot([remoteLead]),
+    ordinaryLeadsComplete: true,
+  });
+  const complete = await list(f.runtime, f.context);
+  assert.deepEqual(
+    complete.details?.peers.map((peer: any) => peer.session),
+    ["previously-verified-peer"],
+  );
+
+  probeImpl = async () => ({
+    ...snapshot([remoteLead]),
+    ordinaryLeadsComplete: false,
+  });
+  const incomplete = await list(f.runtime, f.context);
+  assert.deepEqual(incomplete.details?.peers, []);
+  assert.deepEqual(incomplete.details?.remote_diagnostics, [
+    { machine: "one", reason: "eligibility_unverified" },
+  ]);
+  await assert.rejects(
+    send(f.runtime, f.context, "previously-verified-peer"),
+    /Remote Manager changed/u,
+  );
+
+  probeImpl = async () => ({
+    ...snapshot([remoteLead]),
+    ordinaryLeadsComplete: true,
+  });
+  assert.equal(
+    (await send(f.runtime, f.context, "previously-verified-peer")).details
+      ?.accepted,
+    true,
+  );
 });
 
 test("managed assigned local Leads do not discover or probe remote peers", async (t) => {
@@ -1009,7 +1173,9 @@ test("partial discovery refreshes healthy routes, retains unavailable routes, an
   probeImpl = async (item) =>
     item.id === "healthy" ? changed : Promise.reject(new Error("offline"));
   const partial = await list(f.runtime, f.context);
-  assert.deepEqual(partial.details?.unavailable_machines, ["offline"]);
+  assert.deepEqual(partial.details?.remote_diagnostics, [
+    { machine: "offline", reason: "herdr_not_reachable" },
+  ]);
   assert.equal(
     (await send(f.runtime, f.context, "healthy-peer")).details?.accepted,
     true,

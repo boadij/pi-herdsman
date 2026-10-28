@@ -119,13 +119,60 @@ on enabled, reachable saved Herdr machines. An ordinary Lead similarly
 discovers only remote Leads verified as ordinary and unassigned by the remote
 machine's authoritative assignment scan. Managed or assigned Leads are not
 remote federation targets. Those entries retain the exact Pi session ID and
-include a `machine` display label. Reachable-machine probe failures are
-reported separately as `unavailable_machines`. If remote Lead eligibility
-cannot be verified, that machine does not contribute Lead results; an
-incomplete scan does not mean that no eligible Leads exist. Labels are not
-authority. Remote transport requires an independently working noninteractive
-OpenSSH target with normal strict host-key verification. `ssh://` targets and
-SSH-config aliases are supported; Herdr-only temporary authentication is not.
+include a `machine` display label. If remote Lead eligibility cannot be
+verified, that machine does not contribute Lead results; an incomplete scan
+does not mean that no eligible Leads exist. Labels are not authority. Remote
+transport requires an independently working noninteractive OpenSSH target with
+normal strict host-key verification. `ssh://` targets and SSH-config aliases
+are supported; Herdr-only temporary authentication is not.
+
+An eligible peer in `peers` has been verified for discovery, but
+`message_peer` still revalidates identity and authority when sending. A peer in
+`reply_only` has an existing authorized return correspondence: its reply can
+be queued even though its current independent availability is unverified.
+Neither display metadata nor a diagnostic observation makes a target
+addressable. Discovery failures appear as an optional `remote_diagnostics`
+array and do not hide peers discovered successfully elsewhere:
+
+```json
+{
+  "remote_diagnostics": [
+    {
+      "machine": "base",
+      "reason": "build_mismatch",
+      "peer": "worker",
+      "local_build": "v0.34.1 · 0123456789ab",
+      "remote_build": "v0.34.0 · fedcba987654"
+    }
+  ]
+}
+```
+
+Each diagnostic has one of these reasons:
+
+- `machine_list_failed`: Herdr's saved machine list could not be read.
+- `herdr_not_reachable`: Herdr did not confirm reachability for the saved
+  machine; this does not establish that its physical host is offline.
+- `probe_failed`: the remote peer probe failed before identity was established.
+- `build_mismatch`: an observed peer has valid build evidence that differs from
+  this runtime. The affected peer is excluded from `peers`.
+- `build_unverified`: an observed peer has missing or invalid build evidence
+  and is excluded from `peers`.
+- `eligibility_unverified`: a remote ordinary-Lead assignment scan was
+  incomplete. That machine contributes no Lead results; this does not assert
+  that it has no eligible Leads.
+
+`machine` and optional `peer` values are bounded display hints, not target
+handles. Build fields appear only for validated build mismatches. Diagnostics
+contain no connection targets, credentials, or raw transport errors; they are
+observations, never authorization records. A complete scan with no eligible
+peers is a normal empty result and needs no diagnostic. A listing, reachability,
+probe, or eligibility diagnostic means discovery is incomplete even when other
+peers were found; build diagnostics report observed peers that were excluded.
+`remote_diagnostics` contains at most 20 entries. If more were observed,
+`remote_diagnostics_omitted` gives the exact additional count; total warnings
+are the array length plus that count. Expanded Pi output also reports any
+diagnostics it omits from display.
 
 ```json
 {

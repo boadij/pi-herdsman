@@ -1795,6 +1795,72 @@ function peerMessageStatus(details: Record<string, unknown>): string {
         : "peer message queued";
 }
 
+const remoteDiagnosticMessages: Record<string, [string, string]> = {
+  machine_list_failed: [
+    "Saved Herdr machines could not be listed",
+    "Check Herdr machine status.",
+  ],
+  herdr_not_reachable: [
+    "Herdr reachability not confirmed",
+    "Check Herdr machine status; reconnect interactively if needed.",
+  ],
+  probe_failed: [
+    "Remote peer probe failed",
+    "Check Herdr machine status and the remote Pi session.",
+  ],
+  build_mismatch: ["Peer build mismatch", "Reload the outdated Pi session."],
+  build_unverified: [
+    "Peer build could not be verified",
+    "Reload the remote Pi session to publish build identity.",
+  ],
+  eligibility_unverified: [
+    "Ordinary-Lead eligibility could not be verified",
+    "Check the remote assignment scan before relying on Lead results.",
+  ],
+};
+
+const maxRemoteDiagnostics = 20;
+
+function peerRemoteDiagnosticLines(
+  diagnostics: unknown[],
+  reportedOmitted: number,
+): string[] {
+  const lines: string[] = [];
+  const visibleDiagnostics = diagnostics.slice(0, maxRemoteDiagnostics);
+  for (const item of visibleDiagnostics) {
+    if (!item || typeof item !== "object") continue;
+    const diagnostic = item as Record<string, unknown>;
+    const message = remoteDiagnosticMessages[value(diagnostic.reason)];
+    if (!message) continue;
+    const machine = collapseDisplayText(value(diagnostic.machine), 80);
+    const peer = collapseDisplayText(value(diagnostic.peer), 80);
+    const subject = [machine, peer].filter(Boolean).join(" · ");
+    lines.push(`  ${subject || "saved machines"} · ${message[0]}`);
+    const localBuild = collapseDisplayText(value(diagnostic.local_build), 48);
+    const remoteBuild = collapseDisplayText(value(diagnostic.remote_build), 48);
+    if (localBuild) lines.push(`    local  ${localBuild}`);
+    if (remoteBuild) lines.push(`    remote ${remoteBuild}`);
+    lines.push(`    Check: ${message[1]}`);
+  }
+  const omitted =
+    reportedOmitted +
+    Math.max(0, diagnostics.length - visibleDiagnostics.length);
+  if (omitted)
+    lines.push(
+      `  ${omitted} additional diagnostic${omitted === 1 ? "" : "s"} omitted`,
+    );
+  return lines;
+}
+
+function remoteDiagnosticOmittedCount(
+  details: Record<string, unknown>,
+): number {
+  const count = details.remote_diagnostics_omitted;
+  return typeof count === "number" && Number.isSafeInteger(count) && count > 0
+    ? count
+    : 0;
+}
+
 function agentDefinitionSuffix(label: string, definition: unknown): string {
   const name = value(definition);
   return name && name !== label ? ` · ${name}` : "";
@@ -3121,14 +3187,15 @@ function expandedResultLines(
             ];
           }),
         );
-      const unavailableMachines = Array.isArray(details.unavailable_machines)
-        ? details.unavailable_machines
+      const remoteDiagnostics = Array.isArray(details.remote_diagnostics)
+        ? details.remote_diagnostics
         : [];
-      if (unavailableMachines.length)
-        lines.push(
-          "",
-          `unavailable machines ${unavailableMachines.map(value).join(", ")}`,
-        );
+      const diagnosticLines = peerRemoteDiagnosticLines(
+        remoteDiagnostics,
+        remoteDiagnosticOmittedCount(details),
+      );
+      if (diagnosticLines.length)
+        lines.push("", "remote diagnostics", ...diagnosticLines);
       return lines;
     }
     const reports = Array.isArray(details.reports) ? details.reports : [];
@@ -3469,9 +3536,22 @@ export function renderCoordinationResult(
     const replyOnly = Array.isArray(details.reply_only)
       ? details.reply_only
       : [];
-    const summary = replyOnly.length
-      ? `peer · ${peers.length} discovered · ${replyOnly.length} reply-only`
-      : `peer · ${peers.length} peer${peers.length === 1 ? "" : "s"}`;
+    const diagnostics = Array.isArray(details.remote_diagnostics)
+      ? details.remote_diagnostics
+      : [];
+    const warningCount =
+      diagnostics.length + remoteDiagnosticOmittedCount(details);
+    const peerCount =
+      warningCount || replyOnly.length
+        ? `${peers.length} discovered`
+        : `${peers.length} peer${peers.length === 1 ? "" : "s"}`;
+    const summary = [
+      `peer · ${peerCount}`,
+      ...(replyOnly.length ? [`${replyOnly.length} reply-only`] : []),
+      ...(warningCount
+        ? [`${warningCount} warning${warningCount === 1 ? "" : "s"}`]
+        : []),
+    ].join(" · ");
     return new WidthSafeText(humanText(theme, "toolTitle", summary), 0, 0);
   }
   if (tool === "peer" && action === "message")

@@ -3210,7 +3210,9 @@ test("list peers rendering distinguishes self from peers", () => {
         { session: "id-only" },
         { session: "unnamed-origin-manager" },
       ],
-      unavailable_machines: ["office"],
+      remote_diagnostics: [
+        { machine: "office", reason: "herdr_not_reachable" },
+      ],
     },
   };
 
@@ -3220,7 +3222,7 @@ test("list peers rendering distinguishes self from peers", () => {
         args: { action: "list" },
       }),
     ),
-    "peer · 1 discovered · 5 reply-only",
+    "peer · 1 discovered · 5 reply-only · 1 warning",
   );
 
   assert.match(
@@ -3248,7 +3250,7 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  project-beta\n  session: workspace-only\n  Reply can be queued; current availability is unverified.\n  id-only\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nunavailable machines office",
+    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  project-beta\n  session: workspace-only\n  Reply can be queued; current availability is unverified.\n  id-only\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nremote diagnostics\n  office · Herdr reachability not confirmed\n    Check: Check Herdr machine status; reconnect interactively if needed.",
   );
 
   assert.equal(
@@ -3323,6 +3325,122 @@ test("list peers rendering distinguishes self from peers", () => {
     40,
   );
   assert.ok(long.split("\n").every((line) => visibleWidth(line) <= 40));
+});
+
+test("remote peer diagnostics explain safe remediation and stay bounded", () => {
+  const result = {
+    details: {
+      ok: true,
+      action: "list",
+      self: "self",
+      peers: Array.from({ length: 6 }, (_, index) => ({
+        session: `peer-${index}`,
+      })),
+      remote_diagnostics: [
+        { reason: "machine_list_failed" },
+        { machine: "base\n\u0000 host", reason: "herdr_not_reachable" },
+        { machine: "probe", reason: "probe_failed" },
+        {
+          machine: "build",
+          peer: "worker".repeat(40),
+          reason: "build_mismatch",
+          local_build: `v0.34.1 · ${"a".repeat(12)}`,
+          remote_build: `v0.34.0 · ${"b".repeat(12)}`,
+        },
+        { machine: "unverified", reason: "build_unverified", peer: "peer" },
+        { machine: "leads", reason: "eligibility_unverified" },
+      ],
+    },
+  };
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult("peer", "list", result, {}, presentationTheme),
+    ),
+    "peer · 6 discovered · 6 warnings",
+  );
+
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "peer",
+      "list",
+      result,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  for (const text of [
+    "Saved Herdr machines could not be listed",
+    "Herdr reachability not confirmed",
+    "Remote peer probe failed",
+    "Peer build mismatch",
+    "Peer build could not be verified",
+    "Ordinary-Lead eligibility could not be verified",
+    "local  v0.34.1 · aaaaaaaaaaaa",
+    "remote v0.34.0 · bbbbbbbbbbbb",
+    "Reload the outdated Pi session.",
+    "Check the remote assignment scan before relying on Lead results.",
+  ])
+    assert.ok(expanded.includes(text), `missing diagnostic text: ${text}`);
+  assert.match(expanded, /base host · Herdr reachability not confirmed/);
+  assert.doesNotMatch(
+    expanded,
+    /[\u0000-\u0009\u000b-\u001f\u007f]|ssh:|credential|target\.example/u,
+  );
+
+  const narrow = renderCoordinationResult(
+    "peer",
+    "list",
+    result,
+    { expanded: true },
+    presentationTheme,
+  ).render(40);
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
+});
+
+test("remote diagnostic rendering caps entries and counts omitted warnings", () => {
+  const result = {
+    details: {
+      ok: true,
+      action: "list",
+      peers: [],
+      remote_diagnostics: Array.from({ length: 25 }, (_, index) => ({
+        machine: `machine-${index}`,
+        reason: "build_unverified",
+        peer: `peer-${index}`,
+      })),
+      remote_diagnostics_omitted: 5,
+    },
+  };
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult("peer", "list", result, {}, presentationTheme),
+    ),
+    "peer · 0 discovered · 30 warnings",
+  );
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "peer",
+      "list",
+      result,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.equal(
+    (expanded.match(/Peer build could not be verified/gu) ?? []).length,
+    20,
+  );
+  assert.match(expanded, /10 additional diagnostics omitted/u);
+  const narrow = renderCoordinationResult(
+    "peer",
+    "list",
+    result,
+    { expanded: true },
+    presentationTheme,
+  ).render(40);
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
 });
 
 test("widget never exceeds its width", (t) => {
