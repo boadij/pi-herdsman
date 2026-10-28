@@ -69,14 +69,14 @@ Initiate a peer message for concrete, task-relevant coordination another eligibl
 Returns this session separately from independently discovered eligible
 same-role sessions. A Lead or Manager may also receive an optional
 `reply_only` collection for originating sessions of its current role with an
-existing authorized return correspondence:
+existing authorized return correspondence. Target-bearing entries have this
+form:
 
 ```json
 {
-  "self": "<this exact Pi session ID>",
   "peers": [
     {
-      "session": "<exact full Pi session ID>",
+      "target": "lead:7k3mp9qd2f",
       "name": "workspace/api",
       "cwd": "/work/api",
       "repo": "api",
@@ -86,7 +86,7 @@ existing authorized return correspondence:
   ],
   "reply_only": [
     {
-      "session": "<exact originating same-role session ID>",
+      "target": "lead:4n8rx2c6ya",
       "name": "Research peer",
       "workspace_label": "project-alpha/main"
     }
@@ -97,28 +97,30 @@ existing authorized return correspondence:
 `reply_only` is omitted when empty. Its targets are not independently
 discovered peers. Optional `name` and `workspace_label` are last-known,
 sender-provided presentation context; they may be absent, non-unique, or stale.
-Older correspondences may remain ID-only until a subsequent accepted exchange
-provides metadata. These labels do not verify identity, availability, machine
+These labels do not verify identity, availability, machine
 origin, project ownership, or permission to initiate an unrelated conversation.
-Only the exact `session` is a `message_peer` target. The result never exposes
-correspondence capabilities or other private state. `message_peer` revalidates
-identity and authority when sending. Missing reciprocal Herdr/SSH configuration
-does not prevent replies through an existing correspondence; reverse
-connectivity is needed only to independently initiate communication. Therefore,
-an empty `peers` list does not necessarily mean communication with known
-originating peers through current-role correspondences is impossible.
+Each peer is addressed by its stable `target`; the same role/session has the
+same target whether discovered locally or through federation. Targets resolve
+to exact coordinator sessions but are not authorization. `message_peer`
+revalidates identity and authority when sending, including the existing
+eligibility and correspondence checks. Missing reciprocal Herdr/SSH
+configuration does not prevent replies through an existing correspondence;
+reverse connectivity is needed only to independently initiate communication.
+Therefore, an empty `peers` list does not necessarily mean communication with
+known originating peers through current-role correspondences is impossible.
 
-`self` is never repeated in `peers`. Each peer has a `session`, `name`, `cwd`,
-`repo`, `branch`, and `workspace_label`; presentation metadata may be empty.
-Only the exact full `session` ID is a messaging target. Names, paths, branches,
-and workspace labels are display metadata, not target handles. The model-facing
-list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
+The current session is identified separately from `peers`. Peer targets are
+caller-session-scoped bindings, not portable aliases. An unresolved target is
+rejected; rediscover it with `list_peers` before messaging. Do the same when
+identity or eligibility is uncertain. Names, paths, branches, and workspace
+labels are descriptive metadata, not target handles. The model-facing list has
+no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 When the active coordinator is a Manager, the list also discovers live Managers
 on enabled, reachable saved Herdr machines. An ordinary Lead similarly
 discovers only remote Leads verified as ordinary and unassigned by the remote
 machine's authoritative assignment scan. Managed or assigned Leads are not
-remote federation targets. Those entries retain the exact Pi session ID and
+remote federation targets. Those entries use the same stable target format and
 include a `machine` display label. If remote Lead eligibility cannot be
 verified, that machine does not contribute Lead results; an incomplete scan
 does not mean that no eligible Leads exist. Labels are not authority. Remote
@@ -176,7 +178,7 @@ diagnostics it omits from display.
 
 ```json
 {
-  "session": "<exact full Pi session ID from `list_peers`>",
+  "target": "lead:7k3mp9qd2f",
   "message": "The integration is ready.",
   "files": ["result:researcher#1"]
 }

@@ -14,6 +14,7 @@ import {
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { coordinatorTarget } from "../extension/coordinator-target.ts";
 import {
   cleanupSmokeFixture,
   isMissingDockerResource,
@@ -24,7 +25,7 @@ import {
   classifyCurrentSendEvidence,
   delegateResultEvidence,
   isLiveCorrespondenceRecipient,
-  matchedManagedLeadDenial,
+  matchedUnboundTargetRejection,
   matchedDelegateResult,
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
@@ -538,7 +539,7 @@ try {
         freshListResults: [...freshListResults].slice(0, 64).map(([toolCallId, result]) => ({
           toolCallId: boundedIdentity(toolCallId),
           resultCount: freshListResultCounts.get(toolCallId) ?? 0,
-          expectedPeerMatched: process.argv[5] !== "" && (result.details?.peers ?? []).some(peer => sessionFingerprint(peer.session) === process.argv[5]),
+          expectedPeerMatched: process.argv[5] !== "" && (result.details?.peers ?? []).some(peer => sessionFingerprint(peer.target) === process.argv[5]),
         })),
         messagePeerCalls: sendCalls.size,
         sendCallIds: boundedCallIds(sendCalls),
@@ -565,7 +566,9 @@ try {
         kind,
         boundedReaderArgument(id),
         boundedReaderArgument(ref, 512),
-        sessionFingerprint(resources.b.ordinaryLead.sessionId),
+        sessionFingerprint(
+          coordinatorTarget("lead", resources.b.ordinaryLead.sessionId),
+        ),
         sessionFingerprint(expectedRecipientSession),
         boundedReaderArgument(expectedCanonicalRef, 512),
       ],
@@ -1335,23 +1338,26 @@ try {
     "agent",
     "prompt",
     resources.a.ordinaryLead.pane,
-    `PEER_E2E_A_TEST_MANAGED ${assignedLeadSessionId}`,
+    `PEER_E2E_A_TEST_MANAGED ${coordinatorTarget("lead", assignedLeadSessionId)}`,
     "--wait",
     "--timeout",
     "60000",
   ]);
-  const managedDenial = exec("a", ["cat", resources.a.ordinaryLead.sessionPath])
+  const managedAttempt = exec("a", [
+    "cat",
+    resources.a.ordinaryLead.sessionPath,
+  ])
     .split("\n")
     .filter(Boolean)
     .map(JSON.parse);
-  const denialResult = matchedManagedLeadDenial(
-    managedDenial,
-    assignedLeadSessionId,
+  const rejectionResult = matchedUnboundTargetRejection(
+    managedAttempt,
+    coordinatorTarget("lead", assignedLeadSessionId),
   );
-  stage("assigned-managed-lead-excluded-and-denied", {
+  stage("managed-lead-discovery-excluded-and-unbound-target-rejected", {
     sessionId: assignedLeadSessionId,
     assignmentId: projectAssignment.id,
-    denial: denialResult.text,
+    unboundTargetRejection: rejectionResult.text,
   });
   const ordinaryLeadSession = resources.a.ordinaryLead.sessionPath;
   const discoveryStartLine = Number(
@@ -1445,7 +1451,7 @@ try {
     .map(JSON.parse);
   assertPeerInListPeersResult(
     ordinaryLeadTranscript.slice(discoveryStartLine),
-    resources.b.ordinaryLead.sessionId,
+    coordinatorTarget("lead", resources.b.ordinaryLead.sessionId),
   );
   stage("ordinary-lead-discovery-confirmed", {
     senderSession: resources.a.ordinaryLead.sessionId,

@@ -131,6 +131,8 @@ const support = await import("./support.ts");
 const compatibility = await import("./compatibility.ts");
 const supervision = await import("./supervision.ts");
 const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+const { coordinatorTarget, rememberCoordinatorTarget } =
+  await import("./coordinator-target.ts");
 
 const self = "11111111-1111-4111-8111-111111111111";
 const assignment = {
@@ -199,6 +201,7 @@ function fixture(
   };
   const manager = { piSessionId: self, leaseId: "manager-lease", createdAt: 1 };
   const context = support.fakeContext() as any;
+  context.activeRole = role;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => self,
@@ -221,7 +224,14 @@ function fixture(
     updatedAt: 1,
   };
   const runtime = createLeadCoordinationRuntime({
-    pi: { sendMessage() {} },
+    pi: {
+      sendMessage() {},
+      appendEntry(customType: string, data: unknown) {
+        context.sessionManager
+          .getEntries()
+          .push({ type: "custom", customType, data });
+      },
+    },
     leadRuntime,
     processRole: "lead",
     controllerScope: { kind: "root" },
@@ -294,14 +304,89 @@ const send = (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
   session: string,
-) =>
-  runtime.peerMessage(
+) => {
+  const entries = context.sessionManager.getEntries();
+  const branch = context.sessionManager.getBranch();
+  const target = rememberCoordinatorTarget(
+    {
+      appendEntry(customType: string, data: unknown) {
+        const entry = { type: "custom", customType, data };
+        entries.push(entry);
+        if (branch !== entries) branch.push(entry);
+      },
+    } as any,
+    context,
+    context.activeRole,
+    session,
+  );
+  return runtime.peerMessage(
     "send",
-    { action: "message", session, message: "test" },
+    { action: "message", target, message: "test" },
     undefined,
     undefined,
     context,
   );
+};
+
+test("internal peer reconciliation does not persist model-facing target bindings", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  probeImpl = async () => snapshot([remote("remote-manager")]);
+  const entries = f.context.sessionManager.getEntries();
+  const before = entries.slice();
+  await f.runtime.peerMessage(
+    "remote-reconciliation",
+    { action: "list", internal: true },
+    undefined,
+    undefined,
+    f.context,
+  );
+  assert.deepEqual(entries, before);
+  const visible = await list(f.runtime, f.context);
+  assert.equal(
+    visible.details?.peers[0].target,
+    coordinatorTarget("manager", "remote-manager"),
+  );
+  assert.equal(
+    entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-coordinator-target-v1",
+    ).length,
+    1,
+  );
+});
+
+test("Lead rejects a bound remote peer that becomes managed", async (t) => {
+  const f = fixture("lead");
+  t.after(f.close);
+  machines.push(machine("one"));
+  const peer = {
+    ...remote("remote-lead"),
+    role: "lead" as const,
+    sessionKind: "ordinary" as const,
+  };
+  probeImpl = async () => ({
+    ...snapshot([peer]),
+    ordinaryLeadsComplete: true,
+  });
+  const discovered = await list(f.runtime, f.context);
+  const target = discovered.details!.peers[0].target;
+  probeImpl = async () => ({
+    ...snapshot([{ ...peer, sessionKind: "managed" as const }]),
+    ordinaryLeadsComplete: true,
+  });
+  await assert.rejects(
+    f.runtime.peerMessage(
+      "send",
+      { action: "message", target, message: "test" },
+      undefined,
+      undefined,
+      f.context,
+    ),
+    /Remote Manager changed/u,
+  );
+  assert.deepEqual(deliveries, []);
+});
 
 test("Lead send reports failed authorization predicates without rejecting a valid route", async (t) => {
   const unauthorized = fixture("lead");
@@ -487,7 +572,10 @@ test("reply receipt names the originating Lead correspondence role", async (t) =
 
   assert.match(
     sent.content?.[0]?.text ?? "",
-    /^Reply queued for originating Lead peer-old \([0-9a-f-]+\)\.$/u,
+    new RegExp(
+      `^Reply queued for originating Lead ${coordinatorTarget("lead", "peer-old")} \\([0-9a-f-]+\\)\\.$`,
+      "u",
+    ),
   );
 });
 
@@ -590,7 +678,7 @@ test("list_peers projects exact reply-only correspondence targets without exposi
   assert.deepEqual(result.details?.peers, []);
   const expected = [
     {
-      session: "origin-manager",
+      target: coordinatorTarget("manager", "origin-manager"),
       name: "Research Manager",
       workspace_label: "project-alpha/main",
     },
@@ -606,7 +694,10 @@ test("list_peers projects exact reply-only correspondence targets without exposi
   );
 
   const sent = await send(f.runtime, f.context, "origin-manager");
-  assert.equal(sent.details?.remoteSessionId, "origin-manager");
+  assert.equal(
+    sent.details?.target,
+    coordinatorTarget("manager", "origin-manager"),
+  );
   assert.equal(sent.details?.queued, true);
   assert.equal(queuedReplies.length, 1);
   assert.equal(queuedReplies[0][0].id, "corr-origin");
@@ -655,7 +746,8 @@ test("a discovered Manager is not duplicated in reply_only", async (t) => {
   const result = await list(f.runtime, f.context);
   assert.ok(
     result.details?.peers.some(
-      (peer: any) => peer.session === "origin-manager",
+      (peer: any) =>
+        peer.target === coordinatorTarget("manager", "origin-manager"),
     ),
   );
   assert.equal(result.details?.reply_only, undefined);
@@ -871,8 +963,8 @@ test("build diagnostics exclude unverified and incompatible peers but retain com
     ]);
   const result = await list(f.runtime, f.context);
   assert.deepEqual(
-    result.details?.peers.map((peer: any) => peer.session),
-    ["compatible-peer"],
+    result.details?.peers.map((peer: any) => peer.target),
+    [coordinatorTarget("manager", "compatible-peer")],
   );
   assert.deepEqual(result.details?.remote_diagnostics, [
     {
@@ -909,7 +1001,7 @@ test("remote diagnostics are capped and report the omitted count in both result 
   assert.equal(result.details?.remote_diagnostics.length, 20);
   assert.equal(result.details?.remote_diagnostics_omitted, 5);
   assert.deepEqual(JSON.parse(result.content[0].text), {
-    self,
+    self: { role: "manager" },
     peers: [],
     remote_diagnostics: result.details?.remote_diagnostics,
     remote_diagnostics_omitted: 5,
@@ -955,8 +1047,8 @@ test("incomplete ordinary-Lead scans retain prior verified routes", async (t) =>
   });
   const complete = await list(f.runtime, f.context);
   assert.deepEqual(
-    complete.details?.peers.map((peer: any) => peer.session),
-    ["previously-verified-peer"],
+    complete.details?.peers.map((peer: any) => peer.target),
+    [coordinatorTarget("lead", "previously-verified-peer")],
   );
 
   probeImpl = async () => ({

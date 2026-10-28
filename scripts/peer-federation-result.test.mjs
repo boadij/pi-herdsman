@@ -19,7 +19,7 @@ import {
   currentSendDiagnostics,
   currentSendDiscoveryMatched,
   isLiveCorrespondenceRecipient,
-  matchedManagedLeadDenial,
+  matchedUnboundTargetRejection,
   matchedDelegateResult,
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
@@ -51,7 +51,7 @@ test("ordinary Lead send acceptance requires one fresh discovery, one send, and 
 test("send-turn discovery requires exactly one correlated result containing the peer", () => {
   const calls = new Map([["list-call", {}]]);
   const results = new Map([
-    ["list-call", { details: { peers: [{ session: "expected-peer" }] } }],
+    ["list-call", { details: { peers: [{ target: "expected-peer" }] } }],
   ]);
   assert.equal(
     currentSendDiscoveryMatched(
@@ -464,7 +464,7 @@ test("live correspondence recipient matches role, session, generation, and Lead 
   );
 });
 
-test("managed Lead denial requires exact nested call and correlated error result", () => {
+test("unbound target rejection requires exact nested call and correlated error result", () => {
   const call = {
     type: "message",
     message: {
@@ -474,7 +474,7 @@ test("managed Lead denial requires exact nested call and correlated error result
           type: "toolCall",
           name: "message_peer",
           id: "peer-call",
-          arguments: { session: "assigned-session" },
+          arguments: { target: "lead:0123456789" },
         },
       ],
     },
@@ -489,22 +489,22 @@ test("managed Lead denial requires exact nested call and correlated error result
       content: [
         {
           type: "text",
-          text: "Peer target was not found or is no longer a live same-role peer",
+          text: "Unknown coordinator target; rediscover it",
         },
       ],
     },
   };
   assert.equal(
-    matchedManagedLeadDenial([call, result], "assigned-session").text,
-    "Peer target was not found or is no longer a live same-role peer",
+    matchedUnboundTargetRejection([call, result], "lead:0123456789").text,
+    "Unknown coordinator target; rediscover it",
   );
   assert.throws(() =>
-    matchedManagedLeadDenial([call, result], "wrong-session"),
+    matchedUnboundTargetRejection([call, result], "lead:9876543210"),
   );
-  assert.throws(() => matchedManagedLeadDenial([call], "assigned-session"));
+  assert.throws(() => matchedUnboundTargetRejection([call], "lead:0123456789"));
   assert.throws(
     () =>
-      matchedManagedLeadDenial(
+      matchedUnboundTargetRejection(
         [
           call,
           {
@@ -515,7 +515,7 @@ test("managed Lead denial requires exact nested call and correlated error result
             },
           },
         ],
-        "assigned-session",
+        "lead:0123456789",
       ),
     /expected rejection/u,
   );
@@ -587,7 +587,7 @@ test("list_peers discovery requires the exact result to contain the peer", () =>
   );
 });
 
-test("list_peers accepts the exact public peer session in its correlated result", () => {
+test("list_peers accepts the exact public peer target in its correlated result", () => {
   const entries = [
     {
       type: "message",
@@ -602,15 +602,15 @@ test("list_peers accepts the exact public peer session in its correlated result"
         role: "toolResult",
         toolName: "list_peers",
         toolCallId: "list-exact",
-        details: { peers: [{ session: "remote-session" }] },
+        details: { peers: [{ target: "lead:0123456789" }] },
       },
     },
   ];
   assert.doesNotThrow(() =>
-    assertPeerInListPeersResult(entries, "remote-session"),
+    assertPeerInListPeersResult(entries, "lead:0123456789"),
   );
   assert.throws(
-    () => assertPeerInListPeersResult(entries, "absent-session"),
+    () => assertPeerInListPeersResult(entries, "lead:9876543210"),
     /exact list_peers result omitted/u,
   );
 });

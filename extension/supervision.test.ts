@@ -971,7 +971,7 @@ test("generic coordination transport orders and renders message peers", async ()
     sent.map((value) => value.details.id),
     [older.id, newer.id],
   );
-  assert.match(sent[0].content, /^Peer message from lead-a: older$/);
+  assert.match(sent[0].content, /^Peer message: older$/);
   assert.doesNotMatch(sent[0].content, /to lead lead-b/);
   assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
   assert.equal(removeCoordinationMessage, removeChiefMessage);
@@ -1114,10 +1114,7 @@ test("peer presence and inbox transport are shared across socket runtimes", asyn
       1,
     );
     assert.equal(sent[0].details.id, record.id);
-    assert.match(
-      sent[0].content,
-      /^Peer message from lead-a: shared peer inbox$/,
-    );
+    assert.match(sent[0].content, /^Peer message: shared peer inbox$/);
     assert.doesNotMatch(sent[0].content, /to lead lead-b/);
     assert.deepEqual(listCoordinationMessagePaths(peersA, "lead-b"), []);
   } finally {
@@ -2258,6 +2255,45 @@ test("synchronous Pi submission failure retains the inbox record", async () => {
   assert.equal(existsSync(path), true);
 });
 
+test("sender binding failure defers delivery without losing the inbox record", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  let persisted = false;
+  let sent: any;
+  const options = {
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => persisted,
+    sendMessage: (payload: unknown) => {
+      sent = payload;
+      persisted = true;
+    },
+  };
+  assert.equal(
+    await drainCoordinationInbox({
+      ...options,
+      senderTarget: () => {
+        throw new Error("binding failed");
+      },
+    }),
+    0,
+  );
+  assert.equal(sent, undefined);
+  assert.equal(existsSync(path), true);
+  assert.equal(
+    await drainCoordinationInbox({
+      ...options,
+      senderTarget: () => "lead:0123456789",
+    }),
+    1,
+  );
+  assert.match(sent.content, /^From Lead lead:0123456789: /);
+  assert.equal(sent.details.fromSessionId, record.fromSessionId);
+  assert.equal(existsSync(path), false);
+});
+
 test("inbox orders valid records by createdAt and retains transient failures", async () => {
   const runtime = supervisionRuntime(socket());
   const records = [
@@ -2295,9 +2331,9 @@ test("inbox orders valid records by createdAt and retains transient failures", a
     },
   });
   assert.deepEqual(seen, [
-    "From lead lead: ten",
-    "From lead lead: twenty",
-    "From lead lead: thirty",
+    "From Lead: ten",
+    "From Lead: twenty",
+    "From Lead: thirty",
   ]);
 });
 
@@ -2334,7 +2370,8 @@ test("terminal authorization rejection deletes, and sender is model-visible", as
       content = (payload as any).content;
     },
   });
-  assert.match(content, /^From lead api\/backend: hello$/);
+  assert.equal(content, "From Lead: hello");
+  assert.doesNotMatch(content, /api\/backend/);
   const rejected = message();
   writeChiefMessage(rejected, runtime);
   await drainCoordinationInbox({
@@ -2456,9 +2493,15 @@ test("coordination envelopes identify senders without claiming recipient roles",
   }
   for (const [index, { route, record }] of traffic.entries()) {
     assert.equal(delivered[index]!.id, record.id, route.name);
+    const senderPrefix =
+      route.senderRole === "chief"
+        ? "From your Chief: "
+        : route.senderRole === "manager"
+          ? "From Manager: "
+          : "From Lead: ";
     assert.equal(
       delivered[index]!.content,
-      `From ${route.senderRole} ${route.fromSessionId}: ${record.text}`,
+      `${senderPrefix}${record.text}`,
       route.name,
     );
     assert.doesNotMatch(

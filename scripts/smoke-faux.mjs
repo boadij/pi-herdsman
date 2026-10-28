@@ -795,7 +795,7 @@ export function decide(model, context) {
   }
   if (model === "federated-peer-a") {
     const managedSession = prompt.match(
-      /PEER_E2E_A_TEST_MANAGED ([0-9a-f-]{36})/u,
+      /PEER_E2E_A_TEST_MANAGED (lead:[0-9a-hjkmnp-tv-z]{10})/u,
     )?.[1];
     if (managedSession) {
       const listed = correlatedCall(messages, "list_peers");
@@ -812,7 +812,7 @@ export function decide(model, context) {
       if (successfulCallCount(messages, "message_peer"))
         throw new Error("managed Lead message unexpectedly succeeded");
       return call("message_peer", {
-        session: managedSession,
+        target: managedSession,
         message: "must be rejected",
       });
     }
@@ -840,7 +840,7 @@ export function decide(model, context) {
         throw new Error("ordinary Lead request omitted its result reference");
       if (successfulCallCount(turn, "message_peer") === 0)
         return call("message_peer", {
-          session: peer.session,
+          target: peer.target,
           message: `PEER_E2E_CORRELATION_ID PEER_E2E_LEAD_REQUEST: inspect the portable file and use ${semantic}.`,
           files: ["spec.md", semantic],
         });
@@ -864,7 +864,7 @@ export function decide(model, context) {
         throw new Error("single-message fixture found no remote Manager");
       if (successfulCallCount(messages, "message_peer") === 0)
         return call("message_peer", {
-          session: peer.session,
+          target: peer.target,
           message:
             "PEER_E2E_SINGLE_REQUEST: verify receiving Manager delivery.",
         });
@@ -895,7 +895,7 @@ export function decide(model, context) {
       if (!semantic)
         throw new Error("federation smoke omitted semantic result evidence");
       return call("message_peer", {
-        session: peer.session,
+        target: peer.target,
         message:
           "PEER_E2E_REQUEST: delegate the attached Manager spec and report the result.",
         files: ["manager-spec.md", semantic],
@@ -905,7 +905,7 @@ export function decide(model, context) {
       const peers = JSON.parse(text(list.result));
       const peer = peers.peers?.find((candidate) => candidate.machine);
       return call("message_peer", {
-        session: peer.session,
+        target: peer.target,
         message: "PEER_E2E_REQUEST_SECOND: same verified Manager pair.",
       });
     }
@@ -1069,9 +1069,9 @@ export function decide(model, context) {
         .update(artifact)
         .digest("hex");
       const origin = text(inbound).match(
-        /Peer message from ([0-9a-f-]{36}):/u,
+        /Peer message from (lead:[0-9a-hjkmnp-tv-z]{10}):/u,
       )?.[1];
-      if (!origin) throw new Error("Lead request omitted exact origin session");
+      if (!origin) throw new Error("Lead request omitted origin target");
       if (successfulCallCount(messages, "message_peer") === 0) {
         logFederatedPeerBDecision({
           inboundRequestPresent,
@@ -1081,7 +1081,7 @@ export function decide(model, context) {
           tool: "message_peer",
         });
         return call("message_peer", {
-          session: origin,
+          target: origin,
           message: `PEER_E2E_LEAD_REPLY: used ${semantic} (${canonicalRef}, sha256 ${artifactSha256}) after reading PEER_E2E_PORTABLE_RESULT_CONTENT_V1 from the imported artifact.`,
         });
       }
@@ -1125,18 +1125,16 @@ export function decide(model, context) {
     )
       return fauxAssistantMessage("PEER_E2E_B_SINGLE_RECEIVED");
     const origin = text(inbound).match(
-      /Peer message from ([0-9a-f-]{36}):/,
+      /Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u,
     )?.[1];
     if (inbound && !origin)
-      throw new Error(
-        "federation smoke could not identify the exact origin session",
-      );
+      throw new Error("federation smoke could not identify the origin target");
     const semantic = text(inbound).match(/\bresult:[A-Za-z0-9_-]+#\d+\b/)?.[0];
     if (inbounds.length < 2)
       return waitForResult(
         "Waiting for both requests on the Manager pair route.",
       );
-    const branch = `herdsman/federation-smoke-${origin.slice(0, 8)}`;
+    const branch = `herdsman/federation-smoke-${origin.slice(8, 16)}`;
     const assignment = correlatedCall(messages, "delegate_work", branch);
     if (!assignment) {
       const forwardable =
@@ -1165,11 +1163,11 @@ export function decide(model, context) {
     if (replies >= 2) return fauxAssistantMessage("PEER_E2E_B_REPLIED");
     return replies === 0
       ? call("message_peer", {
-          session: origin,
+          target: origin,
           message: "PEER_E2E_REPLY_PROGRESS: delegation is complete.",
         })
       : call("message_peer", {
-          session: origin,
+          target: origin,
           message:
             "PEER_E2E_REPLY_FINAL: local delegation inspected the forwarded evidence.",
           files: ["reply.txt", semantic],

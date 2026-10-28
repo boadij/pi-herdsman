@@ -70,7 +70,7 @@ export function currentSendDiscoveryMatched(
   calls,
   results,
   resultCounts,
-  peerSession,
+  peerTarget,
 ) {
   if (calls.size !== 1) return false;
   const [callId] = calls.keys();
@@ -78,7 +78,7 @@ export function currentSendDiscoveryMatched(
   return (
     resultCounts.get(callId) === 1 &&
     (result?.details?.expectedPeerMatched === true ||
-      result?.details?.peers?.some((peer) => peer.session === peerSession) ===
+      result?.details?.peers?.some((peer) => peer.target === peerTarget) ===
         true)
   );
 }
@@ -238,7 +238,7 @@ export function matchedDelegateResult(entries) {
   return { toolCallId: call.id, message: results[0].message };
 }
 
-export function matchedManagedLeadDenial(entries, assignedLeadSessionId) {
+export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
   const calls = entries
     .filter(
       (entry) =>
@@ -249,7 +249,7 @@ export function matchedManagedLeadDenial(entries, assignedLeadSessionId) {
       (part) =>
         part.type === "toolCall" &&
         part.name === "message_peer" &&
-        part.arguments?.session === assignedLeadSessionId &&
+        part.arguments?.target === assignedLeadTarget &&
         typeof part.id === "string",
     );
   if (calls.length !== 1)
@@ -275,17 +275,13 @@ export function matchedManagedLeadDenial(entries, assignedLeadSessionId) {
     .join("\n");
   if (
     message.isError !== true ||
-    !/Peer target was not found or is no longer a live same-role peer/u.test(
-      text,
-    )
+    !/Unknown coordinator target; rediscover it/u.test(text)
   )
-    throw new Error(
-      `Managed Lead denial did not match expected rejection: ${text}`,
-    );
+    throw new Error(`Unbound target did not match expected rejection: ${text}`);
   return { toolCallId: call.id, message, text };
 }
 
-export function assertPeerInListPeersResult(entries, peerId) {
+export function assertPeerInListPeersResult(entries, peerTarget) {
   const calls = entries
     .filter(
       (entry) =>
@@ -311,7 +307,9 @@ export function assertPeerInListPeersResult(entries, peerId) {
   if (results.length !== 1)
     throw new Error("Lead omitted or duplicated exact list_peers tool result");
   if (
-    !results[0].message.details?.peers?.some((peer) => peer.session === peerId)
+    !results[0].message.details?.peers?.some(
+      (peer) => peer.target === peerTarget,
+    )
   )
     throw new Error("exact list_peers result omitted the remote ordinary Lead");
 }

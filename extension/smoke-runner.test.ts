@@ -3907,8 +3907,8 @@ test("simulated Manager decision only delegates the exact requested project work
 });
 
 test("federation Manager starts its branch after an earlier completed managed assignment", () => {
-  const origin = "12345678-1234-1234-1234-123456789abc";
-  const branch = "herdsman/federation-smoke-12345678";
+  const origin = "manager:0123456789";
+  const branch = "herdsman/federation-smoke-01234567";
   const messages = [
     {
       role: "user",
@@ -3958,7 +3958,7 @@ test("federation Lead correlates discovery and sends only within the current tur
         {
           type: "text",
           text: JSON.stringify({
-            peers: [{ session: "old-target", machine: "old" }],
+            peers: [{ target: "old-target", machine: "old" }],
           }),
         },
       ],
@@ -4006,7 +4006,7 @@ test("federation Lead correlates discovery and sends only within the current tur
       {
         type: "text",
         text: JSON.stringify({
-          peers: [{ session: "new-target", machine: "new" }],
+          peers: [{ target: "new-target", machine: "new" }],
         }),
       },
     ],
@@ -4020,11 +4020,11 @@ test("federation Lead correlates discovery and sends only within the current tur
     ],
   });
   assert.equal(send.content[0].name, "message_peer");
-  assert.equal(send.content[0].arguments.session, "new-target");
+  assert.equal(send.content[0].arguments.target, "new-target");
 });
 
 test("federation Lead handles inbound request after its capture prompt and imported binding", () => {
-  const origin = "12345678-1234-1234-1234-123456789abc";
+  const origin = "lead:0123456789";
   const canonical = "result:abcdefab-cdef-abcd-efab-cdefabcdefab";
   const messages = [
     { role: "user", content: "PEER_E2E_B_CAPTURE_SESSION" },

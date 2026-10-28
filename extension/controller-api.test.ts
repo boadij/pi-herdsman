@@ -1930,7 +1930,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
         undefined,
         ctx,
       );
-    assert.equal(result.details.chiefSessionId, chiefId);
+    assert.equal("chiefSessionId" in result.details, false);
     assert.ok(
       listChiefMessagePaths(runtime, chiefId).some((path) => {
         const record = readChiefMessage(path);
@@ -2175,7 +2175,7 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
         undefined,
         ctx,
       );
-    assert.equal(result.details.chiefSessionId, chiefId);
+    assert.equal("chiefSessionId" in result.details, false);
     assert.ok(
       listChiefMessagePaths(runtime, chiefId).some((path) => {
         const record = readChiefMessage(path);
@@ -2328,6 +2328,20 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
         String(message.content).includes("review-evidence-478"),
     );
     assert.ok(delivered.content.includes(completeEvidence));
+    const { coordinatorTarget, resolveCoordinatorTarget } =
+      await import("./coordinator-target.ts");
+    const senderTarget = coordinatorTarget("lead", senderId);
+    assert.ok(delivered.content.startsWith(`From Lead ${senderTarget}: `));
+    assert.deepEqual(resolveCoordinatorTarget(ctx, senderTarget), {
+      role: "lead",
+      sessionId: senderId,
+    });
+    const restored = fakeContext([...pi.entries]) as any;
+    restored.sessionManager.getSessionId = () => sessionId;
+    assert.deepEqual(resolveCoordinatorTarget(restored, senderTarget), {
+      role: "lead",
+      sessionId: senderId,
+    });
     assert.deepEqual(
       {
         fromSessionId: delivered.details.fromSessionId,
@@ -5280,7 +5294,7 @@ async function runManagerStartupScenario(
             undefined,
             ctx,
           );
-        assert.equal(transcript.details.session_id, staleId);
+        assert.equal(transcript.details.branch, assignment.branch);
         assert.match(
           transcript.details.transcript,
           /assigned branch transcript evidence/,

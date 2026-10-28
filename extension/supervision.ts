@@ -264,6 +264,9 @@ export type ChiefInboxDrainOptions = {
     | "followUp"
     | undefined
     | Promise<"steer" | "followUp" | undefined>;
+  senderTarget?: (
+    record: ChiefMessageRecord,
+  ) => string | undefined | Promise<string | undefined>;
   sendMessage: (
     message: unknown,
     options: {
@@ -1205,15 +1208,18 @@ export function chiefMessageQuarantined(
   }
 }
 
-function deliveredMessageContent(record: CoordinationMessageRecord): string {
+function deliveredMessageContent(
+  record: CoordinationMessageRecord,
+  senderTarget?: string,
+): string {
   const prefix =
     record.kind === "chief_message"
-      ? `From chief ${record.fromSessionId}: `
+      ? "From your Chief: "
       : record.kind === "manager_message"
-        ? `From manager ${record.fromSessionId}: `
+        ? `From Manager${senderTarget ? ` ${senderTarget}` : ""}: `
         : record.kind === "lead_message"
-          ? `From lead ${record.fromSessionId}: `
-          : `Peer message from ${record.fromSessionId}: `;
+          ? `From Lead${senderTarget ? ` ${senderTarget}` : ""}: `
+          : `Peer message${senderTarget ? ` from ${senderTarget}` : ""}: `;
   const content =
     record.kind === "project_assignment"
       ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
@@ -1350,10 +1356,17 @@ export async function drainCoordinationInbox(
               continue;
             }
           }
+          const senderTarget =
+            options.senderTarget &&
+            (record.kind === "peer_message" ||
+              record.kind === "lead_message" ||
+              record.kind === "manager_message")
+              ? await options.senderTarget(record)
+              : undefined;
           await options.sendMessage(
             {
               customType: `pi-herdsman-${record.kind}`,
-              content: deliveredMessageContent(record),
+              content: deliveredMessageContent(record, senderTarget),
               display: true,
               details: {
                 id: record.id,
@@ -1361,6 +1374,7 @@ export async function drainCoordinationInbox(
                 fromSessionId: record.fromSessionId,
                 toSessionId: record.toSessionId,
                 leadSessionId: record.leadSessionId,
+                ...(senderTarget ? { senderTarget } : {}),
                 ...(record.branch ? { branch: record.branch } : {}),
                 ...(record.kind === "peer_message"
                   ? { digest: coordinationMessageDigest(record) }

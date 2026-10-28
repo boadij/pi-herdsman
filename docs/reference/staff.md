@@ -11,11 +11,18 @@ the branch-based project operations `delegate_work`, `resume_work`,
 `stop_lead`, `remove_worktree`, and `integrate_branch`. Chief has no
 project-operation tools.
 
-Managers target assigned Leads by exact `branch`; ordinary supervised Leads
-and Chief direct reports use the exact full Pi `session` ID from a fresh
-supervision snapshot or `list_staff`. Project actions use the Git branch.
-Presentation state is not authority; every action revalidates current identity
-and direct-report authority.
+Managers select assigned Leads by `branch`; ordinary supervised Leads and
+Chief's actionable direct reports use the stable `target` discovered in the
+current supervision context or `list_staff`. Project actions use the Git
+branch. A target resolves to an exact coordinator identity, but is not
+authorization: every action revalidates current identity and direct-report
+authority.
+
+Target bindings are scoped to the caller's current Pi-session history. If a
+target cannot be resolved in the current history, the operation rejects it;
+rediscover the report with `list_staff` or the supervision context before
+acting. Do the same when identity or eligibility is uncertain. Presentation
+labels are not targets.
 
 ## Direct-report projection
 
@@ -32,11 +39,12 @@ Ordinary Manager-supervised Leads are excluded from Chief's actionable roster.
 Ambiguous duplicate assignments or unverified topology do not produce an
 actionable report.
 
-A direct-report record can expose the exact `session`, presentation-only
-`display_name`, runtime state, Agent counts, `available_tools`, and optional
-branch provenance. Manager reports also include a derived `relationship`
-value of `assigned` or `supervised`. Use the assigned report's `branch` or the
-ordinary report's `session`, never `display_name`. The
+An actionable target-bearing direct-report record exposes a stable `target`,
+presentation-only `display_name`, runtime state, Agent counts,
+`available_tools`, and optional branch provenance. Assigned Lead reports use
+their `branch` instead of a target. Manager reports also include a derived
+`relationship` value of `assigned` or `supervised`. Use the assigned report's
+`branch` or the ordinary report's `target`, never `display_name`. The
 automatic supervision snapshot is bounded state, not terminal or transcript
 evidence. Use `list_staff` when a fresh complete roster is materially needed.
 
@@ -72,25 +80,27 @@ Do not call `list_staff` merely to poll progress.
 ## `inspect_staff`
 
 ```json
-{ "session": "<exact full Pi session ID>" }
+{ "target": "lead:7k3mp9qd2f" }
 ```
 
-For an assigned Lead use `{ "branch": "feat/example" }` instead. Supply exactly
-one selector. Read-only. Requires a current eligible direct report. Returns bounded live
-terminal/process evidence. It does not expose persisted Pi conversation
-history. Use it only when live terminal/process evidence materially matters.
+For an assigned Lead, Manager uses `{ "branch": "feat/example" }` instead.
+Supply exactly one of `target` or `branch`. Read-only. Requires a current
+eligible direct report. Returns bounded live terminal/process evidence. It does
+not expose persisted Pi conversation history. Use it only when live
+terminal/process evidence materially matters.
 
 ## `read_staff_transcript`
 
 ```json
-{ "session": "<exact full Pi session ID>" }
+{ "target": "lead:7k3mp9qd2f" }
 ```
 
-For an assigned Lead use `{ "branch": "feat/example" }` instead. Supply exactly
-one selector. Read-only. Requires a current eligible direct report and revalidates the
-persisted Pi session before returning bounded visible conversation and tool
-evidence. Reasoning, system messages, extension entries, and control markers
-are excluded; the internal session-file path is not returned.
+For an assigned Lead, Manager uses `{ "branch": "feat/example" }` instead.
+Supply exactly one of `target` or `branch`. Read-only. Requires a current
+eligible direct report and revalidates its persisted Pi session before
+returning bounded visible conversation and tool evidence. Reasoning, system
+messages, extension entries, and control markers are excluded; the internal
+session-file path is not returned.
 
 ## `message_staff`
 
@@ -103,8 +113,9 @@ are excluded; the internal session-file path is not returned.
 }
 ```
 
-Use exactly one of `branch` (assigned Lead) or `session` (ordinary supervised
-Lead or Chief direct report). Sends an asynchronous durable message to the exact current direct report. The
+Use exactly one of `branch` (assigned Lead) or `target` (ordinary supervised
+Lead or Chief direct report). Sends an asynchronous durable message to the
+exact current direct report. The
 message is queued by Herdsman before submission. If an assigned report is
 actively running, supervisor direction uses Pi's cooperative steering lane;
 steering does not abort the current operation or interrupt an in-flight tool

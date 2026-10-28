@@ -129,6 +129,11 @@ import {
 } from "./compatibility.ts";
 import type { PeerCorrespondence } from "./peer-correspondence.ts";
 import {
+  coordinatorTarget,
+  rememberCoordinatorTarget,
+  resolveCoordinatorTarget,
+} from "./coordinator-target.ts";
+import {
   AGENT_COORDINATION_TOOLS,
   agentLaunchArgs,
   configuredToolPolicy,
@@ -3804,7 +3809,7 @@ export function registerLeadRuntime(
         activeLeadRole(options.leadRuntime) === "lead"
         ? coordinationRuntime.peerMessage(
             "remote-reconciliation",
-            { action: "list" },
+            { action: "list", internal: true },
             signal,
             undefined,
             ctx,
@@ -6517,13 +6522,46 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         await refresh(ctx);
         if (!isCurrent()) return;
         const contextStatus = status(ctx);
+        const targets = new Map<string, string>();
+        const candidates: {
+          role: "lead" | "manager";
+          session: string;
+          target: string;
+        }[] = [];
+        if (contextStatus !== "unavailable" && snapshot) {
+          for (const report of host.presentationReports(snapshot)) {
+            if (
+              report.compatibility === "incompatible" ||
+              !report.availableActions?.length ||
+              report.relationship === "assigned" ||
+              (report.role !== "lead" && report.role !== "manager")
+            )
+              continue;
+            const target = coordinatorTarget(report.role, report.lead);
+            targets.set(report.lead, target);
+            candidates.push({
+              role: report.role,
+              session: report.lead,
+              target,
+            });
+          }
+        }
         const content = host.formatContext(
           contextStatus === "unavailable" ? undefined : snapshot,
           {
             status: contextStatus,
             role: host.activeRole() === "manager" ? "manager" : "chief",
+            targets,
           },
         );
+        for (const candidate of candidates)
+          if (content.split("\n").includes(`  target: ${candidate.target}`))
+            rememberCoordinatorTarget(
+              host.pi,
+              ctx,
+              candidate.role,
+              candidate.session,
+            );
         if (host.latestMessageText(ctx) === content) return;
         return { customType: host.contextType, content, display: false };
       } catch {
@@ -9002,10 +9040,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     | { action: "remove"; branch: string }
     | { action: "merge"; branch: string; expected_head: string }
     | { action: "stop"; branch: string }
-    | { action: "inspect" | "transcript"; session?: string; branch?: string }
+    | { action: "inspect" | "transcript"; target?: string; branch?: string }
     | {
         action: "message";
-        session?: string;
+        target?: string;
         branch?: string;
         message: string;
         files?: string[];
@@ -10531,7 +10569,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             HERDSMAN_BUILD,
             incompatible.build,
             "staff action",
-            `lead ${incompatible.session}`,
+            `lead on branch ${branch}`,
           );
         throw new Error("Assigned work is not uniquely active");
       }
@@ -10643,10 +10681,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       params.action !== "list" &&
       Number(params.branch !== undefined) +
-        Number(params.session !== undefined) !==
+        Number(params.target !== undefined) !==
         1
     )
-      throw new Error("Provide exactly one of branch or session");
+      throw new Error("Provide exactly one of branch or target");
     let selectedAssignment: ProjectAssignment | undefined;
     if (params.action !== "list" && params.branch !== undefined) {
       if (activeRole() !== "manager" || !params.branch.trim())
@@ -10714,7 +10752,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         action: "list",
         self: {
           role: activeRole(),
-          session: ctx.sessionManager.getSessionId(),
         },
         ...(managerSnapshot
           ? {
@@ -10737,42 +10774,65 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             }
           : {}),
         reports: reports
-          .map((report: any) => ({
-            role: activeRole() === "chief" ? report.role : "lead",
-            session: reportSession(report),
-            ...(activeRole() === "manager"
-              ? {
-                  relationship: report.relationship ?? "assigned",
-                  ...(report.relationship === "assigned" && report.branch
-                    ? { branch: report.branch }
-                    : {}),
-                }
-              : {}),
-            display_name: report.displayName,
-            runtime_state: report.runtimeState,
-            agent_counts: report.agentCounts,
-            ...(activeRole() === "chief"
-              ? {
-                  project: "project" in report ? report.project : "",
-                  lead_counts:
-                    "leadCounts" in report ? report.leadCounts : undefined,
-                  leads:
-                    "leads" in report
-                      ? report.leads.map((lead: any) => ({
-                          ...lead,
-                          ...(lead.compatibility === "incompatible"
-                            ? { available_tools: [] }
-                            : {}),
-                        }))
-                      : [],
-                }
-              : {}),
-            available_tools: report.availableActions.map(staffToolName),
-          }))
+          .map((report: any) => {
+            const role = activeRole() === "chief" ? report.role : "lead";
+            const relationship = report.relationship ?? "assigned";
+            const actionable =
+              report.compatibility !== "incompatible" &&
+              report.availableActions?.length > 0 &&
+              !(activeRole() === "manager" && relationship === "assigned");
+            const target =
+              actionable && (role === "lead" || role === "manager")
+                ? rememberCoordinatorTarget(
+                    pi,
+                    ctx,
+                    role,
+                    reportSession(report),
+                  )
+                : undefined;
+            return {
+              role,
+              ...(target ? { target } : {}),
+              ...(activeRole() === "manager"
+                ? {
+                    relationship,
+                    ...(relationship === "assigned" && report.branch
+                      ? { branch: report.branch }
+                      : {}),
+                  }
+                : {}),
+              display_name: report.displayName,
+              runtime_state: report.runtimeState,
+              agent_counts: report.agentCounts,
+              ...(activeRole() === "chief"
+                ? {
+                    project: "project" in report ? report.project : "",
+                    lead_counts:
+                      "leadCounts" in report ? report.leadCounts : undefined,
+                    leads:
+                      "leads" in report
+                        ? report.leads.map((lead: any) => ({
+                            display_name: lead.display_name,
+                            runtime_state: lead.runtime_state,
+                            ...(lead.agent_counts
+                              ? { agent_counts: lead.agent_counts }
+                              : {}),
+                            ...(lead.compatibility === "incompatible"
+                              ? {
+                                  compatibility: "incompatible",
+                                  available_tools: [],
+                                }
+                              : {}),
+                          }))
+                        : [],
+                  }
+                : {}),
+              available_tools: report.availableActions.map(staffToolName),
+            };
+          })
           .concat(
             incompatibleReports.map((report) => ({
               role: report.role,
-              session: report.session,
               display_name: report.displayName,
               compatibility: "incompatible",
               build: report.build,
@@ -10782,7 +10842,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ...(discoveryWarning ? { warning: discoveryWarning } : {}),
       });
     }
-    const targetSession = selectedAssignment?.id ?? params.session;
+    const resolvedTarget =
+      params.target !== undefined
+        ? resolveCoordinatorTarget(ctx, params.target)
+        : undefined;
+    const targetSession = selectedAssignment?.id ?? resolvedTarget?.sessionId;
     const targets = reports.filter(
       (candidate: any) => reportSession(candidate) === targetSession,
     );
@@ -10797,12 +10861,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           host.HERDSMAN_BUILD,
           incompatibleTarget.build,
           "staff action",
-          `${incompatibleTarget.role} ${incompatibleTarget.session}`,
+          `${incompatibleTarget.role} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
         );
       throw new Error(
-        "Lead target was not found or is no longer eligible. Use the exact assigned branch or ordinary direct-report session from fresh supervision state; never use display_name.",
+        "Staff target was not found or is no longer eligible. Rediscover current staff with list_staff and use its target or assigned branch; never use display_name.",
       );
     }
+    if (resolvedTarget && resolvedTarget.role !== (lead.role ?? "lead"))
+      throw new Error(
+        "Staff target role no longer matches the direct report. Rediscover with list_staff.",
+      );
     if (
       (selectedAssignment && lead.relationship !== "assigned") ||
       (!selectedAssignment &&
@@ -10810,7 +10878,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         lead.relationship === "assigned")
     )
       throw new Error(
-        "Assigned Leads require branch targeting; session targets must be ordinary direct reports",
+        "Assigned Leads require branch targeting; target selectors are for ordinary direct reports",
       );
     const assignmentStillCurrent = () => {
       if (!selectedAssignment) return true;
@@ -10898,14 +10966,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       return result({
         ok: true,
         action: "inspect",
-        session: lead.lead,
+        ...(params.target ? { target: params.target } : {}),
+        ...(selectedAssignment ? { branch: selectedAssignment.branch } : {}),
         display_name: lead.displayName,
-        identity: {
-          workspace_id: lead.workspaceId,
-          pane_id: lead.paneId,
-          tab_id: lead.tabId,
-          pi_session_id: reportSession(lead),
-        },
         captured_at: evidence.capturedAt,
         recent_output_truncated: evidence.recentOutputTruncated,
         ...(evidence.recentOutput
@@ -10950,9 +11013,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       return result({
         ok: true,
         action: "transcript",
-        session: lead.lead,
+        ...(params.target ? { target: params.target } : {}),
+        ...(selectedAssignment ? { branch: selectedAssignment.branch } : {}),
         display_name: lead.displayName,
-        session_id: reportSession(lead),
         transcript: transcript.transcript,
         transcript_truncated: transcript.truncated,
       });
@@ -11102,7 +11165,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         HERDSMAN_BUILD,
         targetState?.build,
         "message_staff",
-        `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
+        `${targetState?.role ?? "Lead"} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
       );
       const record: ChiefMessageRecord = {
         version: 2,
@@ -11126,7 +11189,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ok: true,
         action: params.action,
         id: record.id,
-        session: lead.lead,
+        ...(params.target ? { target: params.target } : {}),
+        ...(selectedAssignment ? { branch: selectedAssignment.branch } : {}),
         display_name: lead.displayName,
         next_action:
           "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
@@ -12390,8 +12454,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     );
   };
   type PeerOperation =
-    | { action: "list" }
-    | { action: "message"; session: string; message: string; files?: string[] };
+    | { action: "list"; internal?: boolean }
+    | { action: "message"; target: string; message: string; files?: string[] };
   type RemoteDiagnostic = {
     machine?: string;
     reason:
@@ -12640,7 +12704,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           text: `Message sent to supervisor (${record.id}).`,
         },
       ],
-      details: { id: record.id, chiefSessionId: record.toSessionId },
+      details: { id: record.id },
     };
   };
   const resolvePeerResultBindings = (
@@ -12764,7 +12828,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           continue;
         peers.push({
           session: record.piSessionId,
-          name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
+          name:
+            record.name ??
+            (activeRole() === "manager" ? "Manager peer" : "Lead peer"),
           cwd: record.cwd ?? "",
           repo: record.repo ?? "",
           branch: record.branch ?? "",
@@ -12882,7 +12948,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 continue;
               const peerHint = diagnosticLabel(
                 remote.name,
-                `peer-${remote.piSessionId.slice(0, 8)}`,
+                remoteRole === "lead" ? "Lead peer" : "Manager peer",
               );
               if (!isRuntimeBuild(remote.build)) {
                 addRemoteDiagnostic({
@@ -12918,7 +12984,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               peers.push({
                 session: remote.piSessionId,
                 name:
-                  remote.name ?? `manager-${remote.piSessionId.slice(0, 8)}`,
+                  remote.name ??
+                  (remoteRole === "lead" ? "Lead peer" : "Manager peer"),
                 machine: machine.label,
                 cwd: remote.cwd ?? "",
                 repo: remote.repo ?? "",
@@ -13367,22 +13434,56 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             }
           : {}),
       };
+      const presentedPayload = params.internal
+        ? discoveryPayload
+        : {
+            ...discoveryPayload,
+            self: { role: activeRole() },
+            peers: peers.map(({ session, ...peer }) => ({
+              target: rememberCoordinatorTarget(
+                pi,
+                ctx,
+                activeRole() as "lead" | "manager",
+                session,
+              ),
+              ...peer,
+            })),
+            ...(replyOnly.length
+              ? {
+                  reply_only: replyOnly.map(({ session, ...peer }) => ({
+                    target: rememberCoordinatorTarget(
+                      pi,
+                      ctx,
+                      activeRole() as "lead" | "manager",
+                      session,
+                    ),
+                    ...peer,
+                  })),
+                }
+              : {}),
+          };
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(discoveryPayload),
+            text: JSON.stringify(presentedPayload),
           },
         ],
         details: {
           ok: true,
           action: "list",
-          ...discoveryPayload,
+          ...presentedPayload,
         },
       };
     }
+    const resolvedTarget = resolveCoordinatorTarget(ctx, params.target);
+    if (resolvedTarget.role !== activeRole())
+      throw new Error(
+        "Peer target role does not match the current role; run `list_peers` again.",
+      );
+    const recipientSession = resolvedTarget.sessionId;
     const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
-    const remoteRoute = remotePeerRoutes.get(params.session);
+    const remoteRoute = remotePeerRoutes.get(recipientSession);
     const returnCorrespondences =
       sender &&
       (activeRole() === "manager" || activeRole() === "lead") &&
@@ -13391,12 +13492,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             (item) =>
               (item.role ?? "manager") === activeRole() &&
               matchesReturnRecipient(item, sender) &&
-              item.originSession === params.session,
+              item.originSession === recipientSession,
           )
         : [];
     const target = remoteRoute
       ? undefined
-      : await livePeerLead(ctx, params.session);
+      : await livePeerLead(ctx, recipientSession);
     const noAuthorizedLocalTarget =
       (!target || (target.role ?? "lead") !== activeRole()) &&
       returnCorrespondences.length !== 1;
@@ -13407,11 +13508,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         : remoteRoute
           ? remoteRoute.role !== activeRole()
             ? "route_role_mismatch"
-            : ambiguousRemoteSessions.has(params.session)
+            : ambiguousRemoteSessions.has(recipientSession)
               ? "route_ambiguous"
               : undefined
           : noAuthorizedLocalTarget
-            ? ambiguousRemoteSessions.has(params.session)
+            ? ambiguousRemoteSessions.has(recipientSession)
               ? "route_ambiguous"
               : "no_authorized_target"
             : undefined;
@@ -13439,7 +13540,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         leaseId: sender.claim.id,
         kind: "peer_message",
         fromSessionId: sender.piSessionId,
-        toSessionId: target?.piSessionId ?? params.session,
+        toSessionId: target?.piSessionId ?? recipientSession,
         leadSessionId: sender.piSessionId,
         peerSource:
           remoteRoute && activeRole() === "lead"
@@ -13519,10 +13620,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         content: [
           {
             type: "text",
-            text: `Reply queued for originating ${recipientRole === "lead" ? "Lead" : "Manager"} ${params.session} (${replyId}).`,
+            text: `Reply queued for originating ${recipientRole === "lead" ? "Lead" : "Manager"} ${params.target} (${replyId}).`,
           },
         ],
-        details: { id: replyId, remoteSessionId: params.session, queued: true },
+        details: { id: replyId, target: params.target, queued: true },
       };
     }
     if (remoteRoute) {
@@ -13530,7 +13631,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const currentTarget = current.peers.find(
         (peer) =>
           peer.role === remoteRoute.role &&
-          peer.piSessionId === params.session &&
+          peer.piSessionId === recipientSession &&
           peer.claim.id === remoteRoute.claimId &&
           (remoteRoute.role !== "lead" ||
             (current.ordinaryLeadsComplete === true &&
@@ -13542,7 +13643,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         HERDSMAN_BUILD,
         currentTarget.build as RuntimeBuild,
         "peer_message",
-        `remote ${remoteRoute.role} ${params.session}`,
+        `remote ${remoteRoute.role} ${params.target}`,
       );
       const record: ChiefMessageRecord = {
         version: 2,
@@ -13551,7 +13652,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         leaseId: sender.claim.id,
         kind: "peer_message",
         fromSessionId: sender.piSessionId,
-        toSessionId: params.session,
+        toSessionId: recipientSession,
         leadSessionId: sender.piSessionId,
         peerSource:
           remoteRoute.role === "lead"
@@ -13609,12 +13710,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               !item.finalized &&
               (item.role ?? "manager") === remoteRoute.role &&
               item.originSession === sender.piSessionId &&
-              item.recipientSession === params.session,
+              item.recipientSession === recipientSession,
           ) ??
           createPeerCorrespondence({
             originSession: sender.piSessionId,
             originGeneration: sender.claim.id,
-            recipientSession: params.session,
+            recipientSession,
             recipientGeneration: remoteRoute.claimId,
             acceptanceId: recordId,
             role: remoteRoute.role,
@@ -13641,7 +13742,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           dataRoot: remoteRoute.dataRoot,
           session: sender.piSessionId,
           claimId: sender.claim.id,
-          recipientSession: params.session,
+          recipientSession,
           digest: transferDigest,
           envelope,
         });
@@ -13670,13 +13771,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           {
             type: "text",
             text: accepted
-              ? `Message accepted by remote ${remoteRoute.role} ${params.session} (${recordId}).`
-              : `Message queued locally for remote ${remoteRoute.role} ${params.session} (${recordId}); remote acceptance is still pending.`,
+              ? `Message accepted by remote ${remoteRoute.role} ${params.target} (${recordId}).`
+              : `Message queued locally for remote ${remoteRoute.role} ${params.target} (${recordId}); remote acceptance is still pending.`,
           },
         ],
         details: {
           id: recordId,
-          remoteSessionId: params.session,
+          target: params.target,
           machine: remoteRoute.machine.label,
           accepted,
           queued: true,
@@ -13697,13 +13798,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       content: [
         {
           type: "text",
-          text: `Peer message queued for ${record.toSessionId}.`,
+          text: `Peer message queued for ${params.target}.`,
         },
       ],
       details: {
         ok: true,
         action: "message",
-        session: record.toSessionId,
+        target: params.target,
         id: record.id,
       },
     };
@@ -14625,6 +14726,40 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
 
           if (supervisorDownlink) return "steer";
           return ctx.isIdle() ? "followUp" : undefined;
+        },
+        senderTarget: (record: ChiefMessageRecord) => {
+          if (record.kind === "peer_message") {
+            const role = record.peerSource?.role;
+            if (
+              (role !== "lead" && role !== "manager") ||
+              role !== activeRole()
+            )
+              throw new Error("Peer sender role is unavailable for delivery");
+            return rememberCoordinatorTarget(
+              pi,
+              ctx,
+              role,
+              record.fromSessionId,
+            );
+          }
+          if (record.kind === "manager_message" && activeRole() === "chief")
+            return rememberCoordinatorTarget(
+              pi,
+              ctx,
+              "manager",
+              record.fromSessionId,
+            );
+          if (
+            record.kind === "lead_message" &&
+            (activeRole() === "chief" || activeRole() === "manager")
+          )
+            return rememberCoordinatorTarget(
+              pi,
+              ctx,
+              "lead",
+              record.fromSessionId,
+            );
+          return undefined;
         },
         isDelivered: (id: string) => {
           const record = transactions.get(id)?.record;

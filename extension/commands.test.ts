@@ -61,6 +61,10 @@ import {
   writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
+import {
+  coordinatorTarget,
+  rememberCoordinatorTarget,
+} from "./coordinator-target.ts";
 import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
 import {
   herdsmanTempRoot,
@@ -2005,12 +2009,18 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
         JSON.parse(
           (await peers.execute("list", {}, undefined, undefined, context))
             .content[0].text,
-        ).peers.some((peer: { session: string }) => peer.session === targetId),
+        ).peers.some(
+          (peer: { target: string }) =>
+            peer.target === coordinatorTarget("manager", targetId),
+        ),
         true,
       );
       await message.execute(
         "message",
-        { session: targetId, message: "Manager peer" },
+        {
+          target: coordinatorTarget("manager", targetId),
+          message: "Manager peer",
+        },
         undefined,
         undefined,
         context,
@@ -2155,10 +2165,16 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
     }
     const sender = fixtures[0]!;
     await sender.pi.tools
+      .find((tool) => tool.name === "list_peers")!
+      .execute("list", {}, undefined, undefined, sender.context);
+    await sender.pi.tools
       .find((tool) => tool.name === "message_peer")!
       .execute(
         "message",
-        { session: leads[1]!.sessionId, message: "ordinary non-Git message" },
+        {
+          target: coordinatorTarget("lead", leads[1]!.sessionId),
+          message: "ordinary non-Git message",
+        },
         undefined,
         undefined,
         sender.context,
@@ -2330,8 +2346,9 @@ test("Manager peer messages deliver to a live Manager without changing its role"
     );
     assert.ok(
       listed.peers.some(
-        (peer: { session: string }) =>
-          peer.session === recipientManager!.sessionId,
+        (peer: { target: string }) =>
+          peer.target ===
+          coordinatorTarget("manager", recipientManager!.sessionId),
       ),
       JSON.stringify(listed),
     );
@@ -2343,7 +2360,10 @@ test("Manager peer messages deliver to a live Manager without changing its role"
       .find((tool) => tool.name === "message_peer")!
       .execute(
         "message",
-        { session: recipientManager!.sessionId, message: "manager queued" },
+        {
+          target: coordinatorTarget("manager", recipientManager!.sessionId),
+          message: "manager queued",
+        },
         undefined,
         undefined,
         sender.context,
@@ -3678,7 +3698,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       assert.equal(tool.defaultActive, false);
     }
     const historicalArgs = {
-      session: "lead-historical-session",
+      target: "lead:0123456789",
       message: "Please continue the prior assignment",
     };
     const historical = staffMessage.renderCall(
@@ -3689,7 +3709,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       },
       { args: historicalArgs, argsComplete: true },
     );
-    assert.match(historical.render(160).join("\n"), /^message staff  lead-his/);
+    assert.match(
+      historical.render(160).join("\n"),
+      /^message staff  lead:0123456789/,
+    );
     await first.events.get("session_start")![0](undefined, ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
@@ -3888,14 +3911,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         peer.execute(
           "message",
           {
-            session: leadPeerSession,
+            target: coordinatorTarget("lead", leadPeerSession),
             message: "Wrong role",
           },
           undefined,
           undefined,
           ctx1,
         ),
-        /no longer a live same-role peer/,
+        /Unknown coordinator target/,
       );
     } finally {
       removePeerLeadRecord(peerRuntime(), leadPeerSession, leadPeer);
@@ -9059,10 +9082,16 @@ async function managerDelegateAssignmentTest(
     const staffMessage = pi.tools.find(
       (tool) => tool.name === "message_staff",
     )!;
+    const assignedTarget = rememberCoordinatorTarget(
+      pi.pi as never,
+      ctx,
+      "lead",
+      childSession,
+    );
     for (const selector of [
       {},
-      { session: childSession },
-      { session: childSession, branch: assignment.branch },
+      { target: assignedTarget },
+      { target: assignedTarget, branch: assignment.branch },
     ])
       await assert.rejects(
         staffMessage.execute(
@@ -10030,7 +10059,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   };
   let overview: any;
   const manager = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
-  const managerCtx = fakeContext() as any;
+  const managerCtx = fakeContext(manager.entries) as any;
   managerCtx.hasUI = true;
   managerCtx.ui.custom = async (factory: any) => {
     overview = factory(
@@ -10058,19 +10087,15 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       undefined,
       managerCtx,
     );
-    assert.deepEqual(
-      managerListing.details.reports
-        .map((report: any) => report.session)
-        .sort(),
-      [assignedLeadSession, ordinaryLeadSession].sort(),
-      "all eligible Leads in the verified project group are Manager reports",
-    );
+    assert.equal(managerListing.details.reports.length, 2);
     const assignedReport = managerListing.details.reports.find(
-      (report: any) => report.session === assignedLeadSession,
+      (report: any) => report.relationship === "assigned",
     );
     const ordinaryReport = managerListing.details.reports.find(
-      (report: any) => report.session === ordinaryLeadSession,
+      (report: any) =>
+        report.target === coordinatorTarget("lead", ordinaryLeadSession),
     );
+    assert.equal("target" in assignedReport, false);
     assert.equal(assignedReport.relationship, "assigned");
     assert.deepEqual(assignedReport.available_tools, [
       "inspect_staff",
@@ -10086,16 +10111,12 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       .find((tool) => tool.name === "inspect_staff")!
       .execute(
         "inspect",
-        { action: "inspect", session: ordinaryLeadSession },
+        { action: "inspect", target: ordinaryReport.target },
         undefined,
         undefined,
         managerCtx,
       );
-    assert.equal(inspection.details.session, ordinaryLeadSession);
-    assert.equal(
-      inspection.details.identity.pi_session_id,
-      ordinaryLeadSession,
-    );
+    assert.equal(inspection.details.target, ordinaryReport.target);
     assert.equal(
       inspection.details.recent_output,
       "bounded ordinary live output",
@@ -10104,7 +10125,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       .find((tool) => tool.name === "read_staff_transcript")!
       .execute(
         "transcript",
-        { session: ordinaryLeadSession },
+        { target: ordinaryReport.target },
         undefined,
         undefined,
         managerCtx,
@@ -10221,6 +10242,27 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       piSessionId: ordinaryLeadSession,
       updatedAt: Date.now(),
     });
+    await assert.rejects(
+      manager.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          { branch: "assigned-branch", message: "hello" },
+          undefined,
+          undefined,
+          managerCtx,
+        ),
+      (error: any) => {
+        assert.equal(error.detail.category, "incompatible_build");
+        assert.match(error.message, /assigned-branch/);
+        assert.doesNotMatch(
+          JSON.stringify(error),
+          new RegExp(assignedLeadSession),
+        );
+        assert.doesNotMatch(error.message, new RegExp(assignedLeadSession));
+        return true;
+      },
+    );
     await manager.commandOptions.get("manager").handler("", managerCtx);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -10265,7 +10307,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     process.env.HERDR_PANE_ID = "chief-pane";
     process.env.HERDR_TAB_ID = "chief-tab";
     const chief = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
-    const chiefCtx = fakeContext() as any;
+    const chiefCtx = fakeContext(chief.entries) as any;
     chiefCtx.sessionManager.getSessionId = () => `chief-${randomUUID()}`;
     const chiefSession = chiefCtx.sessionManager.getSessionId();
     chiefCtx.sessionManager.getSessionId = () => chiefSession;
@@ -10312,7 +10354,9 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
           message?.customType === "pi-herdsman-supervision-context",
       );
       assert.ok(
-        JSON.stringify(contextMessage?.message).includes(ordinaryLeadSession),
+        JSON.stringify(contextMessage?.message).includes(
+          coordinatorTarget("manager", LEAD_SESSION_ID),
+        ),
         JSON.stringify(contextMessage?.message),
       );
       liveAgents.push(
@@ -10337,20 +10381,24 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       assert.equal(listed.details.self.role, "chief");
       assert.equal(listed.details.reports.length, 2);
       assert.equal(listed.details.reports[0].role, "manager");
-      assert.equal(listed.details.reports[0].session, LEAD_SESSION_ID);
+      assert.equal(
+        listed.details.reports[0].target,
+        coordinatorTarget("manager", LEAD_SESSION_ID),
+      );
       assert.ok(
         listed.details.reports[0].available_tools.includes("inspect_staff"),
       );
       assert.ok(
         listed.details.reports[0].available_tools.includes("message_staff"),
       );
-      const nestedSessions = listed.details.reports[0].leads.map(
-        (lead: any) => lead.session,
+      assert.equal(listed.details.reports[0].leads.length, 36);
+      assert.ok(
+        listed.details.reports[0].leads.every(
+          (lead: any) => !("target" in lead) && !("session" in lead),
+        ),
       );
-      assert.equal(nestedSessions.length, 36);
-      assert.ok(nestedSessions.includes(incompatibleChildSession));
       const nestedIncompatible = listed.details.reports[0].leads.find(
-        (lead: any) => lead.session === incompatibleChildSession,
+        (lead: any) => lead.compatibility === "incompatible",
       );
       assert.equal(nestedIncompatible.compatibility, "incompatible");
       assert.deepEqual(nestedIncompatible.available_tools, []);
@@ -10361,29 +10409,33 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
         total: 35,
       });
       const incompatibleEntry = listed.details.reports.find(
-        (report: any) => report.session === incompatibleManagerSession,
+        (report: any) => report.compatibility === "incompatible",
       );
       assert.equal(incompatibleEntry.compatibility, "incompatible");
       assert.equal(incompatibleEntry.build.sha256, OTHER_HERDSMAN_BUILD.sha256);
       assert.deepEqual(incompatibleEntry.available_tools, []);
       assert.equal(
         listed.details.reports.some(
-          (report: any) => report.session === nestedLeadSession,
+          (report: any) =>
+            report.target === coordinatorTarget("lead", nestedLeadSession),
         ),
         false,
         "a Lead under an incompatible Manager is not elevated to Chief direct staff",
       );
       assert.match(listed.details.warning, /reload those Pi sessions/);
+      const incompatibleTarget = rememberCoordinatorTarget(
+        chief.pi as never,
+        chiefCtx,
+        "manager",
+        incompatibleManagerSession,
+      );
       for (const [toolName, params] of [
-        [
-          "inspect_staff",
-          { action: "inspect", session: incompatibleManagerSession },
-        ],
+        ["inspect_staff", { action: "inspect", target: incompatibleTarget }],
         [
           "message_staff",
-          { session: incompatibleManagerSession, message: "unauthorized" },
+          { target: incompatibleTarget, message: "unauthorized" },
         ],
-        ["read_staff_transcript", { session: incompatibleManagerSession }],
+        ["read_staff_transcript", { target: incompatibleTarget }],
       ] as const) {
         await assert.rejects(
           chief.tools
@@ -10428,7 +10480,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       assert.equal(
         convergedList.details.reports.some(
           (report: any) =>
-            report.session === incompatibleManagerSession &&
+            report.target === incompatibleTarget &&
             report.compatibility === "incompatible",
         ),
         false,
@@ -10472,14 +10524,19 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
           .execute(
             "message",
             {
-              session: "unrelated-lead",
+              target: rememberCoordinatorTarget(
+                chief.pi as never,
+                chiefCtx,
+                "lead",
+                "unrelated-lead",
+              ),
               message: "Not a direct report",
             },
             undefined,
             undefined,
             chiefCtx,
           ),
-        /not a current direct report|Lead target was not found or is no longer eligible/,
+        /not a current direct report|Staff target was not found or is no longer eligible/,
       );
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
@@ -10687,7 +10744,8 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       .execute("list", {}, undefined, undefined, managerCtx);
     assert.equal(
       reports.details.reports.find(
-        (report: any) => report.session === leadSession,
+        (report: any) =>
+          report.target === coordinatorTarget("lead", leadSession),
       )?.relationship,
       "supervised",
     );
@@ -10709,7 +10767,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         undefined,
         leadCtx,
       );
-    assert.equal(uplink.details.chiefSessionId, LEAD_SESSION_ID);
+    assert.equal("chiefSessionId" in uplink.details, false);
     useManagerIdentity();
     managerCtx.isIdle = () => true;
     await t.waitFor(() =>
@@ -10721,6 +10779,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
             message?.details?.fromSessionId === leadSession &&
             message?.details?.toSessionId === LEAD_SESSION_ID,
         ),
+      ),
+    );
+    const incoming = manager.sentMessageCalls.find(
+      ({ message }: any) => message?.details?.id === uplink.details.id,
+    )!.message as any;
+    assert.ok(
+      incoming.content.startsWith(
+        `From Lead ${coordinatorTarget("lead", leadSession)}: `,
       ),
     );
     assert.equal(
@@ -10745,7 +10811,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       .execute(
         "message",
         {
-          session: leadSession,
+          target: coordinatorTarget("lead", leadSession),
           message: "Manager to ordinary Lead",
         },
         undefined,
@@ -10786,7 +10852,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       .execute(
         "message",
         {
-          session: leadSession,
+          target: coordinatorTarget("lead", leadSession),
           message: "Manager message while ordinary Lead is idle",
         },
         undefined,
@@ -10961,7 +11027,8 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       .execute("list", {}, undefined, undefined, managerCtx);
     assert.equal(
       ambiguousReports.details.reports.some(
-        (report: any) => report.session === leadSession,
+        (report: any) =>
+          report.target === coordinatorTarget("lead", leadSession),
       ),
       false,
       "ordinary Leads are not advertised when two Managers share their repository",
@@ -10976,14 +11043,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         .execute(
           "message",
           {
-            session: leadSession,
+            target: coordinatorTarget("lead", leadSession),
             message: "Do not enqueue ambiguous supervision",
           },
           undefined,
           undefined,
           managerCtx,
         ),
-      /Lead target was not found or is no longer eligible/,
+      /Staff target was not found or is no longer eligible/,
     );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), leadSession),
@@ -11022,14 +11089,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         .execute("list", {}, undefined, undefined, managerCtx);
       assert.equal(
         assignedReports.details.reports.find(
-          (report: any) => report.session === leadSession,
+          (report: any) => report.branch === assignedBranch,
         )?.relationship,
         "assigned",
         "project assignment authority remains available despite multiple Managers",
       );
       assert.equal(
         assignedReports.details.reports.find(
-          (report: any) => report.session === leadSession,
+          (report: any) => report.branch === assignedBranch,
         )?.branch,
         assignedBranch,
       );
@@ -11988,10 +12055,16 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     await sender.events.get("session_start")![0](undefined, senderContext);
     const peer = sender.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
+    const target = rememberCoordinatorTarget(
+      sender.pi as never,
+      senderContext,
+      "lead",
+      targetId,
+    );
     await assert.rejects(
       peer.execute(
         "message",
-        { session: targetId, message: "mismatch must not publish" },
+        { target, message: "mismatch must not publish" },
         undefined,
         undefined,
         senderContext,
@@ -12013,12 +12086,12 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     });
     const queued = await peer.execute(
       "message",
-      { session: targetId, message: "sender survived" },
+      { target, message: "sender survived" },
       undefined,
       undefined,
       senderContext,
     );
-    assert.equal(queued.details?.session, targetId);
+    assert.equal(queued.details?.target, target);
     await sender.events.get("session_shutdown")![0]();
     assert.equal(readPeerLeadRecord(runtime, senderId), undefined);
 

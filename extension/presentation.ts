@@ -1465,7 +1465,11 @@ function staffToolName(action: string): string {
 /** Formats validated supervision for hidden persistent Chief or Manager context. */
 export function formatSupervisionContext(
   snapshot: SupervisionPresentationSnapshot | undefined,
-  options: { status: SupervisionContextStatus; role?: "chief" | "manager" },
+  options: {
+    status: SupervisionContextStatus;
+    role?: "chief" | "manager";
+    targets?: ReadonlyMap<string, string>;
+  },
 ): string {
   const role = options.role ?? "chief";
   const header = [
@@ -1478,8 +1482,8 @@ export function formatSupervisionContext(
     "This supervision is state-only context, not a response target.",
     "Tool actions still revalidate current identity/state before execution.",
     role === "manager"
-      ? "Use branch for assigned Leads and exact session for ordinary supervised Leads; never use display_name."
-      : "Use the exact full session ID for direct reports; never use display_name.",
+      ? "Use branch for assigned Leads and stable targets for ordinary supervised Leads; never use display_name."
+      : "Use stable targets for actionable direct reports; never use display_name.",
   ];
   if (options.status === "unavailable")
     return [
@@ -1579,7 +1583,10 @@ export function formatSupervisionContext(
     ];
     if (role === "manager" && lead.relationship === "assigned" && lead.branch)
       lines.push(`  branch: ${supervisionValue(lead.branch)}`);
-    else lines.push(`  session: ${supervisionValue(lead.lead)}`);
+    else if (options.targets?.has(lead.lead))
+      lines.push(
+        `  target: ${supervisionValue(options.targets.get(lead.lead))}`,
+      );
     if (displayed.compatibility === "incompatible") {
       lines.push(
         "  compatibility: incompatible (observed; no available staff tools)",
@@ -1613,7 +1620,7 @@ export function formatSupervisionContext(
       lines.push("  descendant_leads (observation only; no staff actions):");
       for (const child of lead.leads.slice(0, 32))
         lines.push(
-          `    ${supervisionValue(child.display_name)} · ${child.compatibility === "incompatible" ? "incompatible (build mismatch)" : supervisionValue(child.runtime_state)} · session=${supervisionValue(child.session)}` +
+          `    ${supervisionValue(child.display_name)} · ${child.compatibility === "incompatible" ? "incompatible (build mismatch)" : supervisionValue(child.runtime_state)}` +
             `${child.agent_counts ? ` · agents=${child.agent_counts.total}` : ""}`,
         );
     }
@@ -1809,7 +1816,7 @@ function peerMessageStatus(details: Record<string, unknown>): string {
     ? "accepted remotely"
     : details.accepted === false
       ? "queued for remote retry"
-      : details.remoteSessionId
+      : details.target && details.action !== "message"
         ? "reply queued"
         : "peer message queued";
 }
@@ -2770,11 +2777,11 @@ function renderExpandedCoordinationCall(
       if (args.session) fields.push(["session", args.session]);
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff") {
-    if (args.session) fields.push(["session", args.session]);
+    if (args.target) fields.push(["target", args.target]);
     if (args.branch) fields.push(["branch", args.branch]);
     if (action === "delegate" && args.base) fields.push(["base", args.base]);
   } else if (tool === "peer") {
-    if (args.session) fields.push(["session", args.session]);
+    if (args.target) fields.push(["target", args.target]);
   }
   const content = new Container();
   content.addChild(new Text(header, 0, 0));
@@ -2833,9 +2840,8 @@ export function renderCoordinationCall(
         ? ""
         : typeof a.branch === "string"
           ? a.branch
-          : shortIdentity(a.session);
-  else if (tool === "peer")
-    target = action === "list" ? "" : shortIdentity(a.session);
+          : value(a.target);
+  else if (tool === "peer") target = action === "list" ? "" : value(a.target);
   const definition =
     tool === "agent"
       ? value(a.definition) ||
@@ -3042,7 +3048,9 @@ function expandedResultLines(
     value(details.display_name) ||
     value(details.agent) ||
     value(details.label) ||
-    value(details.session) ||
+    (tool === "staff" || tool === "peer"
+      ? value(details.target)
+      : value(details.session)) ||
     value(args.agent) ||
     value(args.label) ||
     "agent";
@@ -3088,13 +3096,14 @@ function expandedResultLines(
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
-    [
-      "session",
-      details.session ??
-        details.session_id ??
-        details.pi_session_id ??
-        details.chiefSessionId,
-    ],
+    ...(tool === "staff" || tool === "peer"
+      ? [["target", details.target] as [string, unknown]]
+      : [
+          [
+            "session",
+            details.session ?? details.session_id ?? details.pi_session_id,
+          ] as [string, unknown],
+        ]),
     ["branch", tool === "staff" ? details.branch : undefined],
     [
       "checkout path",
@@ -3117,17 +3126,6 @@ function expandedResultLines(
   ];
   if (tool === "agent" && action === "reply")
     fields.push(["ask", details.ask_id ?? details.askId ?? args.askId]);
-  const identity =
-    details.identity && typeof details.identity === "object"
-      ? (details.identity as Record<string, unknown>)
-      : {};
-  if (tool === "staff" && action === "inspect") {
-    fields.push(
-      ["session", identity.pi_session_id],
-      ["pane", identity.pane_id],
-      ["workspace", identity.workspace_id],
-    );
-  }
   for (const [label, field] of fields)
     if (field !== undefined && field !== "")
       lines.push(`${label}: ${String(field)}`);
@@ -3175,7 +3173,9 @@ function expandedResultLines(
   if (action === "list" && (tool === "staff" || tool === "peer")) {
     if (tool === "peer") {
       const peers = Array.isArray(details.peers) ? details.peers : [];
-      const self = value(details.self) || "unknown";
+      const self = value(
+        (details.self as Record<string, unknown> | undefined)?.role,
+      );
       lines.push(
         "",
         `self ${self}`,
@@ -3183,11 +3183,13 @@ function expandedResultLines(
         ...peers.flatMap((peer: any) =>
           peer && typeof peer === "object"
             ? (() => {
-                const session = value(peer.session) || "session";
-                const name = value(peer.name) || session;
+                const target = value(peer.target);
+                const name = value(peer.name) || "peer";
                 const branch = value(peer.branch);
                 const branchSuffix = branch ? ` · branch: ${branch}` : "";
-                return [`  ${name} · session: ${session}${branchSuffix}`];
+                return [
+                  `  ${name}${target ? ` · target: ${target}` : ""}${branchSuffix}`,
+                ];
               })()
             : [],
         ),
@@ -3203,14 +3205,14 @@ function expandedResultLines(
             if (!item || typeof item !== "object") return [];
             const name = value(item.name);
             const workspace = value(item.workspace_label);
-            const session = value(item.session) || "session";
-            const primary = name || workspace || session;
+            const target = value(item.target);
+            const primary = name || workspace || "peer";
             return [
               `  ${primary}`,
               ...(name && workspace && workspace !== name
                 ? [`  ${workspace}`]
                 : []),
-              ...(primary !== session ? [`  session: ${session}`] : []),
+              ...(target ? [`  target: ${target}`] : []),
               "  Reply can be queued; current availability is unverified.",
             ];
           }),
@@ -3259,11 +3261,11 @@ function expandedResultLines(
             : {};
         const totalAgents = typeof counts.total === "number" ? counts.total : 0;
         const state = value(lead.runtime_state) || "unknown";
-        const display =
-          value(lead.display_name) || value(lead.session) || "lead";
+        const display = value(lead.display_name) || "lead";
         return [
           `${display}  ${state}${totalAgents ? ` · ${totalAgents} agent${totalAgents === 1 ? "" : "s"}` : ""}`,
-          `  session: ${value(lead.session)}`,
+          ...(value(lead.target) ? [`  target: ${value(lead.target)}`] : []),
+          ...(value(lead.branch) ? [`  branch: ${value(lead.branch)}`] : []),
           ...(lead.agent_counts && typeof lead.agent_counts === "object"
             ? [
                 `  agent counts: ${Object.entries(counts)
@@ -3485,7 +3487,9 @@ export function renderCoordinationResult(
     const label =
       value(details.agent) ||
       value(details.display_name) ||
-      shortIdentity(details.session) ||
+      (tool === "staff" || tool === "peer"
+        ? value(details.target)
+        : shortIdentity(details.session)) ||
       "target";
     const tail = textLines(details.transcript).at(-1);
     const preview = tail ? collapseDisplayText(tail) : undefined;
@@ -3615,7 +3619,7 @@ export function renderCoordinationResult(
     );
   }
   const display =
-    value(details.display_name) || shortIdentity(details.session) || "lead";
+    value(details.display_name) || value(details.target) || "lead";
   if (action === "inspect")
     return new WidthSafeText(
       [
@@ -3810,6 +3814,7 @@ export function renderCoordinationMessage(
     content?: string;
     details?: {
       fromSessionId?: string;
+      senderTarget?: string;
       toSessionId?: string;
       leadSessionId?: string;
       branch?: string;
@@ -3844,12 +3849,25 @@ export function renderCoordinationMessage(
     heading = d?.toRole
       ? `${endpoint(senderRole, d.fromDisplayName)} → ${endpoint(d.toRole, d.toDisplayName)}`
       : `${endpoint(senderRole, d?.fromDisplayName)} message`;
-    if (d?.fromSessionId) prefix = `From ${senderRole} ${d.fromSessionId}: `;
+    const currentPrefix =
+      senderRole === "chief"
+        ? "From your Chief: "
+        : `From ${senderRole === "manager" ? "Manager" : "Lead"}${d?.senderTarget ? ` ${d.senderTarget}` : ""}: `;
+    prefix = message.content?.startsWith(currentPrefix)
+      ? currentPrefix
+      : d?.fromSessionId
+        ? `From ${senderRole} ${d.fromSessionId}: `
+        : undefined;
   } else {
     switch (kind) {
       case "peer_message":
         heading = "Peer message";
-        if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
+        const currentPrefix = `Peer message${d?.senderTarget ? ` from ${d.senderTarget}` : ""}: `;
+        prefix = message.content?.startsWith(currentPrefix)
+          ? currentPrefix
+          : d?.fromSessionId
+            ? `Peer message from ${d.fromSessionId}: `
+            : undefined;
         break;
       case "project_assignment":
         heading = statusLine(theme, "accent", "→", `${branch} assigned`);

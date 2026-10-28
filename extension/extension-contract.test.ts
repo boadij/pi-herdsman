@@ -16,6 +16,11 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
+  COORDINATOR_TARGET_PATTERN,
+  coordinatorTarget,
+  rememberCoordinatorTarget,
+} from "./coordinator-target.ts";
+import {
   COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
@@ -335,33 +340,33 @@ const SEMANTIC_TOOL_CASES = [
     { message: "progress", question: "x" },
     ["message"],
   ],
-  ["list_peers", {}, { session: "x" }, []],
+  ["list_peers", {}, { target: "lead:0123456789" }, []],
   [
     "message_peer",
-    { session: "session-id", message: "please review" },
-    { session: "session-id", message: "please review", lead: "x" },
-    ["session", "message"],
+    { target: "lead:0123456789", message: "please review" },
+    { target: "lead:0123456789", message: "please review", lead: "x" },
+    ["target", "message"],
   ],
 ] as const;
 
 const STAFF_TOOL_CASES = [
-  ["list_staff", {}, { session: "x" }, []],
+  ["list_staff", {}, { target: "lead:0123456789" }, []],
   [
     "inspect_staff",
-    { session: "session-id" },
-    { session: "session-id", message: "x" },
+    { target: "lead:0123456789" },
+    { target: "lead:0123456789", message: "x" },
     [],
   ],
   [
     "read_staff_transcript",
-    { session: "session-id" },
-    { session: "session-id", message: "x" },
+    { target: "lead:0123456789" },
+    { target: "lead:0123456789", message: "x" },
     [],
   ],
   [
     "message_staff",
-    { session: "session-id", message: "progress", retain: true },
-    { session: "session-id", message: "progress", lead: "x" },
+    { target: "lead:0123456789", message: "progress", retain: true },
+    { target: "lead:0123456789", message: "progress", lead: "x" },
     ["message"],
   ],
 ] as const;
@@ -808,7 +813,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(typeof historicalStaffMessage.renderCall, "function");
   assert.equal(typeof historicalStaffMessage.renderResult, "function");
   const historicalArgs = {
-    session: "lead-historical-session",
+    target: "lead:0123456789",
     message: "Please continue the prior assignment",
   };
   const historicalCall = historicalStaffMessage.renderCall(
@@ -821,7 +826,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.match(
     historicalCall.render(160).join("\n"),
-    /^message staff  lead-his/,
+    /^message staff  lead:0123456789/,
   );
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
@@ -1167,6 +1172,7 @@ test("list peers and message use global peer presence, not caller inventory", as
   );
   writePeerLeadRecord(runtime, { ...unverifiedTarget.record, group: null });
   const pi = fakePi({
+    entries: [resultEntry],
     exec: (_command, args) =>
       args[0] === "worktree" && args[1] === "list"
         ? peerTopology()
@@ -1185,7 +1191,7 @@ test("list peers and message use global peer presence, not caller inventory", as
           : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext([resultEntry]) as any;
+  const context = fakeContext(pi.entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => senderId,
@@ -1222,14 +1228,14 @@ test("list peers and message use global peer presence, not caller inventory", as
       {
         self: payload.self,
         peers: [...payload.peers].sort((a, b) =>
-          a.session.localeCompare(b.session),
+          a.target.localeCompare(b.target),
         ),
       },
       {
-        self: senderId,
+        self: { role: "lead" },
         peers: [
           {
-            session: targetId,
+            target: coordinatorTarget("lead", targetId),
             name: "Target Lead",
             cwd: "/workspaces/target",
             repo: "pi-herdsman",
@@ -1237,22 +1243,22 @@ test("list peers and message use global peer presence, not caller inventory", as
             workspace_label: "pi-herdsman/feature/peer",
           },
           {
-            session: unenrichedTargetId,
-            name: `lead-${unenrichedTargetId.slice(0, 8)}`,
+            target: coordinatorTarget("lead", unenrichedTargetId),
+            name: "Lead peer",
             cwd: "",
             repo: "",
             branch: "",
             workspace_label: "",
           },
           {
-            session: unverifiedTargetId,
-            name: `lead-${unverifiedTargetId.slice(0, 8)}`,
+            target: coordinatorTarget("lead", unverifiedTargetId),
+            name: "Lead peer",
             cwd: "",
             repo: "",
             branch: "",
             workspace_label: "",
           },
-        ].sort((a, b) => a.session.localeCompare(b.session)),
+        ].sort((a, b) => a.target.localeCompare(b.target)),
       },
     );
     assert.equal(modelJson.includes(WORKSPACE), false);
@@ -1272,14 +1278,18 @@ test("list peers and message use global peer presence, not caller inventory", as
     );
     assert.equal(
       JSON.parse(contradictoryList.content[0].text).peers.some(
-        (peer: { session: string }) => peer.session === targetId,
+        (peer: { target: string }) =>
+          peer.target === coordinatorTarget("lead", targetId),
       ),
       false,
     );
     await assert.rejects(
       peerMessage.execute(
         "message",
-        { session: targetId, message: "contradictory identity" },
+        {
+          target: coordinatorTarget("lead", targetId),
+          message: "contradictory identity",
+        },
         undefined,
         undefined,
         context,
@@ -1288,13 +1298,15 @@ test("list peers and message use global peer presence, not caller inventory", as
     removeProjectAssignment(assignments, "peer-test-repo", "feature/peer");
     assert.equal(
       payload.peers.some(
-        (peer: { session: string }) => peer.session === unverifiedTargetId,
+        (peer: { target: string }) =>
+          peer.target === coordinatorTarget("lead", unverifiedTargetId),
       ),
       true,
     );
     assert.equal(
       payload.peers.some(
-        (peer: { session: string }) => peer.session === senderId,
+        (peer: { target: string }) =>
+          peer.target === coordinatorTarget("lead", senderId),
       ),
       false,
     );
@@ -1302,7 +1314,7 @@ test("list peers and message use global peer presence, not caller inventory", as
       assert.equal("lead" in peer, false);
       assert.equal(
         Value.Check(peerMessage.parameters, {
-          session: peer.session,
+          target: peer.target,
           message: "hello",
         }),
         true,
@@ -1319,7 +1331,10 @@ test("list peers and message use global peer presence, not caller inventory", as
     });
     await peerMessage.execute(
       "message",
-      { session: targetId, message: "ordinary peers are global" },
+      {
+        target: coordinatorTarget("lead", targetId),
+        message: "ordinary peers are global",
+      },
       undefined,
       undefined,
       context,
@@ -1332,7 +1347,7 @@ test("list peers and message use global peer presence, not caller inventory", as
     const queued = await peerMessage.execute(
       "message",
       {
-        session: targetId,
+        target: coordinatorTarget("lead", targetId),
         message: "global peer",
         files: ["result:implementation#1"],
       },
@@ -1340,7 +1355,7 @@ test("list peers and message use global peer presence, not caller inventory", as
       undefined,
       context,
     );
-    assert.equal(queued.details?.session, targetId);
+    assert.equal(queued.details?.target, coordinatorTarget("lead", targetId));
     assert.equal("lead" in (queued.details ?? {}), false);
     const messagePaths = listCoordinationMessagePaths(runtime, targetId);
     assert.equal(messagePaths.length, 1);
@@ -1728,6 +1743,12 @@ test("peer publication rejects sender and target generation replacement during a
     ...context.sessionManager,
     getSessionId: () => senderId,
   };
+  const targetAddress = rememberCoordinatorTarget(
+    pi.pi as never,
+    context,
+    "lead",
+    targetId,
+  );
   try {
     const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
@@ -1747,7 +1768,7 @@ test("peer publication rejects sender and target generation replacement during a
       const pending = peer.execute(
         "message",
         {
-          session: targetId,
+          target: targetAddress,
           message: "must not queue",
           files: [attachment],
         },
@@ -1804,7 +1825,7 @@ test("peer publication rejects sender and target generation replacement during a
       await assert.rejects(
         peer.execute(
           "message",
-          { session: targetId, message: "ordinary Lead changed groups" },
+          { target: targetAddress, message: "ordinary Lead changed groups" },
           undefined,
           undefined,
           context,
@@ -1843,7 +1864,7 @@ test("peer publication rejects sender and target generation replacement during a
         peer.execute(
           "message",
           {
-            session: targetId,
+            target: targetAddress,
             message: "same generation but changed authority",
           },
           undefined,
@@ -1873,7 +1894,11 @@ test("peer publication rejects sender and target generation replacement during a
     };
     const pending = peer.execute(
       "message",
-      { session: targetId, message: "topology changed", files: [attachment] },
+      {
+        target: targetAddress,
+        message: "topology changed",
+        files: [attachment],
+      },
       undefined,
       undefined,
       context,
@@ -1953,6 +1978,12 @@ test("peer publication tolerates sender and target presentation enrichment durin
     ...context.sessionManager,
     getSessionId: () => senderId,
   };
+  const targetAddress = rememberCoordinatorTarget(
+    pi.pi as never,
+    context,
+    "lead",
+    targetId,
+  );
   try {
     const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
@@ -1972,7 +2003,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         const pending = peer.execute(
           "message",
           {
-            session: targetId,
+            target: targetAddress,
             message: "presentation enrichment queues",
             files: [attachment],
           },
@@ -1998,7 +2029,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         );
 
         const queued = await pending;
-        assert.equal(queued.details?.session, targetId);
+        assert.equal(queued.details?.target, targetAddress);
         messageId = queued.details?.id as string;
         assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
         const message = readChiefMessage(
@@ -2266,7 +2297,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.equal(
     Value.Check(tool.parameters, {
-      session: LEAD_SESSION_ID,
+      target: coordinatorTarget("lead", LEAD_SESSION_ID),
       message: "Please continue",
       files: ["result:implementation#1"],
     }),
@@ -2274,14 +2305,14 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.equal(
     Value.Check(tool.parameters, {
-      session: LEAD_SESSION_ID,
+      target: coordinatorTarget("lead", LEAD_SESSION_ID),
       message: "Please continue",
       results: [{ agent: "implementation", index: 1 }],
     }),
     false,
   );
   const renderedStaffCall = tool.renderCall(
-    { session: "lead-bbbbbbbbb", message: "Please continue" },
+    { target: "lead:0123456789", message: "Please continue" },
     {
       fg: (_color: string, value: string) => value,
       bold: (text: string) => text,
@@ -2291,7 +2322,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(typeof renderedStaffCall.render, "function");
   assert.match(
     renderedStaffCall.render(160).join("\n"),
-    /^message staff  lead-bbbbbb…/,
+    /^message staff  lead:0123456789/,
   );
   const renderedStaffResult = tool.renderResult(
     {
@@ -2303,7 +2334,7 @@ test("active chief describes authoritative remote ask projection", async () => {
       fg: (_color: string, value: string) => value,
       bold: (text: string) => text,
     },
-    { args: { session: "lead-bbbbbbbbb" } },
+    { args: { target: "lead:0123456789" } },
   );
   assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);
   assert.deepEqual(pi.pi.getActiveTools(), [
@@ -2336,21 +2367,22 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.match(String(chiefPrompt), /verified workspace-neutral Chief/);
   assert.match(String(chiefPrompt), /Custom Chief strategy/);
   assert.doesNotMatch(String(chiefPrompt), /You are the active chief/);
-  const sessionSchema = (tool.parameters as any).properties.session;
+  const targetSchema = (tool.parameters as any).properties.target;
+  assert.equal(targetSchema.pattern, COORDINATOR_TARGET_PATTERN);
+  assert.equal(Value.Check(targetSchema, ""), false);
+  assert.equal(Value.Check(targetSchema, "lead:0000000000"), true);
+  assert.equal(Value.Check(targetSchema, "lead:000000000o"), false);
+  assert.equal(Value.Check(targetSchema, "lead:000000000"), false);
   assert.equal(
-    sessionSchema.pattern,
-    "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
-  );
-  assert.equal(Value.Check(sessionSchema, ""), false);
-  assert.equal(Value.Check(sessionSchema, "-"), false);
-  assert.equal(Value.Check(sessionSchema, "lead/session"), false);
-  assert.equal(Value.Check(sessionSchema, LEAD_SESSION_ID), true);
-  assert.equal(
-    Value.Check(inspectTool.parameters, { session: LEAD_SESSION_ID }),
+    Value.Check(inspectTool.parameters, {
+      target: coordinatorTarget("lead", LEAD_SESSION_ID),
+    }),
     true,
   );
   assert.equal(
-    Value.Check(transcriptTool.parameters, { session: LEAD_SESSION_ID }),
+    Value.Check(transcriptTool.parameters, {
+      target: coordinatorTarget("lead", LEAD_SESSION_ID),
+    }),
     true,
   );
   assert.equal(
@@ -2675,7 +2707,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     }
     assertToolResult(listed);
     const listedLead = (listed.details?.reports as any[])[0];
-    assert.equal(listedLead.session, leadId);
+    assert.equal(listedLead.target, coordinatorTarget("lead", leadId));
     assert.equal(listedLead.role, "lead");
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
@@ -2686,13 +2718,13 @@ test("read staff transcript advertises persisted candidates and revalidates the 
 
     const transcript = await tool.execute(
       "transcript",
-      { session: leadId },
+      { target: listedLead.target },
       undefined,
       undefined,
       context,
     );
     assertToolResult(transcript);
-    assert.equal(transcript.details?.session, leadId);
+    assert.equal(transcript.details?.target, listedLead.target);
     assert.equal("lead" in (transcript.details ?? {}), false);
     assert.match(transcript.details?.transcript, /visible user/);
     assert.match(transcript.details?.transcript, /visible assistant/);
@@ -2717,19 +2749,19 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     assertToolResult(malformed);
     assert.equal(
       (malformed.details?.reports as any[]).some(
-        (report) => report.session === leadId,
+        (report) => report.target === listedLead.target,
       ),
       false,
     );
     await assert.rejects(
       tool.execute(
         "transcript",
-        { session: leadId },
+        { target: listedLead.target },
         undefined,
         undefined,
         context,
       ),
-      /Lead target was not found or is no longer eligible/,
+      /Staff target was not found or is no longer eligible/,
     );
     const { SessionManager } = await import("@earendil-works/pi-coding-agent");
     const sessionManager = SessionManager as any;
@@ -2751,7 +2783,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
       );
       assertToolResult(mismatched);
       const mismatchedLead = (mismatched.details?.reports as any[]).find(
-        (report) => report.session === leadId,
+        (report) => report.target === listedLead.target,
       );
       assert.ok(mismatchedLead);
       assert.ok(
@@ -2760,7 +2792,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
       await assert.rejects(
         tool.execute(
           "transcript",
-          { session: leadId },
+          { target: listedLead.target },
           undefined,
           undefined,
           context,
@@ -2784,7 +2816,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     await assert.rejects(
       tool.execute(
         "transcript",
-        { session: leadId },
+        { target: listedLead.target },
         undefined,
         undefined,
         context,

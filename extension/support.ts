@@ -35,6 +35,8 @@ export const nativeSessions = new Map<
     sessionName?: string;
   }
 >();
+const { SessionManager: nativeSessionManager } =
+  await import("@earendil-works/pi-coding-agent");
 export let sessionOpenError: unknown;
 export let failNextMailboxWrite = false;
 export let failNextRequestRemoval = false;
@@ -325,6 +327,8 @@ mock.module("@earendil-works/pi-coding-agent", {
       return [];
     },
     SessionManager: {
+      inMemory: (...args: any[]) =>
+        (nativeSessionManager as any).inMemory(...args),
       findById: (cwd: string, id: string) =>
         [...nativeSessions.values()].find(
           (session) => session.id === id && session.cwd === cwd,

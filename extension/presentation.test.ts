@@ -496,7 +496,13 @@ test("Supervision context formatting preserves state, safety, and bounded record
         },
       ],
     };
-    const formatted = formatSupervisionContext(snapshot, { status: "fresh" });
+    const formatted = formatSupervisionContext(snapshot, {
+      status: "fresh",
+      targets: new Map([
+        ["lead-bbbbbbbb", "lead:0123456789"],
+        ["lead-aaaaaaaa", "lead:abcdefghjk"],
+      ]),
+    });
     assert.match(formatted, /<supervision_state status="fresh">/);
     assert.match(formatted, /Persisted hidden model context/);
     assert.match(
@@ -523,8 +529,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
         formatted.indexOf("display_name: workspace\/research"),
     );
     for (const value of [
-      "session: lead-bbbbbbbb",
-      "session: lead-aaaaaaaa",
+      "target: lead:0123456789",
+      "target: lead:abcdefghjk",
       "runtime: working",
       "runtime: idle",
       "available_tools: inspect_staff, message_staff",
@@ -543,9 +549,12 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /lead_session_id/);
     assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
 
-    const stale = formatSupervisionContext(snapshot, { status: "stale" });
+    const stale = formatSupervisionContext(snapshot, {
+      status: "stale",
+      targets: new Map([["lead-bbbbbbbb", "lead:0123456789"]]),
+    });
     assert.match(stale, /The latest refresh attempt failed/);
-    assert.match(stale, /lead-bbbbbbbb/);
+    assert.match(stale, /target: lead:0123456789/);
     const unavailable = formatSupervisionContext(undefined, {
       status: "unavailable",
     });
@@ -609,7 +618,15 @@ test("Supervision context formatting preserves state, safety, and bounded record
           agents: [],
         })),
       },
-      { status: "fresh" },
+      {
+        status: "fresh",
+        targets: new Map(
+          Array.from({ length: 12 }, (_, index) => [
+            `lead-${index}`,
+            `lead:${String(index).padStart(10, "0")}`,
+          ]),
+        ),
+      },
     );
     assert.ok(
       Buffer.byteLength(formatted, "utf8") <= SUPERVISION_CONTEXT_MAX_BYTES,
@@ -622,8 +639,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
     );
     assert.match(formatted, /truncated: true/);
     assert.match(formatted, /Use list_staff for current omitted state/);
-    assert.match(formatted, /session: lead-0\n/);
-    assert.doesNotMatch(formatted, /session: lead-9\n/);
+    assert.match(formatted, /target: lead:0000000000\n/);
+    assert.doesNotMatch(formatted, /target: lead:0000000009\n/);
     assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
   }
 });
@@ -652,11 +669,15 @@ test("Manager supervision context uses the assigned branch and ordinary session"
         },
       ],
     },
-    { status: "fresh", role: "manager" },
+    {
+      status: "fresh",
+      role: "manager",
+      targets: new Map([["ordinary-session", "lead:0123456789"]]),
+    },
   );
   assert.match(text, /branch: feat\/exact/);
   assert.doesNotMatch(text, /session: assigned-session/);
-  assert.match(text, /session: ordinary-session/);
+  assert.match(text, /target: lead:0123456789/);
 });
 
 test("Supervision ambient projections share status and empty-state semantics", (t) => {
@@ -1914,17 +1935,17 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   assert.match(expanded, /files:\n  investigation\.md/);
 });
 
-test("coordination presentation uses the explicit operation and session target", () => {
+test("coordination presentation uses the explicit operation and stable target", () => {
   assert.equal(
     renderedText(
       renderCoordinationCall(
         "peer",
         "message",
-        { session: "peer-1", message: "Check this" },
+        { target: "lead:0123456789", message: "Check this" },
         presentationTheme,
       ),
     ),
-    "message peer  peer-1\n  Check this",
+    "message peer  lead:0123456789\n  Check this",
   );
 });
 
@@ -2592,7 +2613,7 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
     [
       "staff",
       "message",
-      { session: "lead-id", message: "message staff" },
+      { target: "lead:0123456789", message: "message staff" },
       "message staff",
     ],
   ] as const;
@@ -2776,7 +2797,7 @@ test("expanded managed-agent replies show the ask ID only for agent replies", ()
 test("compact transcript results are shared by agent and staff", () => {
   for (const [tool, details, label] of [
     ["agent", { agent: "implementer" }, "implementer"],
-    ["staff", { session: "lead-session", display_name: "api" }, "api"],
+    ["staff", { target: "lead:0123456789", display_name: "api" }, "api"],
   ] as const) {
     const rendered = renderedText(
       renderCoordinationResult(
@@ -3116,16 +3137,16 @@ test("chief and staff coordination renderers share semantic status language", ()
         {
           details: {
             ok: true,
-            session: "lead-opaque",
+            target: "lead:0123456789",
             display_name: "workspace/api",
           },
         },
         { expanded: true },
         presentationTheme,
-        { args: { session: "lead-opaque" } },
+        { args: { target: "lead:0123456789" } },
       ),
     ),
-    /session: lead-opaque/,
+    /target: lead:0123456789/,
   );
 
   const chiefMessage = renderedText(
@@ -3136,7 +3157,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         details: {
           ok: true,
           id: "record-message",
-          chiefSessionId: "chief-session-message",
+          chiefSessionId: "must-not-be-rendered",
         },
       },
       { expanded: true },
@@ -3144,20 +3165,20 @@ test("chief and staff coordination renderers share semantic status language", ()
       { args: { action: "message" } },
     ),
   );
-  assert.match(chiefMessage, /session: chief-session-message/);
+  assert.doesNotMatch(chiefMessage, /must-not-be-rendered|session:/);
 
   assert.match(
     renderedText(
       renderCoordinationResult(
         "peer",
         "message",
-        { details: { ok: true, session: "peer-session" } },
+        { details: { ok: true, target: "manager:0123456789" } },
         { expanded: true },
         presentationTheme,
-        { args: { session: "peer-session" } },
+        { args: { target: "manager:0123456789" } },
       ),
     ),
-    /session: peer-session/,
+    /target: manager:0123456789/,
   );
 
   const staffList = renderedText(
@@ -3184,7 +3205,7 @@ test("chief and staff coordination renderers share semantic status language", ()
           ],
           reports: [
             {
-              session: "lead-opaque",
+              target: "lead:0123456789",
               display_name: "workspace/api",
               runtime_state: "blocked",
               agent_counts: { active: 2, blocked: 1, total: 3 },
@@ -3205,7 +3226,7 @@ test("chief and staff coordination renderers share semantic status language", ()
     "feat/db · conflict",
     "Repair migrations",
     "another Lead is active in this worktree",
-    "session: lead-opaque",
+    "target: lead:0123456789",
     "agent counts: active=2 · blocked=1 · total=3",
     "can: inspect_staff, message_staff",
   ])
@@ -3219,10 +3240,10 @@ test("list peers rendering distinguishes self from peers", () => {
     details: {
       ok: true,
       action: "list",
-      self: "lead-self",
+      self: { role: "lead" },
       peers: [
         {
-          session: "lead-other",
+          target: "lead:0123456789",
           name: "workspace/api",
           cwd: "/work/api",
           repo: "api",
@@ -3232,17 +3253,17 @@ test("list peers rendering distinguishes self from peers", () => {
       ],
       reply_only: [
         {
-          session: "origin-manager",
+          target: "manager:0123456789",
           name: "Research Manager",
           workspace_label: "project-alpha/main",
         },
         {
-          session: "other-origin-manager",
+          target: "manager:abcdefghjk",
           name: "Research Manager",
         },
-        { session: "workspace-only", workspace_label: "project-beta" },
-        { session: "id-only" },
-        { session: "unnamed-origin-manager" },
+        { target: "manager:abcdefghj2", workspace_label: "project-beta" },
+        { target: "manager:abcdefghj3" },
+        { target: "manager:abcdefghj4" },
       ],
       remote_diagnostics: [
         { machine: "office", reason: "herdr_not_reachable" },
@@ -3284,7 +3305,7 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\ndiscovered peers 1\n  workspace/api · session: lead-other · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  session: origin-manager\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  session: other-origin-manager\n  Reply can be queued; current availability is unverified.\n  project-beta\n  session: workspace-only\n  Reply can be queued; current availability is unverified.\n  id-only\n  Reply can be queued; current availability is unverified.\n  unnamed-origin-manager\n  Reply can be queued; current availability is unverified.\n\nremote diagnostics\n  office · Herdr reachability not confirmed\n    Check: Check Herdr machine status; reconnect interactively if needed.",
+    "peer\n\nself lead\ndiscovered peers 1\n  workspace/api · target: lead:0123456789 · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  target: manager:0123456789\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  target: manager:abcdefghjk\n  Reply can be queued; current availability is unverified.\n  project-beta\n  target: manager:abcdefghj2\n  Reply can be queued; current availability is unverified.\n  peer\n  target: manager:abcdefghj3\n  Reply can be queued; current availability is unverified.\n  peer\n  target: manager:abcdefghj4\n  Reply can be queued; current availability is unverified.\n\nremote diagnostics\n  office · Herdr reachability not confirmed\n    Check: Check Herdr machine status; reconnect interactively if needed.",
   );
 
   assert.equal(
@@ -3296,7 +3317,7 @@ test("list peers rendering distinguishes self from peers", () => {
           details: {
             ok: true,
             action: "list",
-            self: "lead-self",
+            self: { role: "lead" },
             peers: [{ session_id: "stale-session" }],
           },
         },
@@ -3305,7 +3326,7 @@ test("list peers rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\ndiscovered peers 1\n  session · session: session",
+    "peer\n\nself lead\ndiscovered peers 1\n  peer",
   );
 
   assert.equal(
@@ -3313,18 +3334,21 @@ test("list peers rendering distinguishes self from peers", () => {
       renderCoordinationResult(
         "peer",
         "message",
-        { details: { remoteSessionId: "origin-manager", queued: true } },
+        { details: { target: "manager:0123456789", queued: true } },
         { expanded: true },
         presentationTheme,
         { args: { action: "message" } },
       ),
     ),
-    "reply queued",
+    "reply queued\ntarget: manager:0123456789",
   );
   for (const [details, status] of [
     [{ accepted: true }, "accepted remotely"],
     [{ accepted: false }, "queued for remote retry"],
-    [{ session: "local-peer" }, "peer message queued"],
+    [
+      { ok: true, action: "message", target: "lead:0123456789" },
+      "peer message queued",
+    ],
   ] as const) {
     assert.match(
       renderedText(
@@ -3347,9 +3371,9 @@ test("list peers rendering distinguishes self from peers", () => {
       "list",
       {
         details: {
-          self: "self",
+          self: { role: "lead" },
           peers: [],
-          reply_only: [{ session: longSession }],
+          reply_only: [{ target: longSession }],
         },
       },
       { expanded: true },
@@ -3368,7 +3392,7 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
       action: "list",
       self: "self",
       peers: Array.from({ length: 6 }, (_, index) => ({
-        session: `peer-${index}`,
+        target: `manager:${String(index).padStart(10, "0")}`,
       })),
       remote_diagnostics: [
         { reason: "machine_list_failed" },
@@ -6965,10 +6989,8 @@ test("incompatible Lead nested under a Manager is visibly observation-only", () 
     },
     { status: "fresh" },
   );
-  assert.match(
-    context,
-    /Old Lead · incompatible \(build mismatch\) · session=old-lead/,
-  );
+  assert.match(context, /Old Lead · incompatible \(build mismatch\)/);
+  assert.doesNotMatch(context, /old-lead|Old Lead.*target/);
   assert.doesNotMatch(context, /Old Lead.*agents=0/);
   assert.match(context, /lead_counts \(compatible reports\):/);
 });
@@ -7387,6 +7409,30 @@ test("coordination messages render compact semantic headings and strip only know
       !text.includes(envelopes[kind]),
       `${kind} sender/branch envelope`,
     );
+  }
+  for (const [kind, prefix, senderTarget] of [
+    ["chief_message", "From your Chief: ", undefined],
+    [
+      "manager_message",
+      "From Manager manager:0123456789: ",
+      "manager:0123456789",
+    ],
+    ["lead_message", "From Lead lead:0123456789: ", "lead:0123456789"],
+    ["peer_message", "Peer message from lead:0123456789: ", "lead:0123456789"],
+  ] as const) {
+    const text = renderedText(
+      renderCoordinationMessage(
+        kind,
+        {
+          content: `${prefix}Visible body`,
+          details: { ...details, senderTarget },
+        },
+        { expanded: true },
+        presentationTheme,
+      ),
+    );
+    assert.match(text, /Visible body/);
+    assert.ok(!text.includes(prefix));
   }
   const prose =
     "Peer message from someone-else: user prose must remain.\n\nSecond paragraph.";

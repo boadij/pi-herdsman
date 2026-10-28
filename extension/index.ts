@@ -32,6 +32,7 @@ import {
   isResultBinding,
 } from "./storage.ts";
 import { Type } from "typebox";
+import { COORDINATOR_TARGET_PATTERN } from "./coordinator-target.ts";
 import {
   Container,
   fuzzyFilter,
@@ -326,8 +327,6 @@ function expandablePresentation(
 
 const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const HERDSMAN_BUILD = runtimeBuild(HERDSMAN_VERSION, HERDSMAN_EXTENSION_PATH);
-// Keep model-facing lead handles aligned with Pi's SessionManager grammar.
-const PI_SESSION_ID_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$";
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
 const AGENT_CONTEXT_RETIRED_ENTRY = "pi-herdsman-agent-context-retired";
@@ -1077,11 +1076,10 @@ function registerExtensionImpl(
           description: "Exact assigned project branch (Managers only).",
         }),
       ),
-      session: Type.Optional(
+      target: Type.Optional(
         Type.String({
-          pattern: PI_SESSION_ID_PATTERN,
-          description:
-            "Exact full Pi session ID for an ordinary supervised Lead or Chief direct report.",
+          pattern: COORDINATOR_TARGET_PATTERN,
+          description: "Stable target from current staff discovery.",
         }),
       ),
     },
@@ -1095,11 +1093,10 @@ function registerExtensionImpl(
           description: "Exact assigned project branch (Managers only).",
         }),
       ),
-      session: Type.Optional(
+      target: Type.Optional(
         Type.String({
-          pattern: PI_SESSION_ID_PATTERN,
-          description:
-            "Exact full Pi session ID for an ordinary supervised Lead or Chief direct report.",
+          pattern: COORDINATOR_TARGET_PATTERN,
+          description: "Stable target from current staff discovery.",
         }),
       ),
       message: Type.String({ minLength: 1 }),
@@ -1115,10 +1112,9 @@ function registerExtensionImpl(
   );
   const peerMessageParameters = Type.Object(
     {
-      session: Type.String({
-        pattern: PI_SESSION_ID_PATTERN,
-        description:
-          "Exact full Pi session ID returned by list_peers; never use a display label.",
+      target: Type.String({
+        pattern: COORDINATOR_TARGET_PATTERN,
+        description: "Stable target returned by list_peers.",
       }),
       message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
@@ -2033,7 +2029,7 @@ function registerExtensionImpl(
         promptSnippet:
           "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
-          "Send task-relevant communication needed by another eligible coordinator, not routine broadcasts or gratuitous acknowledgments. Send to an eligible same-role Lead or Manager by exact session ID. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact session from list_peers; optional name/workspace labels are advisory display context.",
+          "Send task-relevant communication needed by another eligible coordinator, not routine broadcasts or gratuitous acknowledgments. Send to an eligible same-role Lead or Manager using its stable target. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact target from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
         execute: (...args: any[]) =>
@@ -2094,7 +2090,7 @@ function registerExtensionImpl(
           name: "inspect_staff",
           label: "inspect staff",
           description:
-            "Read bounded live terminal/process evidence for a direct report. Managers use branch for assigned Leads; otherwise use exact session.",
+            "Read bounded live terminal/process evidence for a direct report. Managers use branch for assigned Leads; otherwise use a stable target.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
           execute: (
@@ -2121,7 +2117,7 @@ function registerExtensionImpl(
           name: "read_staff_transcript",
           label: "read staff transcript",
           description:
-            "Read bounded persisted Pi conversation/tool evidence for a direct report. Managers use branch for assigned Leads; otherwise use exact session.",
+            "Read bounded persisted Pi conversation/tool evidence for a direct report. Managers use branch for assigned Leads; otherwise use a stable target.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
           execute: (
@@ -2148,7 +2144,7 @@ function registerExtensionImpl(
           name: "message_staff",
           label: "message staff",
           description:
-            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Managers use branch for assigned Leads; otherwise use exact session. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
+            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Managers use branch for assigned Leads; otherwise use a stable target. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2571,7 +2567,7 @@ function registerExtensionImpl(
           name: "list_peers",
           label: "list peers",
           description:
-            "List independently discovered eligible same-role peers, including eligible ordinary Leads or Managers on reachable saved Herdr machines. Remote Lead discovery requires verified ordinary, unassigned status; incomplete discovery is not proof that no peers exist. A reply-only originating Lead or Manager may also appear when an existing return correspondence allows a reply without independent discovery or current availability. Use only the exact session as a target; labels do not verify identity, availability, or permission to initiate unrelated messages. Do not use for progress polling.",
+            "List independently discovered eligible same-role peers, including eligible ordinary Leads or Managers on reachable saved Herdr machines. Remote Lead discovery requires verified ordinary, unassigned status; incomplete discovery is not proof that no peers exist. A reply-only originating Lead or Manager may also appear when an existing return correspondence allows a reply without independent discovery or current availability. Use only the exact target as a selector; labels do not verify identity, availability, or permission to initiate unrelated messages. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
           execute: (
@@ -2604,7 +2600,7 @@ function registerExtensionImpl(
           ) =>
             peerTool.execute(
               id,
-              { action: "message", lead: p.session, ...p },
+              { action: "message", ...p },
               signal,
               update,
               ctx,
