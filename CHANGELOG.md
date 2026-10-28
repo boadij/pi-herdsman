@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.35.0](https://github.com/boadij/pi-herdsman/compare/v0.34.1...v0.35.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* clarify project and work assignment semantics ([#657](https://github.com/boadij/pi-herdsman/issues/657))
+
+### Fixes
+
+* **peer:** explain remote discovery failures and build mismatches ([#651](https://github.com/boadij/pi-herdsman/issues/651)) ([e75e28e](https://github.com/boadij/pi-herdsman/commit/e75e28ed9fa796a1b6ec10c3905cc150068caac9)), closes [#644](https://github.com/boadij/pi-herdsman/issues/644)
+* **smoke:** wait for core session PID observations ([#648](https://github.com/boadij/pi-herdsman/issues/648)) ([d0bb1a8](https://github.com/boadij/pi-herdsman/commit/d0bb1a8772f7ab4b08b8d4e57941bcb5512593c6)), closes [#646](https://github.com/boadij/pi-herdsman/issues/646)
+* **ui:** enable navigation from truncated Manager branches ([#655](https://github.com/boadij/pi-herdsman/issues/655)) ([d470043](https://github.com/boadij/pi-herdsman/commit/d470043c37a1735c6df6397326e4d20cba26fe56))
+
+
+### Refactoring
+
+* clarify project and work assignment semantics ([#657](https://github.com/boadij/pi-herdsman/issues/657)) ([2b78e1b](https://github.com/boadij/pi-herdsman/commit/2b78e1b7b4a62240f7be881ab066be4cefbee612))
+
+
+### Tests
+
+* **agent:** defer independent result eligibility ([#647](https://github.com/boadij/pi-herdsman/issues/647)) ([#649](https://github.com/boadij/pi-herdsman/issues/649)) ([67fa938](https://github.com/boadij/pi-herdsman/commit/67fa938bac1edfa8830e4808fa35dd89b29d29f6))
+* label Manager activation wait failures ([#650](https://github.com/boadij/pi-herdsman/issues/650)) ([a051a72](https://github.com/boadij/pi-herdsman/commit/a051a72e93fdbda6ae79a61ab2751979a76c1f57)), closes [#634](https://github.com/boadij/pi-herdsman/issues/634)
+
 ## [0.34.1](https://github.com/boadij/pi-herdsman/compare/v0.34.0...v0.34.1) (2026-10-28)
 
 
