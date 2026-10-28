@@ -5552,7 +5552,7 @@ async function runManagerMergeSmoke(ctx) {
     assignmentId,
   );
 
-  const notifyPrompt = `MANAGER_MERGE_NOTIFY ${assigned.row.session} ${targetAdvanced.head}`;
+  const notifyPrompt = `MANAGER_MERGE_NOTIFY ${branch} ${targetAdvanced.head}`;
   await submitPaneCommand(ctx, ctx.rootPaneId, notifyPrompt);
   await waitForEvidence(
     ctx,
@@ -5712,8 +5712,8 @@ export function managerRecoveryLeadContextPrompt(marker) {
   return `Remember this exact context marker for later: ${marker}\n\nReply with exactly the marker and do not call any tools.`;
 }
 
-export function managerRecoveryStopPrompt(session) {
-  return `Pause the existing project work. Call stop_lead exactly once using only ${JSON.stringify({ session })}. After stop_lead succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_PAUSED.`;
+export function managerRecoveryStopPrompt(branch) {
+  return `Pause the existing project work. Call stop_lead exactly once using only ${JSON.stringify({ branch })}. After stop_lead succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_PAUSED.`;
 }
 
 export function managerRecoveryReviewPrompt(branch) {
@@ -8513,7 +8513,7 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
-  const closePrompt = managerRecoveryStopPrompt(first.session);
+  const closePrompt = managerRecoveryStopPrompt(branch);
   markStage(ctx, "graceful-close");
   await promptRoot(closePrompt);
   await waitFor(

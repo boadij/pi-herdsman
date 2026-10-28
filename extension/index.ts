@@ -1071,21 +1071,37 @@ function registerExtensionImpl(
   const emptyParameters = Type.Object({}, { additionalProperties: false });
   const staffTargetParameters = Type.Object(
     {
-      session: Type.String({
-        pattern: PI_SESSION_ID_PATTERN,
-        description:
-          "Exact full Pi session ID shown in the fresh supervision snapshot or returned by list_staff; never use a display name.",
-      }),
+      branch: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Exact assigned project branch (Managers only).",
+        }),
+      ),
+      session: Type.Optional(
+        Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "Exact full Pi session ID for an ordinary supervised Lead or Chief direct report.",
+        }),
+      ),
     },
     { additionalProperties: false },
   );
   const staffMessageParameters = Type.Object(
     {
-      session: Type.String({
-        pattern: PI_SESSION_ID_PATTERN,
-        description:
-          "Exact full Pi session ID from the fresh supervision snapshot or list_staff.",
-      }),
+      branch: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Exact assigned project branch (Managers only).",
+        }),
+      ),
+      session: Type.Optional(
+        Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "Exact full Pi session ID for an ordinary supervised Lead or Chief direct report.",
+        }),
+      ),
       message: Type.String({ minLength: 1 }),
       files: FILES_SCHEMA,
       retain: Type.Optional(
@@ -2078,7 +2094,7 @@ function registerExtensionImpl(
           name: "inspect_staff",
           label: "inspect staff",
           description:
-            "Read bounded live terminal/process evidence for a direct report.",
+            "Read bounded live terminal/process evidence for a direct report. Managers use branch for assigned Leads; otherwise use exact session.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
           execute: (
@@ -2090,7 +2106,7 @@ function registerExtensionImpl(
           ) =>
             staffTool.execute(
               id,
-              { action: "inspect", session: p.session },
+              { action: "inspect", ...p },
               signal,
               update,
               ctx,
@@ -2105,7 +2121,7 @@ function registerExtensionImpl(
           name: "read_staff_transcript",
           label: "read staff transcript",
           description:
-            "Read bounded persisted Pi conversation/tool evidence for a direct report.",
+            "Read bounded persisted Pi conversation/tool evidence for a direct report. Managers use branch for assigned Leads; otherwise use exact session.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
           execute: (
@@ -2117,7 +2133,7 @@ function registerExtensionImpl(
           ) =>
             staffTool.execute(
               id,
-              { action: "transcript", session: p.session },
+              { action: "transcript", ...p },
               signal,
               update,
               ctx,
@@ -2132,7 +2148,7 @@ function registerExtensionImpl(
           name: "message_staff",
           label: "message staff",
           description:
-            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
+            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Managers use branch for assigned Leads; otherwise use exact session. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2283,8 +2299,8 @@ function registerExtensionImpl(
           name: "stop_lead",
           label: "stop lead",
           description:
-            "Stop an exact direct Lead and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
-          parameters: staffTargetParameters,
+            "Stop the assigned Lead for an exact project branch and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
+          parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (
             id: string,
@@ -2295,7 +2311,7 @@ function registerExtensionImpl(
           ) =>
             staffTool.execute(
               id,
-              { action: "stop", session: p.session },
+              { action: "stop", branch: p.branch },
               signal,
               update,
               ctx,

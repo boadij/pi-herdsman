@@ -350,19 +350,19 @@ const STAFF_TOOL_CASES = [
     "inspect_staff",
     { session: "session-id" },
     { session: "session-id", message: "x" },
-    ["session"],
+    [],
   ],
   [
     "read_staff_transcript",
     { session: "session-id" },
     { session: "session-id", message: "x" },
-    ["session"],
+    [],
   ],
   [
     "message_staff",
     { session: "session-id", message: "progress", retain: true },
     { session: "session-id", message: "progress", lead: "x" },
-    ["session", "message"],
+    ["message"],
   ],
 ] as const;
 
@@ -381,9 +381,9 @@ const MANAGER_STAFF_TOOL_CASES = [
   ],
   [
     "stop_lead",
-    { session: "session-id" },
+    { branch: "feat/x" },
     { session: "session-id", branch: "feat/x" },
-    ["session"],
+    ["branch"],
   ],
   [
     "remove_worktree",

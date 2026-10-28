@@ -419,8 +419,9 @@ requirements are protected; snapshots and accepted Agent evidence remain
 unchanged.
 `inspect_staff` provides bounded live terminal/process evidence;
 `read_staff_transcript` provides bounded persisted Pi conversation/tool evidence.
-Target a Lead by the exact full Pi session ID in a fresh snapshot or
-`list_staff`, never by `display_name`.
+Managers target assigned Leads by exact `branch`; ordinary supervised Leads and
+Chief direct reports use the exact full Pi `session` ID from a fresh snapshot or
+`list_staff`. Never target by `display_name`.
 `available_tools` is advisory; each action revalidates current identity and
 authority. Chief supervises direct reports but does not own their Agent trees;
 it may separately own Agents it directly delegates when its effective `agents`
@@ -486,7 +487,7 @@ Pi Herdsman uses one durable vocabulary:
   Leads may use `message_supervisor` for timely information before the result
   boundary; routine information that can wait belongs in the automatic result.
   Project work remains open through implementation and review;
-- `stop_lead` stops an exact Lead and its owned Agent tree while preserving
+- `stop_lead` selects an assigned Lead by branch and stops its owned Agent tree while preserving
   the assignment, Pi session, branch, and worktree. A closed workspace or
   stopped Lead does not retire an assignment while its checkout exists.
   Successful Herdr worktree removal or verified checkout absence retires the

@@ -9028,6 +9028,21 @@ async function managerDelegateAssignmentTest(
     const staffMessage = pi.tools.find(
       (tool) => tool.name === "message_staff",
     )!;
+    for (const selector of [
+      {},
+      { session: childSession },
+      { session: childSession, branch: assignment.branch },
+    ])
+      await assert.rejects(
+        staffMessage.execute(
+          "selector",
+          { ...selector, message: "must not publish" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        /exactly one|require branch targeting/,
+      );
     let changedSource = false;
     mutateRetainedSource = () => {
       if (changedSource) return;
@@ -9047,7 +9062,7 @@ async function managerDelegateAssignmentTest(
     const retainedOutcome = await staffMessage.execute(
       "retain-review",
       {
-        session: childSession,
+        branch: assignment.branch,
         message: "Address the external review",
         files: [reviewFile],
         retain: true,
@@ -10974,11 +10989,20 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
         "assigned",
         "project assignment authority remains available despite multiple Managers",
       );
+      assert.equal(
+        assignedReports.details.reports.find(
+          (report: any) => report.session === leadSession,
+        )?.branch,
+        assignedBranch,
+      );
       await manager.tools
         .find((tool) => tool.name === "message_staff")!
         .execute(
           "message",
-          { session: leadSession, message: "Assigned Lead remains actionable" },
+          {
+            branch: assignedBranch,
+            message: "Assigned Lead remains actionable",
+          },
           undefined,
           undefined,
           managerCtx,

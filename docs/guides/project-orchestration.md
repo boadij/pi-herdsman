@@ -221,7 +221,7 @@ evidence only when it materially matters.
 
 ## Pause and resume
 
-`stop_lead` stops a Lead and its owned Agent execution tree while preserving
+`stop_lead` selects the assigned Lead by branch and stops its owned Agent execution tree while preserving
 the assignment, Pi session, Git branch, and worktree. Resume the same work with
 `resume_project` using its branch. `stop_lead` does not resolve project work.
 

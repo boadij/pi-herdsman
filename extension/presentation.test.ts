@@ -516,7 +516,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /truncated/);
     assert.match(
       formatted,
-      /For a straightforward message or reply, use the exact session value directly; do not call list_staff, inspect_staff, or another read command first\./,
+      /For a straightforward message or reply, use the actionable selector directly; do not call list_staff, inspect_staff, or another read command first\./,
     );
     assert.ok(
       formatted.indexOf("display_name: workspace\/api") <
@@ -626,6 +626,37 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /session: lead-9\n/);
     assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
   }
+});
+
+test("Manager supervision context uses the assigned branch and ordinary session", () => {
+  const lead = {
+    displayName: "Lead",
+    workspaceId: "ws",
+    runtimeState: "working" as const,
+    agentCounts: { active: 0, blocked: 0, total: 0 },
+    availableActions: ["message"] as const,
+  };
+  const text = formatSupervisionContext(
+    {
+      leads: [
+        {
+          ...lead,
+          lead: "assigned-session",
+          relationship: "assigned" as const,
+          branch: "feat/exact",
+        },
+        {
+          ...lead,
+          lead: "ordinary-session",
+          relationship: "supervised" as const,
+        },
+      ],
+    },
+    { status: "fresh", role: "manager" },
+  );
+  assert.match(text, /branch: feat\/exact/);
+  assert.doesNotMatch(text, /session: assigned-session/);
+  assert.match(text, /session: ordinary-session/);
 });
 
 test("Supervision ambient projections share status and empty-state semantics", (t) => {

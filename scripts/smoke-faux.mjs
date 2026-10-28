@@ -747,7 +747,7 @@ export function decide(model, context) {
       });
     }
     const repair = prompt.match(
-      /MANAGER_MERGE_NOTIFY ([A-Za-z0-9._-]+) ([0-9a-f]{40,64})/i,
+      /MANAGER_MERGE_NOTIFY (\S+) ([0-9a-f]{40,64})/i,
     );
     if (repair) {
       if (correlatedCall(messages, "message_staff"))
@@ -755,7 +755,7 @@ export function decide(model, context) {
           "Waiting for the assigned Lead's reconciliation report.",
         );
       return call("message_staff", {
-        session: repair[1],
+        branch: repair[1],
         message: `MANAGER_MERGE_REPAIR Incorporate target main at ${repair[2]}, preserve your source change, validate, and report exact final HEAD.`,
       });
     }

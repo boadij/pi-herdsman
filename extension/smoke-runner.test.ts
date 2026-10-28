@@ -6509,13 +6509,13 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
-test("manager-recovery stops by Lead session and resumes by branch", () => {
+test("manager-recovery stops and resumes by branch", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const session = "lead-session-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
-  const close = managerRecoveryStopPrompt(session);
+  const close = managerRecoveryStopPrompt(branch);
   assert.match(close, /stop_lead exactly once/);
-  assert.ok(close.includes(JSON.stringify({ session })));
+  assert.ok(close.includes(JSON.stringify({ branch })));
   assert.match(close, /PI_HERDSMAN_MANAGER_RECOVERY_PAUSED/);
   const review = managerRecoveryReviewPrompt(branch);
   assert.match(review, /message_staff/);

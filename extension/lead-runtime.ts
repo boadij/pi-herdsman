@@ -5123,7 +5123,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           leads,
         }),
         openWorkspaces,
-        leads,
+        leads: leads.flatMap((lead: any) => {
+          const assignment = assignments.find((item) => item.id === lead.lead);
+          if (lead.relationship === "assigned" && !assignment) return [];
+          return [
+            assignment
+              ? {
+                  ...lead,
+                  relationship: "assigned" as const,
+                  branch: assignment.branch,
+                }
+              : { ...lead, relationship: "supervised" as const },
+          ];
+        }),
         ...(incompatible.length ? { incompatible } : {}),
       };
     }
@@ -5313,6 +5325,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         )
         .map((lead) => ({
           ...lead,
+          ...(sessions.has(lead.lead)
+            ? {
+                branch: assignments.find(
+                  (assignment) => assignment.id === lead.lead,
+                )!.branch,
+              }
+            : {}),
           relationship: sessions.has(lead.lead)
             ? ("assigned" as const)
             : ("supervised" as const),
@@ -7584,6 +7603,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     session: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    expected?: ProjectAssignment,
+    expectedLead?: {
+      workspaceId: string;
+      paneId: string;
+      tabId: string;
+      instanceId: string;
+    },
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
@@ -7607,6 +7633,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (assignments.length !== 1)
       throw new Error("Lead is not an exact current project assignment");
     const assignment = assignments[0];
+    if (
+      expected &&
+      (assignment.branch !== expected.branch ||
+        assignment.id !== expected.id ||
+        assignment.repoKey !== expected.repoKey)
+    )
+      throw new Error("Project assignment changed before stop");
     const close = async () => {
       if (
         host.readProjectAssignment(
@@ -7621,6 +7654,36 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
       if (live.length !== 1)
         throw new Error("Exact live Lead was not found or is ambiguous");
+      if (expectedLead) {
+        const state = host.readLeadCoordinationState(
+          host.supervisionRuntime(),
+          session,
+        );
+        if (
+          live[0].workspace_id !== expectedLead.workspaceId ||
+          live[0].pane_id !== expectedLead.paneId ||
+          live[0].tab_id !== expectedLead.tabId ||
+          state?.instanceId !== expectedLead.instanceId
+        )
+          throw new Error("Lead changed before stop");
+        host.requireCompatibleBuild(
+          host.HERDSMAN_BUILD,
+          state?.build,
+          "stop_lead",
+          `Lead ${session}`,
+        );
+      }
+      const currentManager = await host.currentManager(ctx);
+      if (
+        !currentManager ||
+        !host.sameManagerDescriptor(currentManager, manager) ||
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          assignment.branch,
+        )?.id !== assignment.id
+      )
+        throw new Error("Manager or project assignment changed before stop");
       const stopped = await stopExecution(session, live[0], ctx, signal);
       return {
         content: [
@@ -8906,11 +8969,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     | { action: "resume"; branch: string }
     | { action: "remove"; branch: string }
     | { action: "merge"; branch: string; expected_head: string }
-    | { action: "stop"; session: string }
-    | { action: "inspect" | "transcript"; session: string }
+    | { action: "stop"; branch: string }
+    | { action: "inspect" | "transcript"; session?: string; branch?: string }
     | {
         action: "message";
-        session: string;
+        session?: string;
+        branch?: string;
         message: string;
         files?: string[];
         retain?: boolean;
@@ -10501,7 +10565,47 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action === "stop") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can control project work");
-      return projectStop(params.session, ctx, signal);
+      if (!params.branch?.trim())
+        throw new Error("Provide the exact assigned branch");
+      const manager = await currentManager(ctx);
+      const assignment =
+        manager &&
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          params.branch,
+        );
+      if (!assignment) throw new Error("Project assignment was not found");
+      const matches = (await directReports(ctx)).filter(
+        (report: any) =>
+          (report.session ?? report.lead) === assignment.id &&
+          report.relationship === "assigned",
+      );
+      if (matches.length !== 1)
+        throw new Error("Assigned Lead is not eligible for stop");
+      return projectStop(assignment.id, ctx, signal, assignment, matches[0]);
+    }
+    if (
+      params.action !== "list" &&
+      Number(params.branch !== undefined) +
+        Number(params.session !== undefined) !==
+        1
+    )
+      throw new Error("Provide exactly one of branch or session");
+    let selectedAssignment: ProjectAssignment | undefined;
+    if (params.action !== "list" && params.branch !== undefined) {
+      if (activeRole() !== "manager" || !params.branch.trim())
+        throw new Error("Only Managers can target an exact assigned branch");
+      const manager = await currentManager(ctx);
+      selectedAssignment =
+        manager &&
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          params.branch,
+        );
+      if (!selectedAssignment)
+        throw new Error("Project assignment was not found");
     }
     const refresh = async () => directReports(ctx);
     const result = (value: Record<string, unknown>) => {
@@ -10591,7 +10695,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             role: activeRole() === "chief" ? report.role : "lead",
             session: reportSession(report),
             ...(activeRole() === "manager"
-              ? { relationship: report.relationship ?? "assigned" }
+              ? {
+                  relationship: report.relationship ?? "assigned",
+                  ...(report.relationship === "assigned" && report.branch
+                    ? { branch: report.branch }
+                    : {}),
+                }
               : {}),
             display_name: report.displayName,
             runtime_state: report.runtimeState,
@@ -10627,13 +10736,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ...(discoveryWarning ? { warning: discoveryWarning } : {}),
       });
     }
-    const lead = reports.find(
-      (candidate: any) => reportSession(candidate) === params.session,
+    const targetSession = selectedAssignment?.id ?? params.session;
+    const targets = reports.filter(
+      (candidate: any) => reportSession(candidate) === targetSession,
     );
+    const lead = targets.length === 1 ? targets[0] : undefined;
     if (!lead) {
       const observation = await loadSupervisionSnapshot(ctx);
       const incompatibleTarget = observation.incompatible?.find(
-        (report) => report.session === params.session,
+        (report) => report.session === targetSession,
       );
       if (incompatibleTarget)
         host.requireCompatibleBuild(
@@ -10643,9 +10754,34 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           `${incompatibleTarget.role} ${incompatibleTarget.session}`,
         );
       throw new Error(
-        "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by list_staff; never use display_name.",
+        "Lead target was not found or is no longer eligible. Use the exact assigned branch or ordinary direct-report session from fresh supervision state; never use display_name.",
       );
     }
+    if (
+      (selectedAssignment && lead.relationship !== "assigned") ||
+      (!selectedAssignment &&
+        activeRole() === "manager" &&
+        lead.relationship === "assigned")
+    )
+      throw new Error(
+        "Assigned Leads require branch targeting; session targets must be ordinary direct reports",
+      );
+    const assignmentStillCurrent = () => {
+      if (!selectedAssignment) return true;
+      const current = host.readProjectAssignment(
+        host.supervisionRuntime(),
+        selectedAssignment.repoKey,
+        selectedAssignment.branch,
+      );
+      return (
+        !!current &&
+        current.id === selectedAssignment.id &&
+        current.repoKey === selectedAssignment.repoKey &&
+        current.branch === selectedAssignment.branch
+      );
+    };
+    if (!assignmentStillCurrent())
+      throw new Error("Project assignment changed during target resolution");
     const sameLeadIdentity = (
       candidate: typeof lead,
       expected: typeof lead,
@@ -10695,15 +10831,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
       const currentLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === params.session,
+        (candidate: any) => reportSession(candidate) === targetSession,
       );
+      const finalAuthority =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
       if (
         !currentAuthority ||
         currentAuthority.leaseId !== authority.leaseId ||
+        !finalAuthority ||
+        finalAuthority.leaseId !== authority.leaseId ||
         !currentLead ||
         !sameLeadIdentity(currentLead, lead) ||
         currentLead.relationship !== lead.relationship ||
-        !currentLead.availableActions.includes("inspect")
+        !currentLead.availableActions.includes("inspect") ||
+        !assignmentStillCurrent()
       )
         throw new Error("Lead changed during inspection");
       return result({
@@ -10739,15 +10882,23 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
       const currentLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === params.session,
+        (candidate: any) => reportSession(candidate) === targetSession,
       );
+      const finalAuthority =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
       if (
         !currentChief ||
         currentChief.leaseId !== authority.leaseId ||
+        !finalAuthority ||
+        finalAuthority.leaseId !== authority.leaseId ||
         !currentLead ||
         !sameLeadIdentity(currentLead, lead) ||
         currentLead.piSessionFile !== sessionFile ||
-        !currentLead.availableActions.includes("transcript")
+        currentLead.relationship !== lead.relationship ||
+        !currentLead.availableActions.includes("transcript") ||
+        !assignmentStillCurrent()
       )
         throw new Error("Lead changed during transcript read");
       return result({
@@ -10769,12 +10920,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (!currentChief || currentChief.leaseId !== authority.leaseId)
       throw new Error("Chief lease is no longer active");
     const currentLead = (await directReports(ctx)).find(
-      (candidate: any) => reportSession(candidate) === params.session,
+      (candidate: any) => reportSession(candidate) === targetSession,
     );
     if (
       !currentLead ||
       !sameLeadTarget(currentLead, lead) ||
-      !currentLead.availableActions.includes(params.action)
+      currentLead.relationship !== lead.relationship ||
+      !currentLead.availableActions.includes(params.action) ||
+      !assignmentStillCurrent()
     )
       throw new Error("Lead target changed before the message was queued");
     // The supervision snapshot load is awaited and can observe a lease replacement.
@@ -10821,6 +10974,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           add: params.files,
           resolvedAdd: supplied,
           text: params.message,
+          expectedAssignment: selectedAssignment,
         },
         undefined,
         undefined,
@@ -10865,22 +11019,31 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
       const writeLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === params.session,
+        (candidate: any) => reportSession(candidate) === targetSession,
       );
+      const finalAuthority =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
       const writeAssignment = writeLead
         ? assignmentMatches(writeLead)
         : undefined;
       if (
         !writeChief ||
         writeChief.leaseId !== finalChief.leaseId ||
+        !finalAuthority ||
+        finalAuthority.leaseId !== finalChief.leaseId ||
         !writeLead ||
         !sameLeadTarget(writeLead, currentLead) ||
-        !writeLead.availableActions.includes(params.action)
+        writeLead.relationship !== lead.relationship ||
+        !writeLead.availableActions.includes(params.action) ||
+        !assignmentStillCurrent()
       )
         throw new Error("Lead or Chief changed before the message was queued");
       if (
         (writeLead.relationship === "assigned") !== !!writeAssignment ||
-        writeAssignment?.branch !== initialAssignment?.branch
+        writeAssignment?.branch !== initialAssignment?.branch ||
+        writeAssignment?.id !== initialAssignment?.id
       )
         throw new Error(
           "Lead assignment changed before the message was queued",

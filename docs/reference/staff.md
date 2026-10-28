@@ -11,7 +11,8 @@ the branch-based project operations `delegate_project`, `resume_project`,
 `stop_lead`, `remove_worktree`, and `merge_project`. Chief has no
 project-operation tools.
 
-Lead-targeted actions use the exact full Pi `session` ID from a fresh
+Managers target assigned Leads by exact `branch`; ordinary supervised Leads
+and Chief direct reports use the exact full Pi `session` ID from a fresh
 supervision snapshot or `list_staff`. Project actions use the Git branch.
 Presentation state is not authority; every action revalidates current identity
 and direct-report authority.
@@ -34,8 +35,8 @@ actionable report.
 A direct-report record can expose the exact `session`, presentation-only
 `display_name`, runtime state, Agent counts, `available_tools`, and optional
 branch provenance. Manager reports also include a derived `relationship`
-value of `assigned` or `supervised`. Use `session` as the target, never
-`display_name`. The
+value of `assigned` or `supervised`. Use the assigned report's `branch` or the
+ordinary report's `session`, never `display_name`. The
 automatic supervision snapshot is bounded state, not terminal or transcript
 evidence. Use `list_staff` when a fresh complete roster is materially needed.
 
@@ -54,8 +55,8 @@ unavailable or ambiguous Git inventory preserves it. Work items do not expose
 assignment session IDs, workspace IDs, or pane IDs.
 
 For Manager, `open_workspaces` separately reports current Herdr topology. It is
-not assignment ownership. A branch is the project-work handle; a report's
-`session` is the handle for live Lead actions.
+not assignment ownership. An assigned report's branch is the handle for its
+live Lead actions.
 
 When a live staff session is independently identified but its validated
 Herdsman build differs from the local build, `list_staff` includes an
@@ -74,7 +75,8 @@ Do not call `list_staff` merely to poll progress.
 { "session": "<exact full Pi session ID>" }
 ```
 
-Read-only. Requires a current exact direct-report session. Returns bounded live
+For an assigned Lead use `{ "branch": "feat/example" }` instead. Supply exactly
+one selector. Read-only. Requires a current eligible direct report. Returns bounded live
 terminal/process evidence. It does not expose persisted Pi conversation
 history. Use it only when live terminal/process evidence materially matters.
 
@@ -84,7 +86,8 @@ history. Use it only when live terminal/process evidence materially matters.
 { "session": "<exact full Pi session ID>" }
 ```
 
-Read-only. Requires a current exact direct-report session and revalidates the
+For an assigned Lead use `{ "branch": "feat/example" }` instead. Supply exactly
+one selector. Read-only. Requires a current eligible direct report and revalidates the
 persisted Pi session before returning bounded visible conversation and tool
 evidence. Reasoning, system messages, extension entries, and control markers
 are excluded; the internal session-file path is not returned.
@@ -93,14 +96,15 @@ are excluded; the internal session-file path is not returned.
 
 ```json
 {
-  "session": "<exact full Pi session ID>",
+  "branch": "feat/example",
   "message": "Please revise the error handling.",
   "files": ["/tmp/review.md", "result:implementation#1"],
   "retain": true
 }
 ```
 
-Sends an asynchronous durable message to the exact current direct report. The
+Use exactly one of `branch` (assigned Lead) or `session` (ordinary supervised
+Lead or Chief direct report). Sends an asynchronous durable message to the exact current direct report. The
 message is queued by Herdsman before submission. If an assigned report is
 actively running, supervisor direction uses Pi's cooperative steering lane;
 steering does not abort the current operation or interrupt an in-flight tool
@@ -178,7 +182,7 @@ than recreating it. A retired assignment cannot be resumed; new work may use
 ## `stop_lead`
 
 ```json
-{ "session": "<exact live direct Lead session ID>" }
+{ "branch": "feat/example" }
 ```
 
 Stops only an exact currently assigned project Lead and its owned Agent
