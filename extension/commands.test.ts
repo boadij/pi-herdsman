@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -8203,6 +8203,7 @@ async function managerDelegateAssignmentTest(
   t: TestContext,
   projectTrusted: boolean,
   lockOrder?: "manager-first" | "lead-first",
+  extendedRepoKey = false,
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -8212,12 +8213,13 @@ async function managerDelegateAssignmentTest(
       ? `\\\\.\\pipe\\herdr-${randomUUID()}`
       : `/tmp/herdr-${randomUUID()}.sock`;
   const lifecycleSocketPath = process.env.HERDR_SOCKET_PATH;
-  const repoKey = join(
+  const repoPath = join(
     PI_AGENT_ROOT,
     `herdsman-command-repo-key-${randomUUID()}`,
   );
-  realFs.mkdirSync(repoKey);
-  t.after(() => rmSync(repoKey, { recursive: true, force: true }));
+  const repoKey = extendedRepoKey ? toNamespacedPath(repoPath) : repoPath;
+  realFs.mkdirSync(repoPath);
+  t.after(() => rmSync(repoPath, { recursive: true, force: true }));
   const childWorkspace = `child-${randomUUID()}`;
   const childCwd = realFs.mkdtempSync(join(PI_AGENT_ROOT, "manager-child-"));
   t.after(() => rmSync(childCwd, { recursive: true, force: true }));
@@ -8328,14 +8330,14 @@ async function managerDelegateAssignmentTest(
         return { stdout: `${childCwd}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
         return {
-          stdout: `${options?.cwd === childCwd && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : repoKey}\n`,
+          stdout: `${options?.cwd === childCwd && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : repoPath}\n`,
           stderr: "",
           code: 0,
         };
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: [
-            `worktree ${repoKey}`,
+            `worktree ${repoPath}`,
             `HEAD ${"0".repeat(40)}`,
             "branch refs/heads/main",
             "",
@@ -8378,7 +8380,7 @@ async function managerDelegateAssignmentTest(
           worktree: {
             repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
-            checkout_path: args[2] === childWorkspace ? childCwd : repoKey,
+            checkout_path: args[2] === childWorkspace ? childCwd : repoPath,
           },
         },
         ...(args[2] === childWorkspace
@@ -8392,14 +8394,14 @@ async function managerDelegateAssignmentTest(
           source_workspace_id: primaryWorkspace,
           repo_key: repoKey,
           repo_name: "project",
-          source_checkout_path: reportCheckoutAbsent ? repoKey : repoKey,
+          source_checkout_path: repoPath,
         },
         worktrees: created
           ? [
               {
                 open_workspace_id: primaryWorkspace,
                 branch: "main",
-                path: repoKey,
+                path: repoPath,
                 is_linked_worktree: false,
               },
               ...(!reportCheckoutAbsent
@@ -9134,7 +9136,7 @@ async function managerDelegateAssignmentTest(
       {
         workspace: WORKSPACE,
         branch: "main",
-        path: repoKey,
+        path: repoPath,
         linked: false,
       },
       {
@@ -9705,6 +9707,12 @@ async function managerDelegateAssignmentTest(
 for (const projectTrusted of [true, false])
   test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
     managerDelegateAssignmentTest(t, projectTrusted));
+
+test(
+  "Manager delegation accepts Windows extended Herdr repository keys",
+  { skip: process.platform !== "win32" },
+  (t) => managerDelegateAssignmentTest(t, true, undefined, true),
+);
 
 test("Manager session binding holds the assignment lock before Lead publication", (t) =>
   managerDelegateAssignmentTest(t, false, "manager-first"));
