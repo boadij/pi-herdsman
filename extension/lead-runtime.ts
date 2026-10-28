@@ -7749,7 +7749,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       topology?.source?.repo_key !== manager.repoKey ||
       typeof topology?.source?.source_checkout_path !== "string" ||
-      realpathSync(topology.source.source_checkout_path) !==
+      realpathSync.native(topology.source.source_checkout_path) !==
         localScope.checkoutPath ||
       !Array.isArray(topology?.worktrees)
     )
@@ -7838,10 +7838,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         gitInventory.code !== 0 ||
         gitInventory.killed ||
         gitInventory.stderr?.trim() ||
-        realpathSync(String(gitRoot.stdout ?? "").trim()) !==
-          realpathSync(checkoutPath) ||
-        realpathSync(String(gitCommonDir.stdout ?? "").trim()) !==
-          realpathSync(manager.repoKey) ||
+        realpathSync.native(String(gitRoot.stdout ?? "").trim()) !==
+          realpathSync.native(checkoutPath) ||
+        realpathSync.native(String(gitCommonDir.stdout ?? "").trim()) !==
+          realpathSync.native(manager.repoKey) ||
         !gitWorktrees ||
         gitWorktrees.filter(
           (entry) =>
@@ -8545,7 +8545,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       initialTopology?.source?.repo_key !== initialManager.repoKey ||
       typeof initialTopology?.source?.source_checkout_path !== "string" ||
-      realpathSync(initialTopology.source.source_checkout_path) !==
+      realpathSync.native(initialTopology.source.source_checkout_path) !==
         localScope.checkoutPath
     )
       throw new Error("Herdr worktree topology is unavailable or inconsistent");
@@ -8619,7 +8619,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        realpathSync(topology.source.source_checkout_path) !==
+        realpathSync.native(topology.source.source_checkout_path) !==
           localScope.checkoutPath ||
         !Array.isArray(topology.worktrees) ||
         topology.worktrees.some(
@@ -8694,10 +8694,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         root.code !== 0 ||
         root.killed ||
         root.stderr?.trim() ||
-        realpathSync(String(common.stdout ?? "").trim()) !==
-          realpathSync(manager.repoKey) ||
-        realpathSync(String(root.stdout ?? "").trim()) !==
-          realpathSync(topology.source.source_checkout_path) ||
+        realpathSync.native(String(common.stdout ?? "").trim()) !==
+          realpathSync.native(manager.repoKey) ||
+        realpathSync.native(String(root.stdout ?? "").trim()) !==
+          realpathSync.native(topology.source.source_checkout_path) ||
         !inventory.some(
           (worktree) =>
             resolve(worktree.path) ===
@@ -9074,7 +9074,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        realpathSync(topology.source.source_checkout_path) !==
+        realpathSync.native(topology.source.source_checkout_path) !==
           localScope.checkoutPath
       )
         throw sourceError;
@@ -10085,8 +10085,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branchResult.killed ||
           branchResult.stderr?.trim() ||
           !isAbsolute(String(common.stdout ?? "").trim()) ||
-          realpathSync(String(common.stdout).trim()) !==
-            realpathSync(manager.repoKey) ||
+          realpathSync.native(String(common.stdout).trim()) !==
+            realpathSync.native(manager.repoKey) ||
           String(branchResult.stdout ?? "").trim() !== assignment.branch
         )
           throw new Error(
@@ -10095,15 +10095,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (
           !isAbsolute(cwd!) ||
           workspaceId === primaryWorkspaceId ||
-          realpathSync(cwd!) ===
-            realpathSync(topology.source.source_checkout_path) ||
+          realpathSync.native(cwd!) ===
+            realpathSync.native(topology.source.source_checkout_path) ||
           (matchingWorktrees.length === 1 &&
-            realpathSync(cwd!) !== realpathSync(matchingWorktrees[0]!.path))
+            realpathSync.native(cwd!) !== realpathSync.native(matchingWorktrees[0]!.path))
         )
           throw new Error(
             "Herdr checkout is not the verified linked project worktree",
           );
-        assignment = { ...assignment, checkoutPath: realpathSync(cwd!) };
+        assignment = { ...assignment, checkoutPath: realpathSync.native(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error(
@@ -16070,7 +16070,7 @@ export function createLeadRoleTransitions(
       const inventory = parseGitWorktreeInventory(String(result.stdout ?? ""));
       if (
         !inventory ||
-        realpathSync(commonDir) !== realpathSync(repoKey) ||
+        realpathSync.native(commonDir) !== realpathSync.native(repoKey) ||
         gitPathStatus(sourceCheckoutPath) !== "present"
       )
         return undefined;
