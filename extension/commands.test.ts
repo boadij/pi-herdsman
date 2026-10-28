@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -6558,6 +6558,10 @@ async function managerRemovalFixture(
     confirmationResponse?: string;
     agentStateIssues?: boolean;
     extraAgentStates?: any[];
+    extendedPaths?: boolean;
+    primaryCheckoutAsWorktree?: boolean;
+    wrongGitRepository?: boolean;
+    missingGitRepository?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -6688,8 +6692,17 @@ async function managerRemovalFixture(
             stdout: `${runOptions.cwd === repoKey ? repoKey : checkoutPath}\n`,
             stderr: "",
           };
-        if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
-          return { code: 0, stdout: `${repoKey}\n`, stderr: "" };
+        if (args[0] === "rev-parse" && args[1] === "--path-format=absolute") {
+          const common =
+            args.includes("--git-common-dir") && runOptions.cwd !== repoKey;
+          const path =
+            common && options.missingGitRepository
+              ? join(unrelatedPath, "missing")
+              : common && options.wrongGitRepository
+                ? unrelatedPath
+                : repoKey;
+          return { code: 0, stdout: `${path}\n`, stderr: "" };
+        }
         if (
           args[0] === "worktree" &&
           args[1] === "list" &&
@@ -6814,7 +6827,9 @@ async function managerRemovalFixture(
           source: {
             source_workspace_id: manager.workspaceId,
             repo_key: repoKey,
-            source_checkout_path: repoKey,
+            source_checkout_path: options.extendedPaths
+              ? toNamespacedPath(repoKey)
+              : repoKey,
           },
           worktrees: [
             ...(checkoutPresent
@@ -6822,7 +6837,11 @@ async function managerRemovalFixture(
                   {
                     open_workspace_id: topologyWorkspaceId,
                     branch,
-                    path: checkoutPath,
+                    path: options.primaryCheckoutAsWorktree
+                      ? repoKey
+                      : options.extendedPaths
+                        ? toNamespacedPath(checkoutPath)
+                        : checkoutPath,
                     is_linked_worktree: true,
                   },
                 ]
@@ -6849,7 +6868,12 @@ async function managerRemovalFixture(
         topologyWorkspaceId = workspaceId;
         return {
           workspace: { workspace_id: "new-child-workspace" },
-          worktree: { branch, path: checkoutPath },
+          worktree: {
+            branch,
+            path: options.extendedPaths
+              ? toNamespacedPath(checkoutPath)
+              : checkoutPath,
+          },
         };
       }
       if (args[1] === "remove") {
@@ -8077,6 +8101,40 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
   }
 });
 
+test("Manager removal rejects unverified checkout and repository identity", async (t) => {
+  for (const options of [
+    { primaryCheckoutAsWorktree: true },
+    { wrongGitRepository: true },
+    { missingGitRepository: true },
+  ]) {
+    const fixture = await managerRemovalFixture(t, options);
+    await assert.rejects(
+      fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+      /primary checkout cannot be removed|Git could not verify/,
+    );
+    assert.ok(fixture.assignment());
+    assert.deepEqual(fixture.removals, []);
+  }
+});
+
+test(
+  "Manager removal accepts Windows extended checkout paths",
+  { skip: process.platform !== "win32" },
+  async (t) => {
+    const fixture = await managerRemovalFixture(t, {
+      extendedPaths: true,
+      closedWorkspace: true,
+    });
+    const result = await fixture.runtime.removeWorktree(
+      "feat/remove-test",
+      fixture.ctx,
+    );
+    assert.equal(result.details.checkout_removed, true);
+    assert.equal(result.details.assignment_retired, true);
+    assert.deepEqual(fixture.removals, ["new-child-workspace"]);
+  },
+);
+
 test("Manager removal reports native failure and uncertain assignment reconciliation truthfully", async (t) => {
   const failed = await managerRemovalFixture(t, {
     runningLead: true,
@@ -8255,6 +8313,7 @@ async function managerDelegateAssignmentTest(
   lockOrder?: "manager-first" | "lead-first",
   targetDecision: boolean | null = projectTrusted,
   ancestorDecision: boolean | null = null,
+  extendedPaths = false,
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -8264,20 +8323,47 @@ async function managerDelegateAssignmentTest(
       ? `\\\\.\\pipe\\herdr-${randomUUID()}`
       : `/tmp/herdr-${randomUUID()}.sock`;
   const lifecycleSocketPath = process.env.HERDR_SOCKET_PATH;
-  const repoKey = join(
+  const repoPath = join(
     PI_AGENT_ROOT,
     `herdsman-command-repo-key-${randomUUID()}`,
   );
-  realFs.mkdirSync(repoKey);
-  t.after(() => rmSync(repoKey, { recursive: true, force: true }));
+  realFs.mkdirSync(repoPath);
+  t.after(() => rmSync(repoPath, { recursive: true, force: true }));
+  const git = (args: string[], cwd = repoPath) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  if (extendedPaths) {
+    git(["init"]);
+    git([
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "initial",
+    ]);
+  }
+  const gitRepoPath = extendedPaths
+    ? git(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    : repoPath;
+  const repoKey = extendedPaths ? toNamespacedPath(gitRepoPath) : repoPath;
+  const primaryPath = extendedPaths ? toNamespacedPath(repoPath) : repoKey;
+  assert.ok(gitRepoPath);
   const childWorkspace = `child-${randomUUID()}`;
   const childCwd = realFs.mkdtempSync(join(PI_AGENT_ROOT, "manager-child-"));
   t.after(() => rmSync(childCwd, { recursive: true, force: true }));
+  if (extendedPaths)
+    git(["worktree", "add", "-b", `fixture-${randomUUID()}`, childCwd]);
   new ProjectTrustStore(PI_AGENT_ROOT).set(PI_AGENT_ROOT, ancestorDecision);
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(PI_AGENT_ROOT, null));
-  new ProjectTrustStore(PI_AGENT_ROOT).set(childCwd, targetDecision);
+  const trustPath = extendedPaths ? toNamespacedPath(childCwd) : childCwd;
+  new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   const targetTrusted = (targetDecision ?? ancestorDecision) === true;
-  t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(childCwd, null));
+  t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
   const managedLeadDir = join(childCwd, ".pi", "pi-herdsman", "roles");
   realFs.mkdirSync(managedLeadDir, { recursive: true });
   realFs.writeFileSync(
@@ -8379,13 +8465,31 @@ async function managerDelegateAssignmentTest(
       return respond({});
     }
     if (command === "git") {
+      if (
+        extendedPaths &&
+        created &&
+        !reportCheckoutAbsent &&
+        args[0] === "worktree" &&
+        args[1] === "list"
+      )
+        return { stdout: git(args, options?.cwd), stderr: "", code: 0 };
+      if (
+        extendedPaths &&
+        options?.cwd &&
+        (options.cwd === childCwd ||
+          options.cwd === toNamespacedPath(childCwd)) &&
+        ((args[0] === "rev-parse" && args.includes("--git-common-dir")) ||
+          args[0] === "symbolic-ref")
+      ) {
+        return { stdout: `${git(args, options.cwd)}\n`, stderr: "", code: 0 };
+      }
       if (args[0] === "status")
         return { stdout: gitStatusOutput, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
         return { stdout: `${childCwd}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
         return {
-          stdout: `${options?.cwd === childCwd && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : repoKey}\n`,
+          stdout: `${(options?.cwd === childCwd || options?.cwd === toNamespacedPath(childCwd)) && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : extendedPaths && args.includes("--show-toplevel") ? repoPath : gitRepoPath}\n`,
           stderr: "",
           code: 0,
         };
@@ -8435,7 +8539,7 @@ async function managerDelegateAssignmentTest(
           worktree: {
             repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
-            checkout_path: args[2] === childWorkspace ? childCwd : repoKey,
+            checkout_path: args[2] === childWorkspace ? childCwd : primaryPath,
           },
         },
         ...(args[2] === childWorkspace
@@ -8449,14 +8553,14 @@ async function managerDelegateAssignmentTest(
           source_workspace_id: primaryWorkspace,
           repo_key: repoKey,
           repo_name: "project",
-          source_checkout_path: reportCheckoutAbsent ? repoKey : repoKey,
+          source_checkout_path: primaryPath,
         },
         worktrees: created
           ? [
               {
                 open_workspace_id: primaryWorkspace,
                 branch: "main",
-                path: repoKey,
+                path: primaryPath,
                 is_linked_worktree: false,
               },
               ...(!reportCheckoutAbsent
@@ -8485,12 +8589,16 @@ async function managerDelegateAssignmentTest(
       const branchIndex = args.indexOf("--branch");
       createdBranch = args[branchIndex + 1]!;
       assert.ok(createdBranch);
+      if (extendedPaths) git(["branch", "-m", createdBranch], childCwd);
       created = true;
       return respond({
         workspace: { workspace_id: childWorkspace },
         tab: { tab_id: "child-tab" },
         root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
-        worktree: { branch: createdBranch, path: childCwd },
+        worktree: {
+          branch: createdBranch,
+          path: trustPath,
+        },
       });
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
@@ -8640,7 +8748,7 @@ async function managerDelegateAssignmentTest(
         nativeSessions.set(childSessionPath(), {
           id: childSession,
           path: childSessionPath(),
-          cwd: realFs.realpathSync(childCwd),
+          cwd: realFs.realpathSync.native(childCwd),
           entries: [],
         });
       }
@@ -9197,7 +9305,7 @@ async function managerDelegateAssignmentTest(
       {
         workspace: WORKSPACE,
         branch: "main",
-        path: repoKey,
+        path: primaryPath,
         linked: false,
       },
       {
@@ -9768,6 +9876,20 @@ async function managerDelegateAssignmentTest(
 for (const projectTrusted of [true, false])
   test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
     managerDelegateAssignmentTest(t, projectTrusted));
+
+test(
+  "Manager delegation accepts Windows extended Herdr repository keys",
+  { skip: process.platform !== "win32" },
+  (t) =>
+    managerDelegateAssignmentTest(
+      t,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    ),
+);
 
 test("Manager trust cannot authorize an absent or denied target decision", async (t) => {
   await managerDelegateAssignmentTest(t, true, undefined, null);

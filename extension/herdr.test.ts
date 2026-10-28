@@ -13,7 +13,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { dirname, join } from "node:path";
+import { dirname, join, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
@@ -1629,7 +1629,10 @@ test("start injects mandatory extensions before definition args and configures t
   const tabCreate = calls.find(
     (args) => args[0] === "tab" && args[1] === "create",
   )!;
-  assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], realpathSync(cwd));
+  assert.equal(
+    tabCreate[tabCreate.indexOf("--cwd") + 1],
+    realpathSync.native(cwd),
+  );
   assert.equal(tabCreate[tabCreate.indexOf("--label") + 1], "agents");
   assert.deepEqual(
     tabCreate
@@ -2572,11 +2575,13 @@ async function startAgentCase(
   kind: StartAgentCase,
   onMarker?: () => void,
   timeoutMs = 30_000,
+  paths?: { requested: string; observed: string },
 ) {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "case-workspace";
-  const cwd = "/tmp/case-agent";
+  const cwd = paths?.requested ?? "/tmp/case-agent";
+  const observedCwd = paths?.observed ?? cwd;
   const calls: string[][] = [];
   let processInfoCalls = 0;
   let agentStarts = 0;
@@ -2650,8 +2655,8 @@ async function startAgentCase(
               tab_id: "case-tab",
               terminal_id: "case-terminal",
               agent_status: "unknown",
-              cwd,
-              foreground_cwd: cwd,
+              cwd: observedCwd,
+              foreground_cwd: observedCwd,
               ...mutation,
             },
             ...(kind === "extra-pane"
@@ -2681,7 +2686,7 @@ async function startAgentCase(
                 : "case-terminal",
             workspace_id: "case-workspace",
             tab_id: "case-tab",
-            cwd,
+            cwd: observedCwd,
           },
         });
       if (key === "pane read") return { code: 0, stdout: "", stderr: "" };
@@ -3099,7 +3104,7 @@ test("placement validates a non-lead caller and selects the largest agent axis",
   assert.equal(option(callerSplit, "--pane"), "caller");
   assert.equal(option(callerSplit, "--ratio"), "0.65");
   assert.equal(option(callerSplit, "--direction"), "down");
-  assert.equal(option(callerSplit, "--cwd"), realpathSync(caller.cwd));
+  assert.equal(option(callerSplit, "--cwd"), realpathSync.native(caller.cwd));
   assert.equal(callerSplit.includes("--no-focus"), true);
   assert.equal(
     caller.calls.some((args) => args[0] === "pane" && args[1] === "layout"),
@@ -3154,7 +3159,10 @@ test("placement validates a non-lead caller and selects the largest agent axis",
     assert.equal(option(agentSplit, "--pane"), testCase.anchor);
     assert.equal(option(agentSplit, "--ratio"), "0.5");
     assert.equal(option(agentSplit, "--direction"), testCase.direction);
-    assert.equal(option(agentSplit, "--cwd"), realpathSync(placement.cwd));
+    assert.equal(
+      option(agentSplit, "--cwd"),
+      realpathSync.native(placement.cwd),
+    );
     assert.equal(agentSplit.includes("--no-focus"), true);
   }
 });
@@ -6108,6 +6116,30 @@ test("cwd comparisons accept equivalent symlink paths", () => {
   }
 });
 
+test(
+  "cwd comparisons and pane startup accept Windows path representations",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-cwd-"));
+    try {
+      const ordinary = realpathSync(cwd);
+      const native = realpathSync.native(cwd);
+      for (const observed of [ordinary, toNamespacedPath(cwd)]) {
+        assert.equal(sameCwd(observed, native), true);
+        const result = await startAgentCase("success", undefined, 30_000, {
+          requested: native,
+          observed,
+        });
+        assert.equal(result.failure, undefined);
+        assert.equal(result.agentStarts, 1);
+      }
+      assert.equal(sameCwd(toNamespacedPath(cwd), dirname(cwd)), false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
 test("running ownership includes shell and foreground process group", () => {
   assert.equal(sameRunningProcessOwner(processInfo, processInfo), true);
   assert.equal(
@@ -6574,11 +6606,25 @@ test("local repository discovery ignores inherited topology but checks explicit 
       ),
     );
     sourceWorkspace = undefined;
-    reportedRepo = common;
-    assert.equal(
-      (await localRepositoryScope(pi, { cwd } as any, "w")).repoKey,
-      common,
-    );
+    for (const variant of [
+      { repoKey: common, membership: null },
+      { repoKey: toNamespacedPath(common), membership: null },
+      {
+        repoKey: common,
+        membership: {
+          repo_key: toNamespacedPath(common),
+          checkout_path: toNamespacedPath(checkout),
+          is_linked_worktree: false,
+        },
+      },
+    ]) {
+      reportedRepo = variant.repoKey;
+      membership = variant.membership;
+      assert.equal(
+        (await localRepositoryScope(pi, { cwd } as any, "w")).repoKey,
+        variant.repoKey,
+      );
+    }
     reportedRepo = linked;
     await assert.rejects(
       localRepositoryScope(pi, { cwd } as any, "w"),
@@ -6625,8 +6671,8 @@ test(
 
 test("directory identity fails closed when filesystem IDs are unavailable", (t) => {
   let statCalls = 0;
-  t.mock.method(fs, "realpathSync", ((path: fs.PathLike) =>
-    String(path)) as typeof fs.realpathSync);
+  t.mock.method(fs.realpathSync, "native", ((path: fs.PathLike) =>
+    String(path)) as typeof fs.realpathSync.native);
   t.mock.method(fs, "statSync", (() => {
     statCalls++;
     return {

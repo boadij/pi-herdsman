@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, toNamespacedPath } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
 import { test, type TestContext } from "node:test";
@@ -3607,6 +3607,7 @@ async function runManagerStartupScenario(
     | "reconcile-detached-unrelated"
     | "reconcile-session-unreadable"
     | "reconcile-conflicting-provenance"
+    | "reconcile-aliased-provenance"
     | "reconcile-assignment-lock"
     | "verified-absence-resume"
     | "delegate-reconciles-absent-assignment"
@@ -3713,7 +3714,8 @@ async function runManagerStartupScenario(
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
-  let gitInventoryCalls = 0;
+  const gitInventories: string[] = [];
+  let aliasedCheckoutDeleted = false;
   let gitListOutput = "";
   let gitBranchOutput = "smoke/recover";
   let gitCwd = "/tmp";
@@ -3763,7 +3765,6 @@ async function runManagerStartupScenario(
     options?: { cwd?: string },
   ) => {
     if (command === "git") {
-      gitInventoryCalls++;
       if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
         return { stdout: `${options?.cwd ?? gitCwd}\n`, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
@@ -3816,7 +3817,9 @@ async function runManagerStartupScenario(
             "reconcile-session-unreadable",
             "reconcile-conflicting-provenance",
             "reconcile-assignment-lock",
-          ].includes(mode) && !mode.startsWith("active-missing");
+          ].includes(mode) &&
+          !mode.startsWith("active-missing") &&
+          !aliasedCheckoutDeleted;
         const worktrees = [
           `worktree ${gitCwd}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
           ...(hasManagedCheckout
@@ -3850,6 +3853,8 @@ async function runManagerStartupScenario(
             : []),
         ];
         gitListOutput = worktrees.join("");
+        if (args[1] === "list" && args.includes("--porcelain"))
+          gitInventories.push(gitListOutput);
         return { stdout: gitListOutput, stderr: "", code: 0 };
       }
     }
@@ -4602,8 +4607,25 @@ async function runManagerStartupScenario(
     const activeBranch: any[] = pi.entries;
     const ctx = fakeContext(pi.entries, activeBranch) as any;
     gitCwd = ctx.cwd;
-    if (["reconcile-present", "reconcile-detached"].includes(mode))
+    if (
+      [
+        "reconcile-present",
+        "reconcile-detached",
+        "reconcile-aliased-provenance",
+      ].includes(mode)
+    )
       realFs.mkdirSync(existingGitWorktree, { recursive: true });
+    const checkoutAlias =
+      process.platform === "win32"
+        ? toNamespacedPath(existingGitWorktree)
+        : `${existingGitWorktree}-alias`;
+    if (
+      mode === "reconcile-aliased-provenance" &&
+      process.platform !== "win32"
+    ) {
+      realFs.symlinkSync(existingGitWorktree, checkoutAlias, "dir");
+      t?.after(() => realFs.rmSync(checkoutAlias, { force: true }));
+    }
     ctx.isIdle = () => recipientIdle;
     if (["occupied", "multiple"].includes(mode))
       writeLeadCoordinationState(supervisionRuntime(), {
@@ -4632,6 +4654,7 @@ async function runManagerStartupScenario(
           "reconcile-detached-unrelated",
           "reconcile-session-unreadable",
           "reconcile-conflicting-provenance",
+          "reconcile-aliased-provenance",
         ].includes(mode)
           ? { piSessionFile: `/tmp/${reconciliationId}.jsonl` }
           : {}),
@@ -4639,6 +4662,7 @@ async function runManagerStartupScenario(
           "reconcile-present",
           "reconcile-locked",
           "reconcile-prunable-absent",
+          "reconcile-aliased-provenance",
         ].includes(mode)
           ? { checkoutPath: existingGitWorktree }
           : mode === "reconcile-conflicting-provenance"
@@ -4649,12 +4673,16 @@ async function runManagerStartupScenario(
         realFs.mkdirSync(existingGitWorktree, { recursive: true });
       } else if (
         mode === "reconcile-detached-unrelated" ||
-        mode === "reconcile-conflicting-provenance"
+        mode === "reconcile-conflicting-provenance" ||
+        mode === "reconcile-aliased-provenance"
       ) {
         nativeSessions.set(reconciliationId, {
           id: reconciliationId,
           path: `/tmp/${reconciliationId}.jsonl`,
-          cwd: "/removed/original-checkout",
+          cwd:
+            mode === "reconcile-aliased-provenance"
+              ? checkoutAlias
+              : "/removed/original-checkout",
           entries: [],
         });
       }
@@ -4686,6 +4714,20 @@ async function runManagerStartupScenario(
         .find((tool) => tool.name === "list_staff")!
         .execute("list", {}, undefined, undefined, ctx);
       let assignments = listProjectAssignments(supervisionRuntime(), repoKey);
+      if (
+        mode === "reconcile-aliased-provenance" ||
+        mode === "reconcile-conflicting-provenance"
+      )
+        assert.equal(
+          pi.entries.some(
+            (entry: any) =>
+              entry.customType === "pi_herdsman_state_error" &&
+              JSON.stringify(entry.data).includes(
+                "conflicting checkout provenance",
+              ),
+          ),
+          mode === "reconcile-conflicting-provenance",
+        );
       if (releaseAssignmentLock) {
         assert.deepEqual(
           assignments.map(({ id }) => id),
@@ -4729,7 +4771,7 @@ async function runManagerStartupScenario(
         mode === "reconcile-session-unreadable"
       ) {
         if (mode === "reconcile-absent") {
-          assert.ok(gitInventoryCalls >= 2);
+          assert.ok(gitInventories.length >= 2);
           assert.deepEqual(parseGitWorktreeInventory(gitListOutput), [
             { path: ctx.cwd, branch: "main" },
           ]);
@@ -4766,6 +4808,61 @@ async function runManagerStartupScenario(
             reconciliationBranch,
           ).length,
           1,
+        );
+      }
+      if (mode === "reconcile-aliased-provenance") {
+        const unrelatedId = randomUUID();
+        writeProjectAssignment(supervisionRuntime(), {
+          version: 2,
+          id: unrelatedId,
+          repoKey: "unrelated-repo",
+          branch: reconciliationBranch,
+          text: "unrelated assignment",
+        });
+        realFs.rmSync(existingGitWorktree, { recursive: true, force: true });
+        aliasedCheckoutDeleted = true;
+        const previousInventoryCalls = gitInventories.length;
+        await pi.tools
+          .find((tool) => tool.name === "list_staff")!
+          .execute("list", {}, undefined, undefined, ctx);
+        assignments = listProjectAssignments(supervisionRuntime(), repoKey);
+        if (process.platform === "win32") {
+          const inventories = gitInventories.slice(previousInventoryCalls);
+          assert.ok(inventories.length >= 2);
+          for (const inventory of inventories)
+            assert.deepEqual(parseGitWorktreeInventory(inventory), [
+              { path: ctx.cwd, branch: "main" },
+            ]);
+          assert.deepEqual(assignments, []);
+          assert.equal(
+            listPendingRetirements(supervisionRuntime(), repoKey).filter(
+              (record) => record.id === reconciliationId,
+            ).length,
+            1,
+          );
+          assert.deepEqual(
+            listProjectMessages(
+              supervisionRuntime(),
+              repoKey,
+              reconciliationBranch,
+            ),
+            [],
+          );
+        } else {
+          assert.equal(assignments[0]?.id, reconciliationId);
+          assert.ok(
+            pi.entries.some(
+              (entry: any) =>
+                entry.customType === "pi_herdsman_state_error" &&
+                JSON.stringify(entry.data).includes(
+                  "conflicting checkout provenance",
+                ),
+            ),
+          );
+        }
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "unrelated-repo")[0]?.id,
+          unrelatedId,
         );
       }
       return;
@@ -5028,7 +5125,10 @@ async function runManagerStartupScenario(
         repoKey,
       )[0]!;
       assert.notEqual(assignment.id, staleId);
-      assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
+      assert.equal(
+        assignment.checkoutPath,
+        realFs.realpathSync.native(childPath),
+      );
       assert.equal(createCalls, 1);
       assert.equal(startCalls, 1);
       assert.deepEqual(
@@ -6271,7 +6371,10 @@ async function runManagerStartupScenario(
       "text",
       "version",
     ]);
-    assert.equal(assignment.checkoutPath, realFs.realpathSync(childPath));
+    assert.equal(
+      assignment.checkoutPath,
+      realFs.realpathSync.native(childPath),
+    );
     if (["success", "unmaterialized-path"].includes(mode))
       assert.equal(
         assignment.piSessionFile,
@@ -7170,10 +7273,11 @@ for (const mode of [
   "reconcile-detached-unrelated",
   "reconcile-session-unreadable",
   "reconcile-conflicting-provenance",
+  "reconcile-aliased-provenance",
   "reconcile-assignment-lock",
 ] as const)
-  test(`Manager startup reconciles orphan assignments safely (${mode})`, () =>
-    runManagerStartupScenario(mode));
+  test(`Manager startup reconciles orphan assignments safely (${mode})`, (t) =>
+    runManagerStartupScenario(mode, false, t));
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();

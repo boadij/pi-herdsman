@@ -537,8 +537,8 @@ export type WorktreeGroupScope = Readonly<{
 
 export function sameDirectory(left: string, right: string): boolean {
   try {
-    const leftPath = realpathSync(left);
-    const rightPath = realpathSync(right);
+    const leftPath = realpathSync.native(left);
+    const rightPath = realpathSync.native(right);
     const leftStat = statSync(leftPath, { bigint: true });
     const rightStat = statSync(rightPath, { bigint: true });
     if (!leftStat.isDirectory() || !rightStat.isDirectory()) return false;
@@ -738,7 +738,7 @@ export function herdrAgentAlias(
 function canonicalCwd(value: string): string {
   const resolved = resolve(value);
   try {
-    return realpathSync(resolved);
+    return realpathSync.native(resolved);
   } catch {
     return resolved;
   }

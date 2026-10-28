@@ -174,7 +174,13 @@ import {
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, realpathSync, statSync, unlinkSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  resolve,
+  toNamespacedPath,
+} from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 import {
   listSavedPeerMachines,
@@ -7819,8 +7825,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       topology?.source?.repo_key !== manager.repoKey ||
       typeof topology?.source?.source_checkout_path !== "string" ||
-      realpathSync(topology.source.source_checkout_path) !==
-        localScope.checkoutPath ||
+      !sameDirectory(
+        topology.source.source_checkout_path,
+        localScope.checkoutPath,
+      ) ||
       !Array.isArray(topology?.worktrees)
     )
       throw new Error("Herdr worktree topology is not authoritative");
@@ -7850,11 +7858,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       typeof worktree.path !== "string" ||
       !worktree.path ||
+      !isAbsolute(worktree.path) ||
       worktree.is_linked_worktree !== true
     )
       throw new Error("Herdr worktree checkout path is unavailable");
     const checkoutPath = resolve(worktree.path);
-    if (checkoutPath === resolve(topology.source.source_checkout_path))
+    if (sameDirectory(checkoutPath, topology.source.source_checkout_path))
       throw new Error("The Manager's primary checkout cannot be removed");
     if (worktree.open_workspace_id === manager.workspaceId)
       throw new Error("The Manager's primary workspace cannot be removed");
@@ -7867,7 +7876,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         const session = host.SessionManager.open(assignment.piSessionFile);
         if (
           session.getSessionId() !== assignment.id ||
-          resolve(session.getCwd()) !== checkoutPath
+          !sameDirectory(session.getCwd(), checkoutPath)
         )
           throw new Error();
       } catch {
@@ -7908,14 +7917,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         gitInventory.code !== 0 ||
         gitInventory.killed ||
         gitInventory.stderr?.trim() ||
-        realpathSync(String(gitRoot.stdout ?? "").trim()) !==
-          realpathSync(checkoutPath) ||
-        realpathSync(String(gitCommonDir.stdout ?? "").trim()) !==
-          realpathSync(manager.repoKey) ||
+        !sameDirectory(String(gitRoot.stdout ?? "").trim(), checkoutPath) ||
+        !sameDirectory(
+          String(gitCommonDir.stdout ?? "").trim(),
+          manager.repoKey,
+        ) ||
         !gitWorktrees ||
         gitWorktrees.filter(
           (entry) =>
-            resolve(entry.path) === checkoutPath && entry.branch === branch,
+            sameDirectory(entry.path, checkoutPath) && entry.branch === branch,
         ).length !== 1
       )
         throw new Error();
@@ -8269,7 +8279,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               );
               if (
                 current.assignment.id !== candidate.assignment.id ||
-                current.checkoutPath !== candidate.checkoutPath ||
+                !sameDirectory(current.checkoutPath, candidate.checkoutPath) ||
                 !host.sameManagerDescriptor(current.manager, candidate.manager)
               )
                 throw new Error(
@@ -8342,7 +8352,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   !workspaceId ||
                   workspaceId === current.manager.workspaceId ||
                   opened?.worktree?.branch !== branch ||
-                  resolve(opened?.worktree?.path ?? "") !== current.checkoutPath
+                  !sameDirectory(
+                    opened?.worktree?.path ?? "",
+                    current.checkoutPath,
+                  )
                 )
                   throw new Error(
                     "Herdr reopened a different or ambiguous worktree; checkout preserved",
@@ -8365,7 +8378,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               if (
                 final.assignment.id !== current.assignment.id ||
                 final.worktree.open_workspace_id !== workspaceId ||
-                final.checkoutPath !== current.checkoutPath
+                !sameDirectory(final.checkoutPath, current.checkoutPath)
               )
                 throw new Error(
                   "Removal target changed before native removal; worktree preserved",
@@ -8615,8 +8628,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       initialTopology?.source?.repo_key !== initialManager.repoKey ||
       typeof initialTopology?.source?.source_checkout_path !== "string" ||
-      realpathSync(initialTopology.source.source_checkout_path) !==
-        localScope.checkoutPath
+      !sameDirectory(
+        initialTopology.source.source_checkout_path,
+        localScope.checkoutPath,
+      )
     )
       throw new Error("Herdr worktree topology is unavailable or inconsistent");
     await host.reconcileProjectAssignments(
@@ -8689,8 +8704,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        realpathSync(topology.source.source_checkout_path) !==
-          localScope.checkoutPath ||
+        !sameDirectory(
+          topology.source.source_checkout_path,
+          localScope.checkoutPath,
+        ) ||
         !Array.isArray(topology.worktrees) ||
         topology.worktrees.some(
           (worktree: any) =>
@@ -8764,14 +8781,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         root.code !== 0 ||
         root.killed ||
         root.stderr?.trim() ||
-        realpathSync(String(common.stdout ?? "").trim()) !==
-          realpathSync(manager.repoKey) ||
-        realpathSync(String(root.stdout ?? "").trim()) !==
-          realpathSync(topology.source.source_checkout_path) ||
-        !inventory.some(
-          (worktree) =>
-            resolve(worktree.path) ===
-            resolve(topology.source.source_checkout_path),
+        !sameDirectory(String(common.stdout ?? "").trim(), manager.repoKey) ||
+        !sameDirectory(
+          String(root.stdout ?? "").trim(),
+          topology.source.source_checkout_path,
+        ) ||
+        !inventory.some((worktree) =>
+          sameDirectory(worktree.path, topology.source.source_checkout_path),
         )
       )
         throw new Error(
@@ -9144,8 +9160,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        realpathSync(topology.source.source_checkout_path) !==
-          localScope.checkoutPath
+        !sameDirectory(
+          topology.source.source_checkout_path,
+          localScope.checkoutPath,
+        )
       )
         throw sourceError;
       const targetPath = topology.source.source_checkout_path;
@@ -10155,8 +10173,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branchResult.killed ||
           branchResult.stderr?.trim() ||
           !isAbsolute(String(common.stdout ?? "").trim()) ||
-          realpathSync(String(common.stdout).trim()) !==
-            realpathSync(manager.repoKey) ||
+          !sameDirectory(String(common.stdout).trim(), manager.repoKey) ||
           String(branchResult.stdout ?? "").trim() !== assignment.branch
         )
           throw new Error(
@@ -10165,15 +10182,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (
           !isAbsolute(cwd!) ||
           workspaceId === primaryWorkspaceId ||
-          realpathSync(cwd!) ===
-            realpathSync(topology.source.source_checkout_path) ||
+          !sameDirectory(
+            topology.source.source_checkout_path,
+            localScope.checkoutPath,
+          ) ||
+          sameDirectory(cwd!, topology.source.source_checkout_path) ||
           (matchingWorktrees.length === 1 &&
-            realpathSync(cwd!) !== realpathSync(matchingWorktrees[0]!.path))
+            !sameDirectory(cwd!, matchingWorktrees[0]!.path))
         )
           throw new Error(
             "Herdr checkout is not the verified linked project worktree",
           );
-        assignment = { ...assignment, checkoutPath: realpathSync(cwd!) };
+        assignment = { ...assignment, checkoutPath: realpathSync.native(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error(
@@ -16238,7 +16258,7 @@ export function createLeadRoleTransitions(
       const inventory = parseGitWorktreeInventory(String(result.stdout ?? ""));
       if (
         !inventory ||
-        realpathSync(commonDir) !== realpathSync(repoKey) ||
+        !sameDirectory(commonDir, repoKey) ||
         gitPathStatus(sourceCheckoutPath) !== "present"
       )
         return undefined;
@@ -16294,7 +16314,15 @@ export function createLeadRoleTransitions(
       const session = knownSessionCheckoutPath(assignment);
       return {
         path: recorded ?? session,
-        conflicting: !!recorded && !!session && recorded !== session,
+        conflicting:
+          !!recorded &&
+          !!session &&
+          recorded !== session &&
+          !(
+            process.platform === "win32" &&
+            toNamespacedPath(recorded) === toNamespacedPath(session)
+          ) &&
+          !sameDirectory(recorded, session),
       };
     };
     const checkoutMaySurvive = (
