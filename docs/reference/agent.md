@@ -15,6 +15,7 @@ close_agent
 inspect_agent
 read_agent_transcript
 read_evidence
+attach_handoff
 ```
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
@@ -24,7 +25,25 @@ and authorized delegating-agent controllers. Root fresh-delegation eligibility
 follows the active role: Leads retain their existing policy, while Manager and
 Chief are limited to their effective `agents` allowlist. Existing ownership
 controls remain available for the root session's own Agents when fresh
-delegation is disabled.
+delegation is disabled. `attach_handoff` is available only to managed Agents.
+
+## `attach_handoff`
+
+```json
+{
+  "files": ["result:scout#21"]
+}
+```
+
+A managed Agent can use `attach_handoff` to select exact semantic result refs
+for its eventual completion to its direct owner. This is a non-blocking
+completion selection, not a separate message or evidence-transfer channel; the
+ordinary completion still carries the Agent's final text. Only verified
+semantic result refs available on the current Pi branch are accepted, and
+their artifacts are revalidated when the assignment settles. A successful
+call replaces the prior selection; `files: []` clears it. A ref mentioned only
+in completion text is not selected or made forwardable. The owner receives a
+short inventory of successfully imported refs, not embedded artifact contents.
 
 ## `delegate_agent`
 

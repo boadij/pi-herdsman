@@ -51,6 +51,7 @@ import {
   type RequestRecord,
   type AskRecord,
   type ManagedAgentState,
+  type ResultRecord,
 } from "./mailbox.ts";
 import { chooseLabel } from "./core.ts";
 import { acquireProcessLock } from "./lock.ts";
@@ -1174,6 +1175,12 @@ test("valid results round-trip and atomic temporary files are removed", () => {
     paneId: state.paneId,
     status: "completed" as const,
     text: "completed",
+    resultBindings: [
+      {
+        ref: "result:scout#21",
+        canonicalRef: "result:99999999-9999-4999-8999-999999999999",
+      },
+    ],
     contextUsage: { tokens: 5, contextWindow: 10, percent: 50 },
     completedAt: Date.now(),
   };
@@ -1185,6 +1192,54 @@ test("valid results round-trip and atomic temporary files are removed", () => {
   );
   removeResult(path, result.requestId);
   assert.equal(readResult(path, result.requestId), undefined);
+});
+test("result bindings are optional, unique, and completed-only", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
+  const result: ResultRecord = {
+    version: 5,
+    runId: state.runId,
+    requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "completed",
+    completedAt: Date.now(),
+  };
+  const binding = {
+    ref: "result:scout#21",
+    canonicalRef: "result:99999999-9999-4999-8999-999999999999",
+  };
+  writeResult(path, result);
+  assert.deepEqual(readResult(path, result.requestId), result);
+  assert.throws(
+    () =>
+      writeResult(path, {
+        ...result,
+        resultBindings: [binding, binding],
+      }),
+    /Invalid or conflicting result bindings/,
+  );
+  assert.throws(
+    () =>
+      writeResult(path, {
+        ...result,
+        resultBindings: [{ ...binding, extra: true }],
+      } as never),
+    /Invalid or conflicting result bindings/,
+  );
+  assert.throws(
+    () =>
+      writeResult(path, {
+        ...result,
+        status: "failed",
+        text: undefined,
+        resultBindings: [binding],
+        error: { code: "execution_error", message: "failed" },
+      }),
+    /Failed result cannot contain result bindings/,
+  );
 });
 test("request and result size limits remain independent", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
@@ -1215,6 +1270,16 @@ test("request and result size limits remain independent", () => {
     completedAt: Date.now(),
   };
   assert.throws(() => writeResult(path, result), /too large/);
+  const resultWithBindings = {
+    ...result,
+    requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    text: "x".repeat(4 * 1024 * 1024 - 512),
+    resultBindings: Array.from({ length: 10 }, (_, index) => ({
+      ref: `result:scout#${index + 1}`,
+      canonicalRef: `result:${randomUUID()}`,
+    })),
+  };
+  assert.throws(() => writeResult(path, resultWithBindings), /too large/);
 });
 test("state waiter removes its abort listener after resolution", async () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));

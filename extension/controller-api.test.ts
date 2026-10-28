@@ -12718,16 +12718,16 @@ test("read_evidence revalidates project authority at execution and denies stale 
   assert.equal(revalidated, 2);
 });
 
-test("managed restricted tool policies add read_evidence without unrelated tools", async () => {
+test("managed restricted tool policies add required tools without unrelated tools", async () => {
   const { agentLaunchArgs } = await import("./agent-definitions.ts");
   const cases = [
     {
       frontmatter: { noTools: true },
-      expected: ["ask_owner", "read_evidence"],
+      expected: ["ask_owner", "read_evidence", "attach_handoff"],
     },
     {
       frontmatter: { tools: ["read"] },
-      expected: ["read", "ask_owner", "read_evidence"],
+      expected: ["read", "ask_owner", "read_evidence", "attach_handoff"],
     },
   ];
   for (const { frontmatter, expected } of cases) {

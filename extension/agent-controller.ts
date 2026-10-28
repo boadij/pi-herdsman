@@ -101,6 +101,7 @@ import {
   chooseLabel,
   persistRequiredTextFiles,
   snapshotTextFiles,
+  validateMessageFiles,
 } from "./core.ts";
 import { normalizeHerdrLifecycleState } from "./supervision.ts";
 import {
@@ -539,6 +540,11 @@ Do not overlap writers in a worktree or file-ownership boundary. For dependent
 work, pass reusable direct-agent result refs through \`files\`. Preserve
 canonical result:<request-id> refs already supplied as file evidence exactly
 when forwarding them.
+Before completing, a managed Agent may call attach_handoff({files}) to select
+verified semantic result refs for its ordinary final handoff to its direct
+owner. This is non-blocking selection, not a separate evidence transfer; a ref
+mentioned only in completion text is not forwardable. Use exact refs only, and
+do not select evidence unless the owner needs it.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
@@ -6312,12 +6318,19 @@ export function createAgentController(
         result.requestId !==
           (runtime.activeRequestId ?? runtime.completedRequestId);
       if (identityMismatch) return;
-      const entries = context.sessionManager.getEntries();
+      let entries = context.sessionManager.getEntries();
       const evidenceKey = JSON.stringify(Object.values(expected));
       if (
         !hasDeliveredResult(entries, expected) &&
         !resultDeliveryEvidence.has(evidenceKey)
       ) {
+        const forwardedResultBindings =
+          result.status === "completed" ? (result.resultBindings ?? []) : [];
+        if (forwardedResultBindings.length) {
+          validateMessageFiles(forwardedResultBindings, runtime.cwd, "result");
+          importResultBindings(pi, context, forwardedResultBindings, "result");
+          entries = context.sessionManager.getEntries();
+        }
         const elapsedMs =
           result.status === "completed" &&
           Number.isFinite(runtime.startedAt) &&
@@ -6384,6 +6397,13 @@ export function createAgentController(
         const content = [
           header,
           ...(semanticResult ? [`Result ref: ${semanticResult.ref}`] : []),
+          ...(forwardedResultBindings.length
+            ? [
+                `Forwardable result evidence: ${forwardedResultBindings
+                  .map((binding) => binding.ref)
+                  .join(", ")}`,
+              ]
+            : []),
           ...(retirement ? [retirement] : []),
           completion.content,
           ...(status ? [status.content] : []),

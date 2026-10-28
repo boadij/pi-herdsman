@@ -498,6 +498,11 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     false,
     "ordinary Leads do not get ask_owner",
   );
+  assert.equal(
+    tools.has("attach_handoff"),
+    false,
+    "ordinary Leads do not get attach_handoff",
+  );
   assert.deepEqual(
     pi.tools.map((tool) => tool.name).sort(),
     [
@@ -558,7 +563,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
     leaf.tools.map((tool) => tool.name).sort(),
-    ["ask_owner", "read_evidence"].sort(),
+    ["ask_owner", "attach_handoff", "read_evidence"].sort(),
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
   assertPortableToolSchema(askOwner);

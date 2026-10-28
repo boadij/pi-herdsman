@@ -1025,7 +1025,18 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
 test("enforces read-only managed launch policies and reviewer leaf projection", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-audit-policy-"));
   const expected = new Map([
-    ["scout", ["read", "ls", "find", "grep", "ask_owner", "read_evidence"]],
+    [
+      "scout",
+      [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "ask_owner",
+        "read_evidence",
+        "attach_handoff",
+      ],
+    ],
     [
       "researcher",
       [
@@ -1039,6 +1050,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "source_check",
         "ask_owner",
         "read_evidence",
+        "attach_handoff",
       ],
     ],
     [
@@ -1051,6 +1063,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         ...AGENT_COORDINATION_TOOLS,
         "ask_owner",
         "read_evidence",
+        "attach_handoff",
       ],
     ],
   ]);
@@ -1094,6 +1107,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "grep",
       "ask_owner",
       "read_evidence",
+      "attach_handoff",
       "mcp__",
     ]);
     assert.equal(
@@ -1777,12 +1791,13 @@ test("bundled generalist definition retains its declared tool policy", () => {
       ...AGENT_COORDINATION_TOOLS,
       "ask_owner",
       "read_evidence",
+      "attach_handoff",
       "mcp__",
     ].join(","),
   );
 });
 
-test("managed launch policy always includes ask_owner", () => {
+test("managed launch policy always includes ask_owner and attach_handoff", () => {
   const launch = (frontmatter: Record<string, unknown>) =>
     agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
@@ -1797,7 +1812,7 @@ test("managed launch policy always includes ask_owner", () => {
       { tools: ["read", " ask_owner", "read"] },
       [
         "--tools",
-        "read,ask_owner,read_evidence,mcp__",
+        "read,ask_owner,read_evidence,attach_handoff,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -1807,7 +1822,7 @@ test("managed launch policy always includes ask_owner", () => {
       [
         "--no-tools",
         "--tools",
-        "ask_owner,read_evidence,mcp__",
+        "ask_owner,read_evidence,attach_handoff,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -1817,7 +1832,7 @@ test("managed launch policy always includes ask_owner", () => {
       [
         "--no-tools",
         "--tools",
-        "read,ask_owner,read_evidence,mcp__",
+        "read,ask_owner,read_evidence,attach_handoff,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -1827,7 +1842,7 @@ test("managed launch policy always includes ask_owner", () => {
       [
         "--no-tools",
         "--tools",
-        "ask_owner,read_evidence,mcp__",
+        "ask_owner,read_evidence,attach_handoff,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -1851,6 +1866,19 @@ test("managed launch policy always includes ask_owner", () => {
       expected.some((arg) => arg.split(",").includes("ask_owner")) ? 1 : 0,
     );
   }
+  const regularArgs = agentLaunchArgs(
+    {
+      name: "agent",
+      path: "/agent.md",
+      frontmatter: { tools: ["read"] },
+      body: "",
+    },
+    { bodyPromptPath: "/prompt" },
+  );
+  assert.deepEqual(regularArgs[regularArgs.indexOf("--tools") + 1].split(","), [
+    "read",
+    "mcp__",
+  ]);
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-standalone-"));
   const standalone = withPiAgentDir(root, () => discoverAgent("generalist"));
   assert.match(
@@ -2132,8 +2160,13 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
       },
       { managedAgent: true },
     );
-  const roleTools = [...AGENT_COORDINATION_TOOLS, "ask_owner", "read_evidence"];
-  const leafTools = ["ask_owner", "read_evidence"];
+  const roleTools = [
+    ...AGENT_COORDINATION_TOOLS,
+    "ask_owner",
+    "read_evidence",
+    "attach_handoff",
+  ];
+  const leafTools = ["ask_owner", "read_evidence", "attach_handoff"];
   const toolArgs = (frontmatter: Frontmatter) => {
     const args = make(frontmatter);
     const index = args.indexOf("--tools");
@@ -2226,7 +2259,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     agentLaunchArgs(leaf, { managedAgent: true }).filter(
       (value) => value === "--tools" || value.includes("ask_owner"),
     ),
-    ["--tools", "read,bash,ask_owner,read_evidence,mcp__"],
+    ["--tools", "read,bash,ask_owner,read_evidence,attach_handoff,mcp__"],
   );
   const empty = projectAgentDefinition(
     {
@@ -2255,9 +2288,9 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       (value) =>
         value === "--no-tools" ||
         value === "--tools" ||
-        value === "ask_owner,read_evidence,mcp__",
+        value === "ask_owner,read_evidence,attach_handoff,mcp__",
     ),
-    ["--no-tools", "--tools", "ask_owner,read_evidence,mcp__"],
+    ["--no-tools", "--tools", "ask_owner,read_evidence,attach_handoff,mcp__"],
   );
   const denied = projectAgentDefinition(
     {
@@ -2289,7 +2322,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       "--no-context-files",
       "--no-tools",
       "--tools",
-      "ask_owner,read_evidence,mcp__",
+      "ask_owner,read_evidence,attach_handoff,mcp__",
       "--exclude-tools",
       "mcp__",
       "--no-skills",
@@ -2553,43 +2586,63 @@ test("closed policies preserve native selectors and protect mandatory tools", ()
   ][] = [
     [{}, undefined, undefined, false],
     [{ noBuiltinTools: true }, undefined, undefined, false],
-    [{ tools: ["read"] }, "read,ask_owner,read_evidence,mcp__", "mcp__", false],
+    [
+      { tools: ["read"] },
+      "read,ask_owner,read_evidence,attach_handoff,mcp__",
+      "mcp__",
+      false,
+    ],
     [
       { tools: ["*search"] },
-      "*search,ask_owner,read_evidence,mcp__",
+      "*search,ask_owner,read_evidence,attach_handoff,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: ["read", "mcp__github__*"] },
-      "read,mcp__github__*,ask_owner,read_evidence",
+      "read,mcp__github__*,ask_owner,read_evidence,attach_handoff",
       undefined,
       false,
     ],
     [
       { tools: ["list_mcp_resources"] },
-      "list_mcp_resources,ask_owner,read_evidence,mcp__",
+      "list_mcp_resources,ask_owner,read_evidence,attach_handoff,mcp__",
       "mcp__",
       false,
     ],
-    [{ tools: [] }, "ask_owner,read_evidence,mcp__", "mcp__", true],
-    [{ tools: [","] }, "ask_owner,read_evidence,mcp__", "mcp__", true],
-    [{ noTools: true }, "ask_owner,read_evidence,mcp__", "mcp__", true],
+    [
+      { tools: [] },
+      "ask_owner,read_evidence,attach_handoff,mcp__",
+      "mcp__",
+      true,
+    ],
+    [
+      { tools: [","] },
+      "ask_owner,read_evidence,attach_handoff,mcp__",
+      "mcp__",
+      true,
+    ],
+    [
+      { noTools: true },
+      "ask_owner,read_evidence,attach_handoff,mcp__",
+      "mcp__",
+      true,
+    ],
     [
       { noTools: true, tools: ["read"] },
-      "read,ask_owner,read_evidence,mcp__",
+      "read,ask_owner,read_evidence,attach_handoff,mcp__",
       "mcp__",
       true,
     ],
     [
       { tools: ["read"], excludeTools: ["ask_owner"] },
-      "read,ask_owner,read_evidence,mcp__",
+      "read,ask_owner,read_evidence,attach_handoff,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: ["read"], excludeTools: ["write*", "mcp__", "write*"] },
-      "read,ask_owner,read_evidence,mcp__",
+      "read,ask_owner,read_evidence,attach_handoff,mcp__",
       "write*,mcp__",
       false,
     ],
