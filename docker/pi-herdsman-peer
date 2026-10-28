@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+target=$(node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const { homedir } = require("node:os");
+const { fileURLToPath } = require("node:url");
+try {
+  let dir = process.env.PI_CODING_AGENT_DIR;
+  if (!dir) dir = path.join(homedir(), ".pi", "agent");
+  else if (dir === "~") dir = homedir();
+  else if (dir.startsWith("~/")) dir = path.join(homedir(), dir.slice(2));
+  else if (dir.startsWith("file://")) dir = fileURLToPath(dir);
+  const pkg = path.resolve(dir, "npm/node_modules/pi-herdsman");
+  for (const directory of [path.resolve(dir, "npm"), path.dirname(pkg), pkg, path.join(pkg, "dist")]) {
+    if (!fs.lstatSync(directory).isDirectory()) throw new Error(`not a real directory: ${directory}`);
+  }
+  for (const file of [path.join(pkg, "package.json"), path.join(pkg, "dist/peer-bridge.js")]) {
+    if (!fs.lstatSync(file).isFile()) throw new Error(`not a real file: ${file}`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8"));
+  const bridge = path.join(pkg, "dist/peer-bridge.js");
+  if (manifest.name !== "pi-herdsman") throw new Error("invalid package");
+  process.stdout.write(bridge);
+} catch (error) {
+  console.error(`pi-herdsman-peer: invalid or missing installed package: ${error.message}`);
+  process.exit(1);
+}
+') || exit $?
+exec node "$target" "$@"

@@ -20,8 +20,13 @@ if (!runtime?.pi || !runtime.herdr?.version || !runtime.herdr?.sha256) \
   throw new Error("runtime metadata missing"); \
 process.stdout.write(JSON.stringify(runtime));' > /runtime.json \
  && tarball="$(npm pack --ignore-scripts --silent)" \
+ && mv "$tarball" /pi-herdsman-seed.tgz \
  && mkdir /package \
- && tar -xzf "$tarball" -C /package --strip-components=1
+ && tar -xzf /pi-herdsman-seed.tgz -C /package --strip-components=1 \
+ && npm install --prefix /npm-seed --cache /npm-seed-cache \
+      --legacy-peer-deps --ignore-scripts --no-audit --no-fund /pi-herdsman-seed.tgz \
+ && npm pkg set --prefix /npm-seed 'dependencies.pi-herdsman=*' \
+ && diff -qr /package /npm-seed/node_modules/pi-herdsman
 
 FROM ghcr.io/jdx/mise:${MISE_VERSION} AS mise
 
@@ -135,8 +140,10 @@ RUN set -eu; \
     rm -f /tmp/runtime.json
 
 COPY --from=package /package /opt/pi-herdsman
-RUN ln -s /opt/pi-herdsman/dist/peer-bridge.js /usr/local/bin/pi-herdsman-peer \
- && chmod 0755 /opt/pi-herdsman/dist/peer-bridge.js
+COPY --from=package /npm-seed /opt/pi-herdsman-npm-seed
+COPY --from=package /npm-seed-cache /opt/pi-herdsman-npm-cache
+COPY --from=package /pi-herdsman-seed.tgz /opt/pi-herdsman-seed.tgz
+COPY --chmod=0755 docker/pi-herdsman-peer /usr/local/bin/pi-herdsman-peer
 COPY --chmod=0444 docker/AGENTS.md /AGENTS.md
 COPY docker/entrypoint.sh /usr/local/bin/container-entrypoint
 COPY docker/sshd_config /etc/ssh/sshd_config
