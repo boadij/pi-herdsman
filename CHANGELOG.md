@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.34.1](https://github.com/boadij/pi-herdsman/compare/v0.34.0...v0.34.1) (2026-10-28)
+
+
+### Fixes
+
+* **agent:** forward explicit nested result evidence on completion ([#642](https://github.com/boadij/pi-herdsman/issues/642)) ([d80df03](https://github.com/boadij/pi-herdsman/commit/d80df037a0d6a5ada09d3602b5e6fe39a696089f))
+* **manager:** resolve repository and Manager authority independently of workspace order ([#638](https://github.com/boadij/pi-herdsman/issues/638)) ([e766992](https://github.com/boadij/pi-herdsman/commit/e766992d5627d170a4c56942e9531a61e3988400))
+* **ui:** unify status lifecycle and freshness presentation ([#641](https://github.com/boadij/pi-herdsman/issues/641)) ([066c155](https://github.com/boadij/pi-herdsman/commit/066c155c4eafd6b60647d0ba6d92e041bc77c687))
+
 ## [0.34.0](https://github.com/boadij/pi-herdsman/compare/v0.33.1...v0.34.0) (2026-10-27)
 
 
