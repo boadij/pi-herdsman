@@ -336,8 +336,7 @@ export function managerBootstrapDelegationState(contents, branch) {
     entry.message?.role === "assistant" &&
     Array.isArray(entry.message.content)
       ? entry.message.content.filter(
-          (part) =>
-            part?.type === "toolCall" && part.name === "delegate_project",
+          (part) => part?.type === "toolCall" && part.name === "delegate_work",
         )
       : [],
   );
@@ -755,7 +754,7 @@ export function staffDelegateResults(contents) {
     if (
       entry.type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== "delegate_project" ||
+      message.toolName !== "delegate_work" ||
       message.isError
     )
       return [];
@@ -779,7 +778,7 @@ export function assertNoFailedProjectDelegation(contents, branch) {
             .filter(
               (call) =>
                 call?.type === "toolCall" &&
-                call.name === "delegate_project" &&
+                call.name === "delegate_work" &&
                 call.arguments?.branch === branch &&
                 typeof call.id === "string",
             )
@@ -791,7 +790,7 @@ export function assertNoFailedProjectDelegation(contents, branch) {
     (entry) =>
       entry.type === "message" &&
       entry.message?.role === "toolResult" &&
-      entry.message.toolName === "delegate_project" &&
+      entry.message.toolName === "delegate_work" &&
       callIds.has(entry.message.toolCallId) &&
       (entry.message.isError === true || entry.message.details?.ok === false),
   );
@@ -802,7 +801,7 @@ export function assertNoFailedProjectDelegation(contents, branch) {
     "Project assignment lock is in progress"
       ? "assignment_lock_occupied"
       : "tool_error";
-  const error = new Error(`delegate_project failed (${category})`);
+  const error = new Error(`delegate_work failed (${category})`);
   error.code = "SMOKE_DELEGATION_FAILED";
   throw error;
 }
@@ -3887,7 +3886,7 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use delegate_project exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_project returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
+  return `Use delegate_work exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_work returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
 export function terminalFailureEvidence(contents, branch, sessionId) {
@@ -4138,7 +4137,7 @@ async function runTerminalFailureSmoke(ctx) {
   const root = async () => rootSessionSnapshot(ctx);
   const agents = async () =>
     (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
-  const prompt = `Use delegate_project exactly once. Set branch to exactly ${branch}, task to exactly ${JSON.stringify(task)}, and omit base and files. After it returns, wait for the Lead's report. Do not create or resume other work.`;
+  const prompt = `Use delegate_work exactly once. Set branch to exactly ${branch}, task to exactly ${JSON.stringify(task)}, and omit base and files. After it returns, wait for the Lead's report. Do not create or resume other work.`;
   markStage(ctx, "terminal-failure-manager-start");
   await waitForEvidence(
     ctx,
@@ -4381,9 +4380,9 @@ async function runTerminalFailureSmoke(ctx) {
   assert.equal(
     report.toolCalls,
     1,
-    "Manager should make only the requested delegate_project call",
+    "Manager should make only the requested delegate_work call",
   );
-  assert.deepEqual(report.toolNames, ["delegate_project"]);
+  assert.deepEqual(report.toolNames, ["delegate_work"]);
   const preservedLead = [];
   for (const agent of await agents())
     if ((await agentSessionId(ctx, agent)) === sessionId)
@@ -4803,7 +4802,7 @@ async function runManagerHandoffSmoke(ctx) {
     "--timeout",
     "15000",
   ]);
-  const prompt = `Use delegate_project exactly once with branch ${branch} and task exactly "Do not modify files. Call message_supervisor with MANAGER_HANDOFF_READY, then end the turn."`;
+  const prompt = `Use delegate_work exactly once with branch ${branch} and task exactly "Do not modify files. Call message_supervisor with MANAGER_HANDOFF_READY, then end the turn."`;
   await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
   const assignment = await waitForEvidence(
     ctx,
@@ -5261,7 +5260,7 @@ function managerMergeToolRows(contents) {
     if (entry.type !== "message" || message?.role !== "assistant") return [];
     return (Array.isArray(message.content) ? message.content : [])
       .filter(
-        (part) => part?.type === "toolCall" && part.name === "merge_project",
+        (part) => part?.type === "toolCall" && part.name === "integrate_branch",
       )
       .map((call) => {
         const result = entries.find(
@@ -5697,11 +5696,11 @@ async function runManagerMergeSmoke(ctx) {
 }
 
 export function managerRecoveryResumePrompt(branch) {
-  return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+  return `Resume the existing work on branch ${branch}.\n\nCall resume_work using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
 
 export function managerRecoveryRetiredResumePrompt(branch) {
-  return `Attempt to resume the retired assignment on ${branch}. Call resume_project exactly once using only ${JSON.stringify({ branch })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
+  return `Attempt to resume the retired assignment on ${branch}. Call resume_work exactly once using only ${JSON.stringify({ branch })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
@@ -5721,7 +5720,7 @@ export function managerRecoveryReviewPrompt(branch) {
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
-  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_project exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_project succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
+  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_work exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_work succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
@@ -5754,15 +5753,13 @@ export function managerRecoveryResumeDiagnostics(contents, prompt) {
     )
       return [];
     return (Array.isArray(entry.message.content) ? entry.message.content : [])
-      .filter(
-        (part) => part.type === "toolCall" && part.name === "resume_project",
-      )
+      .filter((part) => part.type === "toolCall" && part.name === "resume_work")
       .map((call) => {
         const result = entries.find(
           (candidate) =>
             candidate.type === "message" &&
             candidate.message?.role === "toolResult" &&
-            candidate.message.toolName === "resume_project" &&
+            candidate.message.toolName === "resume_work" &&
             candidate.message.toolCallId === call.id,
         );
         return {
@@ -7630,7 +7627,7 @@ async function runManagerBootstrapSmoke(ctx) {
     "agent",
     "prompt",
     ctx.rootPaneId,
-    `Use delegate_project exactly once. Set branch to exactly ${branch}, omit base and files, and delegate this task: do not modify files; report exactly MANAGER_BOOTSTRAP_CHILD_DONE to the supervisor; then end your turn. After delegate_project returns, make no other tool calls.`,
+    `Use delegate_work exactly once. Set branch to exactly ${branch}, omit base and files, and delegate this task: do not modify files; report exactly MANAGER_BOOTSTRAP_CHILD_DONE to the supervisor; then end your turn. After delegate_work returns, make no other tool calls.`,
   ]);
   const delegated = await waitForEvidence(
     ctx,
@@ -7645,15 +7642,14 @@ async function runManagerBootstrapSmoke(ctx) {
             Array.isArray(entry.message.content)
               ? entry.message.content.filter(
                   (part) =>
-                    part?.type === "toolCall" &&
-                    part.name === "delegate_project",
+                    part?.type === "toolCall" && part.name === "delegate_work",
                 )
               : [],
           )
         : [];
       if (delegateCalls.length > 1)
         throw new Error(
-          "Manager bootstrap called delegate_project more than once",
+          "Manager bootstrap called delegate_work more than once",
         );
       ctx.managerBootstrapDelegationProgress = {
         ...managerBootstrapDelegationState(snapshot?.contents ?? "", branch),
@@ -8955,7 +8951,7 @@ async function runManagerRecoverySmoke(ctx) {
     if (!session) return null;
     const results = staffActionResults(
       session.contents,
-      "resume_project",
+      "resume_work",
       "resume",
       resumePrompt,
     );
@@ -10310,8 +10306,8 @@ async function runSupervisorAgentSmoke(ctx) {
   ])
     assert.ok(chiefTools.includes(tool), `Chief tool snapshot missing ${tool}`);
   for (const tool of [
-    "delegate_project",
-    "resume_project",
+    "delegate_work",
+    "resume_work",
     "stop_lead",
     "remove_worktree",
     "message_supervisor",

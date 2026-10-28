@@ -78,8 +78,8 @@ test("bundled definition bodies do not prescribe coordination APIs", () => {
     "inspect_staff",
     "read_staff_transcript",
     "message_staff",
-    "delegate_project",
-    "resume_project",
+    "delegate_work",
+    "resume_work",
     "stop_lead",
     "remove_worktree",
   ];

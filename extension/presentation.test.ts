@@ -1938,7 +1938,7 @@ test("staff project operations present their branch target", () => {
         presentationTheme,
       ),
     ),
-    "resume project  feat/recovery",
+    "resume work  feat/recovery",
   );
 
   const expanded = renderedText(
@@ -1967,6 +1967,8 @@ test("expanded staff project results show resolved branches and resume scope", (
       ),
     );
     assert.match(output, /branch: feat\/recovery/);
+    if (action === "delegate") assert.match(output, /^work assigned\n/);
+    if (action === "resume") assert.match(output, /^work resumed\n/);
   }
 
   const resumed = renderedText(
@@ -1999,7 +2001,7 @@ test("expanded staff project results show resolved branches and resume scope", (
       { args: { action: "resume" } },
     ),
   );
-  assert.match(alreadyRunning, /^project already running/m);
+  assert.match(alreadyRunning, /^work already running/m);
 });
 
 test("compact Manager lifecycle results distinguish project outcomes", () => {
@@ -2016,7 +2018,7 @@ test("compact Manager lifecycle results distinguish project outcomes", () => {
     );
   assert.match(
     render("delegate", { ok: true, branch: "feat/recovery" }),
-    /project started · feat\/recovery/,
+    /work assigned · feat\/recovery/,
   );
   assert.match(
     render("resume", {
@@ -2024,11 +2026,11 @@ test("compact Manager lifecycle results distinguish project outcomes", () => {
       branch: "feat/recovery",
       already_running: true,
     }),
-    /project already running · feat\/recovery/,
+    /work already running · feat\/recovery/,
   );
   assert.match(
     render("resume", { ok: true, branch: "feat/recovery" }),
-    /project resumed · feat\/recovery/,
+    /work resumed · feat\/recovery/,
   );
   assert.match(
     render("stop", { ok: true, branch: "feat/recovery" }),
@@ -2154,7 +2156,7 @@ test("merge presentation requires cleanup facts for complete success", () => {
     },
     true,
   );
-  assert.match(successfulExpanded, /^merge project/m);
+  assert.match(successfulExpanded, /^integrate branch/m);
   const failed = renderedText(
     renderCoordinationResult(
       "staff",
@@ -2617,8 +2619,9 @@ test("coordination call titles use action-first natural targets", () => {
     ["staff", "inspect", "inspect staff"],
     ["staff", "transcript", "read staff transcript"],
     ["staff", "message", "message staff"],
-    ["staff", "delegate", "delegate project"],
-    ["staff", "resume", "resume project"],
+    ["staff", "delegate", "delegate work"],
+    ["staff", "resume", "resume work"],
+    ["staff", "merge", "integrate branch"],
     ["staff", "stop", "stop lead"],
     ["peer", "list", "list peers"],
     ["peer", "message", "message peer"],
@@ -7528,7 +7531,7 @@ test("project messages have semantic compact and expanded presentation", () => {
   const compactText = renderedText(compact);
   assert.match(
     compactText,
-    /Project message · feat\/project-message-presentation/,
+    /Assignment update · feat\/project-message-presentation/,
   );
   assert.match(compactText, /Review handoff/);
   assert.match(compactText, /…/);
@@ -7552,7 +7555,7 @@ test("project messages have semantic compact and expanded presentation", () => {
   );
   assert.match(
     expandedText,
-    /Project message · feat\/project-message-presentation/,
+    /Assignment update · feat\/project-message-presentation/,
   );
   assert.match(expandedText, /branch: feat\/project-message-presentation/);
   assert.match(expandedText, /session: lead-session/);

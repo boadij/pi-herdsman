@@ -1274,7 +1274,7 @@ try {
   } catch (error) {
     if (managedResult.isError) throw error;
     throw new Error(
-      `Manager delegate_project returned an invalid JSON result: ${error.message}`,
+      `Manager delegate_work returned an invalid JSON result: ${error.message}`,
     );
   }
   const assignedLeadSessionId =
@@ -1291,7 +1291,7 @@ try {
       : undefined;
   if (!assignedLeadSessionId)
     throw new Error(
-      "Manager delegate_project did not return a successful exact assigned Lead session",
+      "Manager delegate_work did not return a successful exact assigned Lead session",
     );
   const assignmentsDir = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/supervision-v2`;
   const assignmentFiles = exec("b", [

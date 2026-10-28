@@ -2742,7 +2742,9 @@ function coordinationHeader(
       : tool === "staff"
         ? verb === "transcript"
           ? "read staff transcript"
-          : `${verb} ${verb === "delegate" || verb === "resume" ? "project" : verb === "stop" ? "lead" : verb === "remove" ? "worktree" : "staff"}`
+          : verb === "merge"
+            ? "integrate branch"
+            : `${verb} ${verb === "delegate" || verb === "resume" ? "work" : verb === "stop" ? "lead" : verb === "remove" ? "worktree" : "staff"}`
         : tool === "peer"
           ? verb === "list"
             ? "list peers"
@@ -3044,38 +3046,45 @@ function expandedResultLines(
     value(args.agent) ||
     value(args.label) ||
     "agent";
+  const staffWorkOutcome =
+    tool === "staff" && details.ok === true
+      ? action === "delegate"
+        ? "work assigned"
+        : action === "resume"
+          ? details.already_running === true
+            ? "work already running"
+            : "work resumed"
+          : undefined
+      : undefined;
   const heading =
-    tool === "staff" && action === "merge" && details.ok === true
-      ? "merge project"
-      : tool === "staff" &&
-          action === "resume" &&
-          details.already_running === true
-        ? "project already running"
-        : action === "list"
-          ? tool === "staff"
-            ? "staff"
-            : tool === "peer"
-              ? "peer"
-              : "agents"
-          : tool === "peer" && action === "message"
-            ? peerMessageStatus(details)
-            : action === "inspect"
-              ? `inspect ${display}`
-              : tool === "staff" && action === "remove"
-                ? "remove worktree"
-                : action === "delegate" || action === "continue"
-                  ? `${display} started`
-                  : tool === "supervisor"
-                    ? "sent to supervisor"
-                    : action === "steer"
-                      ? "steering queued"
-                      : action === "interrupt"
-                        ? "interrupt accepted"
-                        : tool === "agent" && action === "reply"
-                          ? `reply sent to ${display}`
-                          : action === "close"
-                            ? `${display} closed`
-                            : `${action} ${display}`;
+    staffWorkOutcome ??
+    (tool === "staff" && action === "merge" && details.ok === true
+      ? "integrate branch"
+      : action === "list"
+        ? tool === "staff"
+          ? "staff"
+          : tool === "peer"
+            ? "peer"
+            : "agents"
+        : tool === "peer" && action === "message"
+          ? peerMessageStatus(details)
+          : action === "inspect"
+            ? `inspect ${display}`
+            : tool === "staff" && action === "remove"
+              ? "remove worktree"
+              : action === "delegate" || action === "continue"
+                ? `${display} started`
+                : tool === "supervisor"
+                  ? "sent to supervisor"
+                  : action === "steer"
+                    ? "steering queued"
+                    : action === "interrupt"
+                      ? "interrupt accepted"
+                      : tool === "agent" && action === "reply"
+                        ? `reply sent to ${display}`
+                        : action === "close"
+                          ? `${display} closed`
+                          : `${action} ${display}`);
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
@@ -3223,7 +3232,7 @@ function expandedResultLines(
       "",
       ...(work.length
         ? [
-            "project work:",
+            "Managed work:",
             ...work.flatMap((item: any) => {
               if (!item || typeof item !== "object") return [];
 
@@ -3451,11 +3460,11 @@ export function renderCoordinationResult(
     const branch = value(details.branch) || value(args.branch) || "project";
     const outcome =
       action === "delegate"
-        ? `project started · ${branch}`
+        ? `work assigned · ${branch}`
         : action === "resume"
           ? details.already_running === true
-            ? `project already running · ${branch}`
-            : `project resumed · ${branch}`
+            ? `work already running · ${branch}`
+            : `work resumed · ${branch}`
           : `Lead stopped · ${branch} preserved`;
     return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);
   }
@@ -3849,8 +3858,8 @@ export function renderCoordinationMessage(
         break;
       case "project_message":
         heading = d?.branch
-          ? `Project message · ${d.branch}`
-          : "Project message";
+          ? `Assignment update · ${d.branch}`
+          : "Assignment update";
         if (d?.branch && d?.fromSessionId)
           prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
         break;

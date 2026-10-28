@@ -723,11 +723,11 @@ export function decide(model, context) {
     );
   }
   if (model === "manager-merge") {
-    const assignment = correlatedCall(messages, "delegate_project");
+    const assignment = correlatedCall(messages, "delegate_work");
     if (!assignment && prompt.includes("MANAGER_MERGE_ASSIGN")) {
       const branch = prompt.match(/branch ([^\s]+)/)?.[1];
       if (!branch) throw new Error("Manager merge assignment omitted branch");
-      return call("delegate_project", {
+      return call("delegate_work", {
         branch,
         task: "Create a committed source change using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for a MANAGER_MERGE_REPAIR message; merge main, validate the source file and clean Git status, then message_supervisor with MANAGER_MERGE_REPAIRED and the exact resulting HEAD.",
       });
@@ -736,12 +736,12 @@ export function decide(model, context) {
       throw new Error("Manager merge decision lacks its assigned Lead");
     const attempt = prompt.match(/MANAGER_MERGE_ATTEMPT ([0-9a-f]{40,64})/i);
     if (attempt) {
-      const previous = correlatedCall(messages, "merge_project");
+      const previous = correlatedCall(messages, "integrate_branch");
       if (previous?.call.arguments?.expected_head === attempt[1])
         return waitForResult(
           "Waiting for the next explicit Manager merge scenario step.",
         );
-      return call("merge_project", {
+      return call("integrate_branch", {
         branch: assignment.call.arguments.branch,
         expected_head: attempt[1],
       });
@@ -764,13 +764,13 @@ export function decide(model, context) {
     );
   }
   if (model === "manager-handoff") {
-    const assignment = correlatedCall(messages, "delegate_project");
-    if (!assignment && prompt.includes("Use delegate_project exactly once")) {
+    const assignment = correlatedCall(messages, "delegate_work");
+    if (!assignment && prompt.includes("Use delegate_work exactly once")) {
       const branch = prompt.match(/branch ([^\s]+) and task exactly/)?.[1];
       const task = prompt.match(/task exactly ("(?:[^"\\]|\\.)*")/)?.[1];
       if (!branch || !task)
         throw new Error("Missing Manager handoff assignment details");
-      return call("delegate_project", { branch, task: JSON.parse(task) });
+      return call("delegate_work", { branch, task: JSON.parse(task) });
     }
     if (!assignment) throw new Error("Unexpected manager-handoff transcript");
     const branch = assignment.call.arguments?.branch;
@@ -941,9 +941,9 @@ export function decide(model, context) {
         const files = forwardableRefs(reply);
         if (files.length < 2)
           throw new Error("reply evidence was not forwardable through files");
-        const assignment = correlatedCall(messages, "delegate_project");
+        const assignment = correlatedCall(messages, "delegate_work");
         if (!assignment)
-          return call("delegate_project", {
+          return call("delegate_work", {
             branch: `herdsman/peer-reply-${randomUUID().slice(0, 8)}`,
             task: "PEER_E2E_A_FORWARD_TASK: read the returned file and semantic result fallback, then report PEER_E2E_A_FORWARDED.",
             files,
@@ -996,9 +996,9 @@ export function decide(model, context) {
       outcome: "decision_started",
     });
     if (prompt.includes("PEER_E2E_B_ASSIGN_MANAGED")) {
-      const assignment = correlatedCall(messages, "delegate_project");
+      const assignment = correlatedCall(messages, "delegate_work");
       if (!assignment)
-        return call("delegate_project", {
+        return call("delegate_work", {
           branch: "herdsman/peer-smoke-managed",
           task: "Confirm the assigned task is complete and report PEER_E2E_MANAGED_LEAD_COMPLETE.",
         });
@@ -1137,7 +1137,7 @@ export function decide(model, context) {
         "Waiting for both requests on the Manager pair route.",
       );
     const branch = `herdsman/federation-smoke-${origin.slice(0, 8)}`;
-    const assignment = correlatedCall(messages, "delegate_project", branch);
+    const assignment = correlatedCall(messages, "delegate_work", branch);
     if (!assignment) {
       const forwardable =
         text(inbound).split("Forwardable received files:\n")[1] ?? "";
@@ -1146,7 +1146,7 @@ export function decide(model, context) {
         throw new Error(
           "federation smoke did not receive forwardable evidence",
         );
-      return call("delegate_project", {
+      return call("delegate_work", {
         branch,
         task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
         files: refs,
@@ -1329,16 +1329,16 @@ export function decide(model, context) {
     const latest = messages.at(-1);
     if (
       latest?.role === "user" &&
-      prompt.includes("Use delegate_project exactly once")
+      prompt.includes("Use delegate_work exactly once")
     ) {
       const branch = prompt.match(/branch to exactly ([^,\s]+)/)?.[1];
       const task = prompt.match(/task to exactly ("(?:[^"\\]|\\.)*")/)?.[1];
       if (!branch || !task)
         throw new Error("Missing exact terminal-failure branch or task");
-      return call("delegate_project", { branch, task: JSON.parse(task) });
+      return call("delegate_work", { branch, task: JSON.parse(task) });
     }
     if (latest?.role === "toolResult") {
-      successfulResult(messages, "delegate_project");
+      successfulResult(messages, "delegate_work");
       return fauxAssistantMessage(
         "Assigned Lead started; waiting for its report.",
       );
@@ -1457,7 +1457,7 @@ export default function install(pi) {
           "runtime",
           "smoke-faux-attempts.jsonl",
         ),
-        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", repairInstructionObserved, tools: tools.filter((name) => ["bash", "delegate_project", "merge_project", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "merge_project"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
+        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", repairInstructionObserved, tools: tools.filter((name) => ["bash", "delegate_work", "integrate_branch", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "integrate_branch"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
       );
     }
     if (!recordedSessions.has(currentSessionId)) {
