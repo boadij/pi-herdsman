@@ -69,6 +69,14 @@ an externally blocked runtime. Do not delegate a new task to a blocked agent.
 - launch handoff;
 - one-shot cleanup.
 
+If owner-side revalidation or import of an explicitly forwarded result artifact
+fails, the durable completion remains pending and undelivered; delivery retries
+automatically and fails closed. While the state is `settling`, inspect the
+current error in `list_agents` as `cleanup_error`. Restoring access to the same
+artifact permits delivery. Do not substitute evidence or acknowledge success.
+There is no permanent-loss classification, retry limit, timeout, or automatic
+escalation for this condition.
+
 Do not delegate another task yet.
 
 If nothing independent remains, end the turn normally and let result/attention

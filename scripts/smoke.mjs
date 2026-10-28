@@ -3001,10 +3001,35 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         return null;
       }
     };
-    const attachedDetails =
+    const expectedSourceAgent =
+      ref?.match(/^result:([a-z][a-z0-9_-]{0,31})#[1-9][0-9]*$/u)?.[1] ?? null;
+    const attachedArtifactDetails = (content) => {
+      const match = content
+        .trim()
+        .match(/^Agent result source: ([^\n]+)\n\n([\s\S]+)$/u);
+      if (!match) return null;
+      try {
+        const provenance = JSON.parse(match[1]);
+        return {
+          provenanceMatches: Boolean(
+            provenance &&
+            typeof provenance === "object" &&
+            !Array.isArray(provenance) &&
+            provenance.agent === expectedSourceAgent &&
+            typeof provenance.definition === "string" &&
+            typeof provenance.cwd === "string",
+          ),
+          package: packageDetails(match[2]),
+        };
+      } catch {
+        return null;
+      }
+    };
+    const attachedArtifact =
       attachedArtifacts.length === 1
-        ? packageDetails(attachedArtifacts[0].content)
+        ? attachedArtifactDetails(attachedArtifacts[0].content)
         : null;
+    const attachedDetails = attachedArtifact?.package ?? null;
     const nextResponses = nextSessionEntries
       .filter(
         (entry) =>
@@ -3018,6 +3043,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         details.version === attachedDetails?.version,
     );
     const responseMatchesArtifact = Boolean(
+      attachedArtifact?.provenanceMatches &&
       attachedDetails &&
       expectedPackage &&
       attachedDetails.name === expectedPackage.name &&
@@ -3088,6 +3114,10 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
           canonicalRef,
           attachmentCount: attachedArtifacts.length,
           received: attachedArtifacts.length === 1,
+          attachedPackage: attachedDetails
+            ? { name: attachedDetails.name, version: attachedDetails.version }
+            : null,
+          provenanceMatches: attachedArtifact?.provenanceMatches === true,
           readback: readback
             ? { name: readback.name, version: readback.version }
             : null,
@@ -11763,6 +11793,26 @@ function sanitizedCoreHandoff(value) {
           ? Math.min(Math.max(value.nextAgent.artifact.attachmentCount, 0), 256)
           : 0,
         received: value.nextAgent?.artifact?.received === true,
+        attachedPackage: {
+          name:
+            typeof value.nextAgent?.artifact?.attachedPackage?.name ===
+              "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.attachedPackage.name,
+            )
+              ? value.nextAgent.artifact.attachedPackage.name
+              : null,
+          version:
+            typeof value.nextAgent?.artifact?.attachedPackage?.version ===
+              "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.attachedPackage.version,
+            )
+              ? value.nextAgent.artifact.attachedPackage.version
+              : null,
+        },
+        provenanceMatches:
+          value.nextAgent?.artifact?.provenanceMatches === true,
         readback: {
           name:
             typeof value.nextAgent?.artifact?.readback?.name === "string" &&

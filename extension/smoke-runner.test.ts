@@ -1252,10 +1252,17 @@ test("core failure diagnostics distinguish nested result publication from delive
     const scoutPath = join(piSessions, "scout.jsonl");
     const scoutRef = "result:smoke-core-scout#1";
     const canonicalRef = `result:${requestId}`;
-    const packageArtifact = JSON.stringify({
+    const packagePayload = JSON.stringify({
       name: "pi-herdsman",
       version: "0.25.1",
     });
+    const packageProvenance = JSON.stringify({
+      agent: "smoke-core-scout",
+      definition: "scout",
+      cwd: "/private/project",
+      piSessionId: "private-scout",
+    });
+    const packageArtifact = `Agent result source: ${packageProvenance}\n\n${packagePayload}`;
     const resultArtifact = join(piAgent, "pi-herdsman", "results", requestId);
     await mkdir(dirname(resultArtifact), { recursive: true });
     await writeFile(resultArtifact, packageArtifact);
@@ -1416,25 +1423,28 @@ test("core failure diagnostics distinguish nested result publication from delive
         },
       },
     );
-    await writeFile(
-      join(piSessions, "next.jsonl"),
-      [
-        { type: "session", id: "private-next" },
-        {
-          type: "message",
-          message: {
-            role: "user",
-            content: `<file name="${scoutRef}" bytes="${Buffer.byteLength(packageArtifact)}">\n${packageArtifact}\n</file>\n\nTask: PRIVATE_NEXT_TASK`,
+    const nextSessionPath = join(piSessions, "next.jsonl");
+    const writeNextSession = (artifactContent, responseText) =>
+      writeFile(
+        nextSessionPath,
+        [
+          { type: "session", id: "private-next" },
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: `<file name="${scoutRef}" bytes="${Buffer.byteLength(artifactContent)}">\n${artifactContent}\n</file>\n\nTask: PRIVATE_NEXT_TASK`,
+            },
           },
-        },
-        {
-          type: "message",
-          message: { role: "assistant", content: packageArtifact },
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
-    );
+          {
+            type: "message",
+            message: { role: "assistant", content: responseText },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
+      );
+    await writeNextSession(packageArtifact, packagePayload);
     const nextMailbox = join(mailboxRoot, "d".repeat(32));
     await mkdir(nextMailbox);
     await Promise.all([
@@ -1469,18 +1479,16 @@ test("core failure diagnostics distinguish nested result publication from delive
         rm(path, { recursive: true, force: true }),
       ),
     );
-    const handoffProjection = await collectDiagnostics(
-      {
-        scenario: "core",
-        stage: "core-delegation",
-        paths: { piSessions, piAgent },
-        sessionName: "isolated",
-        rootPaneId: "root",
-        expectedPackage: "pi-herdsman@0.25.1",
-      },
-      { hostPaneId: "host" },
-      null,
-      {
+    const handoffContext = {
+      scenario: "core",
+      stage: "core-delegation",
+      paths: { piSessions, piAgent },
+      sessionName: "isolated",
+      rootPaneId: "root",
+      expectedPackage: "pi-herdsman@0.25.1",
+    };
+    const collectHandoffProjection = () =>
+      collectDiagnostics(handoffContext, { hostPaneId: "host" }, null, {
         execute: async () => ({ stdout: "" }),
         observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
         snapshot: async () => ({
@@ -1490,8 +1498,8 @@ test("core failure diagnostics distinguish nested result publication from delive
             .map((entry) => JSON.stringify(entry))
             .join("\n"),
         }),
-      },
-    );
+      });
+    const handoffProjection = await collectHandoffProjection();
     const corePrompt = initialPromptForScenario("core", {
       expectedPackage: "pi-herdsman@0.25.1",
     });
@@ -1574,6 +1582,14 @@ test("core failure diagnostics distinguish nested result publication from delive
       handoffProjection.coreHandoff.nextAgent.artifact.received,
       true,
     );
+    assert.deepEqual(
+      handoffProjection.coreHandoff.nextAgent.artifact.attachedPackage,
+      { name: "pi-herdsman", version: "0.25.1" },
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.artifact.provenanceMatches,
+      true,
+    );
     assert.equal(
       handoffProjection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
       true,
@@ -1610,12 +1626,63 @@ test("core failure diagnostics distinguish nested result publication from delive
         JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.readback,
         { name: "pi-herdsman", version: "0.25.1" },
       );
+      assert.deepEqual(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
+          .attachedPackage,
+        { name: "pi-herdsman", version: "0.25.1" },
+      );
+      assert.equal(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
+          .provenanceMatches,
+        true,
+      );
       assert.doesNotMatch(
         saved,
         /PRIVATE_TASK|PRIVATE_NEXT_TASK|PRIVATE_SCOUT_CONTENT|PRIVATE_FAILURE|PRIVATE_ERROR|\{"name"/u,
       );
     } finally {
       await rm(dirname(handoffArtifact), { recursive: true, force: true });
+    }
+
+    for (const [artifactContent, responseText, expectedAttachedPackage] of [
+      [
+        `Agent result source: not-json\n\n${packagePayload}`,
+        packagePayload,
+        { name: null, version: null },
+      ],
+      [
+        `Agent result source: ${JSON.stringify({
+          agent: "smoke-other-scout",
+          definition: "scout",
+          cwd: "/private/project",
+        })}\n\n${packagePayload}`,
+        packagePayload,
+        { name: "pi-herdsman", version: "0.25.1" },
+      ],
+      [
+        `Agent result source: ${packageProvenance}\n\n${JSON.stringify({
+          name: "pi-herdsman",
+          version: "0.25.2",
+        })}`,
+        JSON.stringify({ name: "pi-herdsman", version: "0.25.2" }),
+        { name: "pi-herdsman", version: "0.25.2" },
+      ],
+      [
+        packageArtifact,
+        JSON.stringify({ name: "pi-herdsman", version: "0.25.2" }),
+        { name: "pi-herdsman", version: "0.25.1" },
+      ],
+    ]) {
+      await writeNextSession(artifactContent, responseText);
+      const projection = await collectHandoffProjection();
+      assert.equal(
+        projection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
+        false,
+      );
+      assert.deepEqual(
+        projection.coreHandoff.nextAgent.artifact.attachedPackage,
+        expectedAttachedPackage,
+      );
     }
   } finally {
     await rm(root, { recursive: true, force: true });
