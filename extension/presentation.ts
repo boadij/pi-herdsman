@@ -416,6 +416,9 @@ function lifecycleMarker(state: LifecyclePresentationState): string {
   return LIFECYCLE[state][0];
 }
 
+const animates = (state: AgentLifecycleState) =>
+  state === "working" || state === "starting";
+
 const STATE_COLOR: Record<string, string> = {
   [lifecycleLabel("working")]: "success",
   [lifecycleLabel("blocked")]: "warning",
@@ -429,8 +432,12 @@ export function compactModelToken(model: string | undefined): string {
   return model?.split("/").at(-1) ?? "";
 }
 
-function activityIndicator(state: AgentLifecycleState, frame: number): string {
-  return state === "working" || state === "settling" || state === "starting"
+function activityIndicator(
+  state: AgentLifecycleState,
+  frame: number,
+  animate = true,
+): string {
+  return animate && animates(state)
     ? spinner[frame % spinner.length]!
     : lifecycleMarker(state);
 }
@@ -466,7 +473,7 @@ export type StatusRow = {
 
 export function buildStatusRows(
   agents: readonly StatusAgent[],
-  options: { now: number; frame?: number },
+  options: { now?: number; frame?: number; animate?: boolean },
 ): StatusRow[] {
   return buildStatusTree(agents).map(({ agent, tree }) => {
     const inactivity =
@@ -478,11 +485,18 @@ export function buildStatusRows(
       ...(agent.paneId ? { paneId: agent.paneId } : {}),
       ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
       tree,
-      indicator: activityIndicator(agent.state, options.frame ?? 0),
+      indicator: activityIndicator(
+        agent.state,
+        options.frame ?? 0,
+        options.animate,
+      ),
       definition: agent.definition || "?",
       agentLabel: agent.label,
       state: lifecycleLabel(agent.state),
-      elapsed: formatElapsed(agent.startedAt, options.now) ?? "",
+      elapsed:
+        options.now === undefined
+          ? ""
+          : (formatElapsed(agent.startedAt, options.now) ?? ""),
       model: compactModelToken(agent.model),
       thinking: agent.thinking ?? "",
       context: Number.isInteger(agent.contextPercent)
@@ -575,7 +589,8 @@ function renderIdentity(
   const definition = padVisible(row.definition, definitionWidth);
   const raw = `${row.tree}${row.indicator} ${definition}  ${row.agentLabel}`;
   return (
-    themed(theme, "muted", `${row.tree}${row.indicator} `) +
+    themed(theme, "muted", row.tree) +
+    themed(theme, STATE_COLOR[row.state] ?? "muted", `${row.indicator} `) +
     (theme?.bold?.(definition) ?? definition) +
     themed(theme, "muted", `  ${row.agentLabel}`) +
     " ".repeat(Math.max(0, identityWidth - visibleWidth(raw)))
@@ -654,8 +669,9 @@ export function layoutStatusRows(
 export function renderStatusRows(
   agents: readonly StatusAgent[],
   options: {
-    now: number;
+    now?: number;
     frame?: number;
+    animate?: boolean;
     width?: number;
     compact?: boolean;
     theme?: any;
@@ -808,24 +824,28 @@ export type SupervisedLeadDisplay = SupervisedLeadSnapshot &
   }>;
 
 export type SupervisedLeadGroup =
-  "WORKING" | "BLOCKED" | "IDLE/DONE" | "UNKNOWN";
+  "ACTIVE/TRANSITIONAL" | "BLOCKED" | "IDLE/DONE" | "UNRESOLVED";
 
 const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
-  "WORKING",
+  "ACTIVE/TRANSITIONAL",
   "BLOCKED",
   "IDLE/DONE",
-  "UNKNOWN",
+  "UNRESOLVED",
 ];
 
 export function classifySupervisedLead(
   lead: SupervisedLeadSnapshot,
 ): SupervisedLeadGroup {
-  if (lead.runtimeState === "working") return "WORKING";
+  if (
+    lead.runtimeState === "working" ||
+    lead.runtimeState === "starting" ||
+    lead.runtimeState === "settling"
+  )
+    return "ACTIVE/TRANSITIONAL";
   if (lead.runtimeState === "blocked") return "BLOCKED";
-  if (lead.runtimeState === "unknown") return "UNKNOWN";
   if (lead.runtimeState === "idle" || lead.runtimeState === "done")
     return "IDLE/DONE";
-  return "UNKNOWN";
+  return "UNRESOLVED";
 }
 
 /** Copies projected data and disambiguates labels without changing handles. */
@@ -927,17 +947,6 @@ export function groupSupervisedLeads(
   return groups;
 }
 
-function groupOrderedSupervisedLeads(
-  leads: readonly SupervisedLeadDisplay[],
-): ReadonlyMap<SupervisedLeadGroup, SupervisedLeadDisplay[]> {
-  const groups = new Map(
-    SUPERVISION_GROUPS.map((group) => [group, [] as SupervisedLeadDisplay[]]),
-  );
-  for (const lead of leads)
-    groups.get(classifySupervisedLead(lead))!.push(lead);
-  return groups;
-}
-
 /** One projection is shared by rendering and keyboard navigation. */
 export function orderedSupervisionLeads(
   leads: readonly SupervisedLeadSnapshot[],
@@ -1008,15 +1017,30 @@ export function managerSupervisionItems(
   ];
 }
 
-function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
-  return (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
-    (lead.agentCounts?.active ?? 0) > 0
+function supervisionActivityMarker(
+  state: LifecyclePresentationState,
+  activeAgents: number,
+): string {
+  return (state === "idle" || state === "done") && activeAgents > 0
     ? "◉"
-    : lifecycleMarker(lead.runtimeState);
+    : lifecycleMarker(state);
+}
+
+function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
+  return supervisionActivityMarker(
+    lead.runtimeState,
+    lead.agentCounts?.active ?? 0,
+  );
 }
 
 function lifecycleColor(state: LifecyclePresentationState): string {
   return STATE_COLOR[lifecycleLabel(state)] ?? "muted";
+}
+
+function supervisionLeadColor(lead: SupervisedLeadDisplay): string {
+  return supervisionLeadMarker(lead) === "◉"
+    ? "accent"
+    : lifecycleColor(lead.runtimeState);
 }
 
 const MANAGER_METADATA_LAYOUTS = [
@@ -1043,6 +1067,44 @@ function identifyingLabelVisible(
   );
 }
 
+function renderSupervisionHeader(
+  label: string,
+  status: SupervisionContextStatus,
+  width: number,
+  theme: any,
+): string {
+  const marker = themed(theme, "success", "●");
+  const markerWidth = visibleWidth("●");
+  const identity = themed(theme, "muted", label);
+  const freshnessText = status === "fresh" ? "" : `· ${status}`;
+  const freshness = freshnessText
+    ? themed(theme, "warning", freshnessText)
+    : "";
+  if (!freshness)
+    return safeLine(
+      `${marker} ${truncateToWidth(identity, Math.max(0, width - markerWidth - 1), "…")}`,
+      width,
+    );
+
+  const freshnessWidth = visibleWidth(freshnessText);
+  const identityWidth = width - markerWidth - freshnessWidth - 2;
+  if (identityWidth > 0)
+    return safeLine(
+      `${marker} ${truncateToWidth(identity, identityWidth, "…")} ${freshness}`,
+      width,
+    );
+  if (width >= markerWidth + visibleWidth(` ${status}`))
+    return safeLine(`${marker} ${themed(theme, "warning", status)}`, width);
+  return safeLine(
+    `${truncateToWidth(marker, width, "")}${themed(
+      theme,
+      "warning",
+      truncateToWidth(status, Math.max(0, width - markerWidth), "…"),
+    )}`,
+    width,
+  );
+}
+
 /** Renders the bounded ambient lead rows and their render-derived targets. */
 function renderSupervisionRows(
   reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
@@ -1060,15 +1122,11 @@ function renderSupervisionRows(
   if (status === "unavailable")
     return [
       {
-        text: safeLine(
-          `${themed(options.theme, "success", "●")} ${themed(options.theme, "muted", `${role} · unavailable`)}`,
-          width,
-        ),
+        text: renderSupervisionHeader(role, status, width, options.theme),
       },
     ];
   const displays = orderedSupervisionLeads(presentationReports(reports));
-  const groups = groupOrderedSupervisedLeads(displays);
-  const ordinary = SUPERVISION_GROUPS.flatMap((group) => groups.get(group)!);
+  const ordinary = displays;
   const cap = options.ordinaryCap ?? 6;
   const shown = ordinary.slice(0, Math.max(0, cap));
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
@@ -1091,13 +1149,16 @@ function renderSupervisionRows(
     managerSnapshot && "project" in managerSnapshot
       ? managerSnapshot.project
       : undefined;
-  const header = `${themed(options.theme, "success", "●")} ${themed(
-    options.theme,
-    "muted",
+  const headerText =
     role === "manager"
-      ? `manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
-      : `chief · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}${status === "stale" ? " · stale" : ""}`,
-  )}`;
+      ? `manager${project ? ` · ${project}` : ""}`
+      : `chief · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}`;
+  const header = renderSupervisionHeader(
+    headerText,
+    status,
+    width,
+    options.theme,
+  );
   if (
     managerSnapshot &&
     "leads" in managerSnapshot &&
@@ -1109,10 +1170,12 @@ function renderSupervisionRows(
     const now = Date.now();
     const metadata = visible.map((item) => ({
       elapsed:
-        formatElapsed(
-          item.kind === "work" ? item.lead?.herdRunStartedAt : undefined,
-          now,
-        ) ?? "",
+        status === "stale"
+          ? ""
+          : (formatElapsed(
+              item.kind === "work" ? item.lead?.herdRunStartedAt : undefined,
+              now,
+            ) ?? ""),
       context: Number.isInteger(
         item.kind === "work" ? item.lead?.contextPercent : undefined,
       )
@@ -1120,7 +1183,7 @@ function renderSupervisionRows(
         : "",
     }));
     const workMarkers = {
-      active: "●",
+      active: "·",
       paused: "○",
       conflict: "!",
     };
@@ -1134,7 +1197,7 @@ function renderSupervisionRows(
             item.lead?.compatibility === "incompatible"
               ? "!"
               : item.work.status === "active" && item.lead
-                ? `${item.lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(item.lead)}`
+                ? supervisionLeadMarker(item.lead)
                 : workMarkers[item.work.status];
           const prefixWidth = visibleWidth(`${branch}  ${marker} `);
           const suffixWidth = visibleWidth(
@@ -1167,7 +1230,7 @@ function renderSupervisionRows(
         if (item.kind === "lead")
           return {
             text: safeLine(
-              `${themed(options.theme, item.lead.compatibility === "incompatible" ? "warning" : lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${item.lead.compatibility === "incompatible" ? "!" : supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead${item.lead.compatibility === "incompatible" ? " · build mismatch" : ""}`)}`,
+              `${themed(options.theme, item.lead.compatibility === "incompatible" ? "warning" : supervisionLeadColor(item.lead), `${branch} ${navigation}${item.lead.compatibility === "incompatible" ? "!" : supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead${item.lead.compatibility === "incompatible" ? " · build mismatch" : ""}`)}`,
               width,
             ),
             ...(status === "fresh" && item.lead.compatibility !== "incompatible"
@@ -1184,7 +1247,7 @@ function renderSupervisionRows(
           lead?.compatibility === "incompatible"
             ? "!"
             : item.work.status === "active" && lead
-              ? `${lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(lead)}`
+              ? supervisionLeadMarker(lead)
               : workMarkers[item.work.status];
         const prefix = `${branch} ${navigation}${marker} `;
         const suffix =
@@ -1207,9 +1270,9 @@ function renderSupervisionRows(
           lead?.compatibility === "incompatible"
             ? "warning"
             : item.work.status === "active" && lead
-              ? lifecycleColor(lead.runtimeState)
+              ? supervisionLeadColor(lead)
               : item.work.status === "active"
-                ? "success"
+                ? "muted"
                 : item.work.status === "conflict"
                   ? "warning"
                   : "muted";
@@ -1261,7 +1324,7 @@ function renderSupervisionRows(
           : undefined;
       const row = {
         text: safeLine(
-          `${themed(options.theme, isIncompatible ? "warning" : lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${isIncompatible ? " · build mismatch" : `${counts?.total ? ` · ${counts.total} compatible lead${counts.total === 1 ? "" : "s"}` : ""}${incompatibleLeads ? ` · ${incompatibleLeads} incompatible` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`}`)}`,
+          `${themed(options.theme, isIncompatible ? "warning" : supervisionLeadColor(lead), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${isIncompatible ? " · build mismatch" : `${counts?.total ? ` · ${counts.total} compatible lead${counts.total === 1 ? "" : "s"}` : ""}${incompatibleLeads ? ` · ${incompatibleLeads} incompatible` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`}`)}`,
           width,
         ),
         ...(intent ? { intent } : {}),
@@ -1273,11 +1336,15 @@ function renderSupervisionRows(
         row,
         ...children.map((child, childIndex) => {
           const childBranch = childIndex === children.length - 1 ? "└─" : "├─";
+          const childMarker = supervisionActivityMarker(
+            child.runtime_state,
+            child.agent_counts?.active ?? 0,
+          );
           return {
             text: safeLine(
               child.compatibility === "incompatible"
                 ? `${themed(options.theme, "warning", `${childIndent}${childBranch} !`)} ${themed(options.theme, "muted", `${child.branch ?? child.display_name} · build mismatch`)}`
-                : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
+                : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, childMarker === "◉" ? "accent" : lifecycleColor(child.runtime_state), childMarker)} ${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
               width,
             ),
             ...(status === "fresh" && child.compatibility !== "incompatible"
@@ -1345,7 +1412,7 @@ export function formatSupervisionNotification(
       .slice(0, 8)
       .map(
         (lead) =>
-          `${lead.compatibility === "incompatible" ? `incompatible ${lead.role} · ` : `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: `}${lead.displayName}${lead.compatibility === "incompatible" ? " · build mismatch" : `${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} compatible lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.incompatibleLeadCount ? ` · ${lead.incompatibleLeadCount} incompatible lead${lead.incompatibleLeadCount === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`}`,
+          `${lead.compatibility === "incompatible" ? `incompatible ${lead.role} · ` : `${lead.role === "lead" ? "direct lead · " : "manager · "}${lead.runtimeState}: `}${lead.displayName}${lead.compatibility === "incompatible" ? " · build mismatch" : `${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} compatible lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.incompatibleLeadCount ? ` · ${lead.incompatibleLeadCount} incompatible lead${lead.incompatibleLeadCount === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`}`,
       ),
   ];
   if (ordered.length > 8) lines.push(`… ${ordered.length - 8} more · /chief`);
@@ -4088,12 +4155,10 @@ export class StatusWidget {
     this.snapshot = snapshot;
     this.hits = [];
     this.renderedWidth = -1;
-    const animated = snapshot.agents.some(
-      (agent) =>
-        agent.state === "working" ||
-        agent.state === "settling" ||
-        agent.state === "starting",
-    );
+    const animated =
+      !snapshot.stale &&
+      !snapshot.unavailable &&
+      snapshot.agents.some((agent) => animates(agent.state));
     if (animated && !this.timer)
       this.timer = setInterval(() => {
         this.frame++;
@@ -4112,20 +4177,41 @@ export class StatusWidget {
     const s = this.snapshot;
     this.renderedWidth = width;
     this.hits = [];
-    const suffix = s.unavailable
-      ? "unavailable"
-      : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
     const execution = s.execution
       ? ` · ${s.execution.kind === "managed" ? managedExecutionLabel(s.execution.lifecycle) : s.execution.mode}`
       : "";
-    const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
+    const observedNow = s.stale ? s.refreshedAt : Date.now();
+    const elapsed =
+      observedNow === undefined
+        ? undefined
+        : formatElapsed(s.herdRunStartedAt, observedNow);
     let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
-    const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
+    const counts =
+      s.identityOnly || s.unavailable ? "" : formatStatusCounts(s.agents);
+    const freshness = s.unavailable ? "unavailable" : s.stale ? "stale" : "";
+    const freshnessSuffix = freshness ? `  ${freshness}` : "";
+    const fullSuffix = s.unavailable
+      ? freshnessSuffix
+      : counts
+        ? `  ${counts}${s.stale ? " · stale" : ""}`
+        : freshnessSuffix;
+    const fullSuffixWidth = visibleWidth(fullSuffix);
+    const freshnessSuffixWidth = visibleWidth(freshnessSuffix);
     const breadcrumbSegments = s.breadcrumb ?? [{ text: "?" }];
+    const fullIdentityWidth = visibleWidth(
+      renderBreadcrumb(breadcrumbSegments, Number.MAX_SAFE_INTEGER).text,
+    );
+    const reservedSuffixWidth =
+      freshness && fullSuffixWidth + fullIdentityWidth <= availableWidth
+        ? fullSuffixWidth
+        : freshnessSuffixWidth ||
+          (fullSuffixWidth + fullIdentityWidth <= availableWidth
+            ? fullSuffixWidth
+            : 0);
     const renderedBreadcrumb = renderBreadcrumb(
       breadcrumbSegments,
-      availableWidth,
+      Math.max(0, availableWidth - reservedSuffixWidth),
     );
     const breadcrumb = renderedBreadcrumb.text;
     if (!s.stale && !s.unavailable) this.hits.push(...renderedBreadcrumb.hits);
@@ -4133,6 +4219,14 @@ export class StatusWidget {
       0,
       availableWidth - visibleWidth(breadcrumb),
     );
+    const includeCounts =
+      !!counts && visibleWidth(fullSuffix) <= remainingWidth;
+    const suffixBody = includeCounts
+      ? `${counts}${s.stale ? " · stale" : ""}`
+      : freshness;
+    const suffixText = suffixBody
+      ? `${breadcrumb ? "  " : ""}${suffixBody}`
+      : "";
     const executionFits =
       !!execution &&
       visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
@@ -4176,13 +4270,27 @@ export class StatusWidget {
       : "";
     const styledTools = tools ? this.theme.fg("muted", tools) : "";
     const styledRun = run ? this.theme.fg("accent", run) : "";
-    const styledSuffix = suffixText ? this.theme.fg("muted", suffixText) : "";
+    const styledSuffix = !suffixText
+      ? ""
+      : s.unavailable
+        ? this.theme.fg("warning", suffixText)
+        : s.stale
+          ? `${includeCounts ? this.theme.fg("muted", `${breadcrumb ? "  " : ""}${counts} · `) : breadcrumb ? "  " : ""}${this.theme.fg("warning", "stale")}`
+          : this.theme.fg("muted", suffixText);
     const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
-    const out = [truncateToWidth(header, availableWidth, "…")];
+    const compactStaleHeader =
+      s.stale &&
+      !s.unavailable &&
+      !breadcrumb &&
+      visibleWidth("● stale") <= availableWidth
+        ? `${this.theme.fg("success", "●")} ${this.theme.fg("warning", "stale")}`
+        : header;
+    const out = [truncateToWidth(compactStaleHeader, availableWidth, "…")];
     if (s.identityOnly) return out;
     const rows = renderStatusRows(s.agents, {
-      now: Date.now(),
+      now: observedNow,
       frame: this.frame,
+      animate: !s.stale && !s.unavailable,
       width: Math.max(0, width),
       theme: this.theme,
     });

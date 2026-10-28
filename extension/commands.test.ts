@@ -13401,7 +13401,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.deepEqual(widget.render(120), [
     "● chief · 1 manager",
     "└─ ● project-manager · 1 compatible lead",
-    "   └─ feat/nested · working",
+    "   └─ feat/nested · ● working",
   ]);
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
   await new Promise<void>((resolve) => setImmediate(resolve));
