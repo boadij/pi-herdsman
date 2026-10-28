@@ -102,6 +102,7 @@ import {
   captureTerminalFailureAssignment,
   captureManagerHandoffWorktree,
   coreAgentDefinitionsExpectations,
+  coreObservationReady,
   captureTerminalFailureWorktree,
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
@@ -5776,6 +5777,98 @@ test("missing provenance row is classified as evidence failure", () => {
   assert.throws(
     () => requireSmokeEvidence(false, "missing persisted role evidence"),
     (error: Error & { code?: string }) => error.code === "SMOKE_EVIDENCE",
+  );
+});
+
+test("core observation waits for every persisted session PID or fails closed", async () => {
+  const ctx = {
+    assistantResult: true,
+    rootProcess: { paneId: "root", pid: 101 },
+    simulated: true,
+    provenance: [
+      {
+        sessionId: "root",
+        pid: 101,
+        packageName: "@earendil-works/pi-coding-agent",
+        piVersion: "1.4.0",
+        model: "core",
+        hasAgentDefinitions: true,
+      },
+      {
+        sessionId: "child",
+        pid: 202,
+        packageName: "@earendil-works/pi-coding-agent",
+        piVersion: "1.4.0",
+        model: "core",
+        hasAgentDefinitions: false,
+      },
+    ],
+    sessionIds: new Set(["root", "child"]),
+  };
+  const ordinaryReadiness =
+    ctx.assistantResult && 2 >= 2 && Boolean(ctx.rootProcess);
+  assert.equal(ordinaryReadiness, true);
+  assert.equal(
+    coreObservationReady({
+      ...ctx,
+      paneCount: 2,
+      observedPids: new Set([101, 111]),
+    }),
+    false,
+  );
+  assert.throws(
+    () =>
+      matchPiProvenance(
+        ctx.provenance,
+        "child",
+        "child-pane",
+        [{ pid: 111 }],
+        "core",
+        false,
+        "1.4.0",
+      ),
+    /expected one foreground PID match/,
+  );
+
+  let observations = 0;
+  const observedPids = await waitForEvidence(
+    {},
+    "core-delegation",
+    async () => {
+      observations++;
+      const observedPids = new Set([101, 111]);
+      if (observations > 1) observedPids.add(202);
+      return {
+        done: coreObservationReady({
+          ...ctx,
+          paneCount: 2,
+          observedPids,
+        }),
+        value: observedPids,
+        progress: { pids: [...observedPids].sort((a, b) => a - b) },
+      };
+    },
+    { timeoutMs: 1000, stallMs: 500, pollMs: 1 },
+  );
+  assert.equal(observations, 2);
+  assert.ok(observedPids.has(202));
+
+  await assert.rejects(
+    waitForEvidence(
+      {},
+      "core-delegation",
+      async () => ({
+        done: coreObservationReady({
+          ...ctx,
+          paneCount: 2,
+          observedPids: new Set([101, 111]),
+        }),
+      }),
+      { timeoutMs: 20, stallMs: 1000, pollMs: 1 },
+    ),
+    (error: Error & { code?: string; smoke?: { stage?: string } }) =>
+      error.code === "SMOKE_TIMEOUT" &&
+      error.smoke?.stage === "core-delegation",
   );
 });
 

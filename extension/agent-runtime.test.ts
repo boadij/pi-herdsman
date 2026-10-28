@@ -2351,18 +2351,6 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       completedRequestId: secondRequestId,
       updatedAt: Date.now(),
     });
-    writeResult(childTwoMailbox, {
-      version: 5,
-      runId: childTwo.runId,
-      requestId: secondRequestId,
-      ownerSessionId: childTwo.ownerSessionId,
-      workspaceId: childTwo.workspaceId,
-      agentLabel: childTwo.agentLabel,
-      paneId: childTwo.paneId,
-      status: "completed",
-      text: "durable two",
-      completedAt: Date.now(),
-    });
 
     const parentRequestId = randomUUID();
     writeRequest(parentMailbox, {
