@@ -124,7 +124,7 @@ const syncDirectory = (directory: string): void => {
   }
 };
 if (action === "probe") {
-  const peers = listPeerLeadRecords(runtime).filter(compatible);
+  const peers = listPeerLeadRecords(runtime);
   let ordinaryLeadsComplete = true;
   let eligibleLeads: typeof peers = [];
   try {

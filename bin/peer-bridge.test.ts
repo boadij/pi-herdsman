@@ -947,7 +947,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
   }
 });
 
-test("probe preserves Manager results and marks failed Lead assignment scans incomplete", () => {
+test("probe preserves incompatible Managers and rejects their delivery before mutation", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-probe-scan-"));
@@ -957,6 +957,7 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
   const managerId = id();
   const leadId = id();
   const staleId = id();
+  const runtime = peerRuntime();
   const managerClaim = acquireProcessLock(
     peerLeadLockPath(peerRuntime(), managerId),
     { name: "probe Manager" },
@@ -1021,9 +1022,71 @@ test("probe preserves Manager results and marks failed Lead assignment scans inc
     const result = JSON.parse(probe.stdout);
     assert.equal(result.ordinaryLeadsComplete, false);
     assert.deepEqual(
-      result.peers.map((peer: { piSessionId: string }) => peer.piSessionId),
-      [managerId],
+      result.peers
+        .map((peer: { piSessionId: string }) => peer.piSessionId)
+        .sort(),
+      [managerId, staleId].sort(),
     );
+
+    const messageId = id();
+    const originSession = id();
+    const leaseId = id();
+    const delivery = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "accept"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, SSH_CONNECTION: "test-ssh-connection" },
+        input: JSON.stringify({
+          record: {
+            version: 2,
+            build,
+            id: messageId,
+            leaseId,
+            kind: "peer_message",
+            fromSessionId: originSession,
+            toSessionId: staleId,
+            leadSessionId: staleId,
+            text: "incompatible peer delivery",
+            peerSource: { role: "manager" },
+            createdAt: Date.now(),
+          },
+          attachments: [],
+          correspondence: {
+            id: id(),
+            capability: "c".repeat(64),
+            originSession,
+            originGeneration: leaseId,
+            recipientSession: staleId,
+            recipientGeneration: staleClaim.claim.id,
+            acceptanceId: messageId,
+            originDisplay: {
+              name: "Test Manager",
+              workspaceLabel: "test/main",
+            },
+            replies: [],
+          },
+          recipientClaimId: staleClaim.claim.id,
+          expectedDataRoot: herdsmanDataRoot(),
+        }),
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(delivery.status, 0);
+    assert.match(
+      delivery.stderr,
+      /exact correspondence recipient is not live or authorized/,
+    );
+    assert.equal(existsSync(join(runtime.root, "peer-acceptances")), false);
+    assert.equal(
+      existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")),
+      false,
+    );
+    assert.equal(
+      existsSync(chiefMessagePath(runtime, staleId, messageId)),
+      false,
+    );
+    assert.equal(existsSync(join(runtime.root, "received-evidence")), false);
   } finally {
     managerClaim.release();
     leadClaim.release();
