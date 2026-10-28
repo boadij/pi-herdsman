@@ -3036,6 +3036,12 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
   return lines;
 }
 
+function peerMachine(peer: any): string | undefined {
+  return peer && typeof peer === "object"
+    ? collapseDisplayText(value(peer.machine))
+    : undefined;
+}
+
 function expandedResultLines(
   tool: CoordinationTool,
   action: string,
@@ -3176,44 +3182,57 @@ function expandedResultLines(
       const self = value(
         (details.self as Record<string, unknown> | undefined)?.role,
       );
+      const local = peers.filter((peer: any) => !peerMachine(peer));
+      const remote = peers.filter((peer: any) => peerMachine(peer));
+      const renderPeer = (peer: any): string[] => {
+        if (!peer || typeof peer !== "object") return [];
+        const name = collapseDisplayText(value(peer.name)) || "peer";
+        const target = value(peer.target);
+        const branch = collapseDisplayText(value(peer.branch));
+        const workspace = collapseDisplayText(value(peer.workspace_label));
+        const machine = peerMachine(peer);
+        return [
+          `    ${name}${target ? ` · target: ${target}` : ""}${branch ? ` · branch: ${branch}` : ""}`,
+          ...(workspace && workspace !== name
+            ? [`      workspace: ${workspace}`]
+            : []),
+          ...(machine ? [`      machine: ${machine}`] : []),
+        ];
+      };
       lines.push(
         "",
         `self ${self}`,
         `discovered peers ${peers.length}`,
-        ...peers.flatMap((peer: any) =>
-          peer && typeof peer === "object"
-            ? (() => {
-                const target = value(peer.target);
-                const name = value(peer.name) || "peer";
-                const branch = value(peer.branch);
-                const branchSuffix = branch ? ` · branch: ${branch}` : "";
-                return [
-                  `  ${name}${target ? ` · target: ${target}` : ""}${branchSuffix}`,
-                ];
-              })()
-            : [],
-        ),
+        ...(local.length
+          ? ["", `  local (${local.length})`, ...local.flatMap(renderPeer)]
+          : []),
+        ...(remote.length
+          ? ["", `  remote (${remote.length})`, ...remote.flatMap(renderPeer)]
+          : []),
       );
       const replyOnly = Array.isArray(details.reply_only)
         ? details.reply_only
         : [];
+      const role = self || activeRole;
+      const roleLabel =
+        role === "lead" ? "Leads" : role === "manager" ? "Managers" : "peers";
       if (replyOnly.length)
         lines.push(
           "",
-          `reply-only ${activeRole === "lead" ? "Leads" : "Managers"} ${replyOnly.length}`,
+          `reply-only ${roleLabel} ${replyOnly.length}`,
+          "  Existing return correspondences.",
+          "  Replies can be queued; current availability unverified.",
+          "",
           ...replyOnly.flatMap((item: any) => {
             if (!item || typeof item !== "object") return [];
-            const name = value(item.name);
-            const workspace = value(item.workspace_label);
+            const name = collapseDisplayText(value(item.name));
+            const workspace = collapseDisplayText(value(item.workspace_label));
             const target = value(item.target);
-            const primary = name || workspace || "peer";
             return [
-              `  ${primary}`,
+              `  ${name || workspace || "peer"}${target ? ` · target: ${target}` : ""}`,
               ...(name && workspace && workspace !== name
-                ? [`  ${workspace}`]
+                ? [`    last-known workspace: ${workspace}`]
                 : []),
-              ...(target ? [`  target: ${target}`] : []),
-              "  Reply can be queued; current availability is unverified.",
             ];
           }),
         );
@@ -3573,12 +3592,14 @@ export function renderCoordinationResult(
       : [];
     const warningCount =
       diagnostics.length + remoteDiagnosticOmittedCount(details);
+    const remoteCount = peers.filter((peer: any) => peerMachine(peer)).length;
     const peerCount =
-      warningCount || replyOnly.length
+      warningCount || replyOnly.length || remoteCount
         ? `${peers.length} discovered`
         : `${peers.length} peer${peers.length === 1 ? "" : "s"}`;
     const summary = [
       `peer · ${peerCount}`,
+      ...(remoteCount ? [`${remoteCount} remote`] : []),
       ...(replyOnly.length ? [`${replyOnly.length} reply-only`] : []),
       ...(warningCount
         ? [`${warningCount} warning${warningCount === 1 ? "" : "s"}`]
@@ -3861,7 +3882,10 @@ export function renderCoordinationMessage(
   } else {
     switch (kind) {
       case "peer_message":
-        heading = "Peer message";
+        const sender = d?.senderTarget
+          ? collapseDisplayText(safeDisplaySegment(d.senderTarget))
+          : undefined;
+        heading = sender ? `Peer message · ${sender}` : "Peer message";
         const currentPrefix = `Peer message${d?.senderTarget ? ` from ${d.senderTarget}` : ""}: `;
         prefix = message.content?.startsWith(currentPrefix)
           ? currentPrefix
