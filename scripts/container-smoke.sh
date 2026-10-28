@@ -16,6 +16,7 @@ damaged_ssh="${name}-damaged-ssh"
 interrupted_home="${name}-interrupted-home"
 interrupted_ssh="${name}-interrupted-ssh"
 tmp="$(mktemp -d)"
+interrupt_fixture="$tmp/interrupt-fixture"
 port=
 
 cleanup() {
@@ -41,7 +42,8 @@ cleanup() {
 trap cleanup EXIT
 
 ssh-keygen -q -t ed25519 -N '' -f "$tmp/id"
-cat > "$tmp/interrupt-npm" <<'SH'
+mkdir -m 0755 "$interrupt_fixture"
+cat > "$interrupt_fixture/interrupt-npm" <<'SH'
 #!/bin/sh
 while [ "$1" != --prefix ]; do shift; done
 shift
@@ -52,6 +54,7 @@ if [ "${SEED_TEST_MODE:-}" = interrupt ]; then
 fi
 exit 42
 SH
+chmod 0644 "$interrupt_fixture/interrupt-npm"
 
 docker build --platform linux/amd64 -t "$image" .
 
@@ -204,7 +207,7 @@ docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null
 for mode in failure interrupt; do
   docker volume rm "$interrupted_home" "$interrupted_ssh" >/dev/null 2>&1 || true
   docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
-    --entrypoint /bin/sh -v "$interrupted_home:/home/herdsman" -v "$tmp:/fixture:ro" "$image" -c '
+    --entrypoint /bin/sh -v "$interrupted_home:/home/herdsman" -v "$interrupt_fixture:/fixture:ro" "$image" -c '
       mkdir -p ~/.pi/agent ~/fake-bin
       cp /fixture/interrupt-npm ~/fake-bin/npm; chmod 0755 ~/fake-bin/npm
       printf "%s\n" "{\"packages\":[\"/opt/pi-herdsman\"]}" > ~/.pi/agent/settings.json

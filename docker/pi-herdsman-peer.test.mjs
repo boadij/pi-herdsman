@@ -19,7 +19,12 @@ test("launcher selects the Pi npm package and forwards its process contract", ()
     const launcher = resolve("docker/pi-herdsman-peer");
     const run = (dir) =>
       spawnSync("sh", [launcher, "one", "two words"], {
-        env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: dir },
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          PI_CODING_AGENT_DIR: dir,
+        },
         input: "input\n",
         encoding: "utf8",
       });
@@ -77,7 +82,12 @@ test("launcher rejects symlinks in managed package paths", () => {
       renameSync(target, outside);
       symlinkSync(outside, target);
       const result = spawnSync("sh", [resolve("docker/pi-herdsman-peer")], {
-        env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: "" },
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          PI_CODING_AGENT_DIR: "",
+        },
         encoding: "utf8",
       });
       assert.equal(result.status, 1, relative);
