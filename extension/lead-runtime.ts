@@ -13856,6 +13856,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     ctx: ExtensionContext,
     verifyLiveChief = true,
   ): Promise<boolean> => {
+    const sameLiveLead = (current: HerdrRecord, original: HerdrRecord) =>
+      current.workspace_id === original.workspace_id &&
+      current.pane_id === original.pane_id &&
+      current.tab_id === original.tab_id &&
+      current.cwd === original.cwd;
     const sessionId = ctx.sessionManager.getSessionId();
     if (record.toSessionId !== sessionId) return false;
     if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
@@ -14023,25 +14028,35 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       )
         return false;
       const leads = await liveLead(ctx, record.fromSessionId);
-      if (leads.length !== 1) return false;
-      const scope = await worktreeGroupScope(
+      if (leads.length !== 1 || typeof leads[0].cwd !== "string") return false;
+      const lead = leads[0];
+      const scope = await localRepositoryScope(
         pi,
-        ctx,
-        leads[0].workspace_id,
+        { ...ctx, cwd: lead.cwd },
+        lead.workspace_id,
         ctx.signal,
-      );
-      const state = readLeadCoordinationState(
-        supervisionRuntime(),
-        record.leadSessionId,
       );
       const supervisor = await host.resolveEffectiveSupervisor(
         ctx,
         record.fromSessionId,
-        leads[0].workspace_id,
+        lead.workspace_id,
         scope,
       );
+      const [refreshedManager, currentLeads] = await Promise.all([
+        host.currentManager(ctx),
+        liveLead(ctx, record.fromSessionId),
+      ]);
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        record.leadSessionId,
+      );
       return (
-        scope.workspaceIds.includes(leads[0].workspace_id) &&
+        !!refreshedManager &&
+        refreshedManager.piSessionId === manager.piSessionId &&
+        refreshedManager.leaseId === manager.leaseId &&
+        refreshedManager.repoKey === manager.repoKey &&
+        currentLeads.length === 1 &&
+        sameLiveLead(currentLeads[0], lead) &&
         supervisor.kind === "manager" &&
         supervisor.manager.piSessionId === manager.piSessionId &&
         supervisor.manager.leaseId === manager.leaseId &&
@@ -14055,14 +14070,55 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       const chief = await currentChiefAuthority(ctx);
       const workspaceId = host.workspaceId();
       if (!workspaceId) return false;
+      let localScope:
+        Awaited<ReturnType<typeof localRepositoryScope>> | undefined;
+      try {
+        localScope = await localRepositoryScope(
+          pi,
+          ctx,
+          workspaceId,
+          ctx.signal,
+        );
+      } catch (error) {
+        if (!(
+          error instanceof OperationError &&
+          error.detail.details?.herdrCode === "not_git_worktree"
+        ))
+          throw error;
+      }
       const supervisor = await host.resolveEffectiveSupervisor(
         ctx,
         sessionId,
         workspaceId,
+        localScope,
       );
+      let currentLocalScope = localScope;
+      if (localScope) {
+        currentLocalScope = await localRepositoryScope(
+          pi,
+          ctx,
+          workspaceId,
+          ctx.signal,
+        );
+        if (
+          currentLocalScope.repoKey !== localScope.repoKey ||
+          currentLocalScope.checkoutPath !== localScope.checkoutPath
+        )
+          return false;
+      }
+      const currentChief = await currentChiefAuthority(ctx);
+      if (
+        host.workspaceId() !== workspaceId ||
+        ctx.sessionManager.getSessionId() !== sessionId
+      )
+        return false;
       const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
       return (
         !!chief &&
+        !!currentChief &&
+        currentChief.piSessionId === chief.piSessionId &&
+        currentChief.leaseId === chief.leaseId &&
+        (!localScope || !!currentLocalScope) &&
         supervisor.kind === "chief" &&
         supervisor.chief.piSessionId === chief.piSessionId &&
         supervisor.chief.leaseId === chief.leaseId &&

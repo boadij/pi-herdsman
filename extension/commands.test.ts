@@ -10464,6 +10464,9 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
 test("ordinary Lead uplink reaches its Manager despite incomplete workspace topology", async (t) => {
   setLeadEnvironment();
   const socketPath = join(tmpdir(), `manager-lead-inbox-${randomUUID()}.sock`);
+  const repoA = realFs.mkdtempSync(
+    join(tmpdir(), "manager-lead-repository-a-"),
+  );
   const leadSession = randomUUID();
   const leadWorkspace = `workspace-${randomUUID()}`;
   const managerAgent = {
@@ -10496,7 +10499,10 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
     code: 0,
   });
   let omitLeadFromManagerTopology = false;
-  let leadTopologyMatchesRepository = false;
+  let leadWorkspaceTopologyQueries = 0;
+  let repoALocalScopeQueries = 0;
+  let changeLeadCwdAfterLocalScope = false;
+  let leadCwdMutationQueries = 0;
   const exec = (_command: string, args: string[]) => {
     if (args[0] === "workspace" && args[1] === "get")
       return respond({
@@ -10511,22 +10517,34 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
       const targetWorkspace = args.includes("--workspace")
         ? args[3]
         : undefined;
-      const inheritedLeadTopology =
-        targetWorkspace === leadWorkspace && !leadTopologyMatchesRepository;
+      const cwdIndex = args.indexOf("--cwd");
+      const targetCwd = cwdIndex >= 0 ? args[cwdIndex + 1] : undefined;
+      const localRepositoryA = targetCwd === repoA;
+      if (localRepositoryA) repoALocalScopeQueries++;
+      if (targetCwd === "/tmp" && changeLeadCwdAfterLocalScope) {
+        changeLeadCwdAfterLocalScope = false;
+        leadCwdMutationQueries++;
+        leadAgent.cwd = repoA;
+      }
+      const inheritedLeadTopology = targetWorkspace === leadWorkspace;
       const managerTopology =
         targetWorkspace === WORKSPACE && omitLeadFromManagerTopology;
+      if (inheritedLeadTopology) leadWorkspaceTopologyQueries++;
       return respond({
         source: {
           source_workspace_id:
-            inheritedLeadTopology ||
-            managerTopology ||
-            (targetWorkspace === leadWorkspace && leadTopologyMatchesRepository)
+            inheritedLeadTopology || managerTopology
               ? "other-primary-workspace"
               : WORKSPACE,
-          repo_key: inheritedLeadTopology
-            ? "/inherited/repository-a/.git"
-            : "/tmp",
-          repo_name: inheritedLeadTopology ? "repository-a" : "project-b",
+          repo_key: localRepositoryA
+            ? repoA
+            : inheritedLeadTopology
+              ? "/inherited/repository-a/.git"
+              : "/tmp",
+          repo_name:
+            localRepositoryA || inheritedLeadTopology
+              ? "repository-a"
+              : "project-b",
           source_checkout_path: "/tmp/project-root",
         },
         worktrees: inheritedLeadTopology
@@ -10581,6 +10599,15 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
     managerCtx.isIdle = () => false;
     await manager.events.get("session_start")![0](undefined, managerCtx);
     await manager.commandOptions.get("manager").handler("", managerCtx);
+    const originalManagerExec = manager.pi.exec.bind(manager.pi);
+    (manager.pi as any).exec = async (
+      command: string,
+      args: string[],
+      options: { cwd?: string } | undefined,
+    ) =>
+      command === "git" && args[0] === "rev-parse" && options?.cwd === repoA
+        ? { stdout: repoA, stderr: "", code: 0 }
+        : originalManagerExec(command, args, options);
 
     useLeadIdentity();
     lead = fakeRepositoryChiefPi({
@@ -10612,20 +10639,13 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
       "supervised",
     );
     omitLeadFromManagerTopology = true;
-    leadTopologyMatchesRepository = true;
     const managerScope = await worktreeGroupScope(
       manager.pi,
       managerCtx,
       WORKSPACE,
     );
-    const liveLeadScope = await worktreeGroupScope(
-      manager.pi,
-      managerCtx,
-      leadWorkspace,
-    );
     assert.equal(managerScope.workspaceIds.includes(leadWorkspace), false);
-    assert.equal(liveLeadScope.repoKey, managerScope.repoKey);
-    assert.notEqual(liveLeadScope.primaryWorkspaceId, WORKSPACE);
+    const staleTopologyQueriesBeforeUplink = leadWorkspaceTopologyQueries;
     useLeadIdentity();
     const uplink = await lead.tools
       .find((tool) => tool.name === "message_supervisor")!
@@ -10650,12 +10670,22 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
         ),
       ),
     );
+    assert.equal(
+      leadWorkspaceTopologyQueries,
+      staleTopologyQueriesBeforeUplink,
+      "delivery does not query the stale Lead workspace topology",
+    );
+    useLeadIdentity();
+    await assert.rejects(
+      worktreeGroupScope(lead.pi, leadCtx, leadWorkspace),
+      /Herdr project topology changed/,
+      "the inherited Lead workspace still reports repository A after delivery",
+    );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
       [],
     );
     omitLeadFromManagerTopology = false;
-    leadTopologyMatchesRepository = false;
 
     await manager.tools
       .find((tool) => tool.name === "message_staff")!
@@ -10772,6 +10802,89 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
     );
     assert.equal(lead.sentMessageCalls.length, sentBefore);
     assert.equal(imports, 0);
+
+    useManagerIdentity();
+    managerCtx.isIdle = () => false;
+    leadAgent.cwd = repoA;
+    const managerDescriptor = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    );
+    assert.ok(managerDescriptor);
+    const crossRepositoryUplink = {
+      version: 2 as const,
+      id: randomUUID(),
+      leaseId: managerDescriptor.leaseId,
+      kind: "lead_message" as const,
+      fromSessionId: leadSession,
+      toSessionId: LEAD_SESSION_ID,
+      leadSessionId: leadSession,
+      text: "Repository A must not use Repository B supervision",
+      createdAt: Date.now(),
+    };
+    writeCoordinationMessage(crossRepositoryUplink, supervisionRuntime());
+    assert.ok(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+        (path) => readChiefMessage(path).id === crossRepositoryUplink.id,
+      ),
+      "cross-repository uplink is queued before Manager authorization",
+    );
+    managerCtx.isIdle = () => true;
+    await t.waitFor(() => assert.ok(repoALocalScopeQueries > 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      manager.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-lead_message" &&
+          message?.details?.id === crossRepositoryUplink.id,
+      ),
+      false,
+      "a Lead verified in repository A is not authorized by the repository B Manager",
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+        (path) => readChiefMessage(path).id === crossRepositoryUplink.id,
+      ),
+      false,
+      "cross-repository uplink is rejected without delivery",
+    );
+    leadAgent.cwd = "/tmp";
+
+    managerCtx.isIdle = () => false;
+    useLeadIdentity();
+    const changedIdentityUplink = await lead.tools
+      .find((tool) => tool.name === "message_supervisor")!
+      .execute(
+        "message",
+        { message: "Reject if the live Lead identity changes during lookup" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
+    useManagerIdentity();
+    changeLeadCwdAfterLocalScope = true;
+    managerCtx.isIdle = () => true;
+    await t.waitFor(() => assert.ok(leadCwdMutationQueries > 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(leadAgent.cwd, repoA);
+    assert.equal(
+      manager.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-lead_message" &&
+          message?.details?.id === changedIdentityUplink.details.id,
+      ),
+      false,
+      "Manager revalidates the Lead pane/workspace/cwd after asynchronous scope discovery",
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+        (path) =>
+          readChiefMessage(path).id === changedIdentityUplink.details.id,
+      ),
+      false,
+      "the changed-identity uplink is rejected",
+    );
+    leadAgent.cwd = "/tmp";
 
     const competingSession = randomUUID();
     competingLease = claimManagerLease({
@@ -10894,6 +11007,144 @@ test("ordinary Lead uplink reaches its Manager despite incomplete workspace topo
       useManagerIdentity();
       await manager.events.get("session_shutdown")?.[0]();
     }
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+    realFs.rmSync(repoA, { recursive: true, force: true });
+  }
+});
+
+test("ordinary Lead receives Chief messages using its verified local repository despite stale workspace topology", async (t) => {
+  setLeadEnvironment();
+  const workspaceId = `lead-${randomUUID()}`;
+  const leadSession = randomUUID();
+  const chiefId = randomUUID();
+  const socketPath = join(tmpdir(), `chief-local-scope-${randomUUID()}.sock`);
+  process.env.HERDR_WORKSPACE_ID = workspaceId;
+  process.env.HERDR_PANE_ID = "local-scope-lead-pane";
+  process.env.HERDR_TAB_ID = "local-scope-lead-tab";
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    workspace_id: `chief-${randomUUID()}`,
+    pane_id: "local-scope-chief-pane",
+    tab_id: "local-scope-chief-tab",
+    cwd: "/tmp",
+  };
+  const leadAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadSession,
+    },
+    workspace_id: workspaceId,
+    pane_id: process.env.HERDR_PANE_ID,
+    tab_id: process.env.HERDR_TAB_ID,
+    cwd: "/tmp",
+  };
+  const chiefLease = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: chiefAgent.pane_id,
+    tabId: chiefAgent.tab_id,
+    workspaceId: chiefAgent.workspace_id,
+  });
+  const incoming = {
+    version: 2 as const,
+    id: randomUUID(),
+    leaseId: chiefLease.descriptor.leaseId,
+    kind: "chief_message" as const,
+    fromSessionId: chiefId,
+    toSessionId: leadSession,
+    leadSessionId: leadSession,
+    text: "Chief message should use the Lead's local repository identity",
+    createdAt: Date.now(),
+  };
+  writeChiefMessage(incoming, supervisionRuntime());
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeRepositoryChiefPi({
+    activeTools: ["read"],
+    persistMessages: true,
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: { workspace_id: args[2], worktree: null },
+        });
+      if (args[0] === "worktree" && args[1] === "list") {
+        const workspaceIndex = args.indexOf("--workspace");
+        const staleWorkspace =
+          workspaceIndex >= 0 && args[workspaceIndex + 1] === workspaceId;
+        return respond({
+          source: {
+            source_workspace_id: staleWorkspace ? "repository-a" : workspaceId,
+            repo_key: staleWorkspace ? "/inherited/repository-a/.git" : "/tmp",
+            repo_name: staleWorkspace ? "repository-a" : "project-b",
+          },
+          worktrees: staleWorkspace ? [] : [{ open_workspace_id: workspaceId }],
+        });
+      }
+      if (isAgentList(args))
+        return respond({ agents: [chiefAgent, leadAgent] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({
+          agent: args[2] === chiefAgent.pane_id ? chiefAgent : leadAgent,
+        });
+      if (isApiSnapshot(args))
+        return respond({
+          snapshot: {
+            agents: [chiefAgent, leadAgent],
+            panes: [],
+            workspaces: [],
+          },
+        });
+      return respond({});
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.sessionManager.getSessionId = () => leadSession;
+  context.isIdle = () => true;
+  registerExtension!(pi.pi as never);
+  try {
+    const { worktreeGroupScope } = await import("./herdr.ts");
+    await assert.rejects(
+      worktreeGroupScope(pi.pi, context, workspaceId),
+      /Herdr project topology changed/,
+      "the Lead workspace continues to report stale repository A topology",
+    );
+    await pi.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() =>
+      assert.ok(
+        pi.sentMessageCalls.some(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-chief_message" &&
+            message?.details?.id === incoming.id,
+        ),
+      ),
+    );
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+      ),
+    );
+    await assert.rejects(
+      worktreeGroupScope(pi.pi, context, workspaceId),
+      /Herdr project topology changed/,
+      "Chief delivery did not repair or rely on the stale workspace topology",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    chiefLease.release();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
