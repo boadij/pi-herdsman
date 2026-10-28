@@ -1785,6 +1785,8 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
   let observationFailure = false;
   let chiefDiscoveryFailure = false;
   const exec = (_command: string, args: string[]) => {
+    if (_command === "git" && args[0] === "rev-parse")
+      return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
     if (chiefDiscoveryFailure && isAgentList(args))
       return {
         stdout: "",
@@ -1802,13 +1804,14 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     else if (args[0] === "workspace" && args[1] === "get")
       result = {
         workspace: {
-          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+          workspace_id: args[2],
+          worktree: null,
         },
       };
     else if (args[0] === "worktree" && args[1] === "list")
       result = {
         source: {
-          repo_key: "repo-key",
+          repo_key: realpathSync(tmpdir()),
           repo_name: "project",
           source_workspace_id: WORKSPACE,
         },
@@ -2102,6 +2105,8 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
     workspace_id,
   }));
   const exec = (_command: string, args: string[]) => {
+    if (_command === "git" && args[0] === "rev-parse")
+      return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
     let result: unknown = {};
     if (isApiSnapshot(args))
       result = { snapshot: { agents, panes: [], workspaces: [] } };
@@ -2111,13 +2116,14 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
     else if (args[0] === "workspace" && args[1] === "get")
       result = {
         workspace: {
-          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+          workspace_id: args[2],
+          worktree: null,
         },
       };
     else if (args[0] === "worktree" && args[1] === "list")
       result = {
         source: {
-          repo_key: "repo-key",
+          repo_key: realpathSync(tmpdir()),
           repo_name: "project",
           source_workspace_id: WORKSPACE,
         },

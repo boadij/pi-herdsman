@@ -2828,6 +2828,12 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
   };
   const pi = fakePi({
     exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return {
+          stdout: realFs.realpathSync(tmpdir()),
+          stderr: "",
+          code: 0,
+        };
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (isAgentList(args))
         return {
@@ -2853,7 +2859,8 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
             id: AGENT_ID,
             result: {
               workspace: {
-                worktree: { repo_key: "repo", is_linked_worktree: false },
+                workspace_id: args[2],
+                worktree: null,
               },
             },
           }),
@@ -2866,7 +2873,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
             id: AGENT_ID,
             result: {
               source: {
-                repo_key: "repo",
+                repo_key: realFs.realpathSync(tmpdir()),
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },

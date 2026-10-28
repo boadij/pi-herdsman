@@ -10461,7 +10461,7 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
   }
 });
 
-test("ordinary Leads exchange turn-triggering messages with their Manager", async (t) => {
+test("ordinary Lead uplink reaches its Manager despite incomplete workspace topology", async (t) => {
   setLeadEnvironment();
   const socketPath = join(tmpdir(), `manager-lead-inbox-${randomUUID()}.sock`);
   const leadSession = randomUUID();
@@ -10495,6 +10495,8 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     stderr: "",
     code: 0,
   });
+  let omitLeadFromManagerTopology = false;
+  let leadTopologyMatchesRepository = false;
   const exec = (_command: string, args: string[]) => {
     if (args[0] === "workspace" && args[1] === "get")
       return respond({
@@ -10505,16 +10507,35 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
               ? { worktree: null }
               : {},
       });
-    if (args[0] === "worktree" && args[1] === "list")
+    if (args[0] === "worktree" && args[1] === "list") {
+      const targetWorkspace = args.includes("--workspace")
+        ? args[3]
+        : undefined;
+      const inheritedLeadTopology =
+        targetWorkspace === leadWorkspace && !leadTopologyMatchesRepository;
+      const managerTopology =
+        targetWorkspace === WORKSPACE && omitLeadFromManagerTopology;
       return respond({
         source: {
-          source_workspace_id: WORKSPACE,
-          repo_key: "/tmp",
-          repo_name: "project",
+          source_workspace_id:
+            inheritedLeadTopology ||
+            managerTopology ||
+            (targetWorkspace === leadWorkspace && leadTopologyMatchesRepository)
+              ? "other-primary-workspace"
+              : WORKSPACE,
+          repo_key: inheritedLeadTopology
+            ? "/inherited/repository-a/.git"
+            : "/tmp",
+          repo_name: inheritedLeadTopology ? "repository-a" : "project-b",
           source_checkout_path: "/tmp/project-root",
         },
-        worktrees: [{ open_workspace_id: leadWorkspace }],
+        worktrees: inheritedLeadTopology
+          ? []
+          : managerTopology
+            ? [{ open_workspace_id: WORKSPACE }]
+            : [{ open_workspace_id: leadWorkspace }],
       });
+    }
     if (isAgentList(args))
       return respond({ agents: [managerAgent, leadAgent] });
     if (args[0] === "agent" && args[1] === "get")
@@ -10547,6 +10568,7 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
   };
   let manager: ReturnType<typeof fakeChiefPi> | undefined;
   let lead: ReturnType<typeof fakeChiefPi> | undefined;
+  let competingLease: ReturnType<typeof claimManagerLease> | undefined;
   try {
     useManagerIdentity();
     manager = fakeRepositoryChiefPi({
@@ -10572,6 +10594,12 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     let leadIsIdle = false;
     leadCtx.isIdle = () => leadIsIdle;
     await lead.events.get("session_start")![0](undefined, leadCtx);
+    const { worktreeGroupScope } = await import("./herdr.ts");
+    await assert.rejects(
+      worktreeGroupScope(lead.pi, leadCtx, leadWorkspace),
+      /Herdr project topology changed/,
+      "the inherited workspace's topology points at repository A and omits this workspace",
+    );
 
     useManagerIdentity();
     const reports = await manager.tools
@@ -10583,8 +10611,23 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
       )?.relationship,
       "supervised",
     );
+    omitLeadFromManagerTopology = true;
+    leadTopologyMatchesRepository = true;
+    const managerScope = await worktreeGroupScope(
+      manager.pi,
+      managerCtx,
+      WORKSPACE,
+    );
+    const liveLeadScope = await worktreeGroupScope(
+      manager.pi,
+      managerCtx,
+      leadWorkspace,
+    );
+    assert.equal(managerScope.workspaceIds.includes(leadWorkspace), false);
+    assert.equal(liveLeadScope.repoKey, managerScope.repoKey);
+    assert.notEqual(liveLeadScope.primaryWorkspaceId, WORKSPACE);
     useLeadIdentity();
-    await lead.tools
+    const uplink = await lead.tools
       .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
@@ -10593,13 +10636,15 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
         undefined,
         leadCtx,
       );
+    assert.equal(uplink.details.chiefSessionId, LEAD_SESSION_ID);
     useManagerIdentity();
     managerCtx.isIdle = () => true;
     await t.waitFor(() =>
       assert.ok(
-        manager!.sent.some(
-          (message: any) =>
+        manager!.sentMessageCalls.some(
+          ({ message }: any) =>
             message?.customType === "pi-herdsman-lead_message" &&
+            message?.details?.id === uplink.details.id &&
             message?.details?.fromSessionId === leadSession &&
             message?.details?.toSessionId === LEAD_SESSION_ID,
         ),
@@ -10609,6 +10654,8 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
       listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
       [],
     );
+    omitLeadFromManagerTopology = false;
+    leadTopologyMatchesRepository = false;
 
     await manager.tools
       .find((tool) => tool.name === "message_staff")!
@@ -10725,7 +10772,120 @@ test("ordinary Leads exchange turn-triggering messages with their Manager", asyn
     );
     assert.equal(lead.sentMessageCalls.length, sentBefore);
     assert.equal(imports, 0);
+
+    const competingSession = randomUUID();
+    competingLease = claimManagerLease({
+      build: HERDSMAN_BUILD,
+      piSessionId: competingSession,
+      paneId: "competing-manager-pane",
+      tabId: "competing-manager-tab",
+      workspaceId: `competing-${randomUUID()}`,
+      repoKey: "/tmp",
+    });
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: competingSession,
+      updatedAt: Date.now(),
+    });
+    useManagerIdentity();
+    const ambiguousReports = await manager.tools
+      .find((tool) => tool.name === "list_staff")!
+      .execute("list", {}, undefined, undefined, managerCtx);
+    assert.equal(
+      ambiguousReports.details.reports.some(
+        (report: any) => report.session === leadSession,
+      ),
+      false,
+      "ordinary Leads are not advertised when two Managers share their repository",
+    );
+    const queuedBefore = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      leadSession,
+    );
+    await assert.rejects(
+      manager.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          {
+            session: leadSession,
+            message: "Do not enqueue ambiguous supervision",
+          },
+          undefined,
+          undefined,
+          managerCtx,
+        ),
+      /Lead target was not found or is no longer eligible/,
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+      queuedBefore,
+    );
+    useLeadIdentity();
+    await assert.rejects(
+      lead.tools
+        .find((tool) => tool.name === "message_supervisor")!
+        .execute(
+          "message",
+          { message: "Do not guess between Managers" },
+          undefined,
+          undefined,
+          leadCtx,
+        ),
+      /Manager supervisor is ambiguous/,
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
+        .length,
+      0,
+    );
+    const assignedBranch = `assigned-${randomUUID()}`;
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: leadSession,
+      repoKey: "/tmp",
+      branch: assignedBranch,
+      text: "assigned project work",
+    });
+    try {
+      useManagerIdentity();
+      const assignedReports = await manager.tools
+        .find((tool) => tool.name === "list_staff")!
+        .execute("list", {}, undefined, undefined, managerCtx);
+      assert.equal(
+        assignedReports.details.reports.find(
+          (report: any) => report.session === leadSession,
+        )?.relationship,
+        "assigned",
+        "project assignment authority remains available despite multiple Managers",
+      );
+      await manager.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          { session: leadSession, message: "Assigned Lead remains actionable" },
+          undefined,
+          undefined,
+          managerCtx,
+        );
+      useLeadIdentity();
+      await t.waitFor(() =>
+        assert.ok(
+          lead!.sentMessageCalls.some(
+            ({ message }: any) =>
+              message?.customType === "pi-herdsman-manager_message" &&
+              message?.details?.toSessionId === leadSession &&
+              message?.details?.branch === assignedBranch,
+          ),
+        ),
+      );
+    } finally {
+      removeProjectAssignment(supervisionRuntime(), "/tmp", assignedBranch);
+    }
   } finally {
+    competingLease?.release();
     if (lead) {
       useLeadIdentity();
       await lead.events.get("session_shutdown")?.[0]();
@@ -10963,7 +11123,24 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
   const pi = fakeChiefPi({
     entries,
     exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return {
+          stdout: realFs.realpathSync(tmpdir()),
+          stderr: "",
+          code: 0,
+        };
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: { workspace_id: args[2], worktree: null },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: JSON.stringify({
@@ -10971,7 +11148,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
             result: {
               source: {
                 source_workspace_id: "root-workspace",
-                repo_key: "repo-key",
+                repo_key: realFs.realpathSync(tmpdir()),
                 repo_name: "project",
               },
               worktrees: [{ open_workspace_id: WORKSPACE }],
@@ -11133,7 +11310,24 @@ test("Chief message persistence failure can recover without withdrawing peer pre
   const pi = fakeChiefPi({
     entries,
     exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return {
+          stdout: realFs.realpathSync(tmpdir()),
+          stderr: "",
+          code: 0,
+        };
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: { workspace_id: args[2], worktree: null },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (args[0] === "worktree" && args[1] === "list")
         return {
           stdout: JSON.stringify({
@@ -11141,7 +11335,7 @@ test("Chief message persistence failure can recover without withdrawing peer pre
             result: {
               source: {
                 source_workspace_id: "root-workspace",
-                repo_key: "repo-key",
+                repo_key: realFs.realpathSync(tmpdir()),
                 repo_name: "project",
               },
               worktrees: [{ open_workspace_id: WORKSPACE }],
@@ -12300,6 +12494,15 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
     workspaceId: sender.workspace_id,
     repoKey: "/tmp",
   });
+  const managerRuntime = supervisionRuntime();
+  const selectedDescriptorPath = managerDescriptorPath(
+    managerRuntime,
+    sender.workspace_id,
+  );
+  const unrelatedMalformedPath = managerDescriptorPath(
+    managerRuntime,
+    "unrelated-malformed-manager",
+  );
   try {
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
@@ -12321,6 +12524,7 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
       text: "recorded sender",
       createdAt: Date.now(),
     };
+    writeFileSync(unrelatedMalformedPath, "{", "utf8");
     writeChiefMessage(record, supervisionRuntime());
     await t.waitFor(
       () =>
@@ -12366,9 +12570,54 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
       ),
       false,
     );
+    const selectedDescriptor = readFileSync(selectedDescriptorPath, "utf8");
+    writeFileSync(selectedDescriptorPath, "{", "utf8");
+    const malformedSender = {
+      ...record,
+      id: randomUUID(),
+      text: "malformed selected descriptor cannot authorize",
+    };
+    const malformedSenderPath = writeChiefMessage(
+      malformedSender,
+      supervisionRuntime(),
+    );
+    await t.waitFor(
+      () =>
+        assert.deepEqual(
+          listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
+          [malformedSenderPath],
+        ),
+      { timeout: 5000 },
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }: any) => message?.details?.id === malformedSender.id,
+      ),
+      false,
+    );
+    writeFileSync(selectedDescriptorPath, selectedDescriptor, "utf8");
+    await t.waitFor(() =>
+      assert.ok(
+        pi.sentMessageCalls.some(
+          ({ message }: any) => message?.details?.id === malformedSender.id,
+        ),
+      ),
+    );
+    const malformedSenderReceipt = pi.sentMessageCalls.find(
+      ({ message }: any) => message?.details?.id === malformedSender.id,
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...malformedSenderReceipt });
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
+        [],
+      ),
+    );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     lease.release();
+    for (const path of [selectedDescriptorPath, unrelatedMalformedPath])
+      if (existsSync(path)) unlinkSync(path);
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
@@ -13613,7 +13862,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
 });
 
-test("Manager direct reports verify remote repository membership rather than topology workspace order", async (t) => {
+test("Manager direct reports preserve assigned Leads when ordinary supervision is ambiguous", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   const root = mkdtempSync(join(tmpdir(), "manager-reports-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -13622,25 +13871,31 @@ test("Manager direct reports verify remote repository membership rather than top
   mkdirSync(join(repo, ".git"), { recursive: true });
   mkdirSync(join(other, ".git"), { recursive: true });
   const manager = { repoKey: join(repo, ".git"), workspaceId: "manager" };
-  const leads = ["same", "other", "missing", "changed"].map((id) => ({
-    lead: id,
-    workspaceId: id,
-    paneId: id,
-    tabId: id,
-  }));
+  const leads = ["same", "ordinary", "other", "missing", "changed"].map(
+    (id) => ({
+      lead: id,
+      workspaceId: id,
+      paneId: id,
+      tabId: id,
+    }),
+  );
   const calls = new Map<string, number>();
   let abort: AbortController | undefined;
   const runtime = createLeadSupervisionRuntime({
     activeRole: () => "manager",
     state: { managerLease: { descriptor: manager } },
     currentManager: async () => manager,
-    sameManagerDescriptor: () => true,
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.workspaceId === right.workspaceId,
     worktreeGroupScope: async () => ({ workspaceIds: ["manager"] }),
     herdrSessionSnapshot: async () => ({ agents: [], workspaces: [] }),
     managedAgentSnapshots: async () => ({ agents: [] }),
     workspacePresentationProvenance: async () => ({}),
     projectSupervision: () => ({ leads }),
-    listManagerDescriptors: () => [],
+    listManagerDescriptors: () => [
+      manager,
+      { ...manager, workspaceId: "manager-two" },
+    ],
     currentChief: () => undefined,
     supervisionRuntime: () => ({}),
     listProjectAssignments: () => [{ id: "same" }],

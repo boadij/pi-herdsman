@@ -5269,6 +5269,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const sessions = new Set(assignments.map((assignment) => assignment.id));
       if (sessions.size !== assignments.length)
         throw new Error("Multiple project assignments match a Lead session");
+      const repoManagers = host
+        .listManagerDescriptors(host.supervisionRuntime())
+        .filter((candidate) => candidate.repoKey === manager.repoKey);
+      const ordinarySupervisionAvailable =
+        repoManagers.length === 1 &&
+        host.sameManagerDescriptor(repoManagers[0], manager);
       const leads = await Promise.all(
         snapshot.leads.map(async (lead) => {
           try {
@@ -5301,6 +5307,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       );
       return leads
         .filter((lead): lead is NonNullable<typeof lead> => lead !== undefined)
+        .filter(
+          (lead) => sessions.has(lead.lead) || ordinarySupervisionAvailable,
+        )
         .map((lead) => ({
           ...lead,
           relationship: sessions.has(lead.lead)
@@ -13823,6 +13832,25 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     });
     return authorized;
   };
+  const recordedManagerSender = (
+    record: ChiefMessageRecord,
+  ): ReturnType<typeof listManagerDescriptors>[number] | undefined => {
+    const senders = listManagerDescriptors(supervisionRuntime()).filter(
+      (manager) => manager.piSessionId === record.fromSessionId,
+    );
+    if (senders.length === 1) return senders[0];
+    if (senders.length > 1) return undefined;
+    // With no valid match, malformed descriptors make absence inconclusive.
+    try {
+      listManagerDescriptors(supervisionRuntime(), true);
+    } catch (error) {
+      throw new Error(
+        "Manager descriptor verification is temporarily unavailable",
+        { cause: error },
+      );
+    }
+    return undefined;
+  };
   const authorizeChiefRecord = async (
     record: ChiefMessageRecord,
     ctx: ExtensionContext,
@@ -13948,11 +13976,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         );
       }
       if (record.kind !== "manager_message") return false;
-      const senders = listManagerDescriptors(supervisionRuntime(), true).filter(
-        (manager) => manager.piSessionId === record.fromSessionId,
-      );
-      if (senders.length !== 1) return false;
-      const manager = senders[0];
+      const manager = recordedManagerSender(record);
+      if (!manager) return false;
       if (record.leaseId !== manager.leaseId) return false;
       const managerState = readLeadCoordinationState(
         supervisionRuntime(),
@@ -14002,7 +14027,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       const scope = await worktreeGroupScope(
         pi,
         ctx,
-        manager.workspaceId,
+        leads[0].workspace_id,
         ctx.signal,
       );
       const state = readLeadCoordinationState(
@@ -14020,7 +14045,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         supervisor.kind === "manager" &&
         supervisor.manager.piSessionId === manager.piSessionId &&
         supervisor.manager.leaseId === manager.leaseId &&
-        scope.primaryWorkspaceId === manager.workspaceId &&
         scope.repoKey === manager.repoKey &&
         !!state &&
         (state.role ?? "lead") === "lead"
@@ -14049,11 +14073,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       );
     }
     if (record.kind !== "manager_message") return false;
-    const senders = listManagerDescriptors(supervisionRuntime(), true).filter(
-      (manager) => manager.piSessionId === record.fromSessionId,
-    );
-    if (senders.length !== 1) return false;
-    const manager = senders[0];
+    const manager = recordedManagerSender(record);
+    if (!manager) return false;
     if (
       record.leaseId !== manager.leaseId ||
       record.leadSessionId !== sessionId
@@ -14083,26 +14104,19 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       ctx.signal,
     );
     if (localScope.repoKey !== manager.repoKey) return false;
-    const supervisor = await host.resolveEffectiveSupervisor(
-      ctx,
-      sessionId,
-      workspaceId,
-    );
-    if (!supervisor.scope || supervisor.scope.repoKey !== manager.repoKey)
-      return false;
-    if (
-      supervisor.kind !== "assigned" &&
-      (supervisor.kind !== "manager" ||
-        supervisor.manager.piSessionId !== manager.piSessionId ||
-        supervisor.manager.leaseId !== manager.leaseId)
-    )
-      return false;
-    if (
-      supervisor.kind === "assigned"
-        ? supervisor.assignment.branch !== record.branch
-        : record.branch !== undefined
-    )
-      return false;
+    const assignment = host.projectAssignmentForScope(localScope, sessionId);
+    if (assignment) {
+      if (assignment.branch !== record.branch) return false;
+    } else {
+      const supervisor = host.managerForScope(localScope);
+      if (
+        !supervisor ||
+        supervisor.piSessionId !== manager.piSessionId ||
+        supervisor.leaseId !== manager.leaseId ||
+        record.branch !== undefined
+      )
+        return false;
+    }
     let state: ReturnType<typeof readLeadCoordinationState>;
     try {
       state = readLeadCoordinationState(supervisionRuntime(), sessionId);
@@ -15275,8 +15289,22 @@ export function createLeadRoleTransitions(
       throw error;
     }
   };
+  const currentLocalRepositoryScope = async (ctx: ExtensionContext) => {
+    const workspaceId = host.workspaceId();
+    if (!workspaceId) return undefined;
+    try {
+      return await localRepositoryScope(host.pi, ctx, workspaceId, ctx.signal);
+    } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "not_git_worktree"
+      )
+        return undefined;
+      throw error;
+    }
+  };
   const projectAssignmentForScope = (
-    scope: WorktreeGroupScope,
+    scope: Pick<WorktreeGroupScope, "repoKey">,
     sessionId: string,
   ): ProjectAssignment | undefined => {
     const assignments = host.findProjectAssignmentBySession(
@@ -15459,21 +15487,19 @@ export function createLeadRoleTransitions(
     );
   };
   const managerForScope = (
-    scope:
-      Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | undefined,
+    scope: Pick<WorktreeGroupScope, "repoKey"> | undefined,
   ): ManagerDescriptor | undefined => {
     if (!scope) return undefined;
-    const managers = listManagerDescriptors(
-      host.supervisionRuntime(),
-      true,
-    ).filter((manager) => manager.repoKey === scope.repoKey);
+    const managers = listManagerDescriptors(host.supervisionRuntime()).filter(
+      (manager) => manager.repoKey === scope.repoKey,
+    );
     if (managers.length > 1)
       throw new Error("Manager supervisor is ambiguous for this repository");
     return managers[0];
   };
   const currentManager = async (
     ctx: ExtensionContext,
-    scope?: Pick<WorktreeGroupScope, "repoKey" | "primaryWorkspaceId"> | null,
+    scope?: Pick<WorktreeGroupScope, "repoKey"> | null,
   ): Promise<ManagerDescriptor | undefined> => {
     const ownLease =
       activeLeadRole(state) === "manager" && !state.roleSuspended
@@ -15620,9 +15646,9 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     sessionId: string,
     workspaceId: string,
-    verifiedScope?: WorktreeGroupScope,
+    verifiedScope?: Pick<WorktreeGroupScope, "repoKey">,
   ) => {
-    let scope = verifiedScope;
+    let scope: Pick<WorktreeGroupScope, "repoKey"> | undefined = verifiedScope;
     if (!scope) {
       try {
         scope = await host.worktreeGroupScope(ctx, workspaceId, ctx.signal);
@@ -15656,14 +15682,14 @@ export function createLeadRoleTransitions(
       ctx.sessionManager.getSessionId(),
     );
     if (identity?.kind === "managed") {
-      const scope = await currentWorktreeScope(ctx);
+      const scope = await currentLocalRepositoryScope(ctx);
       if (!scope || scope.repoKey !== identity.repoKey) return undefined;
       const assignment = projectAssignmentForScope(scope, identity.sessionId);
       return assignment && assignment.branch === identity.branch
         ? currentManager(ctx, scope)
         : undefined;
     }
-    const scope = await currentWorktreeScope(ctx);
+    const scope = await currentLocalRepositoryScope(ctx);
     if (!scope) return host.currentChiefAuthority(ctx);
     const workspaceId = host.workspaceId();
     if (!workspaceId) return host.currentChiefAuthority(ctx);
