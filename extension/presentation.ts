@@ -1049,7 +1049,12 @@ const MANAGER_METADATA_LAYOUTS = [
   { elapsed: false, context: false },
 ] as const;
 
-type SupervisionRow = { text: string; label?: string; intent?: FocusIntent };
+type SupervisionRow = {
+  text: string;
+  label?: string;
+  intent?: FocusIntent;
+  clickRegion?: { from: number; to: number };
+};
 
 function identifyingLabelVisible(
   text: string,
@@ -1281,19 +1286,29 @@ function renderSupervisionRows(
           width - visibleWidth(prefix) - visibleWidth(suffix) - telemetryWidth;
         const displayedBranch = safeLine(item.work.branch, branchWidth);
         const branchText = themed(options.theme, "muted", displayedBranch);
+        const truncatedBranch = displayedBranch !== item.work.branch;
+        const clickRegion =
+          truncatedBranch && visibleWidth(displayedBranch) > visibleWidth("…")
+            ? {
+                from: visibleWidth(prefix),
+                to: visibleWidth(prefix) + visibleWidth(displayedBranch),
+              }
+            : undefined;
+        const canFocusLead =
+          status === "fresh" &&
+          item.work.status === "active" &&
+          lead &&
+          lead.compatibility !== "incompatible";
         return {
           text: safeLine(
             `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
             width,
           ),
-          ...(status === "fresh" &&
-          item.work.status === "active" &&
-          lead &&
-          lead.compatibility !== "incompatible" &&
-          displayedBranch === item.work.branch
+          ...(canFocusLead && (!truncatedBranch || clickRegion)
             ? {
                 label: item.work.branch,
                 intent: { kind: "session" as const, sessionId: lead.lead },
+                ...(clickRegion ? { clickRegion } : {}),
               }
             : {}),
         };
@@ -1654,17 +1669,17 @@ export function createSupervisionWidget(
       }).filter(({ text }) => text.length > 0);
       hits = [];
       rows.forEach((row, index) => {
-        if (
-          row.intent &&
-          row.label &&
-          identifyingLabelVisible(row.text, row.label, width)
-        )
+        if (!row.intent || !row.label) return;
+        if (row.clickRegion) {
+          hits.push({ row: index, ...row.clickRegion, intent: row.intent });
+        } else if (identifyingLabelVisible(row.text, row.label, width)) {
           hits.push({
             row: index,
             from: 0,
             to: Math.min(width, visibleWidth(row.text)),
             intent: row.intent,
           });
+        }
       });
       return rows.map(({ text }) => text);
     },

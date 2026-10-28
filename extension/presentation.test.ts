@@ -6886,7 +6886,163 @@ test("Manager widget reports incompatible child totals beyond the displayed cap"
   assert.ok(rows.length < 32, "the rendered child-row cap remains in effect");
 });
 
-test("truncated Manager branch is not clickable when it matches row status", () => {
+test("visible truncated Manager branch clicks target its exact Lead, not status", () => {
+  const branch = "feature/653-manager-navigation-with-a-long-name";
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [
+        { branch, session: "exact-associated-lead-session", status: "active" },
+      ],
+      leads: [
+        lead({
+          lead: "exact-associated-lead-session",
+          branch,
+          runtimeState: "working",
+        }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const width = 30;
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  assert.match(row, /feature\/653-.*… · active$/);
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width })
+      ?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "exact-associated-lead-session" },
+  ]);
+
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf("active"),
+      y: 1,
+      width,
+    }),
+    undefined,
+  );
+  assert.equal(focused.length, 1);
+});
+
+test("hidden and ineligible truncated Manager work targets remain inert", () => {
+  const branch = "feature/653-manager-navigation-with-a-long-name";
+  const cases = [
+    {
+      name: "stale",
+      projectionStatus: "stale" as const,
+      workStatus: "active" as const,
+      lead: true,
+      incompatible: false,
+    },
+    {
+      name: "paused",
+      projectionStatus: "fresh" as const,
+      workStatus: "paused" as const,
+      lead: true,
+      incompatible: false,
+    },
+    {
+      name: "conflicted",
+      projectionStatus: "fresh" as const,
+      workStatus: "conflict" as const,
+      lead: true,
+      incompatible: false,
+    },
+    {
+      name: "incompatible",
+      projectionStatus: "fresh" as const,
+      workStatus: "active" as const,
+      lead: true,
+      incompatible: true,
+    },
+    {
+      name: "unresolved",
+      projectionStatus: "fresh" as const,
+      workStatus: "active" as const,
+      lead: false,
+      incompatible: false,
+    },
+  ];
+  for (const item of cases) {
+    const focused: unknown[] = [];
+    const sessionId = `session-${item.name}`;
+    const widget = createSupervisionWidget(
+      () => ({
+        work: [{ branch, session: sessionId, status: item.workStatus }],
+        leads: item.lead
+          ? [
+              lead({
+                lead: sessionId,
+                branch,
+                runtimeState: "working",
+                ...(item.incompatible
+                  ? { compatibility: "incompatible" as const }
+                  : {}),
+              }),
+            ]
+          : [],
+      }),
+      () => item.projectionStatus,
+      "manager",
+      undefined,
+      (intent) => focused.push(intent),
+    );
+
+    const width = 30;
+    const row = stripVTControlCharacters(widget.render(width)[1]!);
+    assert.match(row, /feature.*…/u, item.name);
+    assert.equal(
+      widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width }),
+      undefined,
+      item.name,
+    );
+    assert.deepEqual(focused, [], item.name);
+  }
+
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [
+        {
+          branch,
+          session: "hidden-branch-session",
+          status: "active",
+        },
+      ],
+      leads: [
+        lead({
+          lead: "hidden-branch-session",
+          branch,
+          runtimeState: "working",
+        }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const width = 15;
+  const rows = widget.render(width);
+  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● … · active");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+});
+
+test("width-16 status collision keeps only the visible branch segment clickable", () => {
   const focused: unknown[] = [];
   const widget = createSupervisionWidget(
     () => ({
@@ -6902,13 +7058,19 @@ test("truncated Manager branch is not clickable when it matches row status", () 
   );
 
   const width = 16;
-  const rows = widget.render(width);
-  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● a… · active");
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  assert.equal(row, "└─ ● a… · active");
   assert.equal(
-    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width })
+      ?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "assigned" }]);
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 11, y: 1, width }),
     undefined,
   );
-  assert.deepEqual(focused, []);
+  assert.equal(focused.length, 1);
 });
 
 test("Manager work status outranks live Lead markers except when active", () => {
