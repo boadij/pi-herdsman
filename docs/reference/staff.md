@@ -7,8 +7,8 @@ use `list_staff`, `inspect_staff`, and `message_staff`; `read_staff_transcript`
 is available when persisted session evidence is available. Manager and Chief
 have the same direct-report observation and communication capabilities.
 Manager additionally has
-the branch-based project operations `delegate_project`, `resume_project`,
-`stop_lead`, `remove_worktree`, and `merge_project`. Chief has no
+the branch-based project operations `delegate_work`, `resume_work`,
+`stop_lead`, `remove_worktree`, and `integrate_branch`. Chief has no
 project-operation tools.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
@@ -115,26 +115,27 @@ forward.
 `retain` is optional and defaults to `false`. Set it to `true` only when the
 message text and supplied files should become continuing required evidence
 for the target's verified project assignment. The target must be an assigned
-project Lead; ordinary supervised Leads have no project evidence scope.
+project Lead; ordinary supervised Leads have no assignment evidence scope.
 Retention validates authority and evidence and fails explicitly when either is
 unavailable; it is never silently treated as an ordinary message. Retention
 and message delivery are one logical operation, but if persistence succeeds
 and delivery fails, the outcome reports that partial success rather than
-claiming the handoff completed. Initial `delegate_project.files` are required
+claiming the handoff completed. Initial `delegate_work.files` are required
 as well. See [Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
 
-### Manage project required evidence
+### Manage assignment required evidence
 
-Project-wide required evidence is Manager-owned. The project's **Retained
-evidence** menu shows requirement IDs, names, and origins and allows removal
-of project-owned entries. Inherited baseline entries are protected, and
+Each assignment's required evidence is Manager-owned; sibling Lead assignments
+do not automatically share it. The assignment's **Retained evidence** menu shows
+requirement IDs, names, and origins and allows removal of assignment-owned
+entries. Inherited baseline entries are protected, and
 removal leaves snapshots, source files, and evidence already accepted by
 Agents unchanged. Managed-Agent-local additions have no independent UI or
 model-facing removal tool. See [Project orchestration](../guides/project-orchestration.md#start-and-resume-project-work)
 for the procedure; assigned Leads use delegation `files` for recipient-specific
 evidence.
 
-## `delegate_project`
+## `delegate_work`
 
 Manager only. Start new project work with a required `task` and optional
 `branch`, `base`, and `files`:
@@ -143,7 +144,7 @@ Manager only. Start new project work with a required `task` and optional
 { "task": "Implement the change", "branch": "feat/example" }
 ```
 
-An existing assignment on that branch is rejected; use `resume_project` to
+An existing assignment on that branch is rejected; use `resume_work` to
 continue it. An unoccupied existing Herdr worktree may still be reused for new
 work. A different live Lead occupying that worktree prevents another managed
 writer.
@@ -160,7 +161,7 @@ preserved snapshot.
 Manager-created Leads inherit the Manager session's effective project-trust
 decision for that run; this does not modify Pi's persistent trust store.
 
-## `resume_project`
+## `resume_work`
 
 Manager only. Resume existing unresolved project work using its exact branch:
 
@@ -173,7 +174,7 @@ Resuming already-running work returns the current exact Lead instead of
 starting another. A stopped Lead is relaunched with the same assignment while
 its worktree exists. Verified checkout absence retires the assignment rather
 than recreating it. A retired assignment cannot be resumed; new work may use
-`delegate_project` with the remaining branch.
+`delegate_work` with the remaining branch.
 
 ## `stop_lead`
 
@@ -184,7 +185,7 @@ than recreating it. A retired assignment cannot be resumed; new work may use
 Stops only an exact currently assigned project Lead and its owned Agent
 execution tree. The assignment, Pi session, Git branch, and worktree are
 preserved. Resume the work with
-`resume_project` using its branch. An unassigned Lead is not a Manager staff-stop
+`resume_work` using its branch. An unassigned Lead is not a Manager staff-stop
 target. Failed or ambiguous cleanup does not retire an assignment. Successful
 Herdr worktree removal or verified checkout absence retires the assignment and
 removes pending project messages. Failed or ambiguous inventory preserves the
@@ -241,7 +242,7 @@ false value is not proof that the assignment remains. Overall success requires
 both checkout absence and assignment retirement to be confirmed. Removal never
 deletes the Git branch or Pi conversation.
 
-## `merge_project`
+## `integrate_branch`
 
 Manager only. Integrate an assigned local branch into the verified primary
 branch using fast-forward-only Git:

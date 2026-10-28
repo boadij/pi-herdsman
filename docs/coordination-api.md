@@ -45,10 +45,11 @@ read_staff_transcript
 message_staff
 
 Manager only:
-delegate_project
-resume_project
+delegate_work
+resume_work
 stop_lead
 remove_worktree
+integrate_branch
 ```
 
 ## Direct supervisor
@@ -65,7 +66,7 @@ clarifications, or warnings needed before the automatic completed-result
 handoff. A Lead may choose to wait for a response through `message_staff`.
 Routine information that can wait belongs in the result; there is no
 message/result deduplication. `stop_lead` pauses execution without removing the
-assignment, and `resume_project` resumes it.
+assignment, and `resume_work` resumes it.
 Successful Herdr worktree removal retires the matching project assignment and
 any still-pending project messages. Verified Git worktree inventory showing
 checkout absence also retires the assignment. Failed or ambiguous inventory

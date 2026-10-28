@@ -78,7 +78,7 @@ direct-delegation allowlist.
 
 Project implementation, technical conflict repair, and validation belong to
 assigned Leads and their Agent trees. The Manager owns
-project-level integration decisions and may use `merge_project` to fast-forward
+project-level integration decisions and may use `integrate_branch` to fast-forward
 an accepted assigned branch into the verified primary branch when local-merge
 permission is enabled. Manager's Git integration does not grant ownership of
 the Lead's Agents or transfer responsibility for technical validation. The
@@ -113,8 +113,11 @@ participate in Manager, Chief, staff, supervisor, or peer authority.
 
 ## Project scope
 
-A Herdsman **project** is the coordination scope corresponding to one Herdr Git
-worktree group: its primary workspace plus linked-worktree workspaces.
+A Herdsman **project** is the coordination scope of one verified local Git
+repository's Herdr worktree group: its primary workspace plus linked-worktree
+workspaces. A **worktree** is a physical Git checkout, not a separate project
+or ownership record. Separately verified worktree groups are not conflated
+merely because their repositories share an identity.
 
 Manager authority is scoped to that group. A Lead in the primary workspace may
 enter Manager mode; a Lead in a linked-worktree workspace remains a Lead. An
@@ -130,10 +133,12 @@ Workspace membership is physical placement, not assignment ownership. Multiple
 Leads can share a workspace, and a branch can have a worktree without implying
 that every session in that workspace owns its work.
 
-## Project work belongs to a branch
+## Work assignments belong to a branch
 
-Manager-delegated project work is durable and keyed by repository plus semantic
-Git branch.
+A **work assignment** is one durable, branch-scoped objective assigned to an
+exact managed Lead. It is keyed by repository identity plus semantic Git
+branch. An **Agent assignment** is bounded work delegated to an exact
+owner-managed Agent; it is separate from a work assignment.
 
 Within one repository, the branch is the public work handle. A Lead is the
 current executor. The assignment's exact Pi session ID is an internal executor
@@ -152,8 +157,8 @@ project work
 
 The assignment is the durable indicator that project work remains open. It
 survives Manager turnover and runtime loss; current Herdr placement is derived
-again when the work is observed or resumed. For an assigned project, Herdsman
-automatically returns each completed direct Lead response as a project message
+again when the work is observed or resumed. For an assigned Lead, Herdsman
+automatically returns each completed direct Lead response as an assignment update
 for the Manager role. If managed Agent work is active, the herd run owns that
 handoff until it settles, and the settled response should summarize outcome,
 validation, and important unresolved points. Routine information that can wait
@@ -168,7 +173,7 @@ ownership without asserting completion or acceptance. See
 [Project orchestration](../guides/project-orchestration.md) for the workflow.
 
 `stop_lead` pauses assigned execution while preserving the assignment, Pi
-session, branch, and worktree; `resume_project` resumes the existing
+session, branch, and worktree; `resume_work` resumes the existing
 assignment while its checkout exists. These operations do not change project
 authority. Successful Herdr worktree removal or verified checkout absence
 retires the matching assignment and any still-pending project messages while
@@ -178,7 +183,7 @@ not authority.
 A complete Git worktree inventory that verifies the checkout is absent retires
 the exact assignment and pending project messages, even when a Herdr removal
 event was missed. Failed or ambiguous inventory preserves the assignment.
-`resume_project` cannot restore a retired assignment; a new delegation may
+`resume_work` cannot restore a retired assignment; a new delegation may
 reuse the remaining Git branch.
 
 For the task-oriented workflow, see

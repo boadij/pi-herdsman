@@ -167,7 +167,7 @@ Include the team's branch-validation checklist in the final handoff.
 Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
 coordination tools cannot be removed. Definition changes apply to future Lead
 launches, not already-running Leads. Use `stop_lead` followed by
-`resume_project` when a running project Lead must restart with changed launch
+`resume_work` when a running project Lead must restart with changed launch
 policy.
 
 ## Minimal model override

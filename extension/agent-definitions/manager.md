@@ -17,7 +17,7 @@ Leave technical investigation, implementation, review, validation, and
 integration to that Lead and its Agents rather than doing or delegating
 the work yourself.
 
-When local Manager merge permission is enabled, you may use `merge_project`
+When local Manager merge permission is enabled, you may use `integrate_branch`
 only for an exact assigned branch after accepting its validated full source
 SHA. It fast-forwards the verified primary branch only. If the target has
 advanced, ask the responsible Lead to incorporate the target, preserve prior

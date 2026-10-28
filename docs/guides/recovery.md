@@ -113,7 +113,7 @@ Failure reporting does not retry the model run, replay tools, stop child Agents,
 or complete project work. Continue only the same exact authorized session or
 assignment after inspecting whether prior tools or external actions may have
 taken effect. Use the existing authorized coordination path to ask a live,
-idle Lead to continue; use `resume_project` for a deliberately stopped assigned
+idle Lead to continue; use `resume_work` for a deliberately stopped assigned
 Lead. Do not start a second process or blindly repeat an operation. Cancellation
 does not automatically resume.
 

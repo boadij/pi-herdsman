@@ -521,14 +521,14 @@ test("managed Lead denial requires exact nested call and correlated error result
   );
 });
 
-test("delegate_project error text is surfaced before JSON parsing", () => {
+test("delegate_work error text is surfaced before JSON parsing", () => {
   const entries = [
     {
       type: "message",
       message: {
         role: "assistant",
         content: [
-          { type: "toolCall", name: "delegate_project", id: "call-exact" },
+          { type: "toolCall", name: "delegate_work", id: "call-exact" },
         ],
       },
     },
@@ -536,7 +536,7 @@ test("delegate_project error text is surfaced before JSON parsing", () => {
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "delegate_project",
+        toolName: "delegate_work",
         toolCallId: "call-exact",
         isError: true,
         content: [

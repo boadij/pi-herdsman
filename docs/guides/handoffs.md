@@ -16,8 +16,8 @@ carries evidence, not runtime capability.
 ## Required assignment evidence
 
 A verified managed project assignment can retain **required evidence** for
-future delegated Agents. The initial `delegate_project` task is preserved
-unchanged as `project-brief.md`; files supplied to `delegate_project` also
+future delegated Agents. The initial `delegate_work` task is preserved
+unchanged as `project-brief.md`; files supplied to `delegate_work` also
 become required evidence. Later evidence is retained as part of a handoff by
 setting `retain: true` on an existing coordination operation:
 
@@ -25,12 +25,13 @@ setting `retain: true` on an existing coordination operation:
   for the target assigned Lead's project assignment.
 - An eligible managed Agent uses `delegate_agent` to retain supplied files as
   additions to its local assignment for its own descendants. Its task text is
-  not retained, and it cannot modify the parent project's evidence set.
+  not retained, and it cannot modify the parent assignment's evidence set.
 
-The Manager alone controls project-wide requirements. Root Lead delegation
+The Manager alone controls each assignment's requirements; sibling Lead
+assignments do not automatically inherit one another's evidence. Root Lead delegation
 accepts `files` for the current handoff, without a retention parameter.
 Leads can forward findings directly for immediate correction; when findings
-should become continuing project requirements, send the relevant files or
+should become continuing assignment requirements, send the relevant files or
 result references through `message_supervisor.files` for Manager evaluation.
 Ordinary delegation need not wait for that decision.
 
@@ -54,7 +55,7 @@ handoff and deduplicated by verified version and result binding. The Manager's
 latest retained update identifies one current batch for future eligible
 descendants; other required entries remain historical and reference-first.
 Project
-descendants inherit project requirements; nested descendants also inherit
+descendants inherit assignment requirements; nested descendants also inherit
 relevant additions owned by their Agent parent. Siblings do not inherit one
 another's local additions. An inherited snapshot keeps its original
 `sourceAssignmentId`; forwarding inherited evidence does not transfer
@@ -110,7 +111,7 @@ or unrelated session acquires no automatic evidence scope. Retained evidence
 removal remains an internal exact-ID capability; there is no standalone
 model-facing evidence-management tool. Removing a requirement does not erase
 prior Pi-session entries or evidence already accepted by an Agent.
-For project-owned requirements, the Manager uses the project's **Retained
+For assignment-owned requirements, the Manager uses the assignment's **Retained
 evidence** menu. Inherited baseline requirements are protected; removal leaves
 snapshots, source files, and evidence already accepted by Agents unchanged.
 The menu cannot remove managed-Agent-local additions. See
@@ -121,7 +122,7 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 
 - `files` supplies evidence to the coordination operations that accept it:
   `delegate_agent`, `continue_agent`, `steer_agent`, `interrupt_agent`,
-  `reply_agent`, `delegate_project`, `message_staff`,
+  `reply_agent`, `delegate_work`, `message_staff`,
   `message_supervisor`, `message_peer`, and `ask_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
@@ -209,7 +210,7 @@ physical path attribute, and observed byte size. File content remains raw text. 
 markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `delegate_agent`, `continue_agent`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `delegate_project`, `message_staff`,
+`interrupt_agent`, `reply_agent`, `delegate_work`, `message_staff`,
 `message_supervisor`, `message_peer`, and `ask_owner`. For controller actions,
 relative paths resolve from the calling controller's cwd; for `ask_owner`, they
 resolve from the managed agent's cwd. Accepted ordinary filesystem paths retain

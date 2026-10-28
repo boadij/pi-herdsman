@@ -352,11 +352,11 @@ const MANAGER_TOOLS = [
   ...SUPERVISOR_TOOLS,
   ...PEER_TOOLS,
   ...STAFF_TOOLS,
-  "delegate_project",
-  "resume_project",
+  "delegate_work",
+  "resume_work",
   "stop_lead",
   "remove_worktree",
-  "merge_project",
+  "integrate_branch",
 ] as const;
 const LEAD_COORDINATION_TOOLS = [
   ...AGENT_COORDINATION_TOOLS,
@@ -373,10 +373,10 @@ const ORDINARY_LEAD_CHARTER = `## Lead role
 You are an ordinary Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}
 Your Agent assignments and file handoffs are recipient-specific. Peer messages coordinate work but do not independently transfer execution ownership.`;
-const MANAGED_LEAD_GUIDANCE = `Managed Lead identity is permanent for this exact Pi session. Only a current exact ProjectAssignment permits fresh managed project execution; unavailable or retired assignment state does not grant ordinary Lead execution authority. Exactly owned Agent recovery remains separate. Use native Pi /fork or /clone for independent ordinary continuation; this does not create a separate Git checkout or fresh process configuration.
-For a verified managed project assignment, required project evidence is automatically inherited by newly accepted descendant Agent assignments.
-A Lead's delegation task and ordinary files are recipient-specific; they do not create project-wide requirements.
-Only the Manager can designate continuing project requirements.
+const MANAGED_LEAD_GUIDANCE = `Managed Lead identity is permanent for this exact Pi session. Only a current exact work assignment permits execution of that assignment; unavailable or retired assignment state does not grant ordinary Lead execution authority. Exactly owned Agent recovery remains separate. Use native Pi /fork or /clone for independent ordinary continuation; this does not create a separate Git checkout or fresh process configuration.
+For a verified managed project assignment, assignment required evidence is automatically inherited by newly accepted descendant Agent assignments; sibling Lead assignments do not automatically inherit it.
+A Lead's delegation task and ordinary files are recipient-specific; they do not create assignment requirements.
+Only the Manager can designate continuing requirements for an assignment.
 Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
 For assigned project work, include routine proposed requirements, completion, and review readiness in your normal response; Herdsman delivers it to the Manager automatically.
 For assigned project work, use message_supervisor for timely coordination or explicit evidence transfer, not for a separate completion announcement.
@@ -1219,11 +1219,11 @@ function registerExtensionImpl(
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
     "read_evidence",
-    "delegate_project",
-    "resume_project",
+    "delegate_work",
+    "resume_work",
     "stop_lead",
     "remove_worktree",
-    "merge_project",
+    "integrate_branch",
   ];
   if (processRole === "managed-agent") {
     leadStatusRuntime = createAgentStatusRuntime();
@@ -2157,10 +2157,10 @@ function registerExtensionImpl(
         });
         pi.registerTool({
           ...staffTool,
-          name: "delegate_project",
-          label: "delegate project",
+          name: "delegate_work",
+          label: "delegate work",
           description:
-            "Start new project work, reusing an unoccupied Herdr worktree when available. The initial task and supplied files become required project evidence; use resume_project for existing work.",
+            "Start a new work assignment, reusing an unoccupied Herdr worktree when available. The initial task and supplied files become required assignment evidence; use resume_work for existing work.",
           parameters: staffDelegateParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2185,8 +2185,8 @@ function registerExtensionImpl(
         });
         pi.registerTool({
           ...staffTool,
-          name: "resume_project",
-          label: "resume project",
+          name: "resume_work",
+          label: "resume work",
           description:
             "Reuse an already-running Lead for the exact branch; otherwise resume its existing assignment without creating a duplicate.",
           parameters: staffBranchParameters,
@@ -2239,8 +2239,8 @@ function registerExtensionImpl(
         });
         pi.registerTool({
           ...staffTool,
-          name: "merge_project",
-          label: "merge project",
+          name: "integrate_branch",
+          label: "integrate branch",
           description:
             "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may stop running managed execution before integration. If a later step fails after execution stops, it is not automatically restarted. Verified integration triggers guarded cleanup, but integration and cleanup can complete separately; do not treat integration alone as full finalization.",
           parameters: Type.Object(

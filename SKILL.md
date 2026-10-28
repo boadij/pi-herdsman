@@ -412,8 +412,8 @@ through `files`.
 
 Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
 `message_staff`. Manager has those same direct-report tools, peer tools, and
-`delegate_project`, `resume_project`, and `stop_lead`.
-For administrative removal of project-owned evidence, use the Manager's
+`delegate_work`, `resume_work`, `stop_lead`, `remove_worktree`, and `integrate_branch`.
+For administrative removal of assignment-owned evidence, use the Manager's
 **Retained evidence** menu and its **Remove requirement…** action. Inherited
 requirements are protected; snapshots and accepted Agent evidence remain
 unchanged.
@@ -447,8 +447,9 @@ not ownership or project-resolution authority.
 
 Pi Herdsman uses one durable vocabulary:
 
-- a **project** is the Herdsman coordination scope corresponding to one Herdr
-  worktree group: its primary workspace and linked-worktree workspaces;
+- a **project** is the coordination scope of one verified local Git repository's
+  Herdr worktree group. A worktree is a physical checkout, not an independent
+  project or ownership record;
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace and does not own supervised Leads' Agents. It may
   separately delegate directly to definitions in its effective `agents`
@@ -456,10 +457,11 @@ Pi Herdsman uses one durable vocabulary:
   ordinary Leads in the verified worktree group are direct reports for
   observation and communication. Leads own technical decisions and orchestrate
   execution through their Agent trees;
-- project work belongs to the project, not a Manager session. The project
-  assignment represents open work and its Git branch is the work handle. A
-  Manager uses `delegate_project` with a task and optional branch to start new
-  project work, and `resume_project` with its branch to resume an existing
+- a work assignment is a durable branch-scoped objective assigned to an exact
+  managed Lead, keyed by repository identity and semantic branch, not by Manager
+  session. Its branch is the work handle. A
+  Manager uses `delegate_work` with a task and optional branch to start new
+  project work, and `resume_work` with its branch to resume an existing
   assignment. A successful matching Herdr removal event or verified Git
   worktree inventory showing the checkout absent retires that assignment and
   pending project messages. Unavailable or ambiguous inventory preserves the
@@ -467,7 +469,7 @@ Pi Herdsman uses one durable vocabulary:
   its remaining Git branch;
 - the Manager owns project-level integration decisions. When separately
   authorized by the Manager local-merge policy, it can accept the exact
-  validated source revision and use `merge_project` to fast-forward that
+  validated source revision and use `integrate_branch` to fast-forward that
   assigned branch into the verified primary branch. A `needs_update` result
   means ask the responsible Lead to incorporate the reported target revision,
   resolve actual conflicts, validate, and report the new exact HEAD; it does
@@ -478,7 +480,7 @@ Pi Herdsman uses one durable vocabulary:
   including reconciling an already-absent checkout only after Git proves that
   SHA is on the verified primary branch;
 - each completed direct turn by an assigned Lead is automatically returned as a
-  project message to the current or a replacement Manager; if managed Agent
+  assignment update to the current or a replacement Manager; if managed Agent
   work is active, the herd run owns the handoff until it settles, and the
   settled response summarizes outcome, validation, and important unresolved
   points. These handoffs are nonterminal; Managers treat routine results as

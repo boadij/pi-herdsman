@@ -271,11 +271,11 @@ const REGISTERED_ROLE_TOOLS = [
     "inspect_staff",
     "read_staff_transcript",
     "message_staff",
-    "delegate_project",
-    "resume_project",
+    "delegate_work",
+    "resume_work",
     "stop_lead",
     "remove_worktree",
-    "merge_project",
+    "integrate_branch",
   ].map((name) => ({ name })),
 ];
 
@@ -368,13 +368,13 @@ const STAFF_TOOL_CASES = [
 
 const MANAGER_STAFF_TOOL_CASES = [
   [
-    "delegate_project",
+    "delegate_work",
     { task: "implement" },
     { branch: "feat/existing" },
     ["task"],
   ],
   [
-    "resume_project",
+    "resume_work",
     { branch: "feat/existing" },
     { branch: "feat/existing", task: "replace it" },
     ["branch"],
@@ -398,6 +398,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const tools = new Map(pi.tools.map((tool) => [tool.name, tool]));
+  for (const name of ["delegate_work", "resume_work", "integrate_branch"])
+    assert.equal(pi.tools.filter((tool) => tool.name === name).length, 1);
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
   const portableStrings = [
     ["delegate_agent", ["definition", "task"]],
@@ -407,8 +409,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     ["reply_agent", ["message"]],
     ["message_staff", ["message"]],
     ["message_peer", ["message"]],
-    ["delegate_project", ["task", "branch", "base"]],
-    ["resume_project", ["branch"]],
+    ["delegate_work", ["task", "branch", "base"]],
+    ["resume_work", ["branch"]],
     ["remove_worktree", ["branch"]],
     ["message_supervisor", ["message"]],
   ] as const;
@@ -439,8 +441,9 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     inspect_staff: "inspect staff",
     read_staff_transcript: "read staff transcript",
     message_staff: "message staff",
-    delegate_project: "delegate project",
-    resume_project: "resume project",
+    delegate_work: "delegate work",
+    resume_work: "resume work",
+    integrate_branch: "integrate branch",
     stop_lead: "stop lead",
     remove_worktree: "remove worktree",
   };
@@ -466,6 +469,9 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "staff_delegate",
     "staff_resume",
     "staff_stop",
+    "delegate_project",
+    "resume_project",
+    "merge_project",
   ])
     assert.equal(tools.has(removed), false, `old callable remains: ${removed}`);
   for (const removed of ["staff_close", "staff_complete", "staff_discard"])
@@ -530,11 +536,11 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
-      "delegate_project",
-      "resume_project",
+      "delegate_work",
+      "resume_work",
       "stop_lead",
       "remove_worktree",
-      "merge_project",
+      "integrate_branch",
     ].sort(),
   );
   for (const name of [
@@ -542,11 +548,11 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "inspect_staff",
     "read_staff_transcript",
     "message_staff",
-    "delegate_project",
-    "resume_project",
+    "delegate_work",
+    "resume_work",
     "stop_lead",
     "remove_worktree",
-    "merge_project",
+    "integrate_branch",
   ]) {
     const tool = tools.get(name)!;
     assert.equal(tool.defaultActive, false);
@@ -684,9 +690,9 @@ test("Chief activation exposes only semantic staff tools", async () => {
         `${name} cross-operation input`,
       );
     }
-    for (const name of ["delegate_project", "stop_lead"])
+    for (const name of ["delegate_work", "stop_lead"])
       assert.equal(tools.get(name)?.exposure, "model-only", name);
-    assert.equal(chief.pi.getActiveTools().includes("merge_project"), false);
+    assert.equal(chief.pi.getActiveTools().includes("integrate_branch"), false);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -862,14 +868,14 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "read_staff_transcript",
       "read_evidence",
       "message_staff",
-      "delegate_project",
-      "resume_project",
+      "delegate_work",
+      "resume_work",
       "stop_lead",
       "remove_worktree",
-      "merge_project",
+      "integrate_branch",
     ].sort(),
   );
-  assert.equal(lead.pi.getActiveTools().includes("merge_project"), false);
+  assert.equal(lead.pi.getActiveTools().includes("integrate_branch"), false);
   assert.equal(
     lead.pi.getActiveTools().some((name) => name.startsWith("staff_")),
     false,
@@ -1030,7 +1036,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
     false,
   );
   assert.equal(
-    managed.tools.some((tool) => tool.name === "merge_project"),
+    managed.tools.some((tool) => tool.name === "integrate_branch"),
     false,
   );
   assert.equal(
@@ -2235,17 +2241,14 @@ test("active chief describes authoritative remote ask projection", async () => {
     "For Manager messages to assigned project Leads: retain both message text and files as evidence available to eligible descendant Agents. They can inspect relevant references as needed; use for lasting requirements and accepted reviews, not temporary communication.",
   );
   const delegateTool = pi.tools.find(
-    (candidate) => candidate.name === "delegate_project",
+    (candidate) => candidate.name === "delegate_work",
   );
   assert.ok(delegateTool);
   assert.match(
     delegateTool.description,
-    /initial task and supplied files become required project evidence/,
+    /initial task and supplied files become required assignment evidence/,
   );
-  assert.match(
-    delegateTool.description,
-    /use resume_project for existing work/,
-  );
+  assert.match(delegateTool.description, /use resume_work for existing work/);
   assert.match(
     (tool.parameters as any).properties.files.description,
     /Recipients do not inherit your conversation or attachments/,
@@ -4118,7 +4121,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     assert.doesNotMatch(charter, /fresh managed project execution/);
     assert.doesNotMatch(
       charter,
-      /required project evidence is automatically inherited/,
+      /assignment required evidence is automatically inherited/,
     );
     assert.doesNotMatch(
       charter,
@@ -4212,7 +4215,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.doesNotMatch(ordinaryCharter, /fresh managed project execution/);
   assert.doesNotMatch(
     ordinaryCharter,
-    /required project evidence is automatically inherited/,
+    /assignment required evidence is automatically inherited/,
   );
   assert.doesNotMatch(
     ordinaryCharter,
@@ -4337,12 +4340,19 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
-    assert.match(charter, /Only a current exact ProjectAssignment/);
+    assert.match(
+      charter,
+      /Only a current exact work assignment permits execution of that assignment/,
+    );
+    assert.doesNotMatch(
+      charter,
+      /ProjectAssignment|fresh managed project execution/,
+    );
     assert.match(charter, /unavailable or retired assignment state/);
     assert.match(charter, /Avoid unsolicited routine progress updates/);
     assert.match(
       charter,
-      /required project evidence is automatically inherited/,
+      /assignment required evidence is automatically inherited/,
     );
     assert.doesNotMatch(charter, /You are an ordinary Lead/);
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
@@ -4404,10 +4414,17 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
-    assert.match(charter, /Only a current exact ProjectAssignment/);
     assert.match(
       charter,
-      /required project evidence is automatically inherited/,
+      /Only a current exact work assignment permits execution of that assignment/,
+    );
+    assert.doesNotMatch(
+      charter,
+      /ProjectAssignment|fresh managed project execution/,
+    );
+    assert.match(
+      charter,
+      /assignment required evidence is automatically inherited/,
     );
     assert.match(charter, /Avoid unsolicited routine progress updates/);
     assert.doesNotMatch(charter, /You are an ordinary Lead/);
@@ -4817,17 +4834,17 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
-      "delegate_project",
-      "resume_project",
+      "delegate_work",
+      "resume_work",
       "stop_lead",
       "remove_worktree",
-      "merge_project",
+      "integrate_branch",
     ])
       assert.ok(
         pi.pi.getActiveTools().includes(name),
         `${name} is active for the Manager`,
       );
-    const mergeTool = pi.tools.find((tool) => tool.name === "merge_project");
+    const mergeTool = pi.tools.find((tool) => tool.name === "integrate_branch");
     assert.ok(mergeTool);
     assertPortableToolSchema(mergeTool);
     assert.deepEqual([...mergeTool.parameters.required].sort(), [
@@ -4835,13 +4852,13 @@ test("replaced Manager body keeps its protected prompt contract and tools", asyn
       "expected_head",
     ]);
     for (const [name, terms] of [
-      ["resume_project", ["already-running", "without creating a duplicate"]],
+      ["resume_work", ["already-running", "without creating a duplicate"]],
       [
         "remove_worktree",
         ["owned Agents", "Pending human approval performs no cleanup"],
       ],
       [
-        "merge_project",
+        "integrate_branch",
         [
           "integration and cleanup can complete separately",
           "If a later step fails after execution stops, it is not automatically restarted",

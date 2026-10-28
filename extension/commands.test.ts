@@ -158,7 +158,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
         undefined,
         ctx,
       ),
-      /Only the Manager can update project required evidence/,
+      /Only the Manager can update assignment required evidence/,
     );
     assert.deepEqual(current, assignment);
   }
@@ -851,11 +851,11 @@ const managerTools = [
   "inspect_staff",
   "read_staff_transcript",
   "message_staff",
-  "delegate_project",
-  "resume_project",
+  "delegate_work",
+  "resume_work",
   "stop_lead",
   "remove_worktree",
-  "merge_project",
+  "integrate_branch",
 ];
 const chiefTools = [
   "list_staff",
@@ -1043,7 +1043,7 @@ test("managed identity survives tree and assignment loss while native new-sessio
     "read",
     "delegate_agent",
     "continue_agent",
-    "delegate_project",
+    "delegate_work",
     "list_staff",
   ])
     assert.equal(pi.pi.getActiveTools().includes(tool), false, tool);
@@ -3634,8 +3634,8 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
-      "delegate_project",
-      "resume_project",
+      "delegate_work",
+      "resume_work",
       "stop_lead",
     ];
     const staffMessage = first.tools.find(
@@ -3667,7 +3667,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_project"),
+      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
       true,
     );
     const leadPromptEvent = {
@@ -3707,7 +3707,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       staffMessage,
     );
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_project"),
+      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
       true,
     );
     assert.equal(first.pi.getActiveTools().includes("delegate_agent"), false);
@@ -3801,12 +3801,12 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       ),
       undefined,
     );
-    const staff = first.tools.find((tool) => tool.name === "delegate_project");
-    const resume = first.tools.find((tool) => tool.name === "resume_project");
+    const staff = first.tools.find((tool) => tool.name === "delegate_work");
+    const resume = first.tools.find((tool) => tool.name === "resume_work");
     assert.ok(staff);
     assert.ok(resume);
     assert.equal(staff.parameters.properties.assignment, undefined);
-    assert.match(staff.description, /start new project work/i);
+    assert.match(staff.description, /start a new work assignment/i);
     assert.equal(
       Value.Check(staff.parameters, { branch: "feat/existing" }),
       false,
@@ -3960,7 +3960,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       .get("manager")
       .handler("", persistedManagerContext);
     assert.equal(
-      persistedManager.pi.getActiveTools().includes("delegate_project"),
+      persistedManager.pi.getActiveTools().includes("delegate_work"),
       false,
     );
     assert.equal(
@@ -4578,7 +4578,7 @@ test("restored Manager registers supervision tools and restores Manager tools", 
         entry.data.sessionId = sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
-    assert.ok(pi.tools.some((tool) => tool.name === "delegate_project"));
+    assert.ok(pi.tools.some((tool) => tool.name === "delegate_work"));
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
@@ -4863,7 +4863,7 @@ test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
     assert.deepEqual(gitCalls, []);
     assert.equal(confirmations, 0);
     assert.equal(realFs.existsSync(join(projectCwd, ".git")), false);
-    assert.equal(pi.pi.getActiveTools().includes("delegate_project"), false);
+    assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
@@ -6002,10 +6002,7 @@ test("Manager bootstrap rejects a session change during final Herdr verification
     readLeadCoordinationState(supervisionRuntime(), replacementSessionId),
     undefined,
   );
-  assert.equal(
-    harness.pi.pi.getActiveTools().includes("delegate_project"),
-    false,
-  );
+  assert.equal(harness.pi.pi.getActiveTools().includes("delegate_work"), false);
 });
 
 test("Manager bootstrap rejects and preserves a concurrent staged index", async (t) => {
@@ -8834,7 +8831,7 @@ async function managerDelegateAssignmentTest(
     ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const staff = pi.tools.find((tool) => tool.name === "delegate_project")!;
+    const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
     assert.equal(
       Value.Check(staff.parameters, {
         task: "Do it",
@@ -13688,7 +13685,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     for (const name of ["message_supervisor", "list_peers", "message_peer"])
       assert.ok(!pi.pi.getActiveTools().includes(name), name);
-    assert.ok(!pi.pi.getActiveTools().includes("delegate_project"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_work"));
     assert.equal(
       await pi.events.get("tool_call")![0](
         { toolName: "read", input: {} },
@@ -13698,7 +13695,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
     );
     assert.deepEqual(
       await pi.events.get("tool_call")![0](
-        { toolName: "delegate_project", input: {} },
+        { toolName: "delegate_work", input: {} },
         ctx,
       ),
       {

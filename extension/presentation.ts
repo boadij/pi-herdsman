@@ -2738,7 +2738,9 @@ function coordinationHeader(
       : tool === "staff"
         ? verb === "transcript"
           ? "read staff transcript"
-          : `${verb} ${verb === "delegate" || verb === "resume" ? "project" : verb === "stop" ? "lead" : verb === "remove" ? "worktree" : "staff"}`
+          : verb === "merge"
+            ? "integrate branch"
+            : `${verb} ${verb === "delegate" || verb === "resume" ? "work" : verb === "stop" ? "lead" : verb === "remove" ? "worktree" : "staff"}`
         : tool === "peer"
           ? verb === "list"
             ? "list peers"
@@ -3042,11 +3044,11 @@ function expandedResultLines(
     "agent";
   const heading =
     tool === "staff" && action === "merge" && details.ok === true
-      ? "merge project"
+      ? "integrate branch"
       : tool === "staff" &&
           action === "resume" &&
           details.already_running === true
-        ? "project already running"
+        ? "work already running"
         : action === "list"
           ? tool === "staff"
             ? "staff"
@@ -3219,7 +3221,7 @@ function expandedResultLines(
       "",
       ...(work.length
         ? [
-            "project work:",
+            "Managed work:",
             ...work.flatMap((item: any) => {
               if (!item || typeof item !== "object") return [];
 
@@ -3447,11 +3449,11 @@ export function renderCoordinationResult(
     const branch = value(details.branch) || value(args.branch) || "project";
     const outcome =
       action === "delegate"
-        ? `project started · ${branch}`
+        ? `work assigned · ${branch}`
         : action === "resume"
           ? details.already_running === true
-            ? `project already running · ${branch}`
-            : `project resumed · ${branch}`
+            ? `work already running · ${branch}`
+            : `work resumed · ${branch}`
           : `Lead stopped · ${branch} preserved`;
     return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);
   }
@@ -3845,8 +3847,8 @@ export function renderCoordinationMessage(
         break;
       case "project_message":
         heading = d?.branch
-          ? `Project message · ${d.branch}`
-          : "Project message";
+          ? `Assignment update · ${d.branch}`
+          : "Assignment update";
         if (d?.branch && d?.fromSessionId)
           prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
         break;

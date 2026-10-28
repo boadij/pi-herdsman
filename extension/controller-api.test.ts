@@ -2858,10 +2858,7 @@ for (const reachable of [true, false]) {
           realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)),
           false,
         );
-        assert.equal(
-          pi.pi.getActiveTools().includes("delegate_project"),
-          false,
-        );
+        assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
       }
     } finally {
       await pi.events.get("session_shutdown")?.[0]();
@@ -3513,10 +3510,8 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
     const ctx = fakeContext(pi.entries) as any;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const staff = pi.tools.find((tool) => tool.name === "delegate_project")!;
-    const staffResume = pi.tools.find(
-      (tool) => tool.name === "resume_project",
-    )!;
+    const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
+    const staffResume = pi.tools.find((tool) => tool.name === "resume_work")!;
     const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     await assert.rejects(
       staff.execute(
@@ -4747,10 +4742,8 @@ async function runManagerStartupScenario(
       }
       return;
     }
-    const staff = pi.tools.find((tool) => tool.name === "delegate_project")!;
-    const staffResume = pi.tools.find(
-      (tool) => tool.name === "resume_project",
-    )!;
+    const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
+    const staffResume = pi.tools.find((tool) => tool.name === "resume_work")!;
     const staleId = randomUUID();
     const activeMode = [
       "active-loss",
@@ -5073,7 +5066,7 @@ async function runManagerStartupScenario(
       if (mode === "active-live-mismatch") {
         await assert.rejects(execute(), (error: any) => {
           assert.equal(error.detail.category, "incompatible_build");
-          assert.equal(error.detail.operation, "resume_project");
+          assert.equal(error.detail.operation, "resume_work");
           return true;
         });
         return;
@@ -6672,7 +6665,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Work already exists.*resume_project/,
+        /Work already exists.*resume_work/,
       );
       assert.equal(createCalls, createCallsBeforeDuplicate);
       const assignmentsBeforeMissingResume = listProjectAssignments(
@@ -6689,7 +6682,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /No existing work.*delegate_project/,
+        /No existing work.*delegate_work/,
       );
       assert.deepEqual(
         listProjectAssignments(supervisionRuntime(), repoKey),
@@ -6876,7 +6869,7 @@ test("Manager inspection rejects evidence after assignment revocation", () =>
   runManagerStartupScenario("active-live-inspect-revoked"));
 test("Manager inspection rejects evidence after lease replacement", () =>
   runManagerStartupScenario("active-live-inspect-lease-replaced"));
-test("Manager resume reports incompatible Lead builds as resume_project", () =>
+test("Manager resume reports incompatible Lead builds as resume_work", () =>
   runManagerStartupScenario("active-live-mismatch"));
 test("Manager rejects stopping an unassigned direct Lead", () =>
   runManagerStartupScenario("unassigned-close"));
@@ -6954,9 +6947,9 @@ test("Manager serializes simultaneous same-branch delegation", () =>
   runManagerStartupScenario("concurrent"));
 test("Manager retains placement when recovery topology is not authoritative", () =>
   runManagerStartupScenario("invalid-topology"));
-test("resume_project retires verified-absent work instead of recreating it", () =>
+test("resume_work retires verified-absent work instead of recreating it", () =>
   runManagerStartupScenario("verified-absence-resume"));
-test("delegate_project reconciles an absent failed-start assignment before branch reuse", () =>
+test("delegate_work reconciles an absent failed-start assignment before branch reuse", () =>
   runManagerStartupScenario("delegate-reconciles-absent-assignment"));
 for (const mode of [
   "reconcile-absent",

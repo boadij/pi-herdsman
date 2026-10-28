@@ -97,7 +97,7 @@ registration, Herdr, and an isolated local repository with no remote. The
 assigned managed Lead uses Pi's real `bash` tool to commit source work, then
 incorporates an independent target-side commit, validates the reconciled
 checkout, and reports the exact final SHA. The scenario verifies actual
-Manager `merge_project` calls/results: divergence returns `needs_update`
+Manager `integrate_branch` calls/results: divergence returns `needs_update`
 without changing either checkout; retrying the accepted reconciled SHA
 fast-forwards verified `main` to exactly that SHA. Before generic teardown it
 checks that the exact source worktree is gone, its active assignment record is
@@ -175,7 +175,7 @@ exact Lead, assignment worktree, and session without success handoff or tool
 replay. The provider fixture, project definition, retry settings, and evidence
 files remain within the smoke isolation. For live acceptance the Manager
 continues using the configured smoke model; simulated acceptance scripts only
-its intended `delegate_project` action and report acknowledgment. This scenario
+its intended `delegate_work` action and report acknowledgment. This scenario
 is a single acceptance invocation and is never automatically retried.
 
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool

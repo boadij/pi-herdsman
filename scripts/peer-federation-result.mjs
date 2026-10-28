@@ -216,24 +216,24 @@ export function matchedDelegateResult(entries) {
     .filter(
       (part) =>
         part.type === "toolCall" &&
-        part.name === "delegate_project" &&
+        part.name === "delegate_work" &&
         typeof part.id === "string",
     );
   if (calls.length !== 1)
     throw new Error(
-      "Manager omitted or duplicated exact delegate_project tool call",
+      "Manager omitted or duplicated exact delegate_work tool call",
     );
   const [call] = calls;
   const results = entries.filter(
     (entry) =>
       entry.type === "message" &&
       entry.message?.role === "toolResult" &&
-      entry.message.toolName === "delegate_project" &&
+      entry.message.toolName === "delegate_work" &&
       entry.message.toolCallId === call.id,
   );
   if (results.length !== 1)
     throw new Error(
-      "Manager omitted or duplicated exact delegate_project tool result",
+      "Manager omitted or duplicated exact delegate_work tool result",
     );
   return { toolCallId: call.id, message: results[0].message };
 }
@@ -341,7 +341,7 @@ export function parseDelegateResult(message) {
     throw new Error(
       typeof firstText === "string"
         ? firstText
-        : "Manager delegate_project returned an error",
+        : "Manager delegate_work returned an error",
     );
   if (typeof firstText !== "string")
     throw new Error("missing single JSON text result");

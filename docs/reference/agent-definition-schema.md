@@ -153,8 +153,8 @@ inherited according to this precedence:
 | fresh `delegate`                                | current spawning controller session    |
 | nested fresh `delegate`                         | current spawning managed-agent session |
 | `continue`                                      | saved Pi session                       |
-| fresh managed Lead from `delegate_project`      | current Manager session                |
-| restarted managed Lead from `resume_project`    | saved Pi session                       |
+| fresh managed Lead from `delegate_work`         | current Manager session                |
+| restarted managed Lead from `resume_work`       | saved Pi session                       |
 | any operation with an explicit definition field | explicit definition value              |
 
 Model and thinking resolve independently, so either field can be explicit while

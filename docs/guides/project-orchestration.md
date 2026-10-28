@@ -67,8 +67,8 @@ project-work handles. A branch is optional when starting new work. If omitted,
 Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
-Start new work with `delegate_project`. Resume existing work with
-`resume_project` using its branch. A verified Git inventory showing the
+Start new work with `delegate_work`. Resume existing work with
+`resume_work` using its branch. A verified Git inventory showing the
 assignment's worktree checkout is absent retires that assignment and its
 pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
@@ -93,15 +93,16 @@ overlay. A trusted project may therefore configure the Lead that works on its
 branch. A Lead that is already live is not hot-reconfigured; changed launch
 policy takes effect on its next start.
 
-See [`delegate_project`](../reference/staff.md#delegate_project) and
-[`resume_project`](../reference/staff.md#resume_project).
+See [`delegate_work`](../reference/staff.md#delegate_work) and
+[`resume_work`](../reference/staff.md#resume_work).
 
-Files supplied to `delegate_project` are retained as required evidence for the
+Files supplied to `delegate_work` are retained as required evidence for the
 assignment and delivered to future delegated descendants. To make later
 review material a continuing requirement while sending it to an assigned
 Lead, a Manager uses `message_staff` with `retain: true`; the message text and
-files then become required project evidence. The Manager alone controls
-project requirements. Leads delegate corrections with recipient-specific
+files then become required evidence for that assignment. The Manager alone controls
+its requirements; sibling Lead assignments do not automatically share evidence.
+Leads delegate corrections with recipient-specific
 `files` and send continuing findings through `message_supervisor.files` for
 Manager evaluation. On supported operations, omitted or false `retain` keeps
 files limited to that handoff. Retention
@@ -110,7 +111,7 @@ explicit rather than falling back to an ordinary handoff. Ordinary Leads have
 no automatic evidence scope. See [required assignment evidence](handoffs.md#required-assignment-evidence)
 and the [`message_staff`](../reference/staff.md#message_staff) and
 [`delegate_agent`](../reference/agent.md#delegate_agent) references.
-To remove project-owned requirements, open the project assignment action menu,
+To remove assignment-owned requirements, open the project assignment action menu,
 choose **Retained evidence**, select the entry by ID, name, and origin, then
 **Remove requirement…** and confirm **Remove requirement**. Inherited baseline
 entries are protected. Removal leaves the snapshot, source file, and evidence
@@ -135,7 +136,7 @@ independent enough to justify separate branch and execution boundaries.
 ## Integrate completed branches
 
 When an assigned Lead has completed and validated its branch, the Manager can
-accept its exact source commit and use the Manager-only `merge_project` staff
+accept its exact source commit and use the Manager-only `integrate_branch` staff
 tool to fast-forward the verified primary branch. This is local Git
 integration; it does not fetch, push, or merge a hosted pull request. The source
 and target must be clean, and a branch that does not contain the current target
@@ -209,7 +210,7 @@ retry the model run or replay tool calls automatically. Before continuing the
 same assigned session, inspect its transcript and any external effects because
 a failed execution may have partially acted. Send an authorized message to the
 exact live, idle Lead to continue; resume a deliberately stopped Lead with
-`resume_project` on its branch. Do not create a second writer or treat
+`resume_work` on its branch. Do not create a second writer or treat
 cancellation as a request to resume. Missing or conflicting runtime identity
 fails closed; verify current assignment and supervisor authority before acting.
 Managers should treat routine results as informational and act when useful
@@ -223,10 +224,10 @@ evidence only when it materially matters.
 
 `stop_lead` stops a Lead and its owned Agent execution tree while preserving
 the assignment, Pi session, Git branch, and worktree. Resume the same work with
-`resume_project` using its branch. `stop_lead` does not resolve project work.
+`resume_work` using its branch. `stop_lead` does not resolve project work.
 
 See [`stop_lead`](../reference/staff.md#stop_lead) and
-[`resume_project`](../reference/staff.md#resume_project).
+[`resume_work`](../reference/staff.md#resume_work).
 
 ## Retire project work
 

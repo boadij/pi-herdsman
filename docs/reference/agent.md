@@ -72,7 +72,7 @@ Eligible managed-Agent controllers additionally accept optional boolean
 `retain`, defaulting to `false`. Omitted or false means `files` apply only
 to this handoff. With `retain: true`, supplied files become required evidence
 in the Agent's local assignment for its own descendants only. Task text is not
-retained. Inherited project requirements cannot be removed or changed by a
+retained. Inherited assignment requirements cannot be removed or changed by a
 managed Agent. Retention validates assignment authority and evidence and fails
 explicitly rather than falling back to ordinary delegation; if retention is
 persisted but delivery fails, the result reports that partial outcome.

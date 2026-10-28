@@ -216,7 +216,7 @@ test("manager bootstrap wrong-branch success remains absent in diagnostics", () 
           {
             type: "toolCall",
             id: "wrong-branch-call",
-            name: "delegate_project",
+            name: "delegate_work",
             arguments: { branch: "smoke/wrong" },
           },
         ],
@@ -226,7 +226,7 @@ test("manager bootstrap wrong-branch success remains absent in diagnostics", () 
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "delegate_project",
+        toolName: "delegate_work",
         toolCallId: "wrong-branch-call",
         content: JSON.stringify({
           ok: true,
@@ -3882,12 +3882,12 @@ test("simulated Manager decision only delegates the exact requested project work
       {
         role: "user",
         content:
-          'Use delegate_project exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
+          'Use delegate_work exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
       },
     ],
   });
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_project");
+  assert.equal(answer.content[0].name, "delegate_work");
   assert.deepEqual(answer.content[0].arguments, {
     branch: "herdsman/smoke-test",
     task: "Wait for the report.",
@@ -3921,14 +3921,14 @@ test("federation Manager starts its branch after an earlier completed managed as
         {
           type: "toolCall",
           id: "managed-call",
-          name: "delegate_project",
+          name: "delegate_work",
           arguments: { branch: "herdsman/peer-smoke-managed" },
         },
       ],
     },
     {
       role: "toolResult",
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       toolCallId: "managed-call",
       content: [{ type: "text", text: "Session: managed-session" }],
     },
@@ -3937,7 +3937,7 @@ test("federation Manager starts its branch after an earlier completed managed as
   const answer = decide("federated-peer-b", { messages });
 
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_project");
+  assert.equal(answer.content[0].name, "delegate_work");
   assert.equal(answer.content[0].arguments.branch, branch);
 });
 
@@ -5659,7 +5659,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
   assert.equal(check(entries, wrongTask), null);
 });
 
-test("terminal-failure evidence remains actionable and Manager uses only delegate_project", () => {
+test("terminal-failure evidence remains actionable and Manager uses only delegate_work", () => {
   const entries = [
     {
       type: "custom_message",
@@ -6479,10 +6479,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   const branch = "herdsman/smoke-manager-recovery-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const prompt = managerRecoveryFreshPrompt(branch);
-  assert.match(
-    prompt,
-    /delegate_project exactly once to start new project work/,
-  );
+  assert.match(prompt, /delegate_work exactly once to start new project work/);
   assert.match(prompt, /`task` argument/);
   assert.match(
     prompt,
@@ -6492,7 +6489,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.doesNotMatch(prompt, /`assignment`/);
   assert.match(
     prompt,
-    /after delegate_project returns, end this turn immediately/,
+    /after delegate_work returns, end this turn immediately/,
   );
   assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
   assert.doesNotMatch(prompt, new RegExp(marker));
@@ -6502,7 +6499,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   const resume = managerRecoveryResumePrompt(branch);
   assert.match(
     resume,
-    /resume_project using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
+    /resume_work using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
   assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
@@ -6521,7 +6518,7 @@ test("manager-recovery stops by Lead session and resumes by branch", () => {
   assert.match(review, /message_staff/);
   assert.doesNotMatch(review, new RegExp(marker));
   const resume = managerRecoveryResumeOnlyPrompt(branch);
-  assert.match(resume, /resume_project exactly once/);
+  assert.match(resume, /resume_work exactly once/);
   assert.ok(resume.includes(JSON.stringify({ branch })));
   assert.match(resume, /exact full branch string/);
   assert.match(resume, /Copy that branch string verbatim/);
@@ -6533,7 +6530,7 @@ test("manager-recovery verifies retired assignments cannot be resumed", () => {
   const branch = "herdsman/smoke-manager-recovery-retired";
   const prompt = managerRecoveryRetiredResumePrompt(branch);
   assert.ok(prompt.includes(JSON.stringify({ branch })));
-  assert.match(prompt, /resume_project exactly once/);
+  assert.match(prompt, /resume_work exactly once/);
   assert.match(prompt, /Do not delegate new work/);
   assert.match(prompt, /PI_HERDSMAN_MANAGER_RECOVERY_RETIRED/);
 });
@@ -6691,7 +6688,7 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
           {
             type: "toolCall",
             id: "resume-call",
-            name: "resume_project",
+            name: "resume_work",
             arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
           },
         ],
@@ -6703,7 +6700,7 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "resume_project",
+        toolName: "resume_work",
         toolCallId: "resume-call",
         isError: true,
         content: [{ type: "text", text: "No existing work was found." }],
@@ -6753,8 +6750,8 @@ test("smoke parses successful stop_lead results only", () => {
       ],
       details: result,
     },
-    { toolName: "resume_project", details: resumed },
-    { toolName: "delegate_project", content: JSON.stringify(result) },
+    { toolName: "resume_work", details: resumed },
+    { toolName: "delegate_work", content: JSON.stringify(result) },
     { toolName: "stop_lead", isError: true, content: JSON.stringify(result) },
   ]
     .map((message) =>
@@ -6765,7 +6762,7 @@ test("smoke parses successful stop_lead results only", () => {
     )
     .join("\n");
   assert.deepEqual(staffActionResults(contents, "stop_lead", "stop"), [result]);
-  assert.deepEqual(staffActionResults(contents, "resume_project", "resume"), [
+  assert.deepEqual(staffActionResults(contents, "resume_work", "resume"), [
     resumed,
   ]);
 });
@@ -6785,7 +6782,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "graceful-prompt",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "resume-1", name: "resume_project" }],
+        content: [{ type: "toolCall", id: "resume-1", name: "resume_work" }],
       },
     },
     {
@@ -6794,7 +6791,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "graceful-call",
       message: {
         role: "toolResult",
-        toolName: "resume_project",
+        toolName: "resume_work",
         toolCallId: "resume-1",
         details: { ok: true, action: "resume", session: "lead" },
       },
@@ -6820,7 +6817,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "recovery-prompt",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "resume-2", name: "resume_project" }],
+        content: [{ type: "toolCall", id: "resume-2", name: "resume_work" }],
       },
     },
     {
@@ -6829,7 +6826,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "recovery-call",
       message: {
         role: "toolResult",
-        toolName: "resume_project",
+        toolName: "resume_work",
         toolCallId: "resume-2",
         details: { ok: true, action: "resume", session: "lead" },
       },
@@ -6847,12 +6844,9 @@ test("manager-recovery selects the resume result descended from its exact prompt
   ];
   const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
 
-  assert.equal(
-    staffActionResults(contents, "resume_project", "resume").length,
-    2,
-  );
+  assert.equal(staffActionResults(contents, "resume_work", "resume").length, 2);
   assert.deepEqual(
-    staffActionResults(contents, "resume_project", "resume", recoveryPrompt),
+    staffActionResults(contents, "resume_work", "resume", recoveryPrompt),
     [{ ok: true, action: "resume", session: "lead" }],
   );
   assert.equal(
@@ -6868,24 +6862,24 @@ test("manager-recovery selects the resume result descended from its exact prompt
 test("delegate project results retain only valid successful delegation payloads in order", () => {
   const messages = [
     { toolName: "unrelated", content: '{"ok":true,"action":"delegate"}' },
-    { toolName: "delegate_project", content: "not JSON" },
+    { toolName: "delegate_work", content: "not JSON" },
     {
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       content: "not JSON",
       details: { ok: true, action: "delegate", session: "must-not-match" },
     },
     {
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       isError: true,
       content: '{"ok":true,"action":"delegate"}',
     },
     {
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       content:
         '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh"}',
     },
     {
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       content:
         '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh","state":"working"}',
     },
@@ -6921,7 +6915,7 @@ test("failed project delegation is correlated, sanitized, and preserves topology
         {
           type: "toolCall",
           id: "call-1",
-          name: "delegate_project",
+          name: "delegate_work",
           arguments: { branch },
         },
       ],
@@ -6931,7 +6925,7 @@ test("failed project delegation is correlated, sanitized, and preserves topology
     type: "message",
     message: {
       role: "toolResult",
-      toolName: "delegate_project",
+      toolName: "delegate_work",
       toolCallId: "call-1",
       isError: true,
       content: [
@@ -6947,7 +6941,7 @@ test("failed project delegation is correlated, sanitized, and preserves topology
     () => assertNoFailedProjectDelegation(failed, branch),
     (error) =>
       error.code === "SMOKE_DELEGATION_FAILED" &&
-      error.message === "delegate_project failed (assignment_lock_occupied)",
+      error.message === "delegate_work failed (assignment_lock_occupied)",
   );
   assert.doesNotThrow(() =>
     assertNoFailedProjectDelegation(failed, "smoke/other"),
@@ -6989,7 +6983,7 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       ),
     (error) =>
       error.code === "SMOKE_DELEGATION_FAILED" &&
-      error.message === "delegate_project failed (tool_error)" &&
+      error.message === "delegate_work failed (tool_error)" &&
       !error.message.includes("PRIVATE_TOKEN"),
   );
 
@@ -7210,7 +7204,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
   const prompt = {
     role: "user",
     content:
-      'Use delegate_project exactly once with branch smoke/branch and task exactly "ready"; MANAGER_HANDOFF_READY',
+      'Use delegate_work exactly once with branch smoke/branch and task exactly "ready"; MANAGER_HANDOFF_READY',
   };
   const call = {
     role: "assistant",
@@ -7218,14 +7212,14 @@ test("manager handoff faux decision waits for exact readiness after assignment",
       {
         type: "toolCall",
         id: "call-1",
-        name: "delegate_project",
+        name: "delegate_work",
         arguments: { branch: "smoke/branch", task: "ready" },
       },
     ],
   };
   const result = {
     role: "toolResult",
-    toolName: "delegate_project",
+    toolName: "delegate_work",
     toolCallId: "call-1",
     content: "Session: lead-session\nWorkspace: workspace",
   };
@@ -7573,7 +7567,7 @@ test("terminal-failure retains the assigned Lead PID while its pane is live", as
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "delegate_project",
+        toolName: "delegate_work",
         content: JSON.stringify({
           ok: true,
           action: "delegate",

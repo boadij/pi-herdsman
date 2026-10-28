@@ -5829,7 +5829,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     assert.deepEqual(
       scopeAssignments[0]!.requiredEvidence?.map((entry) => entry.ref),
       [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
-      "normal active-Lead access upgrades legacy evidence without resume_project",
+      "normal active-Lead access upgrades legacy evidence without resume_work",
     );
     assert.ok(
       pi.tools.some((tool) => tool.name === "read_evidence"),
@@ -5868,7 +5868,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     assert.deepEqual(
       migratedAssignment?.requiredEvidence?.map((entry) => entry.ref),
       [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
-      "active Lead delegation persists stable refs without resume_project",
+      "active Lead delegation persists stable refs without resume_work",
     );
     assert.ok(
       accepted!.text.indexOf("Task:\nReview this project") <

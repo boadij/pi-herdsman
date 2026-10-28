@@ -6359,7 +6359,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           );
           const entries = assignment.requiredEvidence ?? [];
           if (!entries.length) {
-            ctx.ui.notify("This project has no required evidence.", "info");
+            ctx.ui.notify("This assignment has no required evidence.", "info");
           } else {
             const selectedEvidence = await uiActions.selectMenu(
               ctx,
@@ -9650,7 +9650,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     signal?: AbortSignal,
   ) => {
     const operationName =
-      operation.action === "resume" ? "resume_project" : "delegate_project";
+      operation.action === "resume" ? "resume_work" : "delegate_work";
     const manager = await currentManager(ctx);
     if (
       !manager ||
@@ -9715,11 +9715,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && currentAssignment)
       throw new Error(
-        `Work already exists on ${branch}; resume it with resume_project.`,
+        `Work already exists on ${branch}; resume it with resume_work.`,
       );
     if (operation.action === "resume" && !currentAssignment)
       throw new Error(
-        `No existing work was found on ${branch}; start it with delegate_project and a task.`,
+        `No existing work was found on ${branch}; start it with delegate_work and a task.`,
       );
     const presentationTask =
       operation.action === "resume"
@@ -9845,7 +9845,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const suppliedFiles = resolveMessageFiles(
         ctx,
         operation.files,
-        "delegate_project",
+        "delegate_work",
       );
       const projectBrief = persistRequiredEvidenceSnapshot(
         id,
@@ -9856,7 +9856,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       for (const file of suppliedFiles)
         attachedEvidence.push(
           ...(typeof file === "string"
-            ? persistRequiredTextFiles(id, [file], ctx.cwd, "delegate_project")
+            ? persistRequiredTextFiles(id, [file], ctx.cwd, "delegate_work")
             : [{ id: randomUUID(), name: file.ref, result: file }]),
         );
       const requiredEvidence = [projectBrief, ...attachedEvidence];
@@ -9866,7 +9866,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "path" in evidence ? [evidence.path] : [evidence.result],
         ),
         ctx.cwd,
-        "delegate_project",
+        "delegate_work",
         "Task",
         {
           inlineLimitBytes: limits.inline.bytes,
@@ -10053,7 +10053,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               readProjectAssignment(runtime, manager.repoKey, assignment.branch)
             )
               throw new Error(
-                `Work already exists on ${assignment.branch}; resume it with resume_project.`,
+                `Work already exists on ${assignment.branch}; resume it with resume_work.`,
               );
             writeProjectAssignment(runtime, assignment);
           },
@@ -10947,7 +10947,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     onPersisted?: (files: RequiredEvidence[]) => void,
   ) => {
     if (host.activeRole() !== "manager")
-      throw new Error("Only the Manager can update project required evidence");
+      throw new Error(
+        "Only the Manager can update assignment required evidence",
+      );
     if (!params.branch?.trim())
       throw new Error("Manager must provide the exact assigned project branch");
     const manager = await host.currentManager(ctx);
@@ -11198,7 +11200,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
   ): Promise<ProjectAssignment> => {
     if (host.activeRole() !== "manager")
-      throw new Error("Only the Manager can inspect project requirements");
+      throw new Error("Only the Manager can inspect assignment requirements");
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
     if (
@@ -11223,7 +11225,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
   ) => {
     if (host.activeRole() !== "manager")
-      throw new Error("Only the Manager can remove project requirements");
+      throw new Error("Only the Manager can remove assignment requirements");
     await updateAssignmentEvidence(
       "manager-required-evidence",
       {
