@@ -994,11 +994,13 @@ test("core failure diagnostics distinguish nested result publication from delive
     "runtime",
     "mailboxes-v5",
   );
+  const piAgent = join(root, "agent");
   await Promise.all([
     mkdir(piSessions),
     mkdir(mailboxRoot, { recursive: true }),
   ]);
   const requestId = "00000000-0000-4000-8000-000000000002";
+  const intermediateRequestId = "00000000-0000-4000-8000-000000000003";
   const entries = (owner, label, child, request) => [
     { type: "session", id: owner },
     {
@@ -1031,7 +1033,7 @@ test("core failure diagnostics distinguish nested result publication from delive
       "private-root",
       "smoke-core-implementer",
       "private-implementer",
-      "00000000-0000-4000-8000-000000000003",
+      intermediateRequestId,
     );
     const implementerEntries = entries(
       "private-implementer",
@@ -1058,6 +1060,7 @@ test("core failure diagnostics distinguish nested result publication from delive
         workspaceId: "private-workspace-id",
         paneId: "private-pane-id",
         agentDefinition: "scout",
+        completedRequestId: requestId,
       }),
     );
     await writeFile(
@@ -1171,7 +1174,10 @@ test("core failure diagnostics distinguish nested result publication from delive
           ? "implementer_result_delivery"
           : "scout_result_delivery",
       );
-      assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
+      assert.doesNotMatch(
+        JSON.stringify(projection),
+        /PRIVATE_TASK|PRIVATE_RESULT/u,
+      );
     }
 
     await rm(join(mailbox, `result-${requestId}.json`));
@@ -1241,6 +1247,442 @@ test("core failure diagnostics distinguish nested result publication from delive
       assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
     } finally {
       await rm(dirname(artifact), { recursive: true, force: true });
+    }
+
+    const scoutPath = join(piSessions, "scout.jsonl");
+    const scoutRef = "result:smoke-core-scout#1";
+    const canonicalRef = `result:${requestId}`;
+    const packagePayload = JSON.stringify({
+      name: "pi-herdsman",
+      version: "0.25.1",
+    });
+    const packageProvenance = JSON.stringify({
+      agent: "smoke-core-scout",
+      definition: "scout",
+      cwd: "/private/project",
+      piSessionId: "private-scout",
+    });
+    const packageArtifact = `Agent result source: ${packageProvenance}\n\n${packagePayload}`;
+    const resultArtifact = join(piAgent, "pi-herdsman", "results", requestId);
+    await mkdir(dirname(resultArtifact), { recursive: true });
+    await writeFile(resultArtifact, packageArtifact);
+    const handoffEntries = [
+      ...implementerEntries,
+      {
+        type: "custom_message",
+        customType: "pi-herdsman-agent-result",
+        id: "scout-result-receipt",
+        details: {
+          requestId,
+          runId: "private-run-id",
+          ownerSessionId: "private-implementer",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-scout",
+          paneId: "private-pane-id",
+          piSessionId: "private-scout",
+          piSessionFile: scoutPath,
+          status: "completed",
+          resultRef: canonicalRef,
+          resultIndex: 1,
+        },
+        content: `Agent result · agent=smoke-core-scout · status=completed\n\nResult ref: ${scoutRef}\n\nPRIVATE_SCOUT_CONTENT`,
+      },
+      {
+        type: "message",
+        id: "attach-call-entry",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "attach_handoff",
+              id: "attach-call",
+              arguments: { files: [scoutRef] },
+            },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "attach-result-entry",
+        message: {
+          role: "toolResult",
+          toolName: "attach_handoff",
+          toolCallId: "attach-call",
+          isError: false,
+          details: {
+            assignmentRequestId: intermediateRequestId,
+            runId: "private-implementer-run",
+            ownerSessionId: "private-root",
+            workspaceId: "private-workspace-id",
+            agentLabel: "smoke-core-implementer",
+            paneId: "private-implementer-pane",
+            piSessionId: "private-implementer",
+            resultBindings: [{ ref: scoutRef, canonicalRef }],
+          },
+          content: "Selected result evidence.",
+        },
+      },
+    ];
+    await writeFile(
+      join(piSessions, "implementer.jsonl"),
+      handoffEntries.map((entry) => JSON.stringify(entry)).join("\n"),
+    );
+    await writeFile(
+      join(mailbox, `result-${requestId}.json`),
+      JSON.stringify({
+        requestId,
+        runId: "private-run-id",
+        ownerSessionId: "private-implementer",
+        workspaceId: "private-workspace-id",
+        agentLabel: "smoke-core-scout",
+        paneId: "private-pane-id",
+        status: "completed",
+      }),
+    );
+    const intermediateMailbox = join(mailboxRoot, "c".repeat(32));
+    await mkdir(intermediateMailbox);
+    await Promise.all([
+      writeFile(
+        join(intermediateMailbox, "state.json"),
+        JSON.stringify({
+          piSessionId: "private-implementer",
+          ownerSessionId: "private-root",
+          activeRequestId: null,
+          completedRequestId: intermediateRequestId,
+          runId: "private-implementer-run",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-implementer",
+          paneId: "private-implementer-pane",
+        }),
+      ),
+      writeFile(
+        join(intermediateMailbox, `result-${intermediateRequestId}.json`),
+        JSON.stringify({
+          requestId: intermediateRequestId,
+          runId: "private-implementer-run",
+          ownerSessionId: "private-root",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-implementer",
+          paneId: "private-implementer-pane",
+          status: "completed",
+        }),
+      ),
+    ]);
+    const nextRequestId = "00000000-0000-4000-8000-000000000005";
+    rootEntries.push(
+      {
+        type: "custom_message",
+        customType: "pi-herdsman-agent-result",
+        details: {
+          requestId: intermediateRequestId,
+          runId: "private-implementer-run",
+          ownerSessionId: "private-root",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-implementer",
+          paneId: "private-implementer-pane",
+          piSessionId: "private-implementer",
+          status: "completed",
+        },
+        content: `Agent result · agent=smoke-core-implementer · status=completed\n\nForwardable result evidence: ${scoutRef}\n\n${packageArtifact}`,
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-result-ref",
+        data: { ref: scoutRef, canonicalRef },
+      },
+      {
+        type: "message",
+        id: "next-call-entry",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "delegate_agent",
+              id: "next-call",
+              arguments: {
+                definition: "scout",
+                label: "smoke-core-next",
+                task: "PRIVATE_NEXT_TASK",
+                files: [scoutRef],
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "next-result-entry",
+        message: {
+          role: "toolResult",
+          toolName: "delegate_agent",
+          toolCallId: "next-call",
+          isError: false,
+          content: `Session: private-next\nRequest: ${nextRequestId}`,
+        },
+      },
+    );
+    const nextSessionPath = join(piSessions, "next.jsonl");
+    const writeNextSession = (artifactContent, responseText) =>
+      writeFile(
+        nextSessionPath,
+        [
+          { type: "session", id: "private-next" },
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: `<file name="${scoutRef}" bytes="${Buffer.byteLength(artifactContent)}">\n${artifactContent}\n</file>\n\nTask: PRIVATE_NEXT_TASK`,
+            },
+          },
+          {
+            type: "message",
+            message: { role: "assistant", content: responseText },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
+      );
+    await writeNextSession(packageArtifact, packagePayload);
+    const nextMailbox = join(mailboxRoot, "d".repeat(32));
+    await mkdir(nextMailbox);
+    await Promise.all([
+      writeFile(
+        join(nextMailbox, "state.json"),
+        JSON.stringify({
+          piSessionId: "private-next",
+          ownerSessionId: "private-root",
+          activeRequestId: null,
+          completedRequestId: nextRequestId,
+          runId: "private-next-run",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-next",
+          paneId: "private-next-pane",
+        }),
+      ),
+      writeFile(
+        join(nextMailbox, `result-${nextRequestId}.json`),
+        JSON.stringify({
+          requestId: nextRequestId,
+          runId: "private-next-run",
+          ownerSessionId: "private-root",
+          workspaceId: "private-workspace-id",
+          agentLabel: "smoke-core-next",
+          paneId: "private-next-pane",
+          status: "completed",
+        }),
+      ),
+    ]);
+    await Promise.all(
+      [mailbox, intermediateMailbox, nextMailbox].map((path) =>
+        rm(path, { recursive: true, force: true }),
+      ),
+    );
+    const handoffContext = {
+      scenario: "core",
+      stage: "core-delegation",
+      paths: { piSessions, piAgent },
+      sessionName: "isolated",
+      rootPaneId: "root",
+      expectedPackage: "pi-herdsman@0.25.1",
+    };
+    const collectHandoffProjection = () =>
+      collectDiagnostics(handoffContext, { hostPaneId: "host" }, null, {
+        execute: async () => ({ stdout: "" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => ({
+          path: "private-root-path",
+          status: "saved",
+          contents: rootEntries
+            .map((entry) => JSON.stringify(entry))
+            .join("\n"),
+        }),
+      });
+    const handoffProjection = await collectHandoffProjection();
+    const corePrompt = initialPromptForScenario("core", {
+      expectedPackage: "pi-herdsman@0.25.1",
+    });
+    assert.match(
+      corePrompt,
+      /reply with exactly one JSON object containing the package "name" and "version" as strings, with no prose/u,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.intermediate.sessionId,
+      "private-implementer",
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.intermediate.sessionPath,
+      "implementer.jsonl",
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.intermediate.requestId,
+      intermediateRequestId,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.intermediate.mailbox.candidates,
+      0,
+    );
+    assert.equal(handoffProjection.coreHandoff.scout.mailbox.candidates, 0);
+    assert.equal(handoffProjection.coreHandoff.scoutReference.ref, scoutRef);
+    assert.equal(
+      handoffProjection.coreHandoff.scoutReference.canonicalRef,
+      canonicalRef,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.scoutReference.artifact.readableUtf8,
+      true,
+    );
+    assert.equal(handoffProjection.coreHandoff.scoutReference.valid, true);
+    assert.deepEqual(
+      handoffProjection.coreHandoff.attachHandoff.calls[0].files,
+      [scoutRef],
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.attachHandoff.calls[0].results[0]
+        .toolCallId,
+      "attach-call",
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.attachHandoff.selectionMatches,
+      true,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.attachHandoff.calls[0].results[0].isError,
+      false,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.ownerImport.successfullyImported,
+      true,
+    );
+    assert.equal(handoffProjection.coreHandoff.ownerImport.status, "completed");
+    assert.deepEqual(
+      handoffProjection.coreHandoff.ownerImport.forwardableRefs,
+      [scoutRef],
+    );
+    assert.deepEqual(
+      handoffProjection.coreHandoff.ownerImport.importedBindings,
+      [{ ref: scoutRef, canonicalRef }],
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.sessionId,
+      "private-next",
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.requestId,
+      nextRequestId,
+    );
+    assert.deepEqual(handoffProjection.coreHandoff.nextAgent.files, [scoutRef]);
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.assignmentMatches,
+      true,
+    );
+    assert.equal(handoffProjection.coreHandoff.nextAgent.mailbox.candidates, 0);
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.artifact.received,
+      true,
+    );
+    assert.deepEqual(
+      handoffProjection.coreHandoff.nextAgent.artifact.attachedPackage,
+      { name: "pi-herdsman", version: "0.25.1" },
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.artifact.provenanceMatches,
+      true,
+    );
+    assert.equal(
+      handoffProjection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
+      true,
+    );
+    assert.deepEqual(
+      handoffProjection.coreHandoff.nextAgent.artifact.readback,
+      { name: "pi-herdsman", version: "0.25.1" },
+    );
+    const handoffEvidence = sanitizedFailureEvidence(
+      { scenario: "core", simulated: true, stage: "core-delegation" },
+      { error: new Error("PRIVATE_FAILURE") },
+      "STALLED",
+      "PASS",
+      handoffProjection,
+    );
+    const handoffArtifact = await preserveFailureEvidence(handoffEvidence);
+    try {
+      const saved = await readFile(handoffArtifact, "utf8");
+      assert.equal(
+        JSON.parse(saved).diagnostics.coreHandoff.scoutReference.valid,
+        true,
+      );
+      assert.equal(
+        JSON.parse(saved).diagnostics.coreHandoff.ownerImport
+          .successfullyImported,
+        true,
+      );
+      assert.equal(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
+          .responseMatchesArtifact,
+        true,
+      );
+      assert.deepEqual(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.readback,
+        { name: "pi-herdsman", version: "0.25.1" },
+      );
+      assert.deepEqual(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
+          .attachedPackage,
+        { name: "pi-herdsman", version: "0.25.1" },
+      );
+      assert.equal(
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
+          .provenanceMatches,
+        true,
+      );
+      assert.doesNotMatch(
+        saved,
+        /PRIVATE_TASK|PRIVATE_NEXT_TASK|PRIVATE_SCOUT_CONTENT|PRIVATE_FAILURE|PRIVATE_ERROR|\{"name"/u,
+      );
+    } finally {
+      await rm(dirname(handoffArtifact), { recursive: true, force: true });
+    }
+
+    for (const [artifactContent, responseText, expectedAttachedPackage] of [
+      [
+        `Agent result source: not-json\n\n${packagePayload}`,
+        packagePayload,
+        { name: null, version: null },
+      ],
+      [
+        `Agent result source: ${JSON.stringify({
+          agent: "smoke-other-scout",
+          definition: "scout",
+          cwd: "/private/project",
+        })}\n\n${packagePayload}`,
+        packagePayload,
+        { name: "pi-herdsman", version: "0.25.1" },
+      ],
+      [
+        `Agent result source: ${packageProvenance}\n\n${JSON.stringify({
+          name: "pi-herdsman",
+          version: "0.25.2",
+        })}`,
+        JSON.stringify({ name: "pi-herdsman", version: "0.25.2" }),
+        { name: "pi-herdsman", version: "0.25.2" },
+      ],
+      [
+        packageArtifact,
+        JSON.stringify({ name: "pi-herdsman", version: "0.25.2" }),
+        { name: "pi-herdsman", version: "0.25.1" },
+      ],
+    ]) {
+      await writeNextSession(artifactContent, responseText);
+      const projection = await collectHandoffProjection();
+      assert.equal(
+        projection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
+        false,
+      );
+      assert.deepEqual(
+        projection.coreHandoff.nextAgent.artifact.attachedPackage,
+        expectedAttachedPackage,
+      );
     }
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1561,9 +2003,30 @@ test("failure artifact retains allowlisted parent routing identity across cleanu
 });
 
 test("exact core and continuation tool evidence is enforced only in simulated mode", () => {
+  const scoutRef = "result:smoke-core-scout#1";
   const exactCoreEvidence = [
-    { name: "delegate_agent", result: "started" },
-    { name: "delegate_agent", result: "started" },
+    {
+      name: "delegate_agent",
+      arguments: { label: "smoke-core-implementer" },
+      result: "started",
+    },
+    {
+      name: "delegate_agent",
+      arguments: { label: "smoke-core-scout" },
+      result: "started",
+      sessionId: "intermediate-session",
+    },
+    {
+      name: "attach_handoff",
+      arguments: { files: [scoutRef] },
+      result: "selected",
+      sessionId: "intermediate-session",
+    },
+    {
+      name: "delegate_agent",
+      arguments: { label: "smoke-core-next", files: [scoutRef] },
+      result: "started",
+    },
     {
       name: "read",
       result: '{"name": "pi-herdsman", "version": "0.25.1"}',
@@ -1574,7 +2037,7 @@ test("exact core and continuation tool evidence is enforced only in simulated mo
   );
   assert.throws(
     () => assertCoreToolEvidence(true, [], "pi-herdsman@0.25.1"),
-    /actual nested delegation and package read/,
+    /select and forward nested result evidence/,
   );
   assert.doesNotThrow(() =>
     assertCoreToolEvidence(false, [], "pi-herdsman@0.25.1"),
@@ -3628,9 +4091,10 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     label: string,
     session = "child-session",
     body = '{"name":"pi-herdsman","version":"0.25.1"}',
+    resultRef = "result:fixture#1",
   ) => ({
     role: "user",
-    content: `Agent result · agent=${label} · definition=implementer · session=${session} · status=completed\n\nResult ref: result:fixture#1\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+    content: `Agent result · agent=${label} · definition=implementer · session=${session} · status=completed\n\nResult ref: ${resultRef}\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
   });
   const rootPrompt =
     "Do not read package.json yourself. Delegate and return PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1.";
@@ -3671,10 +4135,34 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       }),
     /Lead role context missing or incorrect after Agent result/,
   );
+  const scoutRef = "result:smoke-core-scout#1";
+  const implementerDelivery = delivered(
+    "smoke-core-implementer",
+    "implementer-session",
+    `Forwardable result evidence: ${scoutRef}\n\n{"name":"pi-herdsman","version":"0.25.1"}`,
+  );
+  const nextAssignment = decide("core", {
+    messages: [...rootStarted, implementerDelivery],
+  }).content[0];
+  assert.equal(nextAssignment.name, "delegate_agent");
+  assert.deepEqual(nextAssignment.arguments.files, [scoutRef]);
+  const nextTask = {
+    role: "user",
+    content: `<file name="${scoutRef}" bytes="49">\n{"name":"pi-herdsman","version":"0.25.1"}\n</file>\n\nTask:\nSMOKE_CORE_NEXT_AGENT: verify ${scoutRef}`,
+  };
+  assert.deepEqual(
+    JSON.parse(decide("core", { messages: [nextTask] }).content[0].text),
+    { name: "pi-herdsman", version: "0.25.1" },
+  );
+  const rootAfterNext = [
+    ...rootStarted,
+    implementerDelivery,
+    call("delegate_agent", nextAssignment.arguments, "next-1"),
+    result("delegate_agent", "next-1"),
+    delivered("smoke-core-next", "next-session"),
+  ];
   assert.equal(
-    decide("core", {
-      messages: [...rootStarted, delivered("smoke-core-implementer")],
-    }).content[0].text,
+    decide("core", { messages: rootAfterNext }).content[0].text,
     "PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1",
   );
 
@@ -3701,16 +4189,32 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   );
   const nestedPackage = [
     { role: "user", content: "SMOKE_CORE_IMPLEMENTER: delegate one scout." },
-    call("delegate_agent", { definition: "scout" }, "scout-1"),
+    call(
+      "delegate_agent",
+      { definition: "scout", label: "smoke-core-scout" },
+      "scout-1",
+    ),
     result("delegate_agent", "scout-1"),
     delivered(
       "smoke-core-scout",
       "scout-session",
       '{"name":"pi-herdsman","version":"0.25.1","repository":{"type":"git"}}',
+      scoutRef,
     ),
   ];
+  const attachCall = decide("core", { messages: nestedPackage }).content[0];
+  assert.equal(attachCall.name, "attach_handoff");
+  assert.deepEqual(attachCall.arguments, { files: [scoutRef] });
   assert.deepEqual(
-    JSON.parse(decide("core", { messages: nestedPackage }).content[0].text),
+    JSON.parse(
+      decide("core", {
+        messages: [
+          ...nestedPackage,
+          call("attach_handoff", attachCall.arguments, "attach-1"),
+          result("attach_handoff", "attach-1"),
+        ],
+      }).content[0].text,
+    ),
     { name: "pi-herdsman", version: "0.25.1" },
   );
   assert.throws(

@@ -33,7 +33,11 @@ Selection and lifecycle remain separate: `>` means
 selected, `●` means working, `◐` means blocked,
 `◌` means settling or starting, `○` means idle or done, `?` means unknown, and
 `×` means lost. An idle or done lead with active delegated descendants uses
-`◉`. Workspace labels are presentation text inside each lead row, not
+`◉` in accent styling. Lifecycle labels use success for working, accent for
+starting and settling, warning for blocked and unknown, error for lost, and
+muted for idle and done. The leading `●` in a widget header is a
+success-colored identity marker for the status surface, not proof of active
+execution. Workspace labels are presentation text inside each lead row, not
 additional hierarchy nodes. For example, a Manager with one Lead child appears
 as:
 
@@ -77,12 +81,17 @@ widget; context is Pi's current context percentage. Both are best-effort
 presentation metadata and unavailable values are omitted. Under width pressure,
 elapsed is dropped before context. Manager work status remains distinct from
 the live Lead's runtime state. Chief rows receive matching theme styling but do
-not show these telemetry columns.
+not show these telemetry columns. A stale Manager snapshot suppresses elapsed
+telemetry while retaining other available metadata such as context percentage.
 
 Manager work status is `active`, `paused`, or `conflict`.
 An active row uses the live Lead's lifecycle marker when an executor is present;
-otherwise it uses `●`. Paused uses `○` and conflict uses `!`. The row suffix is
-project status, not the Lead's runtime state.
+without a verified Lead it uses a muted `·`, not a claim of verified execution.
+Paused uses `○`; conflict uses warning-colored `!`. A blocked Lead uses its
+warning-colored `◐` lifecycle marker without an additional `!`. Independently
+verified build incompatibility is shown with `!` and `build mismatch`. For
+compatible work, the row suffix is project status, not the Lead's runtime
+state.
 Ordinary Leads supervised by the Manager are shown separately from project
 work, with a supervised label; they are not treated as managed work. A Manager
 can inspect an eligible direct report through the overview, independently of
@@ -212,6 +221,13 @@ After a later refresh failure, the widget retains the last valid snapshot and
 marks the header `stale`.
 
 Header refresh staleness is not agent inactivity.
+Stale and unavailable labels use warning styling. Freshness is prioritized
+over counts and optional metadata: when width permits, the identity is
+shortened to retain the freshness label. At extremely narrow widths, the label
+may itself be truncated. Identity-only Agent headers retain freshness without
+Agent counts. Stale Agent herd-run and row elapsed values use the snapshot's
+observation time (`refreshedAt`), and are omitted when `refreshedAt` is absent.
+Agent inactivity metadata remains independently reported.
 
 ## Agent rows
 
@@ -229,12 +245,13 @@ then elapsed time, then context percentage; the same column choice is used for
 every row. The task is the rightmost elastic field and is kept only when it has
 useful room before it is truncated.
 
-The fixed-width activity column animates working, settling, and starting rows;
-blocked, unknown, and lost rows show their static lifecycle marker in that
-column. Working rows use `● working`, blocked rows use `◐ blocked`, settling rows use
-`◌ settling`, starting rows use `◌ starting`, unknown rows use `? unknown`, and
-lost rows use `× lost` with the theme's attention/error styling. Working,
-settling, and starting animate; blocked, unknown, and lost rows are static.
+Lifecycle labels and static activity glyphs use the canonical markers and
+semantic theme colors described above. The fixed-width Agent activity column
+animates only working and starting rows, and only for a fresh, available
+snapshot; settling is static, as are blocked, unknown, lost, and every row in a
+stale or unavailable snapshot. A stale snapshot continues to show its last
+observed lifecycle state, but elapsed values do not advance past that
+observation.
 While a controller-local start remains pending, an authoritative `settling`
 row is presented as `starting` so launch and request handoff remain visually
 continuous. `working`, `blocked`, and `unknown` authoritative states are never

@@ -168,8 +168,22 @@ function packageDetails(value) {
   return pkg;
 }
 
-function deliveredResult(messages, toolName, matches) {
-  const matched = correlatedCall(messages, toolName);
+function semanticResultRef(value) {
+  const source = typeof value === "string" ? value : text(value);
+  return source.match(/^Result ref: (result:[A-Za-z0-9_-]+#\d+)$/mu)?.[1];
+}
+
+function forwardedResultRefs(value) {
+  const source = typeof value === "string" ? value : text(value);
+  return (
+    source
+      .match(/^Forwardable result evidence: (.+)$/mu)?.[1]
+      ?.split(/,\s*/u) ?? []
+  );
+}
+
+function deliveredResult(messages, toolName, matches, identity) {
+  const matched = correlatedCall(messages, toolName, identity);
   if (!matched) return null;
   return messages.find(
     (message, index) =>
@@ -180,8 +194,11 @@ function deliveredResult(messages, toolName, matches) {
 }
 
 function deliveredAgentResult(messages, toolName, label) {
-  const handoff = deliveredResult(messages, toolName, (content) =>
-    content.startsWith(`Agent result · agent=${label} ·`),
+  const handoff = deliveredResult(
+    messages,
+    toolName,
+    (content) => content.startsWith(`Agent result · agent=${label} ·`),
+    label,
   );
   if (!handoff) return null;
   const content = text(handoff);
@@ -315,21 +332,43 @@ function coreDecision(context) {
     "Do not read package.json yourself.",
   );
   if (rootTask) {
-    const result = deliveredAgentResult(
+    const implementerResult = deliveredAgentResult(
       messages,
       "delegate_agent",
       "smoke-core-implementer",
     );
-    if (result) {
+    if (implementerResult) {
       const systemPrompt = getCurrentSystemPrompt(context.messages);
       if (!/<pi_herdsman_role>\s*## Lead role(?:\r?\n|$)/.test(systemPrompt))
         throw new Error(
           "Lead role context missing or incorrect after Agent result",
         );
-      const pkg = packageDetails(result);
-      return fauxAssistantMessage(
-        `PI_HERDSMAN_SMOKE_OK ${pkg.name}@${pkg.version}`,
+      const refs = forwardedResultRefs(implementerResult);
+      if (refs.length !== 1 || !/^result:smoke-core-scout#\d+$/u.test(refs[0]))
+        throw new Error(
+          "Implementer completion omitted the selected Scout result",
+        );
+      const next = deliveredAgentResult(
+        messages,
+        "delegate_agent",
+        "smoke-core-next",
       );
+      if (next) {
+        const pkg = packageDetails(next);
+        return fauxAssistantMessage(
+          `PI_HERDSMAN_SMOKE_OK ${pkg.name}@${pkg.version}`,
+        );
+      }
+      if (correlatedCall(messages, "delegate_agent", "smoke-core-next"))
+        return waitForResult(
+          "Waiting for the next Agent to verify forwarded evidence.",
+        );
+      return call("delegate_agent", {
+        definition: "scout",
+        label: "smoke-core-next",
+        task: `SMOKE_CORE_NEXT_AGENT: read the attached Scout result ${refs[0]} and return its exact package name and version as JSON.`,
+        files: refs,
+      });
     }
     if (correlatedCall(messages, "delegate_agent"))
       return waitForResult("Waiting for the implementer's completed handoff.");
@@ -346,8 +385,25 @@ function coreDecision(context) {
       "delegate_agent",
       "smoke-core-scout",
     );
-    if (result)
-      return fauxAssistantMessage(JSON.stringify(packageDetails(result)));
+    if (result) {
+      const ref = semanticResultRef(result);
+      if (!ref || !/^result:smoke-core-scout#\d+$/u.test(ref))
+        throw new Error(
+          "Scout completion omitted its semantic result reference",
+        );
+      const selection = correlatedCall(messages, "attach_handoff");
+      if (selection) {
+        if (
+          JSON.stringify(selection.call.arguments?.files) !==
+          JSON.stringify([ref])
+        )
+          throw new Error(
+            "Implementer selected evidence other than the Scout result",
+          );
+        return fauxAssistantMessage(JSON.stringify(packageDetails(result)));
+      }
+      return call("attach_handoff", { files: [ref] });
+    }
     if (correlatedCall(messages, "delegate_agent"))
       return waitForResult("Waiting for the scout's completed handoff.");
     return call("delegate_agent", {
@@ -363,6 +419,17 @@ function coreDecision(context) {
     if (latest?.role === "toolResult")
       throw new Error("Package read result missing or unsuccessful");
     return call("read", { path: "package.json" });
+  }
+  if (prompt.includes("SMOKE_CORE_NEXT_AGENT:")) {
+    const expectedRef = prompt.match(/\bresult:smoke-core-scout#\d+\b/u)?.[0];
+    const attached = prompt.match(
+      /<file name="(result:smoke-core-scout#\d+)"[^>]*>\s*([\s\S]*?)\s*<\/file>/u,
+    );
+    if (!expectedRef || !attached || attached[1] !== expectedRef)
+      throw new Error(
+        "Next Agent did not receive the selected Scout result artifact",
+      );
+    return fauxAssistantMessage(JSON.stringify(packageDetails(attached[2])));
   }
   throw new Error("Unexpected core transcript");
 }

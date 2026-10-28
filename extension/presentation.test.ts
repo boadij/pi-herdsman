@@ -40,6 +40,7 @@ import {
   renderRunningOptions,
   buildStatusTree,
   buildSupervisedLeadDisplays,
+  classifySupervisedLead,
   createSupervisionWidget,
   groupSupervisedLeads,
   moveSupervisionSelection,
@@ -834,6 +835,16 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
       lead({ lead: "session-z", displayName: "same" }),
       lead({ lead: "session-a", displayName: "same", runtimeState: "working" }),
       lead({
+        lead: "starting",
+        displayName: "starting",
+        runtimeState: "starting",
+      }),
+      lead({
+        lead: "settling",
+        displayName: "settling",
+        runtimeState: "settling",
+      }),
+      lead({
         lead: "blocked",
         displayName: "blocked",
         runtimeState: "blocked",
@@ -844,21 +855,52 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
         displayName: "orphan",
         runtimeState: "blocked",
       }),
+      lead({ lead: "done", displayName: "done", runtimeState: "done" }),
+      lead({ lead: "lost", displayName: "lost", runtimeState: "lost" }),
+      lead({
+        lead: "unknown",
+        displayName: "unknown",
+        runtimeState: "unknown",
+      }),
     ]);
     assert.equal(displays[0]!.displayName, "same · session-z");
     const groups = groupSupervisedLeads(displays);
     assert.deepEqual(
       [...groups.keys()],
-      ["WORKING", "BLOCKED", "IDLE/DONE", "UNKNOWN"],
+      ["ACTIVE/TRANSITIONAL", "BLOCKED", "IDLE/DONE", "UNRESOLVED"],
     );
     assert.deepEqual(
-      groups.get("WORKING")!.map((item) => item.lead),
-      ["session-a"],
+      groups.get("ACTIVE/TRANSITIONAL")!.map((item) => item.lead),
+      ["session-a", "settling", "starting"],
     );
     assert.deepEqual(
       groups.get("BLOCKED")!.map((item) => item.lead),
       ["ask", "blocked", "orphan"],
     );
+    assert.deepEqual(
+      groups.get("IDLE/DONE")!.map((item) => item.lead),
+      ["done", "session-z"],
+    );
+    assert.deepEqual(
+      groups.get("UNRESOLVED")!.map((item) => item.lead),
+      ["lost", "unknown"],
+    );
+    for (const [runtimeState, group] of [
+      ["working", "ACTIVE/TRANSITIONAL"],
+      ["starting", "ACTIVE/TRANSITIONAL"],
+      ["settling", "ACTIVE/TRANSITIONAL"],
+      ["blocked", "BLOCKED"],
+      ["idle", "IDLE/DONE"],
+      ["done", "IDLE/DONE"],
+      ["unknown", "UNRESOLVED"],
+      ["lost", "UNRESOLVED"],
+    ] as const) {
+      assert.equal(
+        classifySupervisedLead(lead({ runtimeState })),
+        group,
+        runtimeState,
+      );
+    }
     assert.equal(
       renderSupervisionLeads(
         [displays.find((item) => item.lead === "orphan")!],
@@ -929,6 +971,53 @@ test("Supervision display labels remain unique under suffix collisions", (t) => 
   }
 });
 
+test("Supervision notifications retain exact lifecycle labels and order", () => {
+  const reports = [
+    lead({
+      lead: "s-working",
+      displayName: "c-working",
+      runtimeState: "working",
+    }),
+    lead({
+      lead: "s-starting",
+      displayName: "a-starting",
+      runtimeState: "starting",
+    }),
+    lead({
+      lead: "s-settling",
+      displayName: "b-settling",
+      runtimeState: "settling",
+    }),
+    lead({
+      lead: "s-blocked",
+      displayName: "d-blocked",
+      runtimeState: "blocked",
+    }),
+    lead({ lead: "s-idle", displayName: "f-idle", runtimeState: "idle" }),
+    lead({ lead: "s-done", displayName: "e-done", runtimeState: "done" }),
+    lead({
+      lead: "s-unknown",
+      displayName: "h-unknown",
+      runtimeState: "unknown",
+    }),
+    lead({ lead: "s-lost", displayName: "g-lost", runtimeState: "lost" }),
+  ];
+
+  assert.deepEqual(
+    formatSupervisionNotification(reports, "fresh").split("\n").slice(1),
+    [
+      "direct lead · starting: a-starting",
+      "direct lead · settling: b-settling",
+      "direct lead · working: c-working",
+      "direct lead · blocked: d-blocked",
+      "direct lead · done: e-done",
+      "direct lead · idle: f-idle",
+      "direct lead · lost: g-lost",
+      "direct lead · unknown: h-unknown",
+    ],
+  );
+});
+
 test("Supervision rows cap ordinary leads, retain attention, and fit every width", (t) => {
   {
     const leads = [
@@ -950,6 +1039,14 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
     assert.match(
       renderSupervisionLeads(leads, 100, { status: "stale" })[0]!,
       /stale/,
+    );
+    assert.match(
+      renderSupervisionLeads(leads, 9, { status: "stale" })[0]!,
+      /stale/,
+    );
+    assert.equal(
+      renderSupervisionLeads(leads, 13, { status: "unavailable" })[0],
+      "● unavailable",
     );
   }
 });
@@ -1120,7 +1217,7 @@ test("status projection renders the complete stable tree with aligned columns", 
       renderStatusRows(agents, { now: 0, frame: 1 })[1]!.text,
       rows[1]!.text,
     );
-    assert.notEqual(
+    assert.equal(
       renderStatusRows(agents, { now: 0, frame: 1 })[2]!.text,
       rows[2]!.text,
     );
@@ -1203,6 +1300,22 @@ test("status projection renders the complete stable tree with aligned columns", 
         ),
         `${label} should use ${color}`,
       );
+    for (const [state, color, indicator] of [
+      ["working", "success", "⠋ "],
+      ["blocked", "warning", "◐ "],
+      ["settling", "accent", "◌ "],
+      ["starting", "accent", "⠋ "],
+      ["unknown", "warning", "? "],
+      ["lost", "error", "× "],
+    ] as const) {
+      assert.ok(
+        calls.some(
+          ([actualColor, text]) =>
+            actualColor === color && text.trimEnd() === indicator.trimEnd(),
+        ),
+        `${state} activity glyph should use ${color}`,
+      );
+    }
   }
 });
 
@@ -1384,8 +1497,51 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
     });
     assert.deepEqual(widget.render(160), [
       "● lead  1 settling",
-      "└─ ⠋ agent  settling  ◌ settling",
+      "└─ ◌ agent  settling  ◌ settling",
     ]);
+    assert.equal((widget as any).timer, undefined);
+    widget.setSnapshot({
+      agents: [{ label: "working", definition: "agent", state: "working" }],
+      stale: false,
+      unavailable: false,
+    });
+    const working = widget.render(160)[1];
+    assert.notEqual((widget as any).timer, undefined);
+    (widget as any).frame = 1;
+    assert.notEqual(widget.render(160)[1], working);
+    widget.setSnapshot({
+      agents: [{ label: "working", definition: "agent", state: "working" }],
+      stale: true,
+      unavailable: false,
+      refreshedAt: Date.now(),
+    });
+    assert.equal((widget as any).timer, undefined);
+    const stale = widget.render(160)[1];
+    assert.match(stale!, /└─ ● agent/);
+    (widget as any).frame = 2;
+    assert.equal(widget.render(160)[1], stale);
+    widget.setSnapshot({
+      agents: [{ label: "working", definition: "agent", state: "working" }],
+      stale: false,
+      unavailable: false,
+    });
+    assert.notEqual((widget as any).timer, undefined);
+    widget.setSnapshot({
+      agents: [{ label: "starting", definition: "agent", state: "starting" }],
+      stale: false,
+      unavailable: false,
+    });
+    (widget as any).frame = 0;
+    assert.notEqual((widget as any).timer, undefined);
+    assert.match(widget.render(160)[1]!, /⠋ agent\s+starting/);
+    widget.setSnapshot({
+      agents: [{ label: "starting", definition: "agent", state: "starting" }],
+      stale: true,
+      unavailable: false,
+      refreshedAt: Date.now(),
+    });
+    assert.equal((widget as any).timer, undefined);
+    assert.match(widget.render(160)[1]!, /└─ ◌ agent/);
   }
 
   {
@@ -1440,6 +1596,66 @@ test("status widget projects active herd duration without changing counts", (t) 
   });
   assert.match(widget.render(160)[0]!, /lead · \d+s/);
   assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
+});
+
+test("Status widget freezes stale elapsed values at the observation time", (t) => {
+  const originalNow = Date.now;
+  let now = 35_000;
+  Date.now = () => now;
+  t.after(() => {
+    Date.now = originalNow;
+  });
+  const calls: string[] = [];
+  const widget = new StatusWidget(undefined, {
+    fg: (color: string, text: string) => {
+      calls.push(`${color}:${text}`);
+      return text;
+    },
+    bold: (text: string) => text,
+  });
+  t.after(() => widget.dispose());
+  const snapshot = {
+    agents: [
+      {
+        label: "worker",
+        definition: "agent",
+        state: "working" as const,
+        startedAt: 0,
+      },
+    ],
+    stale: true,
+    unavailable: false,
+    herdRunStartedAt: 0,
+    refreshedAt: 5_000,
+    breadcrumb: [{ text: "a-very-long-lead-identity" }],
+  };
+  widget.setSnapshot(snapshot);
+  const observed = widget.render(160);
+  assert.match(observed[0]!, /5s.*stale/);
+  assert.match(observed[1]!, /5s/);
+  assert.match(observed[1]!, /└─ ● agent/);
+  assert.equal((widget as any).timer, undefined);
+  assert.ok(calls.some((call) => call === "warning:stale"));
+  now = 80_000;
+  assert.deepEqual(widget.render(160), observed);
+
+  widget.setSnapshot({
+    ...snapshot,
+    stale: false,
+    refreshedAt: undefined,
+  });
+  assert.match(widget.render(160)[0]!, /1m 20s/);
+  assert.match(widget.render(160)[1]!, /1m 20s/);
+
+  widget.setSnapshot({ ...snapshot, refreshedAt: undefined });
+  const noObservationTime = widget.render(160);
+  assert.match(noObservationTime[0]!, /stale/);
+  assert.doesNotMatch(noObservationTime.join("\n"), /\b\d+s\b/);
+  for (let width = 1; width <= 40; width++) {
+    const header = widget.render(width)[0]!;
+    assert.ok(visibleWidth(header) <= width);
+  }
+  assert.equal(widget.render(5)[0], "stale");
 });
 
 test("status widget styles herd duration separately and remains width-safe", (t) => {
@@ -3178,7 +3394,10 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       unavailable: false,
     });
     assert.match(widget.render(160)[0]!, /2 settling · 1 starting/);
-    assert.match(widget.render(160).join("\n"), /◌ starting/);
+    assert.match(
+      widget.render(160).join("\n"),
+      /⠋ agent\s+starting\s+◌ starting/,
+    );
     assert.match(widget.render(160).join("\n"), /settling-[ab]/);
     assert.notEqual((widget as any).timer, undefined);
     for (let width = 1; width <= 40; width++)
@@ -3351,6 +3570,47 @@ test("Status widget preserves Lead identity below the active-agent suffix width"
   const header = widget.render(10)[0]!;
   assert.match(header, /lead/);
   assert.ok(visibleWidth(header) <= 10);
+});
+
+test("identity-only Agent headers retain freshness without Agent counts", (t) => {
+  const warnings: string[] = [];
+  const widget = new StatusWidget(undefined, {
+    fg: (color: string, text: string) => {
+      if (color === "warning") warnings.push(text);
+      return text;
+    },
+    bold: (text: string) => text,
+  });
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [{ label: "worker", definition: "agent", state: "working" }],
+    stale: true,
+    unavailable: false,
+    identityOnly: true,
+    breadcrumb: [{ text: "lead" }],
+  });
+  assert.equal(widget.render(160)[0], "● lead  stale");
+  assert.doesNotMatch(widget.render(160)[0]!, /1 working/);
+  assert.ok(warnings.includes("stale"));
+  for (let width = 5; width <= 10; width++) {
+    const header = widget.render(width)[0]!;
+    assert.ok(visibleWidth(header) <= width, `width ${width}`);
+    assert.match(header, /stale/, `width ${width}`);
+    if (width >= visibleWidth("● stale"))
+      assert.match(header, /●/, `identity marker at width ${width}`);
+    else assert.doesNotMatch(header, /●/, `identity marker at width ${width}`);
+  }
+  assert.equal(widget.render(7)[0], "● stale");
+  widget.setSnapshot({
+    agents: [{ label: "worker", definition: "agent", state: "working" }],
+    stale: false,
+    unavailable: true,
+    identityOnly: true,
+    breadcrumb: [{ text: "lead" }],
+  });
+  assert.equal(widget.render(160)[0], "● lead  unavailable");
+  assert.doesNotMatch(widget.render(160)[0]!, /1 working/);
+  assert.ok(warnings.some((text) => text.includes("unavailable")));
 });
 
 test("Status widget headers keep tools separate from child metadata", (t) => {
@@ -3749,6 +4009,40 @@ test("truncated Agent rows are not clickable when their label is hidden", (t) =>
   assert.equal(stripVTControlCharacters(rows[1]!), "…");
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
+    undefined,
+  );
+  assert.deepEqual(selected, []);
+});
+
+test("stale Agent rows remain non-clickable", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "worker",
+        definition: "worker",
+        state: "working",
+        sessionId: "agent-session",
+      },
+    ],
+    stale: true,
+    unavailable: false,
+    refreshedAt: Date.now(),
+    breadcrumb: [{ text: "lead" }],
+  });
+  widget.render(80);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 0,
+      y: 1,
+      width: 80,
+    }),
     undefined,
   );
   assert.deepEqual(selected, []);
@@ -5978,7 +6272,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
   const rows = renderSupervisionLeads(snapshot, 120);
   assert.equal(rows[0], "● chief · 1 manager");
   assert.equal(rows[1], "└─ ○ pi-herdsman · 1 compatible lead");
-  assert.equal(rows[2], "   └─ feat/session-usage-stats · idle");
+  assert.equal(rows[2], "   └─ feat/session-usage-stats · ○ idle");
   assert.doesNotMatch(
     rows.join("\n"),
     /\.git|0 agents|0 leads|manager-session|lead-12345678/,
@@ -6030,7 +6324,11 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
       runtimeState: branch.endsWith("a2")
         ? ("working" as const)
         : ("done" as const),
-      agentCounts: { active: 0, blocked: 0, total: 0 },
+      agentCounts: {
+        active: branch === "child-a1" ? 1 : 0,
+        blocked: 0,
+        total: branch === "child-a1" ? 1 : 0,
+      },
     })),
   });
   const snapshot = {
@@ -6042,12 +6340,34 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
   };
   assert.deepEqual(renderSupervisionLeads(snapshot, 120).slice(1), [
     "├─ ● project-a · 2 compatible leads",
-    "│  ├─ child-a1 · done",
-    "│  └─ child-a2 · working",
+    "│  ├─ child-a1 · ◉ done · 1 agent",
+    "│  └─ child-a2 · ● working",
     "├─ ● project-b · 1 compatible lead",
-    "│  └─ child-b1 · done",
+    "│  └─ child-b1 · ○ done",
     "└─ ○ unrelated-direct-lead",
   ]);
+  const theme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  };
+  assert.ok(
+    renderSupervisionLeads(snapshot, 120, { theme })[2]!.includes(
+      "<accent>◉</accent> <muted>done</muted>",
+    ),
+  );
+  assert.ok(
+    renderSupervisionLeads(
+      [
+        lead({
+          lead: "delegated",
+          displayName: "delegated",
+          runtimeState: "idle",
+          agentCounts: { active: 1, total: 1 },
+        }),
+      ],
+      120,
+      { theme },
+    )[1]!.includes("<accent>└─ ◉</accent>"),
+  );
   for (let width = 1; width <= 120; width++)
     assert.ok(
       renderSupervisionLeads(snapshot, width).every(
@@ -6084,7 +6404,8 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   };
   const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
   assert.equal(rows[0], "● manager · pi-herdsman");
-  assert.match(rows[1]!, /!◐ feat\/active.* · active/);
+  assert.match(rows[1]!, /◐ feat\/active.* · active/);
+  assert.doesNotMatch(rows[1]!, /!◐/);
   assert.match(rows[2]!, /○ feat\/paused.* · paused/);
   assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
   assert.match(
@@ -6098,6 +6419,16 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
     rows.join("\n"),
     /opaque\/manual|managed-0|0 leads|\.git/,
   );
+  const theme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  };
+  const themedRows = renderSupervisionLeads(snapshot, 120, {
+    role: "manager",
+    theme,
+  });
+  assert.ok(themedRows[1]!.includes("<warning>◐</warning>"));
+  assert.doesNotMatch(themedRows[1]!, /!◐/);
+  assert.ok(themedRows[3]!.includes("<warning>!</warning>"));
   const items = managerSupervisionItems(snapshot);
   assert.deepEqual(
     items.map((item) => item.kind),
@@ -6219,8 +6550,16 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   })[0]!;
   assert.ok(staleManagerHeader.includes("<success>●</success>"));
   assert.ok(
-    staleManagerHeader.includes("<muted>manager · pi-herdsman · stale</muted>"),
+    staleManagerHeader.includes(
+      "<muted>manager · pi-herdsman</muted> <warning>· stale</warning>",
+    ),
   );
+  const staleManagerRows = renderSupervisionLeads(snapshot, 140, {
+    role: "manager",
+    status: "stale",
+  });
+  assert.doesNotMatch(staleManagerRows[1]!, /14m/);
+  assert.match(staleManagerRows[1]!, /61%/);
   const widget = createSupervisionWidget(
     () => snapshot,
     () => "fresh",
@@ -6602,6 +6941,71 @@ test("Manager work status outranks live Lead markers except when active", () => 
     )[1]!;
     assert.ok(themedRow.includes(`<${color}>${marker}</${color}>`));
   }
+  const unverified = renderSupervisionLeads(
+    {
+      work: [
+        { branch: "feat/unverified", session: "missing", status: "active" },
+      ],
+      leads: [],
+    },
+    120,
+    { role: "manager" },
+  )[1]!;
+  assert.match(unverified, /└─ · feat\/unverified · active/);
+  assert.doesNotMatch(unverified, /●/);
+  const incompatible = renderSupervisionLeads(
+    [lead({ compatibility: "incompatible" as const })],
+    120,
+    { theme },
+  )[1]!;
+  assert.ok(incompatible.includes("<warning>└─ !</warning>"));
+
+  const focused: unknown[] = [];
+  const blockedWork = createSupervisionWidget(
+    () => ({
+      work: [
+        {
+          branch: "feat/blocked",
+          session: "blocked-session",
+          status: "active",
+        },
+      ],
+      leads: [lead({ lead: "blocked-session", runtimeState: "blocked" })],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  const truncatedBlockedRow = blockedWork.render(25)[1]!;
+  assert.ok(visibleWidth(truncatedBlockedRow) <= 25);
+  assert.doesNotMatch(truncatedBlockedRow, /feat\/blocked/);
+  assert.equal(
+    blockedWork.handleMouse({
+      type: "click",
+      button: "left",
+      x: 0,
+      y: 1,
+      width: 25,
+    }),
+    undefined,
+  );
+  const fullBlockedRow = blockedWork.render(26)[1]!;
+  assert.ok(visibleWidth(fullBlockedRow) <= 26);
+  assert.match(fullBlockedRow, /feat\/blocked/);
+  assert.equal(
+    blockedWork.handleMouse({
+      type: "click",
+      button: "left",
+      x: 0,
+      y: 1,
+      width: 26,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "blocked-session" },
+  ]);
 });
 
 test("coordination messages render compact semantic headings and strip only known envelopes", () => {

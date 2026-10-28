@@ -130,6 +130,7 @@ export interface ResultRecord {
       | "aborted";
     message: string;
   };
+  resultBindings?: ResultBinding[];
   contextUsage?: {
     tokens: number | null;
     contextWindow: number;
@@ -464,6 +465,7 @@ function validate(
               "status",
               "text",
               "error",
+              "resultBindings",
               "contextUsage",
               "completedAt",
             ];
@@ -747,6 +749,14 @@ function validate(
       throw new Error("Invalid result status");
     finite("completedAt");
     if (
+      v.resultBindings !== undefined &&
+      (!Array.isArray(v.resultBindings) ||
+        !v.resultBindings.every(isResultBinding) ||
+        new Set(v.resultBindings.map((binding: ResultBinding) => binding.ref))
+          .size !== v.resultBindings.length)
+    )
+      throw new Error("Invalid or conflicting result bindings");
+    if (
       v.status === "completed" &&
       (typeof v.text !== "string" || !v.text.trim() || v.error !== undefined)
     )
@@ -770,6 +780,8 @@ function validate(
         throw new Error("Invalid failed result");
       if (v.text !== undefined)
         throw new Error("Failed result cannot contain text");
+      if (v.resultBindings !== undefined)
+        throw new Error("Failed result cannot contain result bindings");
     }
     if (v.contextUsage !== undefined) {
       const usage = v.contextUsage as Record<string, unknown>;

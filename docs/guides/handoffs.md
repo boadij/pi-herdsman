@@ -415,6 +415,15 @@ A result reference mentioned only in message text does not establish a reusable
 binding. A semantic result reference can be forwarded through `files` when the
 current Pi branch contains either its direct Agent completion or an explicitly
 imported result binding.
+
+A managed Agent may select semantic result refs for its eventual completion to
+its direct owner with `attach_handoff({ files: ["result:scout#21"] })`. This
+non-blocking operation selects evidence for completion; it does not send a
+separate message or transfer artifact content. Each successful call replaces
+the prior selection, and an empty list clears it. The selected binding and
+artifact are revalidated at settlement and again before owner delivery. The
+owner's completion inventory names refs that were successfully imported;
+mentions in completion prose alone never create bindings.
 A canonical result reference resolves internally to the normal private result file under Pi
 Herdsman's durable data directory; it is still validated, canonicalized, and
 deduplicated like any other file. Preserve the exact reference already supplied

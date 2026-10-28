@@ -59,6 +59,14 @@ Examples include an uncompleted task handoff, pending final result delivery,
 direct-agent gating, terminal cleanup, result persistence recovery, and startup
 or integration handoff. Do not assign another task to a settling agent.
 
+If owner-side revalidation or import of an explicitly forwarded result artifact
+fails, the durable completion remains pending and undelivered; delivery retries
+automatically and fails closed. While the state is `settling`, `list_agents`
+exposes the current error as `cleanup_error`. Restoring access to the same
+artifact permits delivery. Do not substitute evidence or acknowledge success.
+There is no permanent-loss classification, retry limit, timeout, or automatic
+escalation for this condition.
+
 `settling` alone is not timeout-worthy and does not generate generic health
 attention. A durable `result_error` within settling may still produce direct
 owner attention so the stored persistence recovery can be handled.

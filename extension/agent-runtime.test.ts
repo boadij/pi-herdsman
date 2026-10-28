@@ -94,6 +94,7 @@ const {
 const {
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
+  resolveMessageFiles,
   statusBreadcrumb,
   visibleAgentSnapshots,
 } = await import("./agent-controller.ts");
@@ -238,6 +239,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
           continue: "continue_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
+          attach: "attach_handoff",
           reply: "reply_agent",
           close: "close_agent",
           inspect: "inspect_agent",
@@ -493,6 +495,168 @@ test("imported semantic result refs remain usable in the next handoff", async ()
     resetAgentMailbox(mailbox);
     resetAgentMailbox(startup.mailbox);
     realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("managed completion forwards only explicitly selected branch evidence", async () => {
+  const mailbox = setAgentEnvironment("handoff-agent");
+  const sourceRequestId = randomUUID();
+  const canonicalRef = resultRef(sourceRequestId);
+  const artifact = resultPath(sourceRequestId);
+  realFs.mkdirSync(resolve(artifact, ".."), { recursive: true });
+  realFs.writeFileSync(artifact, "persisted Scout finding", "utf8");
+  const semanticRef = "result:scout#21";
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  const input = () => agent.events.get("input")![0];
+  const attach = agentTool(agent, "attach");
+  assert.ok(attach, "managed Agent registers attach_handoff");
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const firstRequest: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "Complete the review and forward the supporting Scout result.",
+      resultBindings: [{ ref: semanticRef, canonicalRef }],
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, firstRequest);
+    assert.deepEqual(
+      input()({ text: controlMarker(firstRequest.requestId) }, context),
+      { action: "transform", text: firstRequest.text },
+    );
+    await assert.rejects(
+      attach.execute(
+        "missing-result",
+        { files: ["result:missing#1"] },
+        undefined,
+        undefined,
+        context,
+      ),
+      /not available on the current branch/,
+    );
+    await assert.rejects(
+      attach.execute(
+        "ordinary-file",
+        { files: ["notes.txt"] },
+        undefined,
+        undefined,
+        context,
+      ),
+      /semantic result references only/,
+    );
+    agent.entries.push({
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: {
+        ref: semanticRef,
+        canonicalRef: resultRef(randomUUID()),
+      },
+    });
+    await assert.rejects(
+      attach.execute(
+        "conflicting-result",
+        { files: [semanticRef] },
+        undefined,
+        undefined,
+        context,
+      ),
+      /conflicting canonical results/,
+    );
+    agent.entries.pop();
+    const selection = await attach.execute(
+      "select-result",
+      { files: [semanticRef] },
+      undefined,
+      undefined,
+      context,
+    );
+    agent.entries.push({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "attach_handoff",
+        isError: false,
+        details: selection.details,
+      },
+    });
+    agent.entries.push({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "attach_handoff",
+        isError: false,
+        details: {
+          ...selection.details,
+          assignmentRequestId: randomUUID(),
+          resultBindings: [],
+        },
+      },
+    });
+    emitAgentTurn(agent, context, {
+      role: "assistant",
+      content: `Review complete; supporting evidence is ${semanticRef}.`,
+    });
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+    assert.deepEqual(
+      readResult(mailbox, firstRequest.requestId)?.resultBindings,
+      [{ ref: semanticRef, canonicalRef }],
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("a text-only result mention does not create a completion binding", async () => {
+  const mailbox = setAgentEnvironment("mention-only-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "Mention the supplied result without forwarding it.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      ),
+      { action: "transform", text: request.text },
+    );
+    emitAgentTurn(agent, context, {
+      role: "assistant",
+      content: "The result:scout#21 reference appeared only in prose.",
+    });
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+    assert.equal(
+      readResult(mailbox, request.requestId)?.resultBindings,
+      undefined,
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
   }
 });
 
@@ -2077,6 +2241,15 @@ test("idle parent steers through its current input turn while agent work is pend
 test("parent settlement waits for agent delivery and ignores result cleanup lag", async () => {
   setAgentEnvironment("delegating-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
+  const forwardedRequestId = randomUUID();
+  const forwardedCanonicalRef = resultRef(forwardedRequestId);
+  const forwardedArtifact = resultPath(forwardedRequestId);
+  realFs.mkdirSync(resolve(forwardedArtifact, ".."), { recursive: true });
+  realFs.writeFileSync(forwardedArtifact, "persisted Scout finding", "utf8");
+  const forwardedBinding = {
+    ref: "result:scout#21",
+    canonicalRef: forwardedCanonicalRef,
+  };
   const parent = managedState("delegating-parent");
   const childOne = {
     ...managedState("child-one", REQUEST_ID, recoveryIdentity("child-one")),
@@ -2225,6 +2398,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       child: ManagedAgentState,
       mailbox: string,
       text: string,
+      resultBindings?: { ref: string; canonicalRef: string }[],
     ) => {
       const requestId = child.activeRequestId ?? child.completedRequestId;
       assert.ok(requestId);
@@ -2244,6 +2418,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
         paneId: child.paneId,
         status: "completed",
         text,
+        ...(resultBindings ? { resultBindings } : {}),
         completedAt: Date.now(),
       });
       emitMailboxChange(mailbox, `result-${requestId}.json`);
@@ -2251,10 +2426,18 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     const sentContent = (index: number): string =>
       String((pi.sentMessageCalls[index]?.message as any)?.content ?? "");
     let earlyResultStatus: string | undefined;
-    deliver(childOne, childOneMailbox, "one");
+    deliver(childOne, childOneMailbox, "one", [forwardedBinding]);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 1);
+    assert.match(
+      sentContent(0),
+      /Forwardable result evidence: result:scout#21/,
+    );
+    assert.deepEqual(
+      resolveMessageFiles(context, [forwardedBinding.ref], "test"),
+      [forwardedBinding],
+    );
     assert.equal(
       (pi.sentMessageCalls[0].message as any).customType,
       "pi-herdsman-agent-result",
@@ -2474,6 +2657,188 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       foreignChildMailbox,
     ])
       resetAgentMailbox(mailbox);
+    realFs.rmSync(forwardedArtifact, { force: true });
+  }
+});
+
+test("owner delivery fails closed and retries selected evidence idempotently", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const parentMailbox = setAgentEnvironment("evidence-owner", ["child"]);
+  process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
+  const requestId = randomUUID();
+  const parent = managedState("evidence-owner");
+  const child = {
+    ...managedState(
+      "evidence-child",
+      requestId,
+      recoveryIdentity("evidence-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+  };
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+
+  const canonicalRef = resultRef(requestId);
+  const artifact = resultPath(requestId);
+  const semanticRef = "result:scout#21";
+  const forwardedBinding = { ref: semanticRef, canonicalRef };
+  realFs.mkdirSync(resolve(artifact, ".."), { recursive: true });
+  realFs.writeFileSync(artifact, "persisted Scout finding", "utf8");
+
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: DEFAULT_PI_SESSION_ID,
+        definition: "parent",
+        label: parent.agentLabel,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: { ref: semanticRef, canonicalRef: resultRef(randomUUID()) },
+    },
+  ];
+  let failNextResultSend = true;
+  const pi = fakePi({
+    entries,
+    exec: agentControllerExecutor(parent, [child]),
+    sendMessage(message) {
+      if ((message as any)?.customType !== "pi-herdsman-agent-result") return;
+      if (failNextResultSend) {
+        failNextResultSend = false;
+        throw new Error("injected result delivery failure");
+      }
+      entries.push(message);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext(entries);
+  const resultMessages = () =>
+    pi.sentMessageCalls.filter(
+      ({ message }) =>
+        (message as any)?.customType === "pi-herdsman-agent-result",
+    );
+  const ownerResultEntries = () =>
+    entries.filter(
+      (entry: any) =>
+        (entry.customType ?? entry.message?.customType) ===
+        "pi-herdsman-agent-result",
+    );
+  const bindingEntries = () =>
+    entries.filter(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-result-ref" &&
+        entry.data?.ref === semanticRef,
+    );
+  const notifyResult = async () => {
+    emitMailboxChange(childMailbox, `result-${requestId}.json`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+
+    writeAgentState(childMailbox, {
+      ...child,
+      activeRequestId: undefined,
+      completedRequestId: requestId,
+      updatedAt: Date.now(),
+    });
+    writeResult(childMailbox, {
+      version: 5,
+      runId: child.runId,
+      requestId,
+      ownerSessionId: child.ownerSessionId,
+      workspaceId: child.workspaceId,
+      agentLabel: child.agentLabel,
+      paneId: child.paneId,
+      status: "completed",
+      text: "Review complete.",
+      resultBindings: [forwardedBinding],
+      completedAt: Date.now(),
+    });
+
+    await notifyResult();
+    assert.equal(
+      resultMessages().length,
+      0,
+      "a conflicting owner binding is not delivered",
+    );
+    assert.equal(
+      ownerResultEntries().length,
+      0,
+      "conflict must not acknowledge completion",
+    );
+    assert.equal(readResult(childMailbox, requestId)?.status, "completed");
+    assert.equal(bindingEntries().length, 1);
+    const conflictingBinding = bindingEntries()[0] as any;
+    assert.notEqual(conflictingBinding.data?.canonicalRef, canonicalRef);
+
+    entries.splice(entries.indexOf(conflictingBinding), 1);
+    realFs.rmSync(artifact, { force: true });
+    await notifyResult();
+    assert.equal(
+      resultMessages().length,
+      0,
+      "an unavailable artifact is not delivered",
+    );
+    assert.equal(
+      ownerResultEntries().length,
+      0,
+      "missing evidence must not acknowledge completion",
+    );
+    assert.equal(readResult(childMailbox, requestId)?.status, "completed");
+    assert.equal(bindingEntries().length, 0);
+
+    realFs.writeFileSync(artifact, "persisted Scout finding", "utf8");
+    await notifyResult();
+    assert.equal(
+      resultMessages().length,
+      1,
+      "the first send fails after importing the evidence",
+    );
+    assert.equal(
+      ownerResultEntries().length,
+      0,
+      "a failed send is not a durable acknowledgement",
+    );
+    assert.equal(readResult(childMailbox, requestId)?.status, "completed");
+    assert.equal(bindingEntries().length, 1);
+    assert.deepEqual((bindingEntries()[0] as any).data, forwardedBinding);
+
+    t.mock.timers.tick(250);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const delivered = resultMessages();
+    assert.equal(delivered.length, 2);
+    const inventoryLines = delivered.map(({ message }) =>
+      String((message as any).content)
+        .split("\n")
+        .filter((line) => line.startsWith("Forwardable result evidence:")),
+    );
+    assert.deepEqual(inventoryLines, [
+      [`Forwardable result evidence: ${semanticRef}`],
+      [`Forwardable result evidence: ${semanticRef}`],
+    ]);
+    assert.equal(ownerResultEntries().length, 1);
+    assert.equal(
+      bindingEntries().length,
+      1,
+      "retry must not duplicate the imported binding",
+    );
+    assert.deepEqual(resolveMessageFiles(context, [semanticRef], "test"), [
+      forwardedBinding,
+    ]);
+  } finally {
+    for (const handler of pi.events.get("session_shutdown") ?? []) handler();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    realFs.rmSync(artifact, { force: true });
   }
 });
 

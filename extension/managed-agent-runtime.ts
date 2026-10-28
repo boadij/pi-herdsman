@@ -100,6 +100,8 @@ import { readFileSync } from "node:fs";
 import { TextDecoder } from "node:util";
 import {
   isRequiredEvidence,
+  isResultBinding,
+  parseSemanticResultRef,
   readRequiredEvidenceSnapshot,
   resolveResultRef,
   semanticEvidenceRef,
@@ -1323,6 +1325,158 @@ export function createManagedAgentAskOwnerHandler(options: {
   };
 }
 
+const ATTACH_HANDOFF_TOOL = "attach_handoff";
+
+type HandoffSelectionDetails = {
+  version: 1;
+  assignmentRequestId: string;
+  runId: string;
+  ownerSessionId: string;
+  workspaceId: string;
+  agentLabel: string;
+  paneId: string;
+  piSessionId: string;
+  resultBindings: ResultBinding[];
+};
+
+function handoffSelectionDetails(
+  state: ManagedAgentState,
+  resultBindings: readonly ResultBinding[],
+): HandoffSelectionDetails {
+  return {
+    version: 1,
+    assignmentRequestId: state.activeRequestId!,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    resultBindings: [...resultBindings],
+  };
+}
+
+function latestHandoffSelection(
+  ctx: ExtensionContext,
+  state: ManagedAgentState,
+): ResultBinding[] | undefined {
+  let selected: ResultBinding[] | undefined;
+  const expectedKeys = [
+    "version",
+    "assignmentRequestId",
+    "runId",
+    "ownerSessionId",
+    "workspaceId",
+    "agentLabel",
+    "paneId",
+    "piSessionId",
+    "resultBindings",
+  ];
+  for (const entry of ctx.sessionManager.getBranch() as any[]) {
+    const message = entry?.type === "message" ? entry.message : undefined;
+    if (
+      message?.role !== "toolResult" ||
+      message.toolName !== ATTACH_HANDOFF_TOOL ||
+      message.isError !== false
+    )
+      continue;
+    const details = message.details;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      details.assignmentRequestId !== state.activeRequestId
+    )
+      continue;
+    if (
+      Object.keys(details).length !== expectedKeys.length ||
+      Object.keys(details).some((key) => !expectedKeys.includes(key)) ||
+      details.version !== 1 ||
+      details.runId !== state.runId ||
+      details.ownerSessionId !== state.ownerSessionId ||
+      details.workspaceId !== state.workspaceId ||
+      details.agentLabel !== state.agentLabel ||
+      details.paneId !== state.paneId ||
+      details.piSessionId !== state.piSessionId ||
+      !Array.isArray(details.resultBindings) ||
+      !details.resultBindings.every(isResultBinding) ||
+      new Set(
+        details.resultBindings.map((binding: ResultBinding) => binding.ref),
+      ).size !== details.resultBindings.length
+    )
+      throw new Error("Invalid or conflicting handoff selection metadata");
+    selected = [...details.resultBindings];
+  }
+  return selected;
+}
+
+function verifyHandoffSelection(
+  ctx: ExtensionContext,
+  selected: readonly ResultBinding[],
+): ResultBinding[] {
+  const resolved = resolveMessageFiles(
+    ctx,
+    selected.map((binding) => binding.ref),
+    ATTACH_HANDOFF_TOOL,
+  );
+  if (
+    resolved.length !== selected.length ||
+    resolved.some(
+      (binding: unknown, index: number) =>
+        !isResultBinding(binding) ||
+        !isDeepStrictEqual(binding, selected[index]),
+    )
+  )
+    throw new Error("Selected result binding is unavailable on this branch");
+  validateMessageFiles(
+    resolved as ResultBinding[],
+    ctx.cwd,
+    ATTACH_HANDOFF_TOOL,
+  );
+  return resolved as ResultBinding[];
+}
+
+export function registerManagedAgentAttachHandoffTool(
+  pi: ExtensionAPI,
+  execute: (
+    _id: string,
+    params: { files: string[] },
+    _signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+  ) => Promise<{
+    content: Array<{ type: "text"; text: string }>;
+    details: HandoffSelectionDetails;
+  }>,
+): void {
+  pi.registerTool({
+    name: ATTACH_HANDOFF_TOOL,
+    label: "Attach handoff evidence",
+    exposure: "model-only",
+    promptSnippet:
+      "Select reusable results for this assignment's final handoff",
+    description:
+      "Select verified semantic result references for your eventual completion to your direct owner. This is non-blocking and does not send evidence now. Use only exact result:<agent>#<index> references; text-only mentions do not grant access.",
+    executionMode: "sequential",
+    parameters: Type.Object(
+      {
+        files: Type.Array(
+          Type.String({
+            minLength: 1,
+            description:
+              "Exact semantic result reference, such as result:scout#21.",
+          }),
+          {
+            description:
+              "Semantic result references to select for the eventual completion; an empty list clears the selection.",
+          },
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    execute,
+  });
+}
+
 export function registerManagedAgentAskOwnerTool(
   pi: ExtensionAPI,
   execute: ReturnType<typeof createManagedAgentAskOwnerHandler>,
@@ -2122,7 +2276,19 @@ export function registerManagedAgentSettlementHandlers(
       observation.responseEntryId
         ? (observation.responseText?.trim() ?? "")
         : "";
-    const completed = !aborted && outcome === "completed" && !!responseText;
+    let completed = !aborted && outcome === "completed" && !!responseText;
+    let resultBindings: ResultBinding[] | undefined;
+    let handoffSelectionError = false;
+    if (completed) {
+      try {
+        const selected = latestHandoffSelection(ctx, state);
+        if (selected?.length)
+          resultBindings = verifyHandoffSelection(ctx, selected);
+      } catch {
+        completed = false;
+        handoffSelectionError = true;
+      }
+    }
     const result: ResultRecord = {
       version: 5,
       runId: state.runId,
@@ -2133,19 +2299,24 @@ export function registerManagedAgentSettlementHandlers(
       paneId: state.paneId,
       status: completed ? "completed" : "failed",
       ...(completed
-        ? { text: responseText }
+        ? {
+            text: responseText,
+            ...(resultBindings?.length ? { resultBindings } : {}),
+          }
         : {
             error: {
               code: aborted
                 ? "aborted"
-                : outcome === "error"
+                : handoffSelectionError || outcome === "error"
                   ? "execution_error"
                   : "empty_result",
               message: aborted
                 ? "Agent execution was cancelled"
-                : outcome === "error"
-                  ? "Agent model execution failed"
-                  : "Agent produced no assistant text",
+                : handoffSelectionError
+                  ? "Selected handoff evidence could not be verified"
+                  : outcome === "error"
+                    ? "Agent model execution failed"
+                    : "Agent produced no assistant text",
             },
           }),
       contextUsage: ctx.getContextUsage(),
@@ -2191,10 +2362,10 @@ export function registerManagedAgentSettlementHandlers(
             ...current,
             status: "failed",
             text: undefined,
+            resultBindings: undefined,
             error: {
               code: "result_too_large",
-              message:
-                "Agent assistant response exceeded the mailbox result limit",
+              message: "Agent result exceeded the mailbox result limit",
             },
           };
           execution.resultWriteAttempts = 0;
@@ -2684,6 +2855,76 @@ export function registerManagedAgentRuntime(
         controller.sessionTreeChanged(ctx, controller.sessionSignal());
     });
   }
+  registerManagedAgentAttachHandoffTool(
+    pi,
+    async (_id, params, _signal, _update, ctx) => {
+      const state = execution.assignment;
+      if (
+        !state?.activeRequestId ||
+        state.completedRequestId ||
+        execution.pendingResult
+      )
+        fail(
+          "invalid_request",
+          "There is no matching active assignment for handoff selection",
+          ATTACH_HANDOFF_TOOL,
+        );
+      const managed = managedAgentIdentity(ctx);
+      const assignmentMatches = (current: ManagedAgentState) =>
+        current.activeRequestId === state.activeRequestId &&
+        state.activeRequestId === managed.activeRequestId &&
+        sameManagedAgentIdentity(state, current);
+      if (!assignmentMatches(managed))
+        fail(
+          "invalid_request",
+          "There is no matching active assignment for handoff selection",
+          ATTACH_HANDOFF_TOOL,
+        );
+      if (!params.files.every((ref) => parseSemanticResultRef(ref)))
+        fail(
+          "invalid_request",
+          "Handoff selection accepts semantic result references only",
+          ATTACH_HANDOFF_TOOL,
+        );
+      const resolved = resolveMessageFiles(
+        ctx,
+        params.files,
+        ATTACH_HANDOFF_TOOL,
+      );
+      if (
+        resolved.some((binding: unknown) => !isResultBinding(binding)) ||
+        new Set((resolved as ResultBinding[]).map((binding) => binding.ref))
+          .size !== resolved.length
+      )
+        fail(
+          "invalid_request",
+          "Handoff selection contains invalid or duplicate result references",
+          ATTACH_HANDOFF_TOOL,
+        );
+      const bindings = verifyHandoffSelection(ctx, resolved as ResultBinding[]);
+      const latest = managedAgentIdentity(ctx);
+      if (
+        !assignmentMatches(latest) ||
+        latest.activeRequestId !== state.activeRequestId
+      )
+        fail(
+          "invalid_request",
+          "Managed-agent assignment changed during handoff selection",
+          ATTACH_HANDOFF_TOOL,
+        );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: bindings.length
+              ? `Selected ${bindings.length} semantic result reference${bindings.length === 1 ? "" : "s"} for your eventual completion. This does not send evidence now.`
+              : "Cleared the selected semantic result references for your eventual completion.",
+          },
+        ],
+        details: handoffSelectionDetails(state, bindings),
+      };
+    },
+  );
   registerManagedAgentAskOwnerTool(
     pi,
     createManagedAgentAskOwnerHandler({

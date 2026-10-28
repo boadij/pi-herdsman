@@ -2583,6 +2583,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       if (dirs.length > 256) throw new Error("mailbox scan exceeded its bound");
       const matches = [];
       const mailboxIdentities = [];
+      const mailboxRecords = [];
       for (const dir of dirs.slice(0, 256)) {
         if (!dir.isDirectory() || !/^[0-9a-f]{32}$/.test(dir.name)) continue;
         const mailbox = join(root, dir.name);
@@ -2604,25 +2605,55 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         )
           continue;
         mailboxIdentities.push(state);
+        let result = null;
+        let resultIdentityMatches = false;
         const path = join(mailbox, `result-${edge.identity.requestId}.json`);
         try {
           const stat = await lstat(path);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
             throw new Error("invalid mailbox result");
-          const result = JSON.parse(await readFile(path, "utf8"));
-          if (
+          result = JSON.parse(await readFile(path, "utf8"));
+          resultIdentityMatches =
             result.requestId === edge.identity.requestId &&
             result.runId === state.runId &&
             result.workspaceId === state.workspaceId &&
             result.ownerSessionId === ownerSessionId &&
             result.agentLabel === label &&
-            result.paneId === state.paneId
-          )
-            matches.push(result);
+            result.paneId === state.paneId;
+          if (resultIdentityMatches) matches.push(result);
           else matches.push(null);
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
         }
+        mailboxRecords.push({
+          state: {
+            ownerSessionId: state.ownerSessionId,
+            activeRequestId: state.activeRequestId ?? null,
+            completedRequestId: state.completedRequestId ?? null,
+            runId: state.runId,
+            workspaceId: state.workspaceId,
+            agentLabel: state.agentLabel,
+            paneId: state.paneId,
+          },
+          result: result
+            ? {
+                requestId: result.requestId,
+                runId: result.runId,
+                ownerSessionId: result.ownerSessionId,
+                workspaceId: result.workspaceId,
+                agentLabel: result.agentLabel,
+                paneId: result.paneId,
+                status: result.status,
+                errorCode: result.error?.code ?? null,
+              }
+            : null,
+          stateIdentityMatches: true,
+          requestMatches: [
+            state.activeRequestId,
+            state.completedRequestId,
+          ].includes(edge.identity.requestId),
+          resultIdentityMatches,
+        });
       }
       if (matches.length === 1 && matches[0]) {
         edge.terminalResult = "published";
@@ -2645,10 +2676,11 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         edge.terminalResult = "ambiguous";
         edge.terminalStatus = "unknown";
       }
+      return { edge, child, mailboxRecords };
     } catch {
       edge.terminalResult = "observation_failed";
     }
-    return { edge, child };
+    return { edge, child, mailboxRecords: [] };
   };
   const implementer = await inspect(
     rootContents,
@@ -2662,6 +2694,439 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         implementer.child.id,
       )
     : { edge: null, child: null };
+  const next = await inspect(rootContents, "smoke-core-next", ownerId);
+  const mailboxEvidence = (observation) => {
+    const records = observation?.mailboxRecords ?? [];
+    const record = records.length === 1 ? records[0] : null;
+    return {
+      candidates: records.length,
+      stateMatches: record?.stateIdentityMatches === true,
+      requestMatches: record?.requestMatches === true,
+      resultMatches: record?.resultIdentityMatches === true,
+      requestId: record?.result?.requestId ?? null,
+      runId: record?.result?.runId ?? null,
+      ownerSessionId: record?.result?.ownerSessionId ?? null,
+      workspaceId: record?.result?.workspaceId ?? null,
+      agentLabel: record?.result?.agentLabel ?? null,
+      paneId: record?.result?.paneId ?? null,
+      status: record?.result?.status ?? null,
+      errorCode: record?.result?.errorCode ?? null,
+    };
+  };
+  const captureHandoff = async () => {
+    if (!implementer.child) return null;
+    const entries = sessionEntries(implementer.child.contents);
+    const scoutIdentity = scout.edge?.identity;
+    const receipts = scoutIdentity
+      ? entries.flatMap((entry, index) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-agent-result" &&
+          entry.details?.requestId === scoutIdentity.requestId &&
+          entry.details?.piSessionId === scoutIdentity.piSessionId
+            ? [{ entry, index }]
+            : [],
+        )
+      : [];
+    const receipt = receipts.length === 1 ? receipts[0] : null;
+    const details = receipt?.entry.details;
+    const ref = receipt
+      ? (messageText(receipt.entry.content).match(
+          /^Result ref: (result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*)$/mu,
+        )?.[1] ?? null)
+      : null;
+    const canonicalRef = details?.resultRef ?? null;
+    const receiptMatches = Boolean(
+      receipt &&
+      details.requestId === scoutIdentity?.requestId &&
+      details.piSessionId === scoutIdentity?.piSessionId &&
+      details.ownerSessionId === implementer.child.id &&
+      details.agentLabel === "smoke-core-scout" &&
+      details.status === "completed" &&
+      (!details.piSessionFile || details.piSessionFile === scout.child?.path),
+    );
+    const referenceMatches = Boolean(
+      receiptMatches &&
+      Number.isSafeInteger(details.resultIndex) &&
+      details.resultIndex > 0 &&
+      ref === `result:smoke-core-scout#${details.resultIndex}` &&
+      canonicalRef === `result:${scoutIdentity.requestId}`,
+    );
+    const artifact = {
+      path: null,
+      exists: false,
+      readableUtf8: false,
+      bytes: null,
+      error: "not_observed",
+    };
+    let artifactValid = false;
+    const canonicalId = canonicalRef?.match(
+      /^result:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu,
+    )?.[1];
+    if (canonicalId) {
+      const path = join(
+        ctx.paths.piAgent,
+        "pi-herdsman",
+        "results",
+        canonicalId,
+      );
+      artifact.path = relative(ctx.paths.piAgent, path);
+      try {
+        const stat = await lstat(path);
+        artifact.exists = stat.isFile() && !stat.isSymbolicLink();
+        artifact.bytes = stat.size;
+        if (!artifact.exists) artifact.error = "invalid_file";
+        else if (stat.size > MAX_SESSION_BYTES) artifact.error = "too_large";
+        else {
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            await readFile(path),
+          );
+          artifact.readableUtf8 = artifactValid = true;
+          artifact.error = null;
+        }
+      } catch (error) {
+        artifact.error = error.code === "ENOENT" ? "missing" : "unreadable";
+      }
+    }
+    const attachCalls = entries.flatMap((entry, index) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content.flatMap((call) =>
+            call?.type === "toolCall" &&
+            call.name === "attach_handoff" &&
+            call.id
+              ? [{ index, call }]
+              : [],
+          )
+        : [],
+    );
+    const toolText = (content) =>
+      messageText(content)
+        .replaceAll(ctx.paths.root, "<smoke-isolation>")
+        .replaceAll(homedir(), "<home>")
+        .replace(
+          /\b(api[-_ ]?key|token|secret|password)\b\s*[:=]\s*[^\s,;]+/giu,
+          "$1=<redacted>",
+        )
+        .replace(/\bBearer\s+\S+/giu, "Bearer <redacted>")
+        .replace(
+          /(?:\/Users\/|\/private\/|\/tmp\/|\/var\/|\/home\/)[^\s"'<>]+/gu,
+          "<path>",
+        )
+        .slice(0, 600);
+    const calls = attachCalls.slice(0, 4).map(({ index, call }) => {
+      const files = Array.isArray(call.arguments?.files)
+        ? call.arguments.files.filter(
+            (file) =>
+              typeof file === "string" &&
+              /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(file),
+          )
+        : [];
+      const results = entries.flatMap((entry, resultIndex) => {
+        if (
+          resultIndex <= index ||
+          entry.type !== "message" ||
+          entry.message?.role !== "toolResult" ||
+          entry.message.toolName !== "attach_handoff" ||
+          entry.message.toolCallId !== call.id
+        )
+          return [];
+        const details = entry.message.details ?? {};
+        return [
+          {
+            index: resultIndex,
+            toolCallId: entry.message.toolCallId,
+            isError: entry.message.isError === true,
+            text: toolText(entry.message.content),
+            details: {
+              assignmentRequestId: details.assignmentRequestId ?? null,
+              runId: details.runId ?? null,
+              ownerSessionId: details.ownerSessionId ?? null,
+              workspaceId: details.workspaceId ?? null,
+              agentLabel: details.agentLabel ?? null,
+              paneId: details.paneId ?? null,
+              piSessionId: details.piSessionId ?? null,
+              errorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+                details.error?.category,
+              )
+                ? details.error.category
+                : null,
+              resultBindings: Array.isArray(details.resultBindings)
+                ? details.resultBindings
+                    .slice(0, 4)
+                    .map(({ ref, canonicalRef }) => ({ ref, canonicalRef }))
+                : [],
+            },
+          },
+        ];
+      });
+      return {
+        index,
+        callId: call.id,
+        fileCount: Array.isArray(call.arguments?.files)
+          ? call.arguments.files.length
+          : 0,
+        files: files.slice(0, 4),
+        results: results.slice(0, 2),
+      };
+    });
+    const intermediateMailbox = mailboxEvidence(implementer);
+    const scoutMailbox = mailboxEvidence(scout);
+    const assignmentRequestId = implementer.edge.identity?.requestId;
+    const handoff = calls[0]?.results[0];
+    const selectionMatches = Boolean(
+      attachCalls.length === 1 &&
+      calls.length === 1 &&
+      calls[0].fileCount === 1 &&
+      calls[0].files[0] === ref &&
+      calls[0].results.length === 1 &&
+      !handoff.isError &&
+      handoff.details.assignmentRequestId === assignmentRequestId &&
+      handoff.details.agentLabel === "smoke-core-implementer" &&
+      handoff.details.piSessionId === implementer.child.id &&
+      handoff.details.resultBindings.length === 1 &&
+      handoff.details.resultBindings[0].ref === ref &&
+      handoff.details.resultBindings[0].canonicalRef === canonicalRef,
+    );
+    const ownerEntries = sessionEntries(rootContents);
+    const ownerReceipts = ownerEntries.filter(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-agent-result" &&
+        entry.details?.requestId === implementer.edge.identity?.requestId &&
+        entry.details?.piSessionId === implementer.edge.identity?.piSessionId &&
+        entry.details?.ownerSessionId === ownerId &&
+        entry.details?.agentLabel === "smoke-core-implementer",
+    );
+    const ownerReceiptContent =
+      ownerReceipts.length === 1 ? messageText(ownerReceipts[0].content) : "";
+    const inventoryLine = ownerReceiptContent
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith("Forwardable result evidence: "));
+    const forwardableRefs = inventoryLine
+      ? inventoryLine
+          .slice("Forwardable result evidence: ".length)
+          .split(/,\s*/u)
+          .filter((candidate) =>
+            /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(candidate),
+          )
+      : [];
+    const importedBindings = ownerEntries.flatMap((entry) =>
+      entry.type === "custom" &&
+      entry.customType === "pi-herdsman-result-ref" &&
+      entry.data?.ref === ref
+        ? [{ ref: entry.data.ref, canonicalRef: entry.data.canonicalRef }]
+        : [],
+    );
+    const ownerImportMatches = Boolean(
+      ownerReceipts.length === 1 &&
+      ownerReceipts[0].details?.status === "completed" &&
+      forwardableRefs.length === 1 &&
+      forwardableRefs[0] === ref &&
+      importedBindings.length === 1 &&
+      importedBindings[0].canonicalRef === canonicalRef,
+    );
+    const nextEntries = sessionEntries(rootContents);
+    const nextCalls = nextEntries.flatMap((entry, index) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content.flatMap((call) =>
+            call?.type === "toolCall" &&
+            call.name === "delegate_agent" &&
+            call.arguments?.label === "smoke-core-next"
+              ? [{ index, call }]
+              : [],
+          )
+        : [],
+    );
+    const nextCall = nextCalls.length === 1 ? nextCalls[0] : null;
+    const nextFiles = Array.isArray(nextCall?.call.arguments?.files)
+      ? nextCall.call.arguments.files.filter(
+          (candidate) =>
+            typeof candidate === "string" &&
+            /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(candidate),
+        )
+      : [];
+    const nextResults = nextCall
+      ? nextEntries.flatMap((entry, index) =>
+          index > nextCall.index &&
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "delegate_agent" &&
+          entry.message.toolCallId === nextCall.call.id
+            ? [entry.message]
+            : [],
+        )
+      : [];
+    const nextResult = nextResults.length === 1 ? nextResults[0] : null;
+    const nextResultText = nextResult ? messageText(nextResult.content) : "";
+    const nextSessionEntries = next.child
+      ? sessionEntries(next.child.contents)
+      : [];
+    const attachedArtifacts = nextSessionEntries.flatMap((entry) => {
+      if (entry.type !== "message" || entry.message?.role !== "user") return [];
+      return [
+        ...messageText(entry.message.content).matchAll(
+          /<file\b([^>]*)>([\s\S]*?)<\/file>/gu,
+        ),
+      ].flatMap((match) => {
+        const name = match[1].match(/\bname="([^"]+)"/u)?.[1];
+        const bytes = match[1].match(/\bbytes="([0-9]+)"/u)?.[1];
+        return name === ref && bytes !== undefined
+          ? [{ bytes: Number(bytes), content: match[2] }]
+          : [];
+      });
+    });
+    const expectedPackage =
+      typeof ctx.expectedPackage === "string"
+        ? (() => {
+            const separator = ctx.expectedPackage.lastIndexOf("@");
+            return separator > 0
+              ? {
+                  name: ctx.expectedPackage.slice(0, separator),
+                  version: ctx.expectedPackage.slice(separator + 1),
+                }
+              : null;
+          })()
+        : null;
+    const packageDetails = (content) => {
+      try {
+        const value = JSON.parse(content.trim());
+        return typeof value.name === "string" &&
+          typeof value.version === "string"
+          ? { name: value.name, version: value.version }
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const expectedSourceAgent =
+      ref?.match(/^result:([a-z][a-z0-9_-]{0,31})#[1-9][0-9]*$/u)?.[1] ?? null;
+    const attachedArtifactDetails = (content) => {
+      const match = content
+        .trim()
+        .match(/^Agent result source: ([^\n]+)\n\n([\s\S]+)$/u);
+      if (!match) return null;
+      try {
+        const provenance = JSON.parse(match[1]);
+        return {
+          provenanceMatches: Boolean(
+            provenance &&
+            typeof provenance === "object" &&
+            !Array.isArray(provenance) &&
+            provenance.agent === expectedSourceAgent &&
+            typeof provenance.definition === "string" &&
+            typeof provenance.cwd === "string",
+          ),
+          package: packageDetails(match[2]),
+        };
+      } catch {
+        return null;
+      }
+    };
+    const attachedArtifact =
+      attachedArtifacts.length === 1
+        ? attachedArtifactDetails(attachedArtifacts[0].content)
+        : null;
+    const attachedDetails = attachedArtifact?.package ?? null;
+    const nextResponses = nextSessionEntries
+      .filter(
+        (entry) =>
+          entry.type === "message" && entry.message?.role === "assistant",
+      )
+      .map((entry) => packageDetails(messageText(entry.message.content)))
+      .filter(Boolean);
+    const matchingResponse = nextResponses.find(
+      (details) =>
+        details.name === attachedDetails?.name &&
+        details.version === attachedDetails?.version,
+    );
+    const responseMatchesArtifact = Boolean(
+      attachedArtifact?.provenanceMatches &&
+      attachedDetails &&
+      expectedPackage &&
+      attachedDetails.name === expectedPackage.name &&
+      attachedDetails.version === expectedPackage.version &&
+      matchingResponse,
+    );
+    const readback = matchingResponse ?? nextResponses.at(-1) ?? null;
+    const nextAssignmentMatches = Boolean(
+      nextCalls.length === 1 &&
+      nextFiles.length === 1 &&
+      nextFiles[0] === ref &&
+      nextResults.length === 1 &&
+      nextResult?.isError === false &&
+      nextResultText.includes(`Session: ${next.edge.identity?.piSessionId}`) &&
+      nextResultText.includes(`Request: ${next.edge.identity?.requestId}`),
+    );
+    return {
+      intermediate: {
+        sessionId: implementer.child.id,
+        sessionPath: relative(ctx.paths.piSessions, implementer.child.path),
+        requestId: assignmentRequestId ?? null,
+        mailbox: intermediateMailbox,
+      },
+      scout: {
+        sessionId: scoutIdentity?.piSessionId ?? null,
+        sessionPath: scout.child
+          ? relative(ctx.paths.piSessions, scout.child.path)
+          : null,
+        requestId: scoutIdentity?.requestId ?? null,
+        mailbox: scoutMailbox,
+      },
+      scoutReference: {
+        ref,
+        canonicalRef,
+        receiptCount: receipts.length,
+        receiptIndex: receipt?.index ?? null,
+        receiptMatches,
+        referenceMatches,
+        artifact,
+        valid: Boolean(referenceMatches && artifactValid),
+      },
+      attachHandoff: { callCount: attachCalls.length, calls, selectionMatches },
+      ownerImport: {
+        receiptCount: ownerReceipts.length,
+        status:
+          ownerReceipts.length === 1 &&
+          ["completed", "failed"].includes(ownerReceipts[0].details?.status)
+            ? ownerReceipts[0].details.status
+            : "unknown",
+        forwardableRefs: forwardableRefs.slice(0, 4),
+        importedBindings: importedBindings.slice(0, 4),
+        successfullyImported: ownerImportMatches,
+      },
+      nextAgent: {
+        sessionId: next.child?.id ?? next.edge.identity?.piSessionId ?? null,
+        sessionPath: next.child
+          ? relative(ctx.paths.piSessions, next.child.path)
+          : null,
+        requestId: next.edge.identity?.requestId ?? null,
+        callCount: nextCalls.length,
+        callId: nextCall?.call.id ?? null,
+        files: nextFiles.slice(0, 4),
+        correlatedResultCount: nextResults.length,
+        assignmentMatches: nextAssignmentMatches,
+        mailbox: mailboxEvidence(next),
+        artifact: {
+          ref,
+          canonicalRef,
+          attachmentCount: attachedArtifacts.length,
+          received: attachedArtifacts.length === 1,
+          attachedPackage: attachedDetails
+            ? { name: attachedDetails.name, version: attachedDetails.version }
+            : null,
+          provenanceMatches: attachedArtifact?.provenanceMatches === true,
+          readback: readback
+            ? { name: readback.name, version: readback.version }
+            : null,
+          responseMatchesArtifact,
+        },
+      },
+    };
+  };
+  const handoffEvidence = await captureHandoff();
   const deliver = (parentContents, edge) => {
     if (!edge?.identity) return { state: "unknown", terminalStatus: "unknown" };
     const entries = sessionEntries(parentContents);
@@ -2734,38 +3199,41 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     firstUnverifiedBoundary = "scout_result_delivery";
   else firstUnverifiedBoundary = "implementer_result_delivery";
   return {
-    rootToImplementer: {
-      delegation: implementer.edge.delegation,
-      session: implementer.edge.session,
-      terminalResult:
-        rootReceipt.state === "observed"
-          ? "delivered"
-          : implementer.edge.terminalResult,
-      terminalStatus:
-        rootReceipt.terminalStatus ?? implementer.edge.terminalStatus,
-      resultDelivered: rootReceipt.state,
+    coreDelegation: {
+      rootToImplementer: {
+        delegation: implementer.edge.delegation,
+        session: implementer.edge.session,
+        terminalResult:
+          rootReceipt.state === "observed"
+            ? "delivered"
+            : implementer.edge.terminalResult,
+        terminalStatus:
+          rootReceipt.terminalStatus ?? implementer.edge.terminalStatus,
+        resultDelivered: rootReceipt.state,
+      },
+      rootCompletionMarker: completionMarker,
+      implementerToScout: scout.edge
+        ? {
+            delegation: scout.edge.delegation,
+            session: scout.edge.session,
+            terminalResult:
+              implementerReceipt.state === "observed"
+                ? "delivered"
+                : scout.edge.terminalResult,
+            terminalStatus:
+              implementerReceipt.terminalStatus ?? scout.edge.terminalStatus,
+            resultDelivered: implementerReceipt.state,
+          }
+        : {
+            delegation: "unknown",
+            session: "unknown",
+            terminalResult: "unknown",
+            terminalStatus: "unknown",
+            resultDelivered: "unknown",
+          },
+      firstUnverifiedBoundary,
     },
-    rootCompletionMarker: completionMarker,
-    implementerToScout: scout.edge
-      ? {
-          delegation: scout.edge.delegation,
-          session: scout.edge.session,
-          terminalResult:
-            implementerReceipt.state === "observed"
-              ? "delivered"
-              : scout.edge.terminalResult,
-          terminalStatus:
-            implementerReceipt.terminalStatus ?? scout.edge.terminalStatus,
-          resultDelivered: implementerReceipt.state,
-        }
-      : {
-          delegation: "unknown",
-          session: "unknown",
-          terminalResult: "unknown",
-          terminalStatus: "unknown",
-          resultDelivered: "unknown",
-        },
-    firstUnverifiedBoundary,
+    coreHandoff: handoffEvidence,
   };
 }
 
@@ -3411,7 +3879,7 @@ async function startCandidate(ctx) {
 }
 
 function corePrompt(expected) {
-  return `Delegate this task to one implementer.\n\nDo not read package.json yourself. The implementer must delegate exactly one scout to read package.json and determine its exact "name" and "version". The implementer must return that result to you.\n\nWhen the delegated work is complete, output exactly:\n\nPI_HERDSMAN_SMOKE_OK ${expected}\n\nDo not output that marker before the implementer reports its result.`;
+  return `Delegate this task to one implementer.\n\nDo not read package.json yourself. The implementer must delegate exactly one scout to read package.json and determine its exact "name" and "version", explicitly select the Scout result for the implementer's completion, and return that result to you. Then delegate one next Agent with the exact forwardable Scout result in the files argument; it must verify the attached evidence and reply with exactly one JSON object containing the package "name" and "version" as strings, with no prose.\n\nWhen the next Agent reports the result, output exactly:\n\nPI_HERDSMAN_SMOKE_OK ${expected}\n\nDo not output that marker before the next Agent verifies the attached evidence.`;
 }
 
 function continuationPrompt() {
@@ -6267,8 +6735,36 @@ export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
   if (!simulated) return;
   requireSmokeEvidence(
     JSON.stringify(evidence.map(({ name }) => name).sort()) ===
-      JSON.stringify(["delegate_agent", "delegate_agent", "read"]),
-    "core must perform the actual nested delegation and package read",
+      JSON.stringify([
+        "attach_handoff",
+        "delegate_agent",
+        "delegate_agent",
+        "delegate_agent",
+        "read",
+      ]),
+    "core must select and forward nested result evidence to a next Agent",
+  );
+  const selection = evidence.find(({ name }) => name === "attach_handoff");
+  const scout = evidence.find(
+    ({ name, arguments: args }) =>
+      name === "delegate_agent" && args?.label === "smoke-core-scout",
+  );
+  const next = evidence.find(
+    ({ name, arguments: args }) =>
+      name === "delegate_agent" && args?.label === "smoke-core-next",
+  );
+  const [ref] = selection?.arguments?.files ?? [];
+  requireSmokeEvidence(
+    typeof ref === "string" && /^result:smoke-core-scout#\d+$/u.test(ref),
+    "intermediate Agent must select the exact Scout result for its completion",
+  );
+  requireSmokeEvidence(
+    scout?.sessionId === selection?.sessionId,
+    "Scout result selection must occur in the intermediate Agent session",
+  );
+  requireSmokeEvidence(
+    JSON.stringify(next?.arguments?.files) === JSON.stringify([ref]),
+    "Lead must attach the exact forwarded Scout result to the next Agent",
   );
   requireSmokeEvidence(
     evidence.some(
@@ -6485,6 +6981,7 @@ async function runCoreSmoke(ctx) {
       for (const call of calls) {
         if (
           call.name !== "delegate_agent" &&
+          call.name !== "attach_handoff" &&
           !(
             call.name === "read" && isPackageReadPath(call.arguments?.path, cwd)
           )
@@ -6497,11 +6994,45 @@ async function runCoreSmoke(ctx) {
           result && !result.isError,
           `missing successful correlated ${call.name} result`,
         );
-        evidence.push({ name: call.name, result: messageText(result.content) });
+        evidence.push({
+          name: call.name,
+          result: messageText(result.content),
+          arguments: call.arguments,
+          sessionId: entries.find((entry) => entry.type === "session")?.id,
+        });
       }
     }
     assertCoreToolEvidence(ctx.simulated, evidence, ctx.expectedPackage);
     ctx.coreToolEvidence = evidence.map(({ name }) => name);
+    const captured = await coreNestedDelegationDiagnostics(
+      ctx,
+      rootSession.contents,
+    );
+    const handoff = captured.coreHandoff;
+    requireSmokeEvidence(
+      handoff?.attachHandoff.selectionMatches === true,
+      "core must persist the exact successful intermediate attach_handoff call and result",
+    );
+    requireSmokeEvidence(
+      handoff?.ownerImport.successfullyImported === true,
+      "Lead must import and expose the exact forwardable Scout result",
+    );
+    requireSmokeEvidence(
+      handoff?.nextAgent.assignmentMatches === true &&
+        handoff.nextAgent.artifact.received === true &&
+        handoff.nextAgent.artifact.responseMatchesArtifact === true,
+      "next Agent must receive and verify the same forwarded Scout artifact",
+    );
+    ctx.coreHandoffEvidence = sanitizedCoreHandoff(handoff);
+    const evidenceArtifact = await preserveFailureEvidence({
+      scenario: "core",
+      mode: ctx.simulated ? "simulated" : "live",
+      capturedBeforeCleanup: true,
+      coreHandoff: ctx.coreHandoffEvidence,
+    });
+    console.log(
+      `core handoff evidence reference: ${failureEvidenceReference(evidenceArtifact)} (under system temp directory)`,
+    );
   }
   ctx.descendantCount = distinctPaneCount([...observed.values()]);
   await waitForDescendantsToExit(ctx);
@@ -10338,13 +10869,18 @@ export async function collectDiagnostics(
   }
   if (ctx.scenario === "core") {
     try {
-      diagnostics.coreDelegation =
-        rootSession.status === "fulfilled" && rootSession.value
-          ? await coreNestedDelegationDiagnostics(
-              ctx,
-              rootSession.value.contents,
-            )
-          : { firstUnverifiedBoundary: "root_session_unavailable" };
+      if (rootSession.status === "fulfilled" && rootSession.value) {
+        const coreEvidence = await coreNestedDelegationDiagnostics(
+          ctx,
+          rootSession.value.contents,
+        );
+        diagnostics.coreDelegation = coreEvidence.coreDelegation;
+        diagnostics.coreHandoff = coreEvidence.coreHandoff;
+      } else {
+        diagnostics.coreDelegation = {
+          firstUnverifiedBoundary: "root_session_unavailable",
+        };
+      }
     } catch {
       diagnostics.coreDelegation = {
         firstUnverifiedBoundary: "observation_failed",
@@ -10679,6 +11215,9 @@ export async function collectDiagnostics(
       ? {
           coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation),
         }
+      : {}),
+    ...(diagnostics.coreHandoff
+      ? { coreHandoff: sanitizedCoreHandoff(diagnostics.coreHandoff) }
       : {}),
     candidateProcessesObserved: Array.isArray(diagnostics.processes)
       ? diagnostics.processes.filter((record) => record.processMatch).length
@@ -11048,6 +11587,255 @@ function sanitizedCoreDelegation(value) {
   };
 }
 
+function sanitizedCoreHandoff(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = (input) =>
+    typeof input === "string" &&
+    input.length <= 256 &&
+    /^[A-Za-z0-9._:-]+$/u.test(input)
+      ? input
+      : null;
+  const request = (input) =>
+    typeof input === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      input,
+    )
+      ? input
+      : null;
+  const semantic = (input) =>
+    typeof input === "string" &&
+    /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(input)
+      ? input
+      : null;
+  const canonical = (input) =>
+    typeof input === "string" &&
+    /^result:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      input,
+    )
+      ? input
+      : null;
+  const path = (input) =>
+    typeof input === "string" &&
+    !isAbsolute(input) &&
+    input.length <= 1024 &&
+    !/[\r\n]/u.test(input) &&
+    !input.split(sep).includes("..")
+      ? input
+      : null;
+  const bindings = (input) =>
+    Array.isArray(input)
+      ? input.slice(0, 4).map((binding) => ({
+          ref: semantic(binding?.ref),
+          canonicalRef: canonical(binding?.canonicalRef),
+        }))
+      : [];
+  const mailbox = (input) => ({
+    candidates: Number.isSafeInteger(input?.candidates)
+      ? Math.min(Math.max(input.candidates, 0), 256)
+      : 0,
+    stateMatches: input?.stateMatches === true,
+    requestMatches: input?.requestMatches === true,
+    resultMatches: input?.resultMatches === true,
+    requestId: request(input?.requestId),
+    runId: id(input?.runId),
+    ownerSessionId: id(input?.ownerSessionId),
+    workspaceId: id(input?.workspaceId),
+    agentLabel: id(input?.agentLabel),
+    paneId: id(input?.paneId),
+    status: ["completed", "failed"].includes(input?.status)
+      ? input.status
+      : "unknown",
+    errorCode: [
+      "empty_result",
+      "execution_error",
+      "result_too_large",
+      "write_failure",
+      "aborted",
+    ].includes(input?.errorCode)
+      ? input.errorCode
+      : null,
+  });
+  const identity = (input) => ({
+    sessionId: id(input?.sessionId),
+    sessionPath: path(input?.sessionPath),
+    requestId: request(input?.requestId),
+    mailbox: mailbox(input?.mailbox),
+  });
+  const reference = value.scoutReference ?? {};
+  const artifact = reference.artifact ?? {};
+  return {
+    intermediate: identity(value.intermediate),
+    scout: identity(value.scout),
+    scoutReference: {
+      ref: semantic(reference.ref),
+      canonicalRef: canonical(reference.canonicalRef),
+      receiptCount: Number.isSafeInteger(reference.receiptCount)
+        ? Math.min(Math.max(reference.receiptCount, 0), 256)
+        : 0,
+      receiptIndex: Number.isSafeInteger(reference.receiptIndex)
+        ? reference.receiptIndex
+        : null,
+      receiptMatches: reference.receiptMatches === true,
+      referenceMatches: reference.referenceMatches === true,
+      artifact: {
+        path: path(artifact.path),
+        exists: artifact.exists === true,
+        readableUtf8: artifact.readableUtf8 === true,
+        bytes: Number.isSafeInteger(artifact.bytes) ? artifact.bytes : null,
+        error: [
+          "not_observed",
+          "missing",
+          "invalid_file",
+          "too_large",
+          "unreadable",
+          null,
+        ].includes(artifact.error)
+          ? artifact.error
+          : "unreadable",
+      },
+      valid: reference.valid === true,
+    },
+    attachHandoff: {
+      callCount: Number.isSafeInteger(value.attachHandoff?.callCount)
+        ? Math.min(Math.max(value.attachHandoff.callCount, 0), 256)
+        : 0,
+      calls: Array.isArray(value.attachHandoff?.calls)
+        ? value.attachHandoff.calls.slice(0, 4).map((call) => ({
+            index: Number.isSafeInteger(call.index) ? call.index : null,
+            callId: id(call.callId),
+            files: Array.isArray(call.files)
+              ? call.files.slice(0, 4).map(semantic)
+              : [],
+            resultCount: Number.isSafeInteger(call.resultCount)
+              ? Math.min(Math.max(call.resultCount, 0), 256)
+              : 0,
+            results: Array.isArray(call.results)
+              ? call.results.slice(0, 2).map((result) => ({
+                  index: Number.isSafeInteger(result.index)
+                    ? result.index
+                    : null,
+                  toolCallId: id(result.toolCallId),
+                  isError: result.isError === true,
+                  text:
+                    typeof result.text === "string"
+                      ? result.text
+                          .replace(
+                            /\b(api[-_ ]?key|token|secret|password)\b\s*[:=]\s*[^\s,;]+/giu,
+                            "$1=<redacted>",
+                          )
+                          .replace(/\bBearer\s+\S+/giu, "Bearer <redacted>")
+                          .replace(
+                            /(?:\/Users\/|\/private\/|\/tmp\/|\/var\/|\/home\/)[^\s"'<>]+/gu,
+                            "<path>",
+                          )
+                          .slice(0, 600)
+                      : "",
+                  details: {
+                    assignmentRequestId: request(
+                      result.details?.assignmentRequestId,
+                    ),
+                    runId: id(result.details?.runId),
+                    ownerSessionId: id(result.details?.ownerSessionId),
+                    workspaceId: id(result.details?.workspaceId),
+                    agentLabel: id(result.details?.agentLabel),
+                    paneId: id(result.details?.paneId),
+                    piSessionId: id(result.details?.piSessionId),
+                    errorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+                      result.details?.errorCategory,
+                    )
+                      ? result.details.errorCategory
+                      : null,
+                    resultBindings: bindings(result.details?.resultBindings),
+                  },
+                }))
+              : [],
+          }))
+        : [],
+      selectionMatches: value.attachHandoff?.selectionMatches === true,
+    },
+    ownerImport: {
+      receiptCount: Number.isSafeInteger(value.ownerImport?.receiptCount)
+        ? Math.min(Math.max(value.ownerImport.receiptCount, 0), 256)
+        : 0,
+      status: ["completed", "failed"].includes(value.ownerImport?.status)
+        ? value.ownerImport.status
+        : "unknown",
+      forwardableRefs: Array.isArray(value.ownerImport?.forwardableRefs)
+        ? value.ownerImport.forwardableRefs.slice(0, 4).map(semantic)
+        : [],
+      importedBindings: bindings(value.ownerImport?.importedBindings),
+      successfullyImported: value.ownerImport?.successfullyImported === true,
+    },
+    nextAgent: {
+      sessionId: id(value.nextAgent?.sessionId),
+      sessionPath: path(value.nextAgent?.sessionPath),
+      requestId: request(value.nextAgent?.requestId),
+      callCount: Number.isSafeInteger(value.nextAgent?.callCount)
+        ? Math.min(Math.max(value.nextAgent.callCount, 0), 256)
+        : 0,
+      callId: id(value.nextAgent?.callId),
+      files: Array.isArray(value.nextAgent?.files)
+        ? value.nextAgent.files.slice(0, 4).map(semantic)
+        : [],
+      correlatedResultCount: Number.isSafeInteger(
+        value.nextAgent?.correlatedResultCount,
+      )
+        ? Math.min(Math.max(value.nextAgent.correlatedResultCount, 0), 256)
+        : 0,
+      assignmentMatches: value.nextAgent?.assignmentMatches === true,
+      mailbox: mailbox(value.nextAgent?.mailbox),
+      artifact: {
+        ref: semantic(value.nextAgent?.artifact?.ref),
+        canonicalRef: canonical(value.nextAgent?.artifact?.canonicalRef),
+        attachmentCount: Number.isSafeInteger(
+          value.nextAgent?.artifact?.attachmentCount,
+        )
+          ? Math.min(Math.max(value.nextAgent.artifact.attachmentCount, 0), 256)
+          : 0,
+        received: value.nextAgent?.artifact?.received === true,
+        attachedPackage: {
+          name:
+            typeof value.nextAgent?.artifact?.attachedPackage?.name ===
+              "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.attachedPackage.name,
+            )
+              ? value.nextAgent.artifact.attachedPackage.name
+              : null,
+          version:
+            typeof value.nextAgent?.artifact?.attachedPackage?.version ===
+              "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.attachedPackage.version,
+            )
+              ? value.nextAgent.artifact.attachedPackage.version
+              : null,
+        },
+        provenanceMatches:
+          value.nextAgent?.artifact?.provenanceMatches === true,
+        readback: {
+          name:
+            typeof value.nextAgent?.artifact?.readback?.name === "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.readback.name,
+            )
+              ? value.nextAgent.artifact.readback.name
+              : null,
+          version:
+            typeof value.nextAgent?.artifact?.readback?.version === "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
+              value.nextAgent.artifact.readback.version,
+            )
+              ? value.nextAgent.artifact.readback.version
+              : null,
+        },
+        responseMatchesArtifact:
+          value.nextAgent?.artifact?.responseMatchesArtifact === true,
+      },
+    },
+  };
+}
+
 function sanitizedFailureDiagnostics(value) {
   if (!value || typeof value !== "object") return null;
   const count = (input) =>
@@ -11117,6 +11905,9 @@ function sanitizedFailureDiagnostics(value) {
     candidateProcessesObserved: count(value.candidateProcessesObserved),
     ...(value.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(value.coreDelegation) }
+      : {}),
+    ...(value.coreHandoff
+      ? { coreHandoff: sanitizedCoreHandoff(value.coreHandoff) }
       : {}),
   };
 }
