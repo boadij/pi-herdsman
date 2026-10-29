@@ -117,7 +117,8 @@ in `AGENTS.md`.
 - `extension/index.ts`: Pi extension composition, shared registration, and runtime selection.
 - `extension/agent-controller.ts`: Shared owner-side Agent delegation, control, recovery, and result lifecycle.
 - `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
-- `extension/lead-runtime.ts`: Lead, Manager, Chief, supervision, project, status, and role lifecycle.
+- `extension/lead-runtime.ts`: Lead lifecycle, role composition, supervision, and project integration wiring.
+- `extension/lead/commands.ts`: Lead command menus, settings UI, and command dispatch.
 - `extension/agent-definitions.ts`: Agent-definition discovery, validation, overrides, and launch arguments.
 - `extension/herdr.ts`: Herdr topology, startup, shutdown, and process ownership.
 - `extension/mailbox.ts`: Durable mailbox protocol and record persistence.
@@ -134,7 +135,8 @@ in `AGENTS.md`.
 - `extension/controller-lifecycle.test.ts`: Authorized delegation lifecycle behavior.
 - `extension/agent-runtime.test.ts`: Managed-agent runtime behavior.
 - `extension/recovery.test.ts`: Failure, recovery, and cleanup behavior.
-- `extension/commands.test.ts`: `/herdsman`, `/agents`, and `/chief` configuration UI behavior.
+- `extension/lead/commands.test.ts`: Direct Lead command-factory behavior.
+- `extension/commands.test.ts`: Command registration and integration behavior.
 - `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
 - `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
 
