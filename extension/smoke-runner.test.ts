@@ -4169,8 +4169,18 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
 
   const scoutTask = {
     role: "user",
-    content: "SMOKE_CORE_SCOUT: read package.json",
+    content:
+      '<file name="evidence:work-assignment#1" bytes="41">\nSMOKE_CORE_IMPLEMENTER: delegate one scout.\n</file>\n\nTask:\nSMOKE_CORE_SCOUT: read package.json\n\nThe owner work assignment supplied as evidence is context only; follow your current Task and do not expand its scope.',
   };
+  assert.throws(
+    () =>
+      decide("core", {
+        messages: [
+          { role: "user", content: "SMOKE_CORE_SCOUT: read package.json" },
+        ],
+      }),
+    /Scout did not receive its owner's task as contextual evidence/,
+  );
   const scoutRead = [
     scoutTask,
     call("read", { path: "package.json" }, "read-1"),
@@ -4300,7 +4310,8 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   const resumed = [
     {
       role: "user",
-      content: "SMOKE_CONTINUATION_SECOND: do not reread package.json.",
+      content:
+        "SMOKE_CONTINUATION_SECOND: do not reread package.json.\n\nEarlier retained evidence (available on demand):\n- evidence:work-assignment#1 — work-assignment.md",
     },
     call("read", { path: "package.json" }, "read-1"),
     {
@@ -4313,8 +4324,34 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       ],
     },
   ];
+  const evidenceCall = decide("continuation", { messages: resumed }).content[0];
+  assert.equal(evidenceCall.name, "read_evidence");
+  assert.deepEqual(evidenceCall.arguments, {
+    ref: "evidence:work-assignment#1",
+  });
+  const resumedWithEvidence = [
+    ...resumed,
+    call("read_evidence", evidenceCall.arguments, "evidence-1"),
+    {
+      ...result("read_evidence", "evidence-1"),
+      content: [
+        { type: "text", text: "SMOKE_CONTINUATION_FIRST: read package.json" },
+      ],
+    },
+  ];
+  assert.throws(
+    () =>
+      decide("continuation", {
+        messages: [
+          ...resumed,
+          call("read_evidence", evidenceCall.arguments, "evidence-1"),
+          result("read_evidence", "evidence-1"),
+        ],
+      }),
+    /Continued task could not read its prior work assignment/,
+  );
   assert.equal(
-    decide("continuation", { messages: resumed }).content[0].text,
+    decide("continuation", { messages: resumedWithEvidence }).content[0].text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
 });

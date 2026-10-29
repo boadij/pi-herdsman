@@ -418,14 +418,15 @@ test("task requests round-trip validated required evidence snapshots and results
       }),
     /evidence assignment identity/,
   );
-  assert.throws(
-    () =>
-      writeRequest(path, {
-        ...request,
-        requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
-        projectAssignmentId: undefined,
-      }),
-    /evidence assignment identity/,
+  const independent = {
+    ...request,
+    requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+    projectAssignmentId: undefined,
+  };
+  writeRequest(path, independent);
+  assert.deepEqual(
+    readRequest(path, independent.requestId),
+    JSON.parse(JSON.stringify(independent)),
   );
 });
 test("evidenced task continuations round-trip split metadata and reject malformed splits", () => {
@@ -467,6 +468,45 @@ test("evidenced task continuations round-trip split metadata and reject malforme
   };
   writeRequest(path, request);
   assert.deepEqual(readRequest(path, request.requestId), request);
+  const task = {
+    ...inherited,
+    id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    sourceAssignmentId: request.evidenceAssignmentId!,
+  };
+  const withTask = {
+    ...request,
+    projectAssignmentId: undefined,
+    localEvidence: [task],
+    requiredEvidence: [inherited, task],
+    taskEvidenceId: task.id,
+  };
+  writeRequest(path, withTask);
+  assert.deepEqual(
+    readRequest(path, withTask.requestId),
+    JSON.parse(JSON.stringify(withTask)),
+  );
+  for (const invalid of [
+    { ...withTask, taskEvidenceId: "bad" },
+    { ...withTask, taskEvidenceId: inherited.id },
+    {
+      ...withTask,
+      localEvidence: [local],
+      requiredEvidence: [inherited, local],
+      taskEvidenceId: local.id,
+    },
+    {
+      ...withTask,
+      localEvidence: [
+        { ...task, sourceAssignmentId: inherited.sourceAssignmentId },
+      ],
+      requiredEvidence: [
+        inherited,
+        { ...task, sourceAssignmentId: inherited.sourceAssignmentId },
+      ],
+    },
+    { ...withTask, kind: "steer" as const },
+  ])
+    assert.throws(() => writeRequest(path, invalid), /evidence/);
   assert.throws(
     () =>
       writeRequest(path, {

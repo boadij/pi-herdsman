@@ -86,6 +86,7 @@ import support, {
 const { updateConfig } = await import("./config.ts");
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
+  createManagedAgentEvidenceUpdater,
   managedAgentRequiredEvidence,
   readEvidencePage,
   READ_EVIDENCE_MAX_BYTES,
@@ -4152,7 +4153,7 @@ test("session agent identity reads the session-wide entry array", () => {
   );
 });
 
-test("required evidence restore verifies the accepted managed assignment identity", () => {
+test("required evidence restore verifies the accepted managed assignment identity", async () => {
   const mailbox = setAgentEnvironment("implementer");
   const ctx = fakeAgentContext();
   const sessionId = ctx.sessionManager.getSessionId();
@@ -4265,6 +4266,55 @@ test("required evidence restore verifies the accepted managed assignment identit
     managedAgentRequiredEvidence(context([previous, evidence]))
       ?.effectiveEvidence,
     [requirement],
+  );
+  const task = persistRequiredEvidenceSnapshot(
+    REQUEST_ID,
+    "work-assignment.md",
+    "do the work",
+  );
+  writeAgentState(mailbox, { ...assignment, projectAssignmentId: undefined });
+  const independent = {
+    ...evidence,
+    data: {
+      ...evidence.data,
+      projectAssignmentId: undefined,
+      inheritedEvidence: [],
+      localEvidence: [task],
+      taskEvidenceId: task.id,
+    },
+  };
+  const accepted = managedAgentRequiredEvidence(context([independent]))!;
+  assert.equal(accepted.projectAssignmentId, undefined);
+  assert.equal(accepted.taskEvidenceId, task.id);
+  assert.equal(
+    readEvidencePage(accepted.effectiveEvidence, task.ref!).content,
+    "do the work",
+  );
+  assert.throws(
+    () =>
+      managedAgentRequiredEvidence(
+        context([
+          {
+            ...independent,
+            data: { ...independent.data, ownerSessionId: randomUUID() },
+          },
+        ]),
+      ),
+    /foreign/,
+  );
+  const update = createManagedAgentEvidenceUpdater({
+    appendEntry() {},
+  } as never);
+  await assert.rejects(
+    () =>
+      update(
+        "test",
+        { remove: [task.id] },
+        undefined,
+        undefined,
+        context([independent]),
+      ),
+    /Current task evidence cannot be removed/,
   );
 });
 
@@ -5024,6 +5074,37 @@ test("required evidence history permits removals but rejects changed retained id
   };
   const context = (history: unknown[]) =>
     fakeAgentContext([identity, ...history]);
+  const taskEntry = {
+    ...entry([localFile]),
+    data: { ...base, localEvidence: [localFile], taskEvidenceId: localFile.id },
+  };
+  assert.equal(
+    managedAgentRequiredEvidence(context([taskEntry]))?.taskEvidenceId,
+    localFile.id,
+  );
+  assert.throws(
+    () =>
+      managedAgentRequiredEvidence(context([taskEntry, entry([localFile])])),
+    /Conflicting/,
+  );
+  for (const bad of [
+    { ...taskEntry.data, taskEvidenceId: "bad" },
+    { ...taskEntry.data, taskEvidenceId: inherited.id },
+    {
+      ...taskEntry.data,
+      localEvidence: [localResult],
+      taskEvidenceId: localResult.id,
+    },
+    {
+      ...taskEntry.data,
+      localEvidence: [{ ...localFile, sourceAssignmentId: randomUUID() }],
+    },
+  ])
+    assert.throws(
+      () =>
+        managedAgentRequiredEvidence(context([{ ...taskEntry, data: bad }])),
+      /malformed/,
+    );
   const afterRemoval = managedAgentRequiredEvidence(
     context([entry([localFile, localResult]), entry([localResult])]),
   )!;

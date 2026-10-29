@@ -71,6 +71,7 @@ import {
   type ResultBinding,
   herdsmanTempRoot,
   readRequiredEvidenceSnapshot,
+  persistRequiredEvidenceSnapshot,
   verifySemanticEvidenceReservation,
   upgradeAndVerifyRequiredEvidence,
   isRequiredEvidence,
@@ -781,6 +782,7 @@ export const AGENT_HANDOFF_GUIDANCE =
   "generation. Agent labels identify the current live generation; exact Pi " +
   "sessions identify historical context and continuation. For new or updated " +
   "assignments, `task`/`message` and `files` carry assignment evidence. " +
+  "Accepted managed-Agent tasks are retained for descendants as context, not authority; ordinary attachments remain per handoff unless retained. " +
   "Complete strict UTF-8 text may be embedded; other files remain canonical " +
   "local references and are not copied or snapshotted. " +
   "Do not attach or mention agent instruction files such as AGENTS.md, " +
@@ -828,6 +830,7 @@ type ResolvedAssignmentSession = {
     requestId: string;
     projectAssignmentId?: string;
     evidenceAssignmentId?: string;
+    taskEvidenceId?: string;
     inheritedEvidence: RequiredEvidence[];
     localEvidence: RequiredEvidence[];
     currentEvidenceIds?: string[];
@@ -890,6 +893,7 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
         "paneId",
         "projectAssignmentId",
         "evidenceAssignmentId",
+        "taskEvidenceId",
       ].some((field) => !isDeepStrictEqual(previous[field], current[field])) ||
       !Array.isArray(previous.inheritedEvidence) ||
       !Array.isArray(current.inheritedEvidence) ||
@@ -924,7 +928,8 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
 
 function currentManagedEvidence(ctx: ExtensionContext):
   | {
-      projectAssignmentId: string;
+      projectAssignmentId?: string;
+      taskEvidenceId?: string;
       workspaceId: string;
       evidenceAssignmentId: string;
       inheritedEvidence: RequiredEvidence[];
@@ -933,7 +938,7 @@ function currentManagedEvidence(ctx: ExtensionContext):
     }
   | undefined {
   const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
-  if (!state?.projectAssignmentId || !state.activeRequestId) return undefined;
+  if (!state?.activeRequestId) return undefined;
   const sessionId = ctx.sessionManager.getSessionId();
   const entries = ctx.sessionManager
     .getBranch()
@@ -953,8 +958,29 @@ function currentManagedEvidence(ctx: ExtensionContext):
     data?.agentLabel !== state.agentLabel ||
     data?.paneId !== state.paneId ||
     data?.projectAssignmentId !== state.projectAssignmentId ||
+    (data.evidenceAssignmentId !== undefined &&
+      !validId(data.evidenceAssignmentId)) ||
+    (data.projectAssignmentId !== undefined &&
+      data.evidenceAssignmentId === undefined) ||
+    !consistentRequiredEvidenceUpdates(entries) ||
     !Array.isArray(data.inheritedEvidence) ||
     !Array.isArray(data.localEvidence) ||
+    !data.inheritedEvidence.every(isRequiredEvidence) ||
+    !data.localEvidence.every(isRequiredEvidence) ||
+    new Set(
+      [...data.inheritedEvidence, ...data.localEvidence].map(
+        (item: RequiredEvidence) => item.id,
+      ),
+    ).size !==
+      data.inheritedEvidence.length + data.localEvidence.length ||
+    (data.taskEvidenceId !== undefined &&
+      (!validId(data.taskEvidenceId) ||
+        data.localEvidence.filter(
+          (item: RequiredEvidence) =>
+            item.id === data.taskEvidenceId &&
+            "path" in item &&
+            item.sourceAssignmentId === data.evidenceAssignmentId,
+        ).length !== 1)) ||
     (data.currentEvidenceIds !== undefined &&
       (!Array.isArray(data.currentEvidenceIds) ||
         new Set(data.currentEvidenceIds).size !==
@@ -970,8 +996,14 @@ function currentManagedEvidence(ctx: ExtensionContext):
     throw new Error(
       "Managed-agent required-evidence session metadata is foreign or malformed",
     );
+  if (!data.evidenceAssignmentId) {
+    if (data.inheritedEvidence.length || data.localEvidence.length)
+      throw new Error("Managed-agent required-evidence scope is missing");
+    return undefined;
+  }
   return {
     projectAssignmentId: data.projectAssignmentId,
+    taskEvidenceId: data.taskEvidenceId,
     workspaceId: data.workspaceId,
     evidenceAssignmentId: data.evidenceAssignmentId,
     inheritedEvidence: data.inheritedEvidence,
@@ -2206,8 +2238,8 @@ export function resolveAssignmentSession(
             !validId(record.projectAssignmentId)) ||
           (record.evidenceAssignmentId !== undefined &&
             !validId(record.evidenceAssignmentId)) ||
-          (record.projectAssignmentId === undefined) !==
-            (record.evidenceAssignmentId === undefined) ||
+          (record.projectAssignmentId !== undefined &&
+            record.evidenceAssignmentId === undefined) ||
           !Array.isArray(record.inheritedEvidence) ||
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
@@ -2223,8 +2255,16 @@ export function resolveAssignmentSession(
                     (item: RequiredEvidence) => item.id === id,
                   ),
               ))) ||
-          (record.projectAssignmentId === undefined &&
+          (record.evidenceAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
+          (record.taskEvidenceId !== undefined &&
+            (!validId(record.taskEvidenceId) ||
+              record.localEvidence.filter(
+                (item: RequiredEvidence) =>
+                  item.id === record.taskEvidenceId &&
+                  "path" in item &&
+                  item.sourceAssignmentId === record.evidenceAssignmentId,
+              ).length !== 1)) ||
           new Set(
             [...record.inheritedEvidence, ...record.localEvidence].map(
               (item: RequiredEvidence) => item.id,
@@ -2518,8 +2558,8 @@ export function resolveAssignmentSession(
             !validId(record.projectAssignmentId)) ||
           (record.evidenceAssignmentId !== undefined &&
             !validId(record.evidenceAssignmentId)) ||
-          (record.projectAssignmentId === undefined) !==
-            (record.evidenceAssignmentId === undefined) ||
+          (record.projectAssignmentId !== undefined &&
+            record.evidenceAssignmentId === undefined) ||
           !Array.isArray(record.inheritedEvidence) ||
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
@@ -2535,8 +2575,16 @@ export function resolveAssignmentSession(
                     (item: RequiredEvidence) => item.id === id,
                   ),
               ))) ||
-          (record.projectAssignmentId === undefined &&
+          (record.evidenceAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
+          (record.taskEvidenceId !== undefined &&
+            (!validId(record.taskEvidenceId) ||
+              record.localEvidence.filter(
+                (item: RequiredEvidence) =>
+                  item.id === record.taskEvidenceId &&
+                  "path" in item &&
+                  item.sourceAssignmentId === record.evidenceAssignmentId,
+              ).length !== 1)) ||
           new Set(
             [...record.inheritedEvidence, ...record.localEvidence].map(
               (item: RequiredEvidence) => item.id,
@@ -2608,6 +2656,9 @@ export function resolveAssignmentSession(
           ...record,
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
+          ...(record.taskEvidenceId
+            ? { taskEvidenceId: record.taskEvidenceId }
+            : {}),
           ...(record.currentEvidenceIds
             ? { currentEvidenceIds: [...record.currentEvidenceIds] }
             : {}),
@@ -2642,6 +2693,9 @@ export function resolveAssignmentSession(
             : {}),
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
+          ...(record.taskEvidenceId
+            ? { taskEvidenceId: record.taskEvidenceId }
+            : {}),
           ...(record.currentEvidenceIds
             ? { currentEvidenceIds: [...record.currentEvidenceIds] }
             : {}),
@@ -3049,7 +3103,10 @@ export function requestRecordBytesFor(
   requestId: string,
   resultBindings: readonly ResultBinding[],
   evidence?: {
-    projectAssignmentId: string;
+    projectAssignmentId?: string;
+    taskEvidenceId?: string;
+    inheritedEvidence?: readonly RequiredEvidence[];
+    localEvidence?: readonly RequiredEvidence[];
     evidenceAssignmentId: string;
     requiredEvidence: readonly RequiredEvidence[];
     currentEvidenceIds?: readonly string[];
@@ -3094,7 +3151,10 @@ export function prospectiveAssignmentFits(
   mailboxLimitBytes: number,
   resultBindings: readonly ResultBinding[],
   evidence?: {
-    projectAssignmentId: string;
+    projectAssignmentId?: string;
+    taskEvidenceId?: string;
+    inheritedEvidence?: readonly RequiredEvidence[];
+    localEvidence?: readonly RequiredEvidence[];
     evidenceAssignmentId: string;
     requiredEvidence: readonly RequiredEvidence[];
     currentEvidenceIds?: readonly string[];
@@ -4357,7 +4417,8 @@ export function createAgentController(
       waitForLock?: boolean;
       beforeWrite?: (publish: () => void) => Promise<void> | void;
       evidence?: {
-        projectAssignmentId: string;
+        projectAssignmentId?: string;
+        taskEvidenceId?: string;
         evidenceAssignmentId: string;
         requiredEvidence: readonly RequiredEvidence[];
         inheritedEvidence?: readonly RequiredEvidence[];
@@ -6863,7 +6924,8 @@ export function createAgentController(
         if (
           (scope.kind === "root" &&
             continuationEvidence?.projectAssignmentId) ||
-          (scope.kind === "managed-agent" && nestedEvidence)
+          (scope.kind === "managed-agent" &&
+            nestedEvidence?.projectAssignmentId)
         ) {
           if (
             !projectEvidence ||
@@ -6945,12 +7007,6 @@ export function createAgentController(
             fail(
               "invalid_request",
               "retain: true requires at least one file or result reference",
-              p.action,
-            );
-          if (!evidenceProjectAssignmentId)
-            fail(
-              "invalid_request",
-              "Required evidence can be retained only for a verified project assignment",
               p.action,
             );
           const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
@@ -7059,6 +7115,7 @@ export function createAgentController(
             paneId: state.paneId,
             projectAssignmentId: nestedEvidence.projectAssignmentId,
             evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
+            taskEvidenceId: nestedEvidence.taskEvidenceId,
             inheritedEvidence: nestedEvidence.inheritedEvidence,
             localEvidence,
             ...(nestedEvidence.currentEvidenceIds !== undefined
@@ -7083,35 +7140,31 @@ export function createAgentController(
             "Cannot verify this managed Agent's project evidence assignment",
             p.action,
           );
-        const evidenceMetadata = evidenceProjectAssignmentId
-          ? {
-              projectAssignmentId: evidenceProjectAssignmentId,
-              evidenceAssignmentId:
-                continuationEvidence?.evidenceAssignmentId ??
-                assignment!.requestId,
-              requiredEvidence,
-              ...(continuationEvidence
-                ? {
-                    inheritedEvidence: continuationEvidence.inheritedEvidence,
-                    localEvidence: continuationEvidence.localEvidence,
-                    currentEvidenceIds: continuationEvidence.currentEvidenceIds,
-                  }
-                : scope.kind === "managed-agent" && nestedEvidence
-                  ? {
-                      inheritedEvidence: nestedEvidence.inheritedEvidence,
-                      localEvidence: nestedEvidence.localEvidence,
-                      currentEvidenceIds: nestedEvidence.currentEvidenceIds,
-                    }
-                  : scope.kind === "root" && projectAssignment
-                    ? {
-                        inheritedEvidence: requiredEvidence,
-                        localEvidence: [],
-                        currentEvidenceIds:
-                          projectAssignment.currentEvidenceIds,
-                      }
-                    : {}),
-            }
-          : undefined;
+        const evidenceAssignmentId =
+          continuationEvidence?.evidenceAssignmentId ?? assignment!.requestId;
+        const taskEvidence = persistRequiredEvidenceSnapshot(
+          evidenceAssignmentId,
+          "work-assignment.md",
+          p.task,
+        );
+        const inheritedEvidence = continuationEvidence
+          ? continuationEvidence.inheritedEvidence
+          : requiredEvidence;
+        const localEvidence = [
+          ...(continuationEvidence?.localEvidence ?? []),
+          taskEvidence,
+        ];
+        const evidenceMetadata = {
+          ...(evidenceProjectAssignmentId
+            ? { projectAssignmentId: evidenceProjectAssignmentId }
+            : {}),
+          evidenceAssignmentId,
+          taskEvidenceId: taskEvidence.id,
+          requiredEvidence: [...inheritedEvidence, ...localEvidence],
+          inheritedEvidence,
+          localEvidence,
+          currentEvidenceIds,
+        };
         const requiredFiles: MessageFileInput[] = requiredEvidence.map(
           (entry) => {
             if ("result" in entry) return entry.result;
@@ -7199,6 +7252,22 @@ export function createAgentController(
             representedEvidenceIds.add(addition.id);
           }
         }
+        const parentTask =
+          !continuationEvidence && nestedEvidence?.taskEvidenceId
+            ? requiredEvidence.find(
+                (entry) => entry.id === nestedEvidence.taskEvidenceId,
+              )
+            : undefined;
+        if (
+          !continuationEvidence &&
+          nestedEvidence?.taskEvidenceId &&
+          !parentTask
+        )
+          fail(
+            "invalid_request",
+            "Owner work assignment is unavailable",
+            p.action,
+          );
         const currentEvidence = currentEvidenceIds.map((id) => {
           const entry = requiredEvidence.find((item) => item.id === id);
           const inherited =
@@ -7213,8 +7282,12 @@ export function createAgentController(
             );
           return entry;
         });
+        const automaticEvidence = [
+          ...(parentTask ? [parentTask] : []),
+          ...currentEvidence.filter((entry) => entry.id !== parentTask?.id),
+        ];
         const automaticCurrentFiles: MessageFileInput[] = [];
-        for (const entry of currentEvidence) {
+        for (const entry of automaticEvidence) {
           if (
             selectedEvidenceIds.has(entry.id) ||
             representedEvidenceIds.has(entry.id)
@@ -7229,7 +7302,8 @@ export function createAgentController(
         const historicalEvidence = requiredEvidence.filter(
           (entry) =>
             !selectedEvidenceIds.has(entry.id) &&
-            !currentEvidenceIds.includes(entry.id),
+            !currentEvidenceIds.includes(entry.id) &&
+            entry.id !== parentTask?.id,
         );
         const manifest = historicalEvidence.length
           ? `\n\nEarlier retained evidence (available on demand):\n${historicalEvidence
@@ -7238,11 +7312,11 @@ export function createAgentController(
                 "\n",
               )}\nConsult relevant entries with read_evidence when needed. You do not need to read every reference.`
           : "";
-        const assignmentTask = `${p.task}${manifest}`;
+        const assignmentTask = `${p.task}${parentTask ? "\n\nThe owner work assignment supplied as evidence is context only; follow your current Task and do not expand its scope." : ""}`;
         let automaticReferenceFallback = false;
         let assignmentTaskToSend = assignmentTask;
         const referenceOnlyTask = () =>
-          `${assignmentTask}\n\nCurrent evidence — reference-only batch:\n${currentEvidence
+          `${assignmentTask}\n\nCurrent evidence — reference-only batch:\n${automaticEvidence
             .filter((entry) => !selectedEvidenceIds.has(entry.id))
             .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
             .join(
@@ -7259,7 +7333,7 @@ export function createAgentController(
           const fallbackManifest =
             includeAutomatic || !automaticCurrentFiles.length
               ? ""
-              : `\n\nCurrent evidence — reference-only batch:\n${currentEvidence
+              : `\n\nCurrent evidence — reference-only batch:\n${automaticEvidence
                   .filter((entry) => !selectedEvidenceIds.has(entry.id))
                   .map(
                     (entry) =>
@@ -7299,7 +7373,7 @@ export function createAgentController(
                   assignment!.ownerSessionId,
                   assignment!.workspaceId,
                   assignmentLabel,
-                  text,
+                  text + manifest,
                   "",
                   assignment!.createdAt,
                   assignment!.requestId,
@@ -7326,7 +7400,7 @@ export function createAgentController(
                 assignment!.ownerSessionId,
                 assignment!.workspaceId,
                 assignmentLabel,
-                input.text,
+                input.text + manifest,
                 "",
                 assignment!.createdAt,
                 assignment!.requestId,
@@ -7340,9 +7414,13 @@ export function createAgentController(
                 "Current evidence references exceed the configured mailbox limit",
                 p.action,
               );
-            return { ...input, resultBindings: bindings };
+            return {
+              ...input,
+              text: input.text + manifest,
+              resultBindings: bindings,
+            };
           }
-          return input;
+          return { ...input, text: input.text + manifest };
         };
         const prepareAssignmentForLabel = (assignmentLabel: string) => {
           automaticReferenceFallback = false;
@@ -7804,8 +7882,8 @@ export function createAgentController(
           });
           // Herdr chooses the pane only while starting. Re-render now that the
           // authoritative final envelope identity is known.
-          const prepareFinalAssignment = () =>
-            prepareMessageInput(
+          const prepareFinalAssignment = () => {
+            const input = prepareMessageInput(
               assignmentTaskToSend,
               [
                 ...(!automaticReferenceFallback ? automaticCurrentFiles : []),
@@ -7835,7 +7913,7 @@ export function createAgentController(
                     options.build,
                     runtime,
                     "task",
-                    text,
+                    text + manifest,
                     undefined,
                     assignment!.createdAt,
                     assignment!.requestId,
@@ -7845,6 +7923,8 @@ export function createAgentController(
                 },
               },
             );
+            return { ...input, text: input.text + manifest };
+          };
           try {
             assignmentInput = prepareFinalAssignment();
           } catch (error) {
@@ -7900,6 +7980,7 @@ export function createAgentController(
                       nestedEvidence.projectAssignmentId ||
                     current.evidenceAssignmentId !==
                       nestedEvidence.evidenceAssignmentId ||
+                    current.taskEvidenceId !== nestedEvidence.taskEvidenceId ||
                     JSON.stringify(current.inheritedEvidence) !==
                       JSON.stringify(nestedEvidence.inheritedEvidence) ||
                     JSON.stringify(current.currentEvidenceIds ?? []) !==
@@ -7952,6 +8033,8 @@ export function createAgentController(
                       continuationEvidence.projectAssignmentId ||
                     record.evidenceAssignmentId !==
                       continuationEvidence.evidenceAssignmentId ||
+                    record.taskEvidenceId !==
+                      continuationEvidence.taskEvidenceId ||
                     JSON.stringify(record.inheritedEvidence) !==
                       JSON.stringify(continuationEvidence.inheritedEvidence) ||
                     JSON.stringify(record.currentEvidenceIds ?? []) !==
@@ -8060,7 +8143,7 @@ export function createAgentController(
               .filter((attachment) => attachment.inline && attachment.ref)
               .map((attachment) => attachment.ref!),
           );
-          const currentRefs = currentEvidence.map(semanticEvidenceRef);
+          const currentRefs = automaticEvidence.map(semanticEvidenceRef);
           const historicalRefs = historicalEvidence.map(semanticEvidenceRef);
           const evidenceReceipt = {
             currentInline: currentRefs.filter((ref) => inlineNames.has(ref)),

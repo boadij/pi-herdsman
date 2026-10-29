@@ -71,8 +71,9 @@ Project-wide requirements are controlled by the Manager.
 Eligible managed-Agent controllers additionally accept optional boolean
 `retain`, defaulting to `false`. Omitted or false means `files` apply only
 to this handoff. With `retain: true`, supplied files become required evidence
-in the Agent's local assignment for its own descendants only. Task text is not
-retained. Inherited assignment requirements cannot be removed or changed by a
+in the Agent's local assignment for its own descendants only. Each accepted
+managed-Agent task is automatically retained for its descendants, independently
+of `retain`. Inherited assignment requirements cannot be removed or changed by a
 managed Agent. Retention validates assignment authority and evidence and fails
 explicitly rather than falling back to ordinary delegation; if retention is
 persisted but delivery fails, the result reports that partial outcome.
@@ -430,14 +431,20 @@ reusable in the receiving branch through a hidden binding; canonical
 supplied as evidence. `files` remains a `string[]` for all three forms.
 
 `files` remains explicit per-message evidence; arbitrary caller conversation
-and attachments are not inherited. A fresh managed Agent in a verified project
-assignment also receives that assignment's required evidence automatically.
+and attachments are not inherited. A managed Agent automatically inherits its
+parent Agent's accepted task as context, with older authorized assignments
+available by semantic evidence reference. Its own task remains operative and
+inherited context grants no additional authority. This applies to ordinary
+Lead-owned Agent trees as well as managed projects. A fresh managed Agent in a
+verified project assignment also receives that assignment's required evidence.
 That received set is fixed for the accepted assignment: later parent changes do
-not silently rewrite it. For an eligible project-scoped managed Agent,
+not silently rewrite it. For an eligible managed Agent,
 `delegate_agent` with `retain: true` adds only local requirements for its
-descendants; inherited evidence remains owned by the project assignment.
+descendants; inherited evidence remains owned by its source assignment.
 `continue_agent` resumes the
-exact saved managed-agent Pi history and its verified assignment evidence.
+exact saved managed-agent Pi history and its verified assignment evidence. It
+retains the new task for descendants while preserving earlier task snapshots as
+historical evidence.
 Files supplied explicitly on a `continue_agent` call are a separate handoff for
 that message; they do not become required evidence for the continued
 assignment.

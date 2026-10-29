@@ -95,6 +95,7 @@ export interface RequestRecord {
   currentEvidenceIds?: string[];
   projectAssignmentId?: string;
   evidenceAssignmentId?: string;
+  taskEvidenceId?: string;
   createdAt: number;
 }
 export interface AskRecord {
@@ -437,6 +438,7 @@ function validate(
             "currentEvidenceIds",
             "projectAssignmentId",
             "evidenceAssignmentId",
+            "taskEvidenceId",
             "createdAt",
           ]
         : kind === "ask"
@@ -695,7 +697,6 @@ function validate(
       const split = [...inherited, ...local] as RequiredEvidence[];
       if (
         new Set(split.map((entry) => entry.id)).size !== split.length ||
-        v.projectAssignmentId === undefined ||
         v.evidenceAssignmentId === undefined ||
         !Array.isArray(v.requiredEvidence) ||
         JSON.stringify(v.requiredEvidence) !== JSON.stringify(split)
@@ -721,9 +722,24 @@ function validate(
     const hasEvidenceAssignmentId = v.evidenceAssignmentId !== undefined;
     if (
       (hasProjectAssignmentId || hasEvidenceAssignmentId) &&
-      (v.kind !== "task" || hasProjectAssignmentId !== hasEvidenceAssignmentId)
+      (v.kind !== "task" ||
+        (hasProjectAssignmentId && !hasEvidenceAssignmentId))
     )
       throw new Error("Invalid request evidence assignment identity");
+    if (v.taskEvidenceId !== undefined) {
+      const task = (v.localEvidence as RequiredEvidence[] | undefined)?.filter(
+        (item) => item.id === v.taskEvidenceId,
+      );
+      if (
+        v.kind !== "task" ||
+        typeof v.taskEvidenceId !== "string" ||
+        !UUID.test(v.taskEvidenceId) ||
+        task?.length !== 1 ||
+        "result" in task[0]! ||
+        task[0]!.sourceAssignmentId !== v.evidenceAssignmentId
+      )
+        throw new Error("Invalid request task evidence identity");
+    }
     if (
       (hasProjectAssignmentId &&
         (typeof v.projectAssignmentId !== "string" ||
