@@ -127,7 +127,7 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
       execFile(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
-        { windowsHide: true, timeout: 2_500, maxBuffer: 32 * 1024 },
+        { windowsHide: true, timeout: 5_000, maxBuffer: 32 * 1024 },
         (error, stdout) => {
           try {
             if (error)
