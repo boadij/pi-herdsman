@@ -9,6 +9,46 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.36.0](https://github.com/boadij/pi-herdsman/compare/v0.35.0...v0.36.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **coordination:** use stable coordinator targets ([#664](https://github.com/boadij/pi-herdsman/issues/664))
+* **config:** separate Agent definitions from role profiles ([#660](https://github.com/boadij/pi-herdsman/issues/660))
+* **coordination:** address assigned Leads by branch ([#658](https://github.com/boadij/pi-herdsman/issues/658))
+
+### Features
+
+* **container:** enable persistent native Pi extension updates ([#659](https://github.com/boadij/pi-herdsman/issues/659)) ([f5e8f75](https://github.com/boadij/pi-herdsman/commit/f5e8f753d78f72c28acd84b188a477b44d60bb6e))
+* **coordination:** address assigned Leads by branch ([#658](https://github.com/boadij/pi-herdsman/issues/658)) ([3fedaac](https://github.com/boadij/pi-herdsman/commit/3fedaacab0853c637ac941fdb46ce7c6014bd557))
+* **coordination:** use stable coordinator targets ([#664](https://github.com/boadij/pi-herdsman/issues/664)) ([7a33ca4](https://github.com/boadij/pi-herdsman/commit/7a33ca4fbc69b08f25357985d9ed1cfc6b8f079f)), closes [#203](https://github.com/boadij/pi-herdsman/issues/203)
+* **evidence:** inherit managed Agent work assignments ([#672](https://github.com/boadij/pi-herdsman/issues/672)) ([717d243](https://github.com/boadij/pi-herdsman/commit/717d24343da1d3a930de280fc0c71e261ed2444a)), closes [#671](https://github.com/boadij/pi-herdsman/issues/671)
+
+
+### Fixes
+
+* **coordination:** clarify result handoffs and deduplicate guidance ([#667](https://github.com/boadij/pi-herdsman/issues/667)) ([251528c](https://github.com/boadij/pi-herdsman/commit/251528c762148beab8a296cf3f9c9c49ed15bc8a))
+* **herdr:** recognize Windows extended repository paths ([#663](https://github.com/boadij/pi-herdsman/issues/663)) ([5054452](https://github.com/boadij/pi-herdsman/commit/505445234a745720ba134b0651e4fef63a1871d1))
+* **peer:** clarify peer discovery and message identity ([2cfb97f](https://github.com/boadij/pi-herdsman/commit/2cfb97f8211f317a561c579389e39d74697a73c1)), closes [#669](https://github.com/boadij/pi-herdsman/issues/669)
+
+
+### Refactoring
+
+* **config:** separate Agent definitions from role profiles ([#660](https://github.com/boadij/pi-herdsman/issues/660)) ([969a58d](https://github.com/boadij/pi-herdsman/commit/969a58dca83339d9518c7d997f2d8feb4be9c942))
+
+
+### Tests
+
+* **ci:** identify unfinished Windows test workers at timeout ([#673](https://github.com/boadij/pi-herdsman/issues/673)) ([ae11daf](https://github.com/boadij/pi-herdsman/commit/ae11daf0177283b5ce71646c558cfe45f10df114))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.22 ([#668](https://github.com/boadij/pi-herdsman/issues/668)) ([a6619c6](https://github.com/boadij/pi-herdsman/commit/a6619c6d42eb5ae3683273304f7de3f3637b14b2))
+* **deps:** update node.js to v26.13.0 ([#674](https://github.com/boadij/pi-herdsman/issues/674)) ([e706feb](https://github.com/boadij/pi-herdsman/commit/e706feb68a25bfdb3b9aad0655e2795b9f2dffc0))
+* **deps:** update tailscale/tailscale docker tag to v1.104.4 ([#665](https://github.com/boadij/pi-herdsman/issues/665)) ([3bf8b00](https://github.com/boadij/pi-herdsman/commit/3bf8b0044513f8d6f8fb35aa9b794eb03492bfdf))
+
 ## [0.35.0](https://github.com/boadij/pi-herdsman/compare/v0.34.1...v0.35.0) (2026-10-28)
 
 
