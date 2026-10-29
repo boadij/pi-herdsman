@@ -100,8 +100,8 @@ test(
 );
 
 test(
-  "Windows timeout attributes a native test-file worker",
-  { skip: process.platform !== "win32", timeout: 15_000 },
+  "timeout attributes a native test-file worker on Windows",
+  { timeout: 15_000 },
   async (t) => {
     const directory = await mkdtemp(
       join(tmpdir(), "pi-herdsman-check-worker-"),
@@ -113,7 +113,11 @@ test(
       pids = ready;
       return Date.now() + 750;
     });
+    const previousFixture = process.env.CHECK_WORKER_FIXTURE;
+    const testContext = process.env.NODE_TEST_CONTEXT;
     process.env.CHECK_WORKER_FIXTURE = pidPath;
+    // The nested runner must start outside the parent node:test worker context.
+    delete process.env.NODE_TEST_CONTEXT;
     let run;
     try {
       run = runTestRunner(
@@ -126,18 +130,26 @@ test(
         "native worker fixture",
       );
     } finally {
-      delete process.env.CHECK_WORKER_FIXTURE;
+      if (previousFixture === undefined)
+        delete process.env.CHECK_WORKER_FIXTURE;
+      else process.env.CHECK_WORKER_FIXTURE = previousFixture;
+      if (testContext !== undefined)
+        process.env.NODE_TEST_CONTEXT = testContext;
     }
     const result = await run;
     assert.equal(result.kind, "suite-timeout");
     assert.equal(result.treeGone, true);
-    assert.match(
-      result.workerDiagnostic,
-      new RegExp(
-        `candidate test worker pid=${pids.child} file=extension/check-runner\\.test\\.ts`,
-      ),
-    );
-    assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
+    if (process.platform === "win32") {
+      assert.match(
+        result.workerDiagnostic,
+        new RegExp(
+          `candidate test worker pid=${pids.child} file=extension/check-runner\\.test\\.ts`,
+        ),
+      );
+      assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
+    } else {
+      assert.equal(result.workerDiagnostic, undefined);
+    }
     assert.throws(
       () => process.kill(pids.child, 0),
       (error: any) => error?.code === "ESRCH",
