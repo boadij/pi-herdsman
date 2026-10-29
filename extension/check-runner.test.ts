@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,6 +25,18 @@ test("Windows worker attribution accepts only existing repository test paths", (
   assert.equal(windowsTestFile('node.exe "not-a-real.test.ts"'), undefined);
   assert.equal(windowsTestFile(`node.exe --file="${file}"`), undefined);
 });
+
+test(
+  "native attribution fixture",
+  { skip: !process.env.CHECK_WORKER_FIXTURE },
+  async () => {
+    await writeFile(
+      process.env.CHECK_WORKER_FIXTURE!,
+      JSON.stringify({ parent: process.ppid, child: process.pid }),
+    );
+    await new Promise(() => setInterval(() => {}, 1_000));
+  },
+);
 
 async function waitForPids(path: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
@@ -84,5 +96,51 @@ test(
         () => process.kill(pid, 0),
         (error: any) => error?.code === "ESRCH",
       );
+  },
+);
+
+test(
+  "Windows timeout attributes a native test-file worker",
+  { skip: process.platform !== "win32", timeout: 15_000 },
+  async (t) => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "pi-herdsman-check-worker-"),
+    );
+    const pidPath = join(directory, "pids.json");
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    let pids;
+    const deadline = waitForPids(pidPath, 5_000).then((ready) => {
+      pids = ready;
+      return Date.now() + 750;
+    });
+    process.env.CHECK_WORKER_FIXTURE = pidPath;
+    let run;
+    try {
+      run = runTestRunner(
+        [
+          "--test",
+          "--test-name-pattern=^native attribution fixture$",
+          "extension/check-runner.test.ts",
+        ],
+        deadline,
+        "native worker fixture",
+      );
+    } finally {
+      delete process.env.CHECK_WORKER_FIXTURE;
+    }
+    const result = await run;
+    assert.equal(result.kind, "suite-timeout");
+    assert.equal(result.treeGone, true);
+    assert.match(
+      result.workerDiagnostic,
+      new RegExp(
+        `candidate test worker pid=${pids.child} file=extension/check-runner\\.test\\.ts`,
+      ),
+    );
+    assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
+    assert.throws(
+      () => process.kill(pids.child, 0),
+      (error: any) => error?.code === "ESRCH",
+    );
   },
 );

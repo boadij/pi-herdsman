@@ -130,7 +130,10 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
         { windowsHide: true, timeout: 2_500, maxBuffer: 32 * 1024 },
         (error, stdout) => {
           try {
-            if (error) return resolvePromise(unavailable);
+            if (error)
+              return resolvePromise(
+                `${unavailable} (${error.killed ? "deadline" : "process error"})`,
+              );
             const snapshot = JSON.parse(stdout);
             if (
               !Array.isArray(snapshot.rows) ||
@@ -162,12 +165,12 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
             lines.push(`check: snapshot truncated=${snapshot.truncated}`);
             resolvePromise(lines.join("\n"));
           } catch {
-            resolvePromise(unavailable);
+            resolvePromise(`${unavailable} (invalid snapshot)`);
           }
         },
       );
     } catch {
-      resolvePromise(unavailable);
+      resolvePromise(`${unavailable} (process error)`);
     }
   });
 }
