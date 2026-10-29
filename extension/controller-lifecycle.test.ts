@@ -1249,6 +1249,7 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
     parentRequest: RequestRecord,
     childLabel: string,
     task: string,
+    referenceOnly = false,
   ) => {
     const parentLabel = parentRequest.agentLabel;
     setAgentEnvironment(parentLabel, ["agent"]);
@@ -1363,6 +1364,19 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
           context,
         );
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      const parentTask = parentRequest.localEvidence!.find(
+        (entry) => entry.id === parentRequest.taskEvidenceId,
+      )!;
+      assert.ok("path" in parentTask && parentTask.ref);
+      assert.deepEqual(
+        result.details.evidence.currentInline,
+        referenceOnly ? [] : [parentTask.ref],
+      );
+      assert.deepEqual(result.details.evidence.explicitInline, []);
+      assert.equal(
+        result.details.evidence.referenced.includes(parentTask.ref),
+        referenceOnly,
+      );
       await new Promise((resolve) => setTimeout(resolve, 30));
       assert.ok(published);
       return published;
@@ -1440,6 +1454,7 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
     largeParent,
     "ancestry-large-child",
     "Narrow child task",
+    true,
   );
   assert.match(largeChild.text, /reference-only batch/);
   assert.ok(largeChild.text.includes(oversized.ref!));

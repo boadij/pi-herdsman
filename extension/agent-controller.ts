@@ -8143,7 +8143,7 @@ export function createAgentController(
               .filter((attachment) => attachment.inline && attachment.ref)
               .map((attachment) => attachment.ref!),
           );
-          const currentRefs = currentEvidence.map(semanticEvidenceRef);
+          const currentRefs = automaticEvidence.map(semanticEvidenceRef);
           const historicalRefs = historicalEvidence.map(semanticEvidenceRef);
           const evidenceReceipt = {
             currentInline: currentRefs.filter((ref) => inlineNames.has(ref)),
