@@ -63,17 +63,19 @@ On POSIX suite deadline, the runner attempts:
 3. `SIGKILL` when required;
 4. bounded proof that the process tree disappeared.
 
-On Windows suite timeout, the runner attempts one bounded descendant snapshot
-before invoking `taskkill.exe /PID <pid> /T /F` and waiting for the runner
-process to disappear. Filename attribution is best-effort; raw command lines
-and environment details are not logged. Snapshot failure does not replace the
-original suite-timeout failure. The 240-second suite deadline and existing
-cleanup remain unchanged.
+On Windows suite timeout, cleanup starts before a concurrent bounded descendant
+snapshot. The runner invokes `taskkill.exe /PID <pid> /T /F` and waits for the
+runner process to disappear. Filename attribution is best-effort and may be
+unavailable when cleanup wins the race; raw command lines and environment
+details are not logged. Snapshot failure does not replace the original
+suite-timeout failure. The 240-second suite deadline remains unchanged. Runner
+disappearance does not verify descendant
+cleanup, which is explicitly reported as unverified.
 
 A test runner that leaks descendants after normal exit is reported as a failure
 on POSIX and cleaned through the same process-group boundary. Windows timeout
-cleanup covers the runner tree; post-parent descendant leak accounting would
-require a Job Object and is not implemented.
+cleanup attempts to terminate the runner tree, but detached descendants can
+survive; reliable containment and post-parent leak accounting are not implemented.
 
 ## Focused tests
 

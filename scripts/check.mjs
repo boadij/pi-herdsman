@@ -89,7 +89,7 @@ export function windowsTestFile(command) {
   return files.size === 1 ? [...files][0] : undefined;
 }
 
-function snapshotWindowsTestWorkers(pid) {
+function snapshotWindowsTestWorkers(pid, signal) {
   const unavailable = "check: Windows timeout snapshot unavailable";
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -127,7 +127,7 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
       execFile(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
-        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 },
+        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024, signal },
         (error, stdout) => {
           try {
             if (error)
@@ -187,18 +187,18 @@ function isAlreadyGoneTaskkillError(error) {
 async function terminateProcessTree(pid) {
   if (isWindows) {
     let forceSent = false;
-    let treeGone = false;
+    let runnerGone = false;
     let cleanupError;
     try {
       await terminateWindowsProcessTree(pid);
       forceSent = true;
-      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      runnerGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
     } catch (error) {
-      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
-      if (!treeGone || !isAlreadyGoneTaskkillError(error))
+      runnerGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      if (!runnerGone || !isAlreadyGoneTaskkillError(error))
         cleanupError = error instanceof Error ? error.message : String(error);
     }
-    return { forceSent, treeGone, cleanupError };
+    return { forceSent, runnerGone, treeGone: undefined, cleanupError };
   }
   let termSent = false;
   let killSent = false;
@@ -229,13 +229,14 @@ function noProcessTreeCleanup() {
 }
 
 function timeoutDiagnostic(label, pid, cleanup, close) {
+  const unverified = isWindows ? "; Windows descendant cleanup unverified" : "";
   if (cleanup.cleanupError)
-    return `check: process tree ${pid} cleanup failed: ${cleanup.cleanupError}`;
-  if (!cleanup.treeGone)
-    return `check: process tree ${pid} did not disappear after forced termination`;
+    return `check: process tree ${pid} cleanup failed: ${cleanup.cleanupError}${unverified}`;
+  if (!(isWindows ? cleanup.runnerGone : cleanup.treeGone))
+    return `check: ${isWindows ? "runner" : "process tree"} ${pid} did not disappear after forced termination${unverified}`;
   if (close === undefined)
-    return `check: ${label} did not close after forced termination`;
-  return `check: suite deadline exceeded while running ${label}`;
+    return `check: ${label} did not close after forced termination${unverified}`;
+  return `check: suite deadline exceeded while running ${label}${unverified}`;
 }
 
 async function awaitClose(closePromise) {
@@ -248,7 +249,12 @@ async function awaitClose(closePromise) {
   return result;
 }
 
-export async function runTestRunner(args, deadline, label = "tests") {
+export async function runTestRunner(
+  args,
+  deadline,
+  label = "tests",
+  snapshot = isWindows ? snapshotWindowsTestWorkers : undefined,
+) {
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
     return {
@@ -315,7 +321,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
 
   const finishClosed = async (close) => {
     // ponytail: post-parent Windows descendant accounting needs a Job Object;
-    // timeout-tree cleanup is covered, but a Job Object is not implemented.
+    // timeout-tree cleanup is attempted, but a Job Object is not implemented.
     const treeRemains = isWindows
       ? false
       : (() => {
@@ -362,14 +368,29 @@ export async function runTestRunner(args, deadline, label = "tests") {
 
   const pid = child.pid;
   const finishTimedOut = async () => {
-    const workerDiagnostic = isWindows
-      ? await snapshotWindowsTestWorkers(pid)
-      : undefined;
-    const cleanup = await terminateProcessTree(pid);
+    const cleanupPromise = terminateProcessTree(pid);
+    const snapshotPromise = (async () => {
+      if (!snapshot) return undefined;
+      const controller = new AbortController();
+      try {
+        return await Promise.race([
+          snapshot(pid, controller.signal),
+          closePromise.then(
+            () => "check: Windows timeout snapshot unavailable (runner exited)",
+          ),
+        ]);
+      } catch {
+        return "check: Windows timeout snapshot unavailable";
+      } finally {
+        controller.abort();
+      }
+    })();
+    const cleanup = await cleanupPromise;
     const close = await awaitClose(closePromise);
+    const workerDiagnostic = await snapshotPromise;
     const cleanupComplete =
       cleanup.cleanupError === undefined &&
-      cleanup.treeGone &&
+      (isWindows ? cleanup.runnerGone : cleanup.treeGone) &&
       close !== undefined;
     return {
       ok: false,
@@ -447,7 +468,7 @@ if (
       console.error(
         result.cleanupError
           ? `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`
-          : result.treeGone
+          : (isWindows ? result.runnerGone : result.treeGone)
             ? "check: timed-out test runner did not close"
             : `check: process tree ${result.pid} could not be reaped`,
       );
