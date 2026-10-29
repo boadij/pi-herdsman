@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTestRunner } from './check.mjs';
@@ -7,7 +7,8 @@ import { runTestRunner } from './check.mjs';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const marker = 'HERDSMAN_CONTROLLED_ORPHAN_FIXTURE_20261029';
 if (process.argv[2] === 'child') {
-  writeFileSync(process.argv[3], String(process.pid));
+  writeFileSync(process.argv[3] + '.tmp', String(process.pid));
+  renameSync(process.argv[3] + '.tmp', process.argv[3]);
   setInterval(() => {}, 1000);
   setTimeout(() => process.exit(0), 60000);
 } else if (process.argv[2] === 'parent') {
@@ -36,14 +37,17 @@ if (process.argv[2] === 'child') {
     })();
     const result = await runTestRunner([process.argv[1], 'parent', pidFile, release], ready, 'fixture', async (_runner, signal) => {
       console.log('status: snapshot-started');
+      console.log(`status: child-alive-before-release=${alive()}`);
+      if (!alive()) failed = true;
       writeFileSync(release, 'release');
       return await new Promise(resolve => {
         const timer = setTimeout(() => resolve('slow snapshot deadline'), 15000);
-        signal.addEventListener('abort', () => { clearTimeout(timer); aborted = true; resolve('aborted'); }, { once: true });
+        signal.addEventListener('abort', () => { clearTimeout(timer); aborted = true; console.log(`status: child-alive-on-runner-close=${alive()}`); resolve('aborted'); }, { once: true });
       });
     });
     console.log(`status: classification=${result.kind}`);
     console.log(`status: runner-tree-gone=${result.treeGone}`);
+    console.log(`status: force-sent=${result.forceSent}`);
     console.log(`status: snapshot-aborted=${aborted}`);
     console.log(`status: child-survived=${alive()}`);
     if (result.kind !== 'suite-timeout' || !result.treeGone || !aborted || !alive()) failed = true;

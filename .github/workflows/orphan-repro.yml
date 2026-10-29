@@ -1,7 +1,7 @@
 name: Controlled Windows orphan reproduction
 on:
   push:
-    branches: [temp/windows-orphan-repro]
+    branches: [temp/windows-orphan-controlled]
 permissions:
   contents: read
 jobs:
