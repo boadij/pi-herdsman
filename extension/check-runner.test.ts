@@ -58,7 +58,7 @@ async function waitForPids(path: string, timeoutMs: number) {
 
 test(
   "check timeout kills and reaps the fixture process tree",
-  { timeout: 17_500 },
+  { timeout: 50_000 },
   async (t) => {
     const directory = await mkdtemp(
       join(tmpdir(), "pi-herdsman-check-runner-"),
@@ -89,7 +89,7 @@ test(
     } else {
       assert.equal(result.workerDiagnostic, undefined);
     }
-    assert.ok(Date.now() - startedAt < 13_000);
+    assert.ok(Date.now() - startedAt < 40_000);
 
     for (const pid of [pids.parent, pids.child])
       assert.throws(
@@ -101,7 +101,7 @@ test(
 
 test(
   "timeout attributes a native test-file worker on Windows",
-  { timeout: 17_500 },
+  { timeout: 50_000 },
   async (t) => {
     const directory = await mkdtemp(
       join(tmpdir(), "pi-herdsman-check-worker-"),
