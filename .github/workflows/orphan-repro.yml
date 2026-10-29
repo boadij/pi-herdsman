@@ -1,0 +1,17 @@
+name: Controlled Windows orphan reproduction
+on:
+  push:
+    branches: [temp/windows-orphan-repro]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - name: Run bounded reproduction
+        run: node scripts/orphan-repro.mjs

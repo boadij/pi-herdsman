@@ -89,7 +89,7 @@ export function windowsTestFile(command) {
   return files.size === 1 ? [...files][0] : undefined;
 }
 
-function snapshotWindowsTestWorkers(pid) {
+function snapshotWindowsTestWorkers(pid, signal) {
   const unavailable = "check: Windows timeout snapshot unavailable";
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -127,7 +127,7 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
       execFile(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
-        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 },
+        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024, signal },
         (error, stdout) => {
           try {
             if (error)
@@ -248,7 +248,12 @@ async function awaitClose(closePromise) {
   return result;
 }
 
-export async function runTestRunner(args, deadline, label = "tests") {
+export async function runTestRunner(
+  args,
+  deadline,
+  label = "tests",
+  snapshot = isWindows ? snapshotWindowsTestWorkers : undefined,
+) {
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
     return {
@@ -362,9 +367,22 @@ export async function runTestRunner(args, deadline, label = "tests") {
 
   const pid = child.pid;
   const finishTimedOut = async () => {
-    const workerDiagnostic = isWindows
-      ? await snapshotWindowsTestWorkers(pid)
-      : undefined;
+    let workerDiagnostic;
+    if (snapshot) {
+      const controller = new AbortController();
+      try {
+        workerDiagnostic = await Promise.race([
+          snapshot(pid, controller.signal),
+          closePromise.then(
+            () => "check: Windows timeout snapshot unavailable (runner exited)",
+          ),
+        ]);
+      } catch {
+        workerDiagnostic = "check: Windows timeout snapshot unavailable";
+      } finally {
+        controller.abort();
+      }
+    }
     const cleanup = await terminateProcessTree(pid);
     const close = await awaitClose(closePromise);
     const cleanupComplete =
