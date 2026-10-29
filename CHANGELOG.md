@@ -9,6 +9,18 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.36.1](https://github.com/boadij/pi-herdsman/compare/v0.36.0...v0.36.1) (2026-10-29)
+
+
+### Fixes
+
+* **status:** refresh Lead widget after profile initialization ([244ca57](https://github.com/boadij/pi-herdsman/commit/244ca577995358048360b306be2fee7b84775118)), closes [#677](https://github.com/boadij/pi-herdsman/issues/677)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.23 ([#676](https://github.com/boadij/pi-herdsman/issues/676)) ([d262631](https://github.com/boadij/pi-herdsman/commit/d2626315c88cfa904ef3641993f9d0cad3535c15))
+
 ## [0.36.0](https://github.com/boadij/pi-herdsman/compare/v0.35.0...v0.36.0) (2026-10-29)
 
 
