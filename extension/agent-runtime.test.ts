@@ -6273,8 +6273,9 @@ test("owner ask waits while busy and delivers once after settlement", async () =
 
 for (const concurrentInbox of [false, true]) {
   test(`Pi 1.3.0 Manager retirement preflight reaches the first model request without waking or steering (concurrent inbox: ${concurrentInbox})`, async () => {
-    const { createLeadCoordinationRuntime, createLeadAgentEventRuntime } =
-      await import("./lead-runtime.ts");
+    const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+    const { createLeadCoordinationRuntime } =
+      await import("./lead/coordination.ts");
     const storage = await import("./supervision.ts");
     const runtime = storage.supervisionRuntime(
       `/tmp/retirement-${randomUUID()}.sock`,
@@ -6528,7 +6529,8 @@ for (const concurrentInbox of [false, true]) {
 }
 
 test("Manager retirement delivery revalidates recipients, exact receipts, cleanup and replacement generations", async () => {
-  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  const { createLeadCoordinationRuntime } =
+    await import("./lead/coordination.ts");
   const storage = await import("./supervision.ts");
   for (const scenario of [
     "notice receipt",
@@ -6722,7 +6724,8 @@ test("Manager retirement delivery revalidates recipients, exact receipts, cleanu
 });
 
 test("Manager retirement inbox isolates corrupt records and delivers valid notices passively", async () => {
-  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  const { createLeadCoordinationRuntime } =
+    await import("./lead/coordination.ts");
   const storage = await import("./supervision.ts");
   const runtime = storage.supervisionRuntime(
     `/tmp/retirement-corrupt-${randomUUID()}.sock`,
@@ -6806,7 +6809,8 @@ test("Manager retirement inbox isolates corrupt records and delivers valid notic
 });
 
 test("Manager retirement preflight continues after one assignment handoff fails", async () => {
-  const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+  const { createLeadCoordinationRuntime } =
+    await import("./lead/coordination.ts");
   const storage = await import("./supervision.ts");
   const runtime = storage.supervisionRuntime(
     `/tmp/retirement-handoff-${randomUUID()}.sock`,
