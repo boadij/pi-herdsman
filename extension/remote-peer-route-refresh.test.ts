@@ -130,7 +130,8 @@ mock.module("./peer-correspondence.ts", {
 const support = await import("./support.ts");
 const compatibility = await import("./compatibility.ts");
 const supervision = await import("./supervision.ts");
-const { createLeadCoordinationRuntime } = await import("./lead-runtime.ts");
+const { createLeadCoordinationRuntime } =
+  await import("./lead/coordination.ts");
 const { coordinatorTarget, rememberCoordinatorTarget } =
   await import("./coordinator-target.ts");
 

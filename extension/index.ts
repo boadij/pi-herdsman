@@ -272,8 +272,8 @@ import {
   registerLeadRuntime,
   createLeadRoleTransitions,
   resolveLeadControllerRole,
-  readLeadSessionIds,
 } from "./lead-runtime.ts";
+import { readLeadSessionIds } from "./lead/coordination.ts";
 
 import {
   populateMenuFrame,
