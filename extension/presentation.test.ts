@@ -3236,98 +3236,104 @@ test("chief and staff coordination renderers share semantic status language", ()
 
 test("list peers rendering distinguishes self from peers", () => {
   const result = {
-    content: [{ type: "text", text: "model-facing prose" }],
     details: {
       ok: true,
       action: "list",
       self: { role: "lead" },
       peers: [
+        { target: "lead:0123456789", name: "api", branch: "feature/peer" },
         {
-          target: "lead:0123456789",
-          name: "workspace/api",
-          cwd: "/work/api",
-          repo: "api",
-          branch: "feature/peer",
-          workspace_label: "api",
+          target: "lead:abcdefghjk",
+          name: "remote",
+          machine: "docker-peer-test",
         },
       ],
       reply_only: [
         {
-          target: "manager:0123456789",
-          name: "Research Manager",
-          workspace_label: "project-alpha/main",
+          target: "lead:abcdefghj2",
+          name: "Lead",
+          workspace_label: "project/main",
         },
-        {
-          target: "manager:abcdefghjk",
-          name: "Research Manager",
-        },
-        { target: "manager:abcdefghj2", workspace_label: "project-beta" },
-        { target: "manager:abcdefghj3" },
-        { target: "manager:abcdefghj4" },
+        { target: "lead:abcdefghj3" },
       ],
       remote_diagnostics: [
         { machine: "office", reason: "herdr_not_reachable" },
       ],
     },
   };
-
-  assert.equal(
-    renderedText(
-      renderCoordinationResult("peer", "list", result, {}, presentationTheme, {
-        args: { action: "list" },
-      }),
-    ),
-    "peer · 1 discovered · 5 reply-only · 1 warning",
+  const compact = renderedText(
+    renderCoordinationResult("peer", "list", result, {}, presentationTheme),
   );
-
+  assert.equal(
+    compact,
+    "peer · 2 discovered · 1 remote · 2 reply-only · 1 warning",
+  );
+  const expanded = renderCoordinationResult(
+    "peer",
+    "list",
+    result,
+    { expanded: true },
+    presentationTheme,
+  );
+  const output = renderedText(expanded);
+  assert.match(output, /local \(1\)[\s\S]*api · target: lead:0123456789/);
   assert.match(
-    renderedText(
-      renderCoordinationResult(
-        "peer",
-        "list",
-        result,
-        { expanded: true },
-        presentationTheme,
-        { args: { action: "list" }, activeRole: "lead" },
-      ),
-    ),
-    /reply-only Leads 5/,
+    output,
+    /remote \(1\)[\s\S]*remote · target: lead:abcdefghjk[\s\S]*machine: docker-peer-test/,
   );
-
+  assert.match(
+    output,
+    /reply-only Leads 2[\s\S]*Existing return correspondences\.[\s\S]*Replies can be queued; current availability unverified\./,
+  );
+  assert.match(
+    output,
+    /Lead · target: lead:abcdefghj2[\s\S]*last-known workspace: project\/main/,
+  );
+  assert.match(output, /peer · target: lead:abcdefghj3/);
+  assert.match(
+    output,
+    /office · Herdr reachability not confirmed[\s\S]*Check: Check Herdr machine status/,
+  );
+  for (let width = 1; width <= 80; width++)
+    assert.ok(
+      expanded.render(width).every((line) => visibleWidth(line) <= width),
+    );
+  const local = {
+    details: { self: { role: "lead" }, peers: [result.details.peers[0]] },
+  };
   assert.equal(
     renderedText(
-      renderCoordinationResult(
-        "peer",
-        "list",
-        result,
-        { expanded: true },
-        presentationTheme,
-        { args: { action: "list" } },
-      ),
+      renderCoordinationResult("peer", "list", local, {}, presentationTheme),
     ),
-    "peer\n\nself lead\ndiscovered peers 1\n  workspace/api · target: lead:0123456789 · branch: feature/peer\n\nreply-only Managers 5\n  Research Manager\n  project-alpha/main\n  target: manager:0123456789\n  Reply can be queued; current availability is unverified.\n  Research Manager\n  target: manager:abcdefghjk\n  Reply can be queued; current availability is unverified.\n  project-beta\n  target: manager:abcdefghj2\n  Reply can be queued; current availability is unverified.\n  peer\n  target: manager:abcdefghj3\n  Reply can be queued; current availability is unverified.\n  peer\n  target: manager:abcdefghj4\n  Reply can be queued; current availability is unverified.\n\nremote diagnostics\n  office · Herdr reachability not confirmed\n    Check: Check Herdr machine status; reconnect interactively if needed.",
+    "peer · 1 peer",
   );
-
+  const reply = {
+    details: {
+      self: { role: "manager" },
+      peers: [],
+      reply_only: [{ target: "manager:0123456789" }],
+    },
+  };
   assert.equal(
     renderedText(
-      renderCoordinationResult(
-        "peer",
-        "list",
-        {
-          details: {
-            ok: true,
-            action: "list",
-            self: { role: "lead" },
-            peers: [{ session_id: "stale-session" }],
-          },
-        },
-        { expanded: true },
-        presentationTheme,
-        { args: { action: "list" } },
-      ),
+      renderCoordinationResult("peer", "list", reply, {}, presentationTheme),
     ),
-    "peer\n\nself lead\ndiscovered peers 1\n  peer",
+    "peer · 0 discovered · 1 reply-only",
   );
+  const replyText = renderedText(
+    renderCoordinationResult(
+      "peer",
+      "list",
+      reply,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(
+    replyText,
+    /reply-only Managers 1[\s\S]*peer · target: manager:0123456789/,
+  );
+  assert.doesNotMatch(replyText, /machine:/);
 
   assert.equal(
     renderedText(
@@ -7434,6 +7440,20 @@ test("coordination messages render compact semantic headings and strip only know
     assert.match(text, /Visible body/);
     assert.ok(!text.includes(prefix));
   }
+  const peerText = renderedText(
+    renderCoordinationMessage(
+      "peer_message",
+      {
+        content: "Peer message from lead:0123456789: Visible body",
+        details: { senderTarget: "lead:0123456789" },
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(peerText, /Peer message · lead:0123456789/);
+  assert.match(peerText, /Visible body/);
+  assert.doesNotMatch(peerText, /Peer message from lead:/);
   const prose =
     "Peer message from someone-else: user prose must remain.\n\nSecond paragraph.";
   assert.match(
