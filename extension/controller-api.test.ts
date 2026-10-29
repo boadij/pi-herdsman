@@ -165,7 +165,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   return fixture;
 }
 const { updateConfig } = await import("./config.ts");
-const { parseGitWorktreeInventory } = await import("./lead-runtime.ts");
+const { parseGitWorktreeInventory } = await import("./lead/project.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find(
     (candidate) =>
@@ -185,58 +185,6 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
       )[name],
   )!;
 
-test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {
-  const hash = "a".repeat(40);
-  const root = join(tmpdir(), "work-repo");
-  const linked = join(tmpdir(), "work-branch");
-  assert.deepEqual(
-    parseGitWorktreeInventory(
-      `worktree ${root}\0HEAD ${hash}\0branch refs/heads/main\0\0worktree ${linked}\0HEAD ${hash}\0branch refs/heads/topic\0\0`,
-    ),
-    [
-      { path: root, branch: "main" },
-      { path: linked, branch: "topic" },
-    ],
-  );
-  assert.equal(
-    parseGitWorktreeInventory(`worktree ${root}\0HEAD ${hash}\0`),
-    undefined,
-  );
-  assert.equal(
-    parseGitWorktreeInventory(
-      `worktree ${root}\0HEAD ${hash}\0branch refs/heads/topic\0\0junk\0\0`,
-    ),
-    undefined,
-  );
-  assert.deepEqual(
-    parseGitWorktreeInventory(
-      `worktree ${linked}\0HEAD ${hash}\0future-attribute value\0branch refs/heads/topic\0locked active\0\0`,
-    ),
-    [{ path: linked, branch: "topic", locked: true }],
-  );
-  assert.equal(
-    parseGitWorktreeInventory(
-      `worktree ${linked}\0HEAD ${hash}\0HEAD ${hash}\0branch refs/heads/topic\0\0`,
-    ),
-    undefined,
-  );
-  assert.deepEqual(
-    parseGitWorktreeInventory(
-      `worktree ${linked}\0HEAD ${hash}\0branch refs/heads/topic\0prunable missing\0\0`,
-    ),
-    [{ path: linked, branch: "topic", prunable: true }],
-  );
-  assert.deepEqual(
-    parseGitWorktreeInventory(`worktree ${linked}\0HEAD ${hash}\0detached\0\0`),
-    [{ path: linked, detached: true }],
-  );
-  assert.deepEqual(
-    parseGitWorktreeInventory(
-      `worktree ${linked}\0HEAD ${hash}\0detached\0prunable gitdir file points to non-existent location\0\0`,
-    ),
-    [{ path: linked, detached: true, prunable: true }],
-  );
-});
 const ownershipResult = (
   child: string,
   owner = LEAD_SESSION_ID,
