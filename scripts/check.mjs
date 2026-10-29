@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHECK_TIMEOUT_MS = 240_000;
@@ -64,6 +65,116 @@ function terminateWindowsProcessTree(pid) {
   });
 }
 
+// Only accept complete command-line arguments that resolve to existing test files.
+export function windowsTestFile(command) {
+  const files = new Set();
+  for (const match of command.matchAll(
+    /(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)/g,
+  )) {
+    const argument = match[1] ?? match[2];
+    if (!/\.test\.(?:[cm]?[jt]s)$/i.test(argument)) continue;
+    try {
+      const root = realpathSync(repoRoot);
+      const file = realpathSync(resolve(root, argument));
+      const name = relative(root, file).split(sep).join("/");
+      if (
+        /^(?!\.\.?\/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$/i.test(name) &&
+        statSync(file).isFile()
+      )
+        files.add(name);
+    } catch {
+      // Unresolvable arguments are not evidence of a test worker.
+    }
+  }
+  return files.size === 1 ? [...files][0] : undefined;
+}
+
+function snapshotWindowsTestWorkers(pid, signal) {
+  const unavailable = "check: Windows timeout snapshot unavailable";
+  const script = `
+$ErrorActionPreference = 'Stop'
+$runnerPid = ${pid}
+$all = @(Get-CimInstance -Query 'SELECT ProcessId, ParentProcessId, Name, CommandLine, CreationDate FROM Win32_Process')
+$runner = @($all | Where-Object { $_.ProcessId -eq $runnerPid })
+if ($runner.Count -ne 1 -or $null -eq $runner[0].CreationDate) { throw 'runner unavailable' }
+$queue = [System.Collections.Generic.Queue[object]]::new()
+$queue.Enqueue($runner[0])
+$seen = [System.Collections.Generic.HashSet[int]]::new()
+[void]$seen.Add($runnerPid)
+$rows = [System.Collections.Generic.List[object]]::new()
+$truncated = $false
+while ($queue.Count -gt 0) {
+  $parent = $queue.Dequeue()
+  foreach ($process in $all) {
+    if ($process.ParentProcessId -ne $parent.ProcessId -or $seen.Contains([int]$process.ProcessId)) { continue }
+    if ($null -eq $process.CreationDate -or $process.CreationDate -lt $parent.CreationDate) { throw 'ancestry unavailable' }
+    if ($rows.Count -ge 24) { $truncated = $true; continue }
+    [void]$seen.Add([int]$process.ProcessId)
+    $queue.Enqueue($process)
+    $command = ''
+    if ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe') {
+      if ($null -eq $process.CommandLine) { throw 'command unavailable' }
+      $command = [string]$process.CommandLine
+    }
+    $rows.Add([pscustomobject]@{ pid = [int]$process.ProcessId; parent = [int]$parent.ProcessId; node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe'); command = $command })
+  }
+}
+if (-not (Get-Process -Id $runnerPid -ErrorAction SilentlyContinue)) { throw 'runner exited' }
+ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated } -Compress -Depth 3
+`;
+  return new Promise((resolvePromise) => {
+    try {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024, signal },
+        (error, stdout) => {
+          try {
+            if (error)
+              return resolvePromise(
+                `${unavailable} (${error.killed ? "deadline" : "process error"})`,
+              );
+            const snapshot = JSON.parse(stdout);
+            if (
+              !Array.isArray(snapshot.rows) ||
+              snapshot.rows.length > 24 ||
+              typeof snapshot.truncated !== "boolean"
+            )
+              throw new Error();
+            const lines = ["check: Windows timeout snapshot"];
+            for (const row of snapshot.rows) {
+              if (
+                !Number.isSafeInteger(row.pid) ||
+                row.pid <= 0 ||
+                !Number.isSafeInteger(row.parent) ||
+                row.parent <= 0 ||
+                typeof row.node !== "boolean" ||
+                typeof row.command !== "string"
+              )
+                throw new Error();
+              const file =
+                row.node && row.parent === pid
+                  ? windowsTestFile(row.command)
+                  : undefined;
+              lines.push(
+                file
+                  ? `check: candidate test worker pid=${row.pid} file=${file}`
+                  : `check: descendant pid=${row.pid} parent=${row.parent} type=other`,
+              );
+            }
+            lines.push(`check: snapshot truncated=${snapshot.truncated}`);
+            resolvePromise(lines.join("\n"));
+          } catch {
+            resolvePromise(`${unavailable} (invalid snapshot)`);
+          }
+        },
+      );
+    } catch {
+      resolvePromise(`${unavailable} (process error)`);
+    }
+  });
+}
+
 function isAlreadyGoneTaskkillError(error) {
   return (
     error?.code === 128 &&
@@ -76,18 +187,18 @@ function isAlreadyGoneTaskkillError(error) {
 async function terminateProcessTree(pid) {
   if (isWindows) {
     let forceSent = false;
-    let treeGone = false;
+    let runnerGone = false;
     let cleanupError;
     try {
       await terminateWindowsProcessTree(pid);
       forceSent = true;
-      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      runnerGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
     } catch (error) {
-      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
-      if (!treeGone || !isAlreadyGoneTaskkillError(error))
+      runnerGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      if (!runnerGone || !isAlreadyGoneTaskkillError(error))
         cleanupError = error instanceof Error ? error.message : String(error);
     }
-    return { forceSent, treeGone, cleanupError };
+    return { forceSent, runnerGone, treeGone: undefined, cleanupError };
   }
   let termSent = false;
   let killSent = false;
@@ -118,13 +229,14 @@ function noProcessTreeCleanup() {
 }
 
 function timeoutDiagnostic(label, pid, cleanup, close) {
+  const unverified = isWindows ? "; Windows descendant cleanup unverified" : "";
   if (cleanup.cleanupError)
-    return `check: process tree ${pid} cleanup failed: ${cleanup.cleanupError}`;
-  if (!cleanup.treeGone)
-    return `check: process tree ${pid} did not disappear after forced termination`;
+    return `check: process tree ${pid} cleanup failed: ${cleanup.cleanupError}${unverified}`;
+  if (!(isWindows ? cleanup.runnerGone : cleanup.treeGone))
+    return `check: ${isWindows ? "runner" : "process tree"} ${pid} did not disappear after forced termination${unverified}`;
   if (close === undefined)
-    return `check: ${label} did not close after forced termination`;
-  return `check: suite deadline exceeded while running ${label}`;
+    return `check: ${label} did not close after forced termination${unverified}`;
+  return `check: suite deadline exceeded while running ${label}${unverified}`;
 }
 
 async function awaitClose(closePromise) {
@@ -137,7 +249,12 @@ async function awaitClose(closePromise) {
   return result;
 }
 
-export async function runTestRunner(args, deadline, label = "tests") {
+export async function runTestRunner(
+  args,
+  deadline,
+  label = "tests",
+  snapshot = isWindows ? snapshotWindowsTestWorkers : undefined,
+) {
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
     return {
@@ -204,7 +321,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
 
   const finishClosed = async (close) => {
     // ponytail: post-parent Windows descendant accounting needs a Job Object;
-    // timeout-tree cleanup is covered, but a Job Object is not implemented.
+    // timeout-tree cleanup is attempted, but a Job Object is not implemented.
     const treeRemains = isWindows
       ? false
       : (() => {
@@ -250,6 +367,43 @@ export async function runTestRunner(args, deadline, label = "tests") {
   }
 
   const pid = child.pid;
+  const finishTimedOut = async () => {
+    const cleanupPromise = terminateProcessTree(pid);
+    const snapshotPromise = (async () => {
+      if (!snapshot) return undefined;
+      const controller = new AbortController();
+      try {
+        return await Promise.race([
+          snapshot(pid, controller.signal),
+          closePromise.then(
+            () => "check: Windows timeout snapshot unavailable (runner exited)",
+          ),
+        ]);
+      } catch {
+        return "check: Windows timeout snapshot unavailable";
+      } finally {
+        controller.abort();
+      }
+    })();
+    const cleanup = await cleanupPromise;
+    const close = await awaitClose(closePromise);
+    const workerDiagnostic = await snapshotPromise;
+    const cleanupComplete =
+      cleanup.cleanupError === undefined &&
+      (isWindows ? cleanup.runnerGone : cleanup.treeGone) &&
+      close !== undefined;
+    return {
+      ok: false,
+      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
+      label,
+      pid,
+      timedOut: true,
+      ...cleanup,
+      close,
+      workerDiagnostic,
+      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
+    };
+  };
   let testDeadline;
   if (deferredDeadline) {
     try {
@@ -270,22 +424,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
   }
   const remaining = testDeadline - Date.now();
   if (remaining <= 0) {
-    const cleanup = await terminateProcessTree(pid);
-    const close = await awaitClose(closePromise);
-    const cleanupComplete =
-      cleanup.cleanupError === undefined &&
-      cleanup.treeGone &&
-      close !== undefined;
-    return {
-      ok: false,
-      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
-      label,
-      pid,
-      timedOut: true,
-      ...cleanup,
-      close,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
-    };
+    return finishTimedOut();
   }
   let timeoutId;
   const timeoutPromise = new Promise((resolveTimeout) => {
@@ -301,22 +440,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
     return finishClosed(outcome.close);
   }
   if (outcome.timedOut) {
-    const cleanup = await terminateProcessTree(pid);
-    const close = await awaitClose(closePromise);
-    const cleanupComplete =
-      cleanup.cleanupError === undefined &&
-      cleanup.treeGone &&
-      close !== undefined;
-    return {
-      ok: false,
-      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
-      label,
-      pid,
-      timedOut: true,
-      ...cleanup,
-      close,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
-    };
+    return finishTimedOut();
   }
   clearTimeout(timeoutId);
 }
@@ -338,12 +462,13 @@ if (
 ) {
   const result = await runCheck();
   if (!result.ok) {
+    if (result.workerDiagnostic) console.error(result.workerDiagnostic);
     console.error(result.diagnostic);
     if (result.kind === "suite-timeout-cleanup-failed")
       console.error(
         result.cleanupError
           ? `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`
-          : result.treeGone
+          : (isWindows ? result.runnerGone : result.treeGone)
             ? "check: timed-out test runner did not close"
             : `check: process tree ${result.pid} could not be reaped`,
       );
