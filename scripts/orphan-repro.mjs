@@ -12,7 +12,7 @@ if (process.argv[2] === 'child') {
   setInterval(() => {}, 1000);
   setTimeout(() => process.exit(0), 60000);
 } else if (process.argv[2] === 'parent') {
-  const child = spawn(process.execPath, [process.argv[1], 'child', process.argv[3], marker], { stdio: 'ignore', windowsHide: true });
+  const child = spawn(process.execPath, [process.argv[1], 'child', process.argv[3], marker], { stdio: 'ignore', windowsHide: true, detached: true });
   child.unref();
   setTimeout(() => process.exit(1), 20000).unref();
   const timer = setInterval(() => { if (existsSync(process.argv[4])) { clearInterval(timer); process.exit(0); } }, 20);
