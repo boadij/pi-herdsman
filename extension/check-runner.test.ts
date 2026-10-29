@@ -3,13 +3,27 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CHECK_TIMEOUT_MS, runTestRunner } from "../scripts/check.mjs";
+import {
+  CHECK_TIMEOUT_MS,
+  runTestRunner,
+  windowsTestFile,
+} from "../scripts/check.mjs";
 
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 test("check suite deadline allows 240 seconds", () => {
   assert.equal(CHECK_TIMEOUT_MS, 240_000);
+});
+
+test("Windows worker attribution accepts only existing repository test paths", () => {
+  const file = join(process.cwd(), "extension", "check-runner.test.ts");
+  assert.equal(
+    windowsTestFile(`"C:\\Program Files\\node.exe" "${file}"`),
+    "extension/check-runner.test.ts",
+  );
+  assert.equal(windowsTestFile('node.exe "not-a-real.test.ts"'), undefined);
+  assert.equal(windowsTestFile(`node.exe --file="${file}"`), undefined);
 });
 
 async function waitForPids(path: string, timeoutMs: number) {
@@ -30,33 +44,45 @@ async function waitForPids(path: string, timeoutMs: number) {
   throw new Error(`fixture did not publish PIDs within ${timeoutMs} ms`);
 }
 
-test("check timeout kills and reaps the fixture process tree", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-herdsman-check-runner-"));
-  const pidPath = join(directory, "pids.json");
-  t.after(() => rm(directory, { recursive: true, force: true }));
-
-  const startedAt = Date.now();
-  let pids;
-  const deadline = waitForPids(pidPath, 5_000).then((readyPids) => {
-    pids = readyPids;
-    return Date.now() + 750;
-  });
-  const result = await runTestRunner(
-    ["scripts/check-hang.mjs", pidPath],
-    deadline,
-    "hanging fixture",
-  );
-
-  assert.equal(result.ok, false);
-  assert.equal(result.kind, "suite-timeout");
-  assert.equal(result.timedOut, true);
-  assert.match(result.diagnostic, /suite deadline/);
-  assert.equal(result.treeGone, true);
-  assert.ok(Date.now() - startedAt < 8_000);
-
-  for (const pid of [pids.parent, pids.child])
-    assert.throws(
-      () => process.kill(pid, 0),
-      (error: any) => error?.code === "ESRCH",
+test(
+  "check timeout kills and reaps the fixture process tree",
+  { timeout: 15_000 },
+  async (t) => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "pi-herdsman-check-runner-"),
     );
-});
+    const pidPath = join(directory, "pids.json");
+    t.after(() => rm(directory, { recursive: true, force: true }));
+
+    const startedAt = Date.now();
+    let pids;
+    const deadline = waitForPids(pidPath, 5_000).then((readyPids) => {
+      pids = readyPids;
+      return Date.now() + 750;
+    });
+    const result = await runTestRunner(
+      ["scripts/check-hang.mjs", pidPath],
+      deadline,
+      "hanging fixture",
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.kind, "suite-timeout");
+    assert.equal(result.timedOut, true);
+    assert.match(result.diagnostic, /suite deadline/);
+    assert.equal(result.treeGone, true);
+    if (process.platform === "win32") {
+      assert.match(result.workerDiagnostic, new RegExp(`\\b${pids.child}\\b`));
+      assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
+    } else {
+      assert.equal(result.workerDiagnostic, undefined);
+    }
+    assert.ok(Date.now() - startedAt < 10_500);
+
+    for (const pid of [pids.parent, pids.child])
+      assert.throws(
+        () => process.kill(pid, 0),
+        (error: any) => error?.code === "ESRCH",
+      );
+  },
+);

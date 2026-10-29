@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHECK_TIMEOUT_MS = 240_000;
@@ -61,6 +62,113 @@ function terminateWindowsProcessTree(pid) {
       { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS },
       (error) => (error ? reject(error) : resolvePromise()),
     );
+  });
+}
+
+// Only accept complete command-line arguments that resolve to existing test files.
+export function windowsTestFile(command) {
+  const files = new Set();
+  for (const match of command.matchAll(
+    /(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)/g,
+  )) {
+    const argument = match[1] ?? match[2];
+    if (!/\.test\.(?:[cm]?[jt]s)$/i.test(argument)) continue;
+    try {
+      const root = realpathSync(repoRoot);
+      const file = realpathSync(resolve(root, argument));
+      const name = relative(root, file).split(sep).join("/");
+      if (
+        /^(?!\.\.?\/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$/i.test(name) &&
+        statSync(file).isFile()
+      )
+        files.add(name);
+    } catch {
+      // Unresolvable arguments are not evidence of a test worker.
+    }
+  }
+  return files.size === 1 ? [...files][0] : undefined;
+}
+
+function snapshotWindowsTestWorkers(pid) {
+  const unavailable = "check: Windows timeout snapshot unavailable";
+  const script = `
+$ErrorActionPreference = 'Stop'
+$runnerPid = ${pid}
+$all = @(Get-CimInstance -Query 'SELECT ProcessId, ParentProcessId, Name, CommandLine, CreationDate FROM Win32_Process')
+$runner = @($all | Where-Object { $_.ProcessId -eq $runnerPid })
+if ($runner.Count -ne 1 -or $null -eq $runner[0].CreationDate) { throw 'runner unavailable' }
+$queue = [System.Collections.Generic.Queue[object]]::new()
+$queue.Enqueue($runner[0])
+$seen = [System.Collections.Generic.HashSet[int]]::new()
+[void]$seen.Add($runnerPid)
+$rows = [System.Collections.Generic.List[object]]::new()
+$truncated = $false
+while ($queue.Count -gt 0) {
+  $parent = $queue.Dequeue()
+  foreach ($process in $all) {
+    if ($process.ParentProcessId -ne $parent.ProcessId -or $seen.Contains([int]$process.ProcessId)) { continue }
+    if ($null -eq $process.CreationDate -or $process.CreationDate -lt $parent.CreationDate) { throw 'ancestry unavailable' }
+    if ($rows.Count -ge 24) { $truncated = $true; continue }
+    [void]$seen.Add([int]$process.ProcessId)
+    $queue.Enqueue($process)
+    $command = ''
+    if ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe') {
+      if ($null -eq $process.CommandLine) { throw 'command unavailable' }
+      $command = [string]$process.CommandLine
+    }
+    $rows.Add([pscustomobject]@{ pid = [int]$process.ProcessId; parent = [int]$parent.ProcessId; node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe'); command = $command })
+  }
+}
+if (-not (Get-Process -Id $runnerPid -ErrorAction SilentlyContinue)) { throw 'runner exited' }
+ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated } -Compress -Depth 3
+`;
+  return new Promise((resolvePromise) => {
+    try {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        { windowsHide: true, timeout: 2_500, maxBuffer: 32 * 1024 },
+        (error, stdout) => {
+          try {
+            if (error) return resolvePromise(unavailable);
+            const snapshot = JSON.parse(stdout);
+            if (
+              !Array.isArray(snapshot.rows) ||
+              snapshot.rows.length > 24 ||
+              typeof snapshot.truncated !== "boolean"
+            )
+              throw new Error();
+            const lines = ["check: Windows timeout snapshot"];
+            for (const row of snapshot.rows) {
+              if (
+                !Number.isSafeInteger(row.pid) ||
+                row.pid <= 0 ||
+                !Number.isSafeInteger(row.parent) ||
+                row.parent <= 0 ||
+                typeof row.node !== "boolean" ||
+                typeof row.command !== "string"
+              )
+                throw new Error();
+              const file =
+                row.node && row.parent === pid
+                  ? windowsTestFile(row.command)
+                  : undefined;
+              lines.push(
+                file
+                  ? `check: candidate test worker pid=${row.pid} file=${file}`
+                  : `check: descendant pid=${row.pid} parent=${row.parent} type=other`,
+              );
+            }
+            lines.push(`check: snapshot truncated=${snapshot.truncated}`);
+            resolvePromise(lines.join("\n"));
+          } catch {
+            resolvePromise(unavailable);
+          }
+        },
+      );
+    } catch {
+      resolvePromise(unavailable);
+    }
   });
 }
 
@@ -250,6 +358,28 @@ export async function runTestRunner(args, deadline, label = "tests") {
   }
 
   const pid = child.pid;
+  const finishTimedOut = async () => {
+    const workerDiagnostic = isWindows
+      ? await snapshotWindowsTestWorkers(pid)
+      : undefined;
+    const cleanup = await terminateProcessTree(pid);
+    const close = await awaitClose(closePromise);
+    const cleanupComplete =
+      cleanup.cleanupError === undefined &&
+      cleanup.treeGone &&
+      close !== undefined;
+    return {
+      ok: false,
+      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
+      label,
+      pid,
+      timedOut: true,
+      ...cleanup,
+      close,
+      workerDiagnostic,
+      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
+    };
+  };
   let testDeadline;
   if (deferredDeadline) {
     try {
@@ -270,22 +400,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
   }
   const remaining = testDeadline - Date.now();
   if (remaining <= 0) {
-    const cleanup = await terminateProcessTree(pid);
-    const close = await awaitClose(closePromise);
-    const cleanupComplete =
-      cleanup.cleanupError === undefined &&
-      cleanup.treeGone &&
-      close !== undefined;
-    return {
-      ok: false,
-      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
-      label,
-      pid,
-      timedOut: true,
-      ...cleanup,
-      close,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
-    };
+    return finishTimedOut();
   }
   let timeoutId;
   const timeoutPromise = new Promise((resolveTimeout) => {
@@ -301,22 +416,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
     return finishClosed(outcome.close);
   }
   if (outcome.timedOut) {
-    const cleanup = await terminateProcessTree(pid);
-    const close = await awaitClose(closePromise);
-    const cleanupComplete =
-      cleanup.cleanupError === undefined &&
-      cleanup.treeGone &&
-      close !== undefined;
-    return {
-      ok: false,
-      kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
-      label,
-      pid,
-      timedOut: true,
-      ...cleanup,
-      close,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
-    };
+    return finishTimedOut();
   }
   clearTimeout(timeoutId);
 }
@@ -338,6 +438,7 @@ if (
 ) {
   const result = await runCheck();
   if (!result.ok) {
+    if (result.workerDiagnostic) console.error(result.workerDiagnostic);
     console.error(result.diagnostic);
     if (result.kind === "suite-timeout-cleanup-failed")
       console.error(

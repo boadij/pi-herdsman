@@ -63,8 +63,12 @@ On POSIX suite deadline, the runner attempts:
 3. `SIGKILL` when required;
 4. bounded proof that the process tree disappeared.
 
-On Windows, the runner invokes `taskkill.exe /PID <pid> /T /F` and waits for
-the runner process to disappear.
+On Windows suite timeout, the runner attempts one bounded descendant snapshot
+before invoking `taskkill.exe /PID <pid> /T /F` and waiting for the runner
+process to disappear. Filename attribution is best-effort; raw command lines
+and environment details are not logged. Snapshot failure does not replace the
+original suite-timeout failure. The 240-second suite deadline and existing
+cleanup remain unchanged.
 
 A test runner that leaks descendants after normal exit is reported as a failure
 on POSIX and cleaned through the same process-group boundary. Windows timeout

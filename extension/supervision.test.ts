@@ -3286,7 +3286,7 @@ test("global assignment authority finds cross-socket matches and serializes the 
           `import { acquireProcessLock } from ${JSON.stringify(lockModule.href)}; try { const lease = acquireProcessLock(process.argv[1], { name: "project assignment authority" }); lease.release(); console.log("acquired"); } catch (error) { console.log(error.message); }`,
           lockPath,
         ],
-        { encoding: "utf8" },
+        { encoding: "utf8", timeout: 10_000 },
       );
       assert.equal(child.status, 0, child.stderr);
       assert.match(
