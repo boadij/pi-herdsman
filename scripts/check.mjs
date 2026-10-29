@@ -92,11 +92,9 @@ export function windowsTestFile(command) {
 function snapshotWindowsTestWorkers(pid) {
   const unavailable = "check: Windows timeout snapshot unavailable";
   const script = `
-[Console]::Error.WriteLine('START')
 $ErrorActionPreference = 'Stop'
 $runnerPid = ${pid}
 $all = @(Get-CimInstance -Query 'SELECT ProcessId, ParentProcessId, Name, CommandLine, CreationDate FROM Win32_Process')
-[Console]::Error.WriteLine('CIM')
 $runner = @($all | Where-Object { $_.ProcessId -eq $runnerPid })
 if ($runner.Count -ne 1 -or $null -eq $runner[0].CreationDate) { throw 'runner unavailable' }
 $queue = [System.Collections.Generic.Queue[object]]::new()
@@ -121,19 +119,16 @@ while ($queue.Count -gt 0) {
     $rows.Add([pscustomobject]@{ pid = [int]$process.ProcessId; parent = [int]$parent.ProcessId; node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe'); command = $command })
   }
 }
-[Console]::Error.WriteLine('TRAVERSAL')
 if (-not (Get-Process -Id $runnerPid -ErrorAction SilentlyContinue)) { throw 'runner exited' }
 ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated } -Compress -Depth 3
 `;
   return new Promise((resolvePromise) => {
     try {
-      const started = Date.now();
-      const child = execFile(
+      execFile(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
         { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 },
         (error, stdout) => {
-          console.log(`snapshot measurement END ${Date.now() - started}ms ${error ? "error" : "ok"}`);
           try {
             if (error)
               return resolvePromise(
@@ -174,16 +169,6 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
           }
         },
       );
-      let pending = "";
-      child.stderr.on("data", (chunk) => {
-        pending += chunk.toString();
-        const lines = pending.split(/\r?\n/);
-        pending = lines.pop();
-        for (const line of lines) {
-          if (["START", "CIM", "TRAVERSAL"].includes(line))
-            console.log(`snapshot measurement ${line} ${Date.now() - started}ms`);
-        }
-      });
     } catch {
       resolvePromise(`${unavailable} (process error)`);
     }
