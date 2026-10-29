@@ -24,8 +24,14 @@ setting `retain: true` on an existing coordination operation:
 - A Manager uses `message_staff` to retain the supplied message text and files
   for the target assigned Lead's project assignment.
 - An eligible managed Agent uses `delegate_agent` to retain supplied files as
-  additions to its local assignment for its own descendants. Its task text is
-  not retained, and it cannot modify the parent assignment's evidence set.
+  additions to its local assignment for its own descendants. It cannot modify
+  the parent assignment's evidence set.
+
+Every accepted managed-Agent task is separately preserved as immutable local
+assignment evidence for its descendants, without `retain` or an explicit file.
+This also applies to Agents delegated by an ordinary Lead. The recipient's own
+task remains its operative instruction; inherited tasks provide context, not
+additional authority.
 
 The Manager alone controls each assignment's requirements; sibling Lead
 assignments do not automatically inherit one another's evidence. Root Lead delegation
@@ -54,19 +60,21 @@ when that assignment is accepted, merged with explicit `files` for that
 handoff and deduplicated by verified version and result binding. The Manager's
 latest retained update identifies one current batch for future eligible
 descendants; other required entries remain historical and reference-first.
-Project
-descendants inherit assignment requirements; nested descendants also inherit
-relevant additions owned by their Agent parent. Siblings do not inherit one
-another's local additions. An inherited snapshot keeps its original
+Project descendants inherit assignment requirements; nested descendants also
+inherit their Agent parent's task and local additions. Siblings do not inherit
+one another's tasks or local additions. An inherited snapshot keeps its original
 `sourceAssignmentId`; forwarding inherited evidence does not transfer
 ownership. The receiving managed Agent cannot remove inherited requirements
 or change the project set. Parent changes do not silently rewrite an
 already-running child's accepted evidence set; continuation resumes the saved
-assignment evidence and still requires valid ownership authority. Retired
+assignment evidence, preserves earlier local tasks, and retains its new task;
+it still requires valid ownership authority. Retired
 project assignments cannot be resumed.
 
-For each managed-Agent assignment, the task and current files are presented
-before historical requirements. A complete Manager-selected current batch is
+For each managed-Agent assignment, its task comes first. A direct Agent
+owner's task is supplied as context, inline when it fits or by an authorized
+semantic reference otherwise; older assignment evidence is reference-first.
+Current files are presented before historical requirements. A complete Manager-selected current batch is
 embedded when it fits the configured limits; if the automatic batch exceeds
 capacity, it is presented as semantic references as a whole. Explicit
 attachments remain strict: an explicit file that cannot be embedded rejects
@@ -76,6 +84,7 @@ presents that exact version as a current explicit attachment. All accepted
 requirements remain part of the assignment; presentation does not change their
 authority or ownership. The initial project brief is delivered as task text
 and separately retained for descendants without duplicating it in the initial
+message. A managed Agent's own task is likewise not duplicated in its initial
 message. A saved Agent continuation keeps the current-batch selection accepted
 with that session, even if the Manager later changes the project batch.
 Successful Agent delegation and continuation return a receipt of the inline
@@ -84,8 +93,8 @@ not that the Agent read, understood, or applied the evidence.
 
 Retained file evidence is an immutable snapshot of supported UTF-8 text no
 larger than 1 MiB. Registration of unsupported, binary, or oversized files
-fails explicitly. Current evidence must fit complete-content delivery limits;
-it is not replaced with a path-only reference. Earlier retained evidence is
+fails explicitly. Explicit current attachments must fit complete-content delivery
+limits; they are not replaced with path-only references. Earlier retained evidence is
 identified by a stable semantic `evidence:` reference. The authorized
 recipient can use `read_evidence` to retrieve bounded content for references
 in its accepted evidence set. Retained evidence remains available throughout
@@ -99,15 +108,14 @@ Ordinary files supplied to `message_staff`, `message_supervisor`, or
 configured per-file and complete-message budgets; unsupported, changed, or
 non-fitting files reject the handoff instead of becoming path-only references.
 Other `files` operations retain their existing preparation behavior. Ordinary
-coordination attachments are per-message evidence and are not added to
-continuing required evidence unless an eligible Manager explicitly sets
-`retain: true`.
+coordination attachments are per-message evidence unless retained through an
+eligible operation with `retain: true`.
 
 This is not general attachment or conversation inheritance. Automatic required
-evidence applies to verified managed project assignments and their nested
-managed-Agent assignments, not to an ordinary Lead's whole session. Evidence
+evidence includes accepted managed-Agent tasks and verified project requirements,
+not an ordinary Lead's whole session. Evidence
 availability does not grant execution or control authority. An unassigned Lead
-or unrelated session acquires no automatic evidence scope. Retained evidence
+or unrelated session acquires no project evidence scope. Retained evidence
 removal remains an internal exact-ID capability; there is no standalone
 model-facing evidence-management tool. Removing a requirement does not erase
 prior Pi-session entries or evidence already accepted by an Agent.

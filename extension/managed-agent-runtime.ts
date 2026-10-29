@@ -138,6 +138,7 @@ type AcceptedEvidenceContext = {
   paneId: string;
   projectAssignmentId?: string;
   evidenceAssignmentId?: string;
+  taskEvidenceId?: string;
   inheritedEvidence: RequiredEvidence[];
   localEvidence: RequiredEvidence[];
   currentEvidenceIds?: string[];
@@ -270,8 +271,9 @@ export function readEvidencePage(
 /** Read only the exact session branch; malformed or foreign entries fail closed. */
 export function managedAgentRequiredEvidence(ctx: ExtensionContext):
   | {
-      projectAssignmentId: string;
+      projectAssignmentId?: string;
       evidenceAssignmentId: string;
+      taskEvidenceId?: string;
       inheritedEvidence: RequiredEvidence[];
       localEvidence: RequiredEvidence[];
       currentEvidenceIds?: string[];
@@ -321,8 +323,8 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
         !SESSION_REQUEST_ID.test(data.projectAssignmentId)) ||
       (data.evidenceAssignmentId !== undefined &&
         !SESSION_REQUEST_ID.test(data.evidenceAssignmentId)) ||
-      (data.projectAssignmentId === undefined) !==
-        (data.evidenceAssignmentId === undefined) ||
+      (data.projectAssignmentId !== undefined &&
+        data.evidenceAssignmentId === undefined) ||
       !Array.isArray(data.inheritedEvidence) ||
       !data.inheritedEvidence.every(isRequiredEvidence) ||
       !Array.isArray(data.localEvidence) ||
@@ -336,8 +338,19 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
               typeof id === "string" &&
               data.inheritedEvidence.some((item) => item.id === id),
           ))) ||
-      (data.projectAssignmentId === undefined &&
+      (data.evidenceAssignmentId === undefined &&
         (data.inheritedEvidence.length || data.localEvidence.length)) ||
+      (data.taskEvidenceId !== undefined &&
+        (typeof data.taskEvidenceId !== "string" ||
+          !SESSION_REQUEST_ID.test(data.taskEvidenceId) ||
+          data.localEvidence.filter((item) => item.id === data.taskEvidenceId)
+            .length !== 1 ||
+          !data.localEvidence.some(
+            (item) =>
+              item.id === data.taskEvidenceId &&
+              !("result" in item) &&
+              item.sourceAssignmentId === data.evidenceAssignmentId,
+          ))) ||
       new Set(
         [...data.inheritedEvidence, ...data.localEvidence].map(
           (item) => item.id,
@@ -378,6 +391,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       latest.requestId === data.requestId &&
       (latest.projectAssignmentId !== data.projectAssignmentId ||
         latest.evidenceAssignmentId !== data.evidenceAssignmentId ||
+        latest.taskEvidenceId !== data.taskEvidenceId ||
         !isDeepStrictEqual(
           latest.currentEvidenceIds ?? [],
           data.currentEvidenceIds ?? [],
@@ -403,7 +417,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
       throw new Error("Conflicting managed-agent required-evidence metadata");
     latest = data;
   }
-  return latest?.projectAssignmentId
+  return latest?.evidenceAssignmentId
     ? {
         ...latest,
         inheritedEvidence: [...latest.inheritedEvidence],
@@ -425,7 +439,7 @@ function persistAcceptedRequiredEvidence(
   if (request.projectAssignmentId && !request.evidenceAssignmentId)
     throw new Error("Managed-agent evidence assignment identity is invalid");
   if (
-    !request.projectAssignmentId &&
+    !request.evidenceAssignmentId &&
     ((request.requiredEvidence?.length ?? 0) ||
       (request.inheritedEvidence?.length ?? 0) ||
       (request.localEvidence?.length ?? 0))
@@ -450,6 +464,9 @@ function persistAcceptedRequiredEvidence(
       : {}),
     ...(request.evidenceAssignmentId
       ? { evidenceAssignmentId: request.evidenceAssignmentId }
+      : {}),
+    ...(request.taskEvidenceId
+      ? { taskEvidenceId: request.taskEvidenceId }
       : {}),
     inheritedEvidence: (
       request.inheritedEvidence ??
@@ -1527,10 +1544,6 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ) {
     const state = managedAgentIdentity(ctx);
-    if (!state.projectAssignmentId)
-      throw new Error(
-        "This managed Agent has no verified project assignment; evidence updates are unavailable.",
-      );
     const current = managedAgentRequiredEvidence(ctx);
     if (!current || current.projectAssignmentId !== state.projectAssignmentId)
       throw new Error(
@@ -1555,6 +1568,8 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
       );
     const local = [...current.localEvidence];
     for (const id of params.remove ?? []) {
+      if (id === current.taskEvidenceId)
+        throw new Error("Current task evidence cannot be removed.");
       if (current.inheritedEvidence.some((item) => item.id === id))
         throw new Error(
           `Evidence ${id} is inherited from the project owner; ask project owner to remove it.`,
@@ -1626,6 +1641,9 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
         paneId: state.paneId,
         projectAssignmentId: current.projectAssignmentId,
         evidenceAssignmentId: current.evidenceAssignmentId,
+        ...(current.taskEvidenceId
+          ? { taskEvidenceId: current.taskEvidenceId }
+          : {}),
         inheritedEvidence: current.inheritedEvidence,
         localEvidence: local,
         ...(current.currentEvidenceIds !== undefined

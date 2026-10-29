@@ -379,6 +379,25 @@ function coreDecision(context) {
     });
   }
 
+  if (prompt.includes("SMOKE_CORE_SCOUT:")) {
+    if (
+      !/<file name="evidence:[^"]+"[^>]*>\s*SMOKE_CORE_IMPLEMENTER:/u.test(
+        prompt,
+      ) ||
+      !prompt.includes(
+        "owner work assignment supplied as evidence is context only",
+      )
+    )
+      throw new Error(
+        "Scout did not receive its owner's task as contextual evidence",
+      );
+    const pkg = packageRead(messages);
+    if (pkg) return fauxAssistantMessage(JSON.stringify(pkg));
+    if (latest?.role === "toolResult")
+      throw new Error("Package read result missing or unsuccessful");
+    return call("read", { path: "package.json" });
+  }
+
   if (rootAgentPrompt(messages, "SMOKE_CORE_IMPLEMENTER:")) {
     const result = deliveredAgentResult(
       messages,
@@ -413,13 +432,6 @@ function coreDecision(context) {
     });
   }
 
-  if (prompt.includes("SMOKE_CORE_SCOUT:")) {
-    const pkg = packageRead(messages);
-    if (pkg) return fauxAssistantMessage(JSON.stringify(pkg));
-    if (latest?.role === "toolResult")
-      throw new Error("Package read result missing or unsuccessful");
-    return call("read", { path: "package.json" });
-  }
   if (prompt.includes("SMOKE_CORE_NEXT_AGENT:")) {
     const expectedRef = prompt.match(/\bresult:smoke-core-scout#\d+\b/u)?.[0];
     const attached = prompt.match(
@@ -534,6 +546,19 @@ function continuationDecision(messages) {
     return call("read", { path: "package.json" });
   }
   if (prompt.includes("SMOKE_CONTINUATION_SECOND:")) {
+    const ref = prompt.match(/(evidence:[^\s]+) — work-assignment\.md/u)?.[1];
+    if (!ref)
+      throw new Error("Continued task omitted prior work assignment reference");
+    const prior = correlatedCall(messages, "read_evidence");
+    if (!prior) return call("read_evidence", { ref });
+    if (
+      prior.call.arguments?.ref !== ref ||
+      prior.result.isError ||
+      !text(prior.result).includes("SMOKE_CONTINUATION_FIRST:")
+    )
+      throw new Error(
+        "Continued task could not read its prior work assignment",
+      );
     const pkg = packageRead(messages);
     if (!pkg)
       throw new Error("Resumed transcript has no successful package.json read");
