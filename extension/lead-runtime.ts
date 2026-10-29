@@ -1477,6 +1477,7 @@ export function createLeadSessionStartRuntime(host: {
             } catch (error) {
               host.appendRoleError(ctx, error);
             }
+            if (needsLeadRoster) host.leadStatusRuntime.requestRefresh();
           }
         }
       }

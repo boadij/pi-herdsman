@@ -19694,6 +19694,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     assert.match(widget?.render(120).join("\n") ?? "", /managed/u),
   );
   assert.ok(widget);
+  widget!.render(120);
   widget!.handleMouse({
     type: "click",
     button: "left",
@@ -20736,7 +20737,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   let listCount = 0;
   let resolveInitial: ((value: ExecResult) => void) | undefined;
   let resolveReconciliation: ((value: ExecResult) => void) | undefined;
-  let resolveAfterRegistration: ((value: ExecResult) => void) | undefined;
+  let resolveAfterReconciliation: ((value: ExecResult) => void) | undefined;
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
@@ -20746,13 +20747,16 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
           return new Promise<ExecResult>((resolve) => {
             resolveInitial = resolve;
           });
-        if (listCount === 2)
+        if (listCount === 2) return { stdout: envelope(), stderr: "", code: 0 };
+        if (listCount === 3)
           return new Promise<ExecResult>((resolve) => {
             resolveReconciliation = resolve;
           });
-        return new Promise<ExecResult>((resolve) => {
-          resolveAfterRegistration = resolve;
-        });
+        if (listCount === 4)
+          return new Promise<ExecResult>((resolve) => {
+            resolveAfterReconciliation = resolve;
+          });
+        return { stdout: envelope(), stderr: "", code: 0 };
       }
       if (args[0] === "agent" && args[1] === "get")
         return {
@@ -20796,6 +20800,8 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   assert.ok(widget);
   assert.match(widget.render(160).join("\n"), /1 unknown/);
 
+  await t.waitFor(() => assert.ok(resolveReconciliation));
+  const countBeforeReconciliation = listCount;
   resolveReconciliation!({
     stdout: JSON.stringify({
       id: 1,
@@ -20804,15 +20810,23 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
     stderr: "",
     code: 0,
   });
-  for (let attempt = 0; attempt < 20 && listCount < 3; attempt++)
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.ok(listCount >= 3, JSON.stringify(pi.calls));
-  resolveAfterRegistration!({ stdout: envelope(), stderr: "", code: 0 });
   await starting;
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const rendered = widget.render(160).join("\n");
-  assert.match(rendered, /1 unknown/);
-  assert.match(rendered, /fresh-widget-agent/);
+  await t.waitFor(() => assert.ok(resolveAfterReconciliation));
+  assert.match(widget.render(160).join("\n"), /1 unknown/);
+  resolveAfterReconciliation!({
+    stdout: JSON.stringify({
+      id: 1,
+      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+    }),
+    stderr: "",
+    code: 0,
+  });
+  await t.waitFor(() => {
+    assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
+    const rendered = widget.render(160).join("\n");
+    assert.match(rendered, /1 lost/);
+    assert.match(rendered, /fresh-widget-agent/);
+  });
   await pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });

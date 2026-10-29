@@ -53,6 +53,7 @@ import {
 } from "./supervision.ts";
 import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
+
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -125,6 +126,97 @@ import {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+
+test("Lead startup requests status refresh after execution profile initialization", async () => {
+  const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
+  const calls: string[] = [];
+  let release!: () => void;
+  let preparing!: () => void;
+  const entered = new Promise<void>((resolve) => (preparing = resolve));
+  const deferred = new Promise<void>((resolve) => (release = resolve));
+  const signal = new AbortController().signal;
+  const host = {
+    diagnostic() {},
+    controller: {
+      abortSession() {},
+      clearPendingStarts() {},
+      beginSession: () => signal,
+      sessionStart() {},
+      async recoverRuntimes() {},
+      startHealthScanner() {},
+    },
+    leadInboxRuntime: { beginSession() {} },
+    leadStatusRuntime: {
+      prepareSession() {},
+      prime: () => calls.push("prime"),
+      setSnapshot: (snapshot: { unavailable: boolean }) => {
+        assert.equal(snapshot.unavailable, true);
+        calls.push("snapshot");
+      },
+      start() {},
+      requestRefresh: () => calls.push("refresh"),
+    },
+    isRoot: () => true,
+    isManagedAgent: () => false,
+    clearLeadExecution() {},
+    setLeadExecutionPending: (pending: boolean) =>
+      calls.push(`pending:${pending}`),
+    clearDefinitionRoster() {},
+    clearChiefStartPreflight() {},
+    roleTransitions: {
+      beginSessionRole: () => ({}),
+      reconcileRoleTools: () => calls.push("reconcile"),
+      canRestoreChiefState: () => false,
+      async resolveControllerRole() {},
+      shouldRestoreChief: () => false,
+      mayPublishLeadPresence: () => false,
+      canStartChiefInbox: () => false,
+      chiefModeInactive: () => true,
+      chiefModeActive: () => false,
+      activeManager: () => false,
+      currentRoleGeneration: () => 0,
+    },
+    herdRun: { restoreSession() {}, finishIfIdle() {} },
+    sessionLeadRoleState: () => undefined,
+    hasLeadExecutionState: () => false,
+    normalizeBaseTools: (tools: string[]) => tools,
+    activeTools: () => [],
+    setLeadTools() {},
+    autoActivateManager: () => false,
+    setOwnTools() {},
+    queueLeadPresentation() {},
+    initialStatusBreadcrumb: () => [],
+    ownToolsSnapshot: () => ({}),
+    discoverSessionDefinitions: async () => ({
+      definitions: [],
+      roleDefinitions: [],
+      projectTrusted: true,
+    }),
+    prepareLeadExecution: async () => {
+      preparing();
+      await deferred;
+      calls.push("prepared");
+    },
+    publishLeadRole() {},
+    visibleAgentCapabilities: async () => [],
+    setDefinitionRoster() {},
+  } as unknown as Parameters<typeof createLeadSessionStartRuntime>[0];
+  const startup =
+    createLeadSessionStartRuntime(host).sessionStart(fakeContext());
+  await entered;
+  assert.ok(calls.includes("prime"));
+  assert.ok(calls.includes("snapshot"));
+  assert.equal(calls.includes("refresh"), false);
+  release();
+  await startup;
+  assert.deepEqual(calls.slice(-4), [
+    "prepared",
+    "pending:false",
+    "reconcile",
+    "refresh",
+  ]);
+  assert.equal(calls.filter((call) => call === "refresh").length, 1);
+});
 
 test("read_evidence is added only to assigned project Lead tools", async () => {
   const { createLeadToolState } = await import("./lead-runtime.ts");
