@@ -206,6 +206,38 @@ const ownershipResult = (
   },
 });
 
+async function waitForStage(
+  t: TestContext,
+  stage: string,
+  condition: () => unknown,
+) {
+  try {
+    await t.waitFor(condition);
+  } catch (error) {
+    if (error instanceof Error) error.message = `${stage}: ${error.message}`;
+    throw error;
+  }
+}
+
+test("waitForStage preserves and labels failures", async () => {
+  const failure = new Error("waitFor() timed out");
+  const stack = failure.stack;
+  const t = {
+    waitFor: async () => {
+      throw failure;
+    },
+  } as unknown as TestContext;
+  await assert.rejects(
+    waitForStage(t, "lifecycle stage", () => {}),
+    (error) => {
+      assert.equal(error, failure);
+      assert.equal(error.message, "lifecycle stage: waitFor() timed out");
+      assert.equal(error.stack, stack);
+      return true;
+    },
+  );
+});
+
 test(
   "a manually continued assigned Lead rejects stale Manager messages and structures the malformed-topology probe error",
   { timeout: 20_000 },
@@ -330,7 +362,7 @@ test(
         updatedAt: Date.now(),
       });
       await pi.events.get("session_start")![0](undefined, ctx);
-      await t.waitFor(() =>
+      await waitForStage(t, "initial managed Lead status", () =>
         assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
       );
       const supervisorTool = pi.tools.find(
@@ -378,7 +410,7 @@ test(
         createdAt: Date.now(),
       } as const;
       const managerMessagePath = writeChiefMessage(managerMessage, runtime);
-      await t.waitFor(() => {
+      await waitForStage(t, "first Manager message delivery", () => {
         const call = pi.sentMessageCalls.find(
           ({ message }: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
@@ -403,7 +435,7 @@ test(
       for (const handler of pi.events.get("agent_settled") ?? [])
         await handler({ aborted: true }, ctx);
       ctx.isIdle = () => true;
-      await t.waitFor(() =>
+      await waitForStage(t, "redelivery following settlement", () =>
         assert.equal(
           pi.sentMessageCalls.filter(
             ({ message }: any) => message?.details?.id === managerMessage.id,
@@ -418,7 +450,7 @@ test(
       )!.message as any;
       pi.entries.push({ type: "custom", ...sentMessage });
       assert.equal(ctx.sessionManager.getBranch().length, 0);
-      await t.waitFor(() =>
+      await waitForStage(t, "first message acknowledgment cleanup", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       for (const field of ["toSessionId", "leadSessionId"] as const) {
@@ -432,7 +464,7 @@ test(
             [field]: randomUUID(),
           }),
         );
-        await t.waitFor(() =>
+        await waitForStage(t, "invalid recipient/Lead message cleanup", () =>
           assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
         );
         assert.equal(
@@ -491,19 +523,22 @@ test(
           false,
         );
         writeFileSync(secondDescriptorPath, secondDescriptor);
-        await t.waitFor(() =>
-          assert.ok(
-            pi.sentMessageCalls.some(
-              ({ message }: any) => message?.details?.id === secondMessage.id,
+        await waitForStage(
+          t,
+          "delivery after Manager descriptor recovery",
+          () =>
+            assert.ok(
+              pi.sentMessageCalls.some(
+                ({ message }: any) => message?.details?.id === secondMessage.id,
+              ),
             ),
-          ),
         );
         assert.deepEqual(listChiefMessagePaths(runtime, leadId), [secondPath]);
         const receipt = pi.sentMessageCalls.find(
           ({ message }: any) => message?.details?.id === secondMessage.id,
         )!.message as any;
         pi.entries.push({ type: "custom", ...receipt });
-        await t.waitFor(() =>
+        await waitForStage(t, "recovered message acknowledgment", () =>
           assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
         );
       } finally {
@@ -516,7 +551,7 @@ test(
         createdAt: Date.now(),
       };
       writeChiefMessage(fallbackMessage, runtime);
-      await t.waitFor(() =>
+      await waitForStage(t, "fallback message delivery", () =>
         assert.equal(
           pi.sentMessageCalls.filter(
             ({ message }: any) => message?.details?.id === fallbackMessage.id,
@@ -537,7 +572,7 @@ test(
           1,
         );
         pending = false;
-        await t.waitFor(() =>
+        await waitForStage(t, "fallback retry after pending work clears", () =>
           assert.equal(
             pi.sentMessageCalls.filter(
               ({ message }: any) => message?.details?.id === fallbackMessage.id,
@@ -552,7 +587,7 @@ test(
         ({ message }: any) => message?.details?.id === fallbackMessage.id,
       )!.message as any;
       pi.entries.push({ type: "custom", ...fallbackReceipt });
-      await t.waitFor(() =>
+      await waitForStage(t, "fallback acknowledgment cleanup", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       const tool = pi.tools.find(
@@ -684,7 +719,7 @@ test(
         listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing"),
         unavailableProjectMessages,
       );
-      await t.waitFor(() =>
+      await waitForStage(t, "stale Manager message cleanup", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       assert.equal(
@@ -719,18 +754,21 @@ test(
         false,
       );
       managerIdentityUnavailable = false;
-      await t.waitFor(() =>
-        assert.ok(
-          pi.sentMessageCalls.some(({ message }: any) =>
-            message?.content?.includes(inconclusiveText),
+      await waitForStage(
+        t,
+        "delivery after identity verification recovers",
+        () =>
+          assert.ok(
+            pi.sentMessageCalls.some(({ message }: any) =>
+              message?.content?.includes(inconclusiveText),
+            ),
           ),
-        ),
       );
       const inconclusiveReceipt = pi.sentMessageCalls.find(({ message }: any) =>
         message?.content?.includes(inconclusiveText),
       )!.message as any;
       pi.entries.push({ type: "custom", ...inconclusiveReceipt });
-      await t.waitFor(() =>
+      await waitForStage(t, "recovered identity message acknowledgment", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       manager.release();
@@ -747,7 +785,7 @@ test(
         { ...managerMessage, id: randomUUID(), text: replacedText },
         runtime,
       );
-      await t.waitFor(() =>
+      await waitForStage(t, "replaced Manager message cleanup", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       assert.equal(
@@ -797,7 +835,7 @@ test(
         await handler({ outcome: "completed" }, ctx);
       for (const handler of pi.events.get("agent_settled") ?? [])
         await handler({ aborted: false }, ctx);
-      await t.waitFor(() =>
+      await waitForStage(t, "manual continuation publication", () =>
         assert.equal(
           listProjectMessages(runtime, realpathSync(tmpdir()), "smoke/routing")
             .length,
@@ -823,8 +861,10 @@ test(
         0,
       );
       await pi.commandOptions.get("lead")!.handler("flexible", ctx);
-      await t.waitFor(() =>
-        assert.match(statusWidget!.render(160)[0], /managed/),
+      await waitForStage(
+        t,
+        "managed status after execution-mode transition",
+        () => assert.match(statusWidget!.render(160)[0], /managed/),
       );
 
       for (const handler of pi.events.get("agent_start") ?? [])
@@ -2263,7 +2303,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     );
 
     await pi.events.get("agent_start")![0](undefined, ctx);
-    await t.waitFor(() =>
+    await waitForStage(t, "Chief inbox delivery after second agent_start", () =>
       assert.ok(
         pi.sent.some((message: any) =>
           String(message?.content ?? "").includes("review-evidence-478"),
@@ -2337,7 +2377,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
         supervisionRuntime(),
       );
       await pi.events.get("agent_start")![0](undefined, ctx);
-      await t.waitFor(() =>
+      await waitForStage(t, "subsequent Chief message delivery", () =>
         assert.ok(
           pi.sent.some((message: any) =>
             String(message?.content ?? "").includes("semantic endpoint test"),
@@ -2460,15 +2500,6 @@ for (const reachable of [true, false]) {
       };
     const notices: string[] = [];
     ctx.ui.notify = (message: string) => notices.push(message);
-    const waitFor = async (stage: string, condition: () => unknown) => {
-      try {
-        await t.waitFor(condition);
-      } catch (error) {
-        if (error instanceof Error)
-          error.message = `${stage}: ${error.message}`;
-        throw error;
-      }
-    };
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
       // No before_agent_start or conversation turn precedes Manager activation.
@@ -2506,7 +2537,7 @@ for (const reachable of [true, false]) {
               message?.customType === "pi-herdsman-project_message" &&
               message?.details?.id === id,
           );
-        await waitFor("live project-message delivery", () =>
+        await waitForStage(t, "live project-message delivery", () =>
           assert.equal(projectDeliveries(liveRecord.id).length, 1),
         );
         assert.ok(
@@ -2558,10 +2589,12 @@ for (const reachable of [true, false]) {
         failRemovalForId = cleanupRecord.id;
         try {
           writeProjectMessage(cleanupRecord, runtime);
-          await waitFor("cleanup-failure project-message delivery", () =>
-            assert.equal(projectDeliveries(cleanupRecord.id).length, 1),
+          await waitForStage(
+            t,
+            "cleanup-failure project-message delivery",
+            () => assert.equal(projectDeliveries(cleanupRecord.id).length, 1),
           );
-          await waitFor("durable cleanup error reporting", () =>
+          await waitForStage(t, "durable cleanup error reporting", () =>
             assert.equal(stateErrors(), errorsBefore + 1),
           );
           await new Promise((resolve) => setTimeout(resolve, 1_100));
@@ -2577,7 +2610,7 @@ for (const reachable of [true, false]) {
         } finally {
           failRemovalForId = undefined;
         }
-        await waitFor("failed project-message cleanup retry", () =>
+        await waitForStage(t, "failed project-message cleanup retry", () =>
           assert.deepEqual(
             listProjectMessages(runtime, realpathSync(tmpdir()), branch),
             [],
@@ -2604,7 +2637,7 @@ for (const reachable of [true, false]) {
           },
         });
         assert.equal(retireProjectAssignment(runtime, retired), true);
-        await waitFor("project-retirement notification delivery", () =>
+        await waitForStage(t, "project-retirement notification delivery", () =>
           assert.equal(
             managerHistory.filter(
               (entry: any) =>
@@ -2621,7 +2654,7 @@ for (const reachable of [true, false]) {
         )!;
         assert.deepEqual(noticeCall.options, { triggerTurn: false });
         managerHistory.push({ ...notice, type: "custom_message" });
-        await waitFor("project-retirement acknowledgment", () =>
+        await waitForStage(t, "project-retirement acknowledgment", () =>
           assert.deepEqual(
             listPendingRetirements(runtime, realpathSync(tmpdir())),
             [],
@@ -2651,8 +2684,10 @@ for (const reachable of [true, false]) {
         writeProjectMessage(backlogRecord, runtime);
         await pi.events.get("session_start")![0](undefined, ctx);
         await pi.commandOptions.get("manager").handler("", ctx);
-        await waitFor("backlog delivery after Manager reactivation", () =>
-          assert.equal(projectDeliveries(backlogRecord.id).length, 1),
+        await waitForStage(
+          t,
+          "backlog delivery after Manager reactivation",
+          () => assert.equal(projectDeliveries(backlogRecord.id).length, 1),
         );
         assert.equal(projectDeliveries(liveRecord.id).length, 0);
         const backlogSend = pi.sentMessageCalls.find(
@@ -2735,10 +2770,13 @@ for (const reachable of [true, false]) {
           assert.equal(saved.id, result.details.id);
           assert.equal(saved.fromSessionId, leadId);
           assert.ok(saved.text.includes(plan));
-          await waitFor("Managed Lead message delivery to Manager", () =>
-            assert.ok(
-              projectDeliveries(result.details.id)[0]?.content.includes(plan),
-            ),
+          await waitForStage(
+            t,
+            "Managed Lead message delivery to Manager",
+            () =>
+              assert.ok(
+                projectDeliveries(result.details.id)[0]?.content.includes(plan),
+              ),
           );
         } finally {
           await lead.events.get("session_shutdown")?.[0]();
