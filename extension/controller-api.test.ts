@@ -2431,11 +2431,6 @@ for (const reachable of [true, false]) {
       tab_id: "root-tab",
       workspace_id: WORKSPACE,
     };
-    let pauseThirdWorktreeList = false;
-    let worktreeListsSincePause = 0;
-    let worktreeListPaused!: () => void;
-    let resumeWorktreeList!: () => void;
-    let worktreeListGate: Promise<void> | undefined;
     const exec = async (_command: string, args: string[]) => {
       if (_command === "git")
         return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
@@ -2443,10 +2438,6 @@ for (const reachable of [true, false]) {
       if (args[0] === "workspace" && args[1] === "get")
         result = { workspace: { workspace_id: args[2], worktree: null } };
       else if (args[0] === "worktree" && args[1] === "list") {
-        if (pauseThirdWorktreeList && ++worktreeListsSincePause === 3) {
-          worktreeListPaused();
-          await worktreeListGate;
-        }
         result = {
           source: {
             repo_key: realpathSync(tmpdir()),
