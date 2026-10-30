@@ -329,6 +329,13 @@ Treat inactivity as advisory evidence, not proof of a hang. Preserve exact
 identity and cleanup evidence on failure. Do not guess through uncertain state,
 retry destructive cleanup blindly, or silently take over delegated work.
 
+An unknown Agent blocks unsafe control of that Agent, not automatically all
+independent work. Distinguish historical identity, current competing execution,
+and ownership of the specific unfinished scope. Perform a bounded relevant
+check when needed; do not repeat an unchanged failed identity investigation.
+Continue independent authorized work where evidence permits, otherwise report
+the specific blocker.
+
 See [Recovery](docs/guides/recovery.md) for operator procedures and the
 [Agent tools](docs/reference/agent.md) for the exact machine contract.
 
