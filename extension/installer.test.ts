@@ -91,7 +91,7 @@ function Resolve-Command([string]$Name) {
 }
 function Version([string]$Command) {
   if ($Command -eq 'MockPi') { return [version]$script:case.pi }
-  if ($Command -eq 'MockHerdr') { return [version]($script:case.herdr -replace '-preview(?:\..*)?$', '') }
+  if ($Command -eq 'MockHerdr') { return [version]($script:case.herdr -replace '-preview(?:\\..*)?$', '') }
   if ($Command -in @('MockNode', 'node')) { return [version]$script:case.node }
   if ($Command -eq 'npm.cmd') { return [version]'10.0.0' }
   throw "Unexpected version command: $Command"
@@ -254,6 +254,8 @@ test(
       result.stdout,
       /-Channel|installer https:\/\/herdr\.dev/u,
     );
+    const malformedPreview = runWindowsBootstrap({ herdr: "0.9.6-previewX1" });
+    assert.match(malformedPreview.stdout, /RESULT failed=True/u);
   },
 );
 
