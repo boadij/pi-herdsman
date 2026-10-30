@@ -9944,8 +9944,8 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
           repo_name: "project",
         },
         worktrees: [
-          { open_workspace_id: assignedWorkspace },
-          { open_workspace_id: ordinaryWorkspace },
+          { branch: "assigned-branch", open_workspace_id: assignedWorkspace },
+          { branch: "ordinary-branch", open_workspace_id: ordinaryWorkspace },
         ],
       });
     if (command === "herdr" && isAgentList(args))
@@ -10160,6 +10160,32 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
       piSessionId: ordinaryLeadSession,
       updatedAt: Date.now(),
     });
+    const incompatibleWork = await managerStaff.execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      managerCtx,
+    );
+    assert.equal(
+      incompatibleWork.details.work.find(
+        (work: any) => work.branch === "assigned-branch",
+      )?.status,
+      "active",
+      "an independently verified incompatible Lead remains active work",
+    );
+    await assert.rejects(
+      manager.tools
+        .find((tool) => tool.name === "stop_lead")!
+        .execute(
+          "stop",
+          { branch: "assigned-branch" },
+          undefined,
+          undefined,
+          managerCtx,
+        ),
+      (error: any) => error.detail.category === "incompatible_build",
+    );
     await assert.rejects(
       manager.tools
         .find((tool) => tool.name === "message_staff")!

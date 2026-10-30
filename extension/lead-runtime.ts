@@ -3640,7 +3640,16 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         work: host.projectWorkSnapshot({
           assignments,
           worktrees: topology.worktrees,
-          leads,
+          leads: [
+            ...leads,
+            ...incompatible
+              .filter((report) => report.role === "lead")
+              .map((report) => ({
+                lead: report.session,
+                workspaceId: report.workspaceId,
+                runtimeState: report.runtimeState,
+              })),
+          ],
         }),
         openWorkspaces,
         leads: leads.flatMap((lead: any) => {
