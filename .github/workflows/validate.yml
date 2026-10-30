@@ -16,6 +16,7 @@ jobs:
   scope:
     runs-on: ubuntu-latest
     outputs:
+      format: ${{ steps.scope.outputs.format }}
       tests: ${{ steps.scope.outputs.tests }}
       package: ${{ steps.scope.outputs.package }}
       container: ${{ steps.scope.outputs.container }}
@@ -53,6 +54,8 @@ jobs:
           fi | node scripts/ci-scope.mjs >> "$GITHUB_OUTPUT"
 
   format:
+    needs: scope
+    if: ${{ needs.scope.outputs.format == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -307,6 +310,7 @@ jobs:
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       FORMAT_RESULT: ${{ needs.format.result }}
+      FORMAT_REQUIRED: ${{ needs.scope.outputs.format }}
       VALIDATE_RESULT: ${{ needs.validate.result }}
       TESTS_REQUIRED: ${{ needs.scope.outputs.tests }}
       PACKAGE_RESULT: ${{ needs.package.result }}
@@ -324,7 +328,6 @@ jobs:
           set -euo pipefail
 
           [ "$SCOPE_RESULT" = "success" ]
-          [ "$FORMAT_RESULT" = "success" ]
 
           required_result() {
             case "$1:$2" in
@@ -336,6 +339,7 @@ jobs:
             esac
           }
 
+          required_result "$FORMAT_REQUIRED" "$FORMAT_RESULT" "Formatting"
           required_result "$TESTS_REQUIRED" "$VALIDATE_RESULT" "Node tests"
           required_result "$PACKAGE_REQUIRED" "$PACKAGE_RESULT" "Package"
           required_result "$CONTAINER_REQUIRED" "$CONTAINER_RESULT" "Container"
