@@ -3300,17 +3300,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         (work: any) =>
           work.branch === assignment.branch && work.session === assignment.id,
       );
-      if (matches?.length !== 1 || matches[0]?.status !== "active") {
-        const incompatible = snapshot.incompatible?.find(
-          (report) => report.session === assignment.id,
+      const incompatible = snapshot.incompatible?.find(
+        (report) => report.role === "lead" && report.session === assignment.id,
+      );
+      if (incompatible)
+        requireCompatibleBuild(
+          HERDSMAN_BUILD,
+          incompatible.build,
+          "staff action",
+          `lead on branch ${branch}`,
         );
-        if (incompatible)
-          requireCompatibleBuild(
-            HERDSMAN_BUILD,
-            incompatible.build,
-            "staff action",
-            `lead on branch ${branch}`,
-          );
+      if (matches?.length !== 1 || matches[0]?.status !== "active") {
         throw new Error("Assigned work is not uniquely active");
       }
       return assignment;
