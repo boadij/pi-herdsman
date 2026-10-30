@@ -789,13 +789,20 @@ function registerExtensionImpl(
       : undefined;
   if (agentEnvError) {
     pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
+      pi.setActiveTools([]);
       appendDurableError(
         pi,
         ctx,
         "pi_herdsman_state_error",
         new Error("invalid agent environment: " + agentEnvError),
       );
+      ctx.ui.notify("Managed Agent startup rejected.", "error");
     });
+    pi.on("before_agent_start", () => pi.setActiveTools([]));
+    pi.on("tool_call", () => ({
+      block: true,
+      reason: "Invalid managed Agent startup environment.",
+    }));
     return;
   }
   pi.registerEntryRenderer(AGENT_DEFINITIONS_ENTRY, (entry, options, theme) => {
@@ -2359,6 +2366,25 @@ function registerExtensionImpl(
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
       const sessionStartOptions = {
+        rejectNativeAgentRestore: (ctx: ExtensionContext) => {
+          const sessionId = ctx.sessionManager.getSessionId();
+          try {
+            if (
+              !sessionAgentIdentity(ctx.sessionManager.getEntries(), sessionId)
+            )
+              return false;
+            throw new Error(
+              "This session belongs to a managed Agent but was restored without its authorized launch context. Execution is disabled. Recover the assignment through its original Lead using Herdsman's existing recovery controls.",
+            );
+          } catch (error) {
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+            ctx.ui.notify(
+              "Managed Agent session requires recovery by its original Lead; execution is disabled.",
+              "error",
+            );
+            return true;
+          }
+        },
         autoActivateManager: (ctx: ExtensionContext) =>
           readEffectiveConfig(ctx).autoActivateManager,
         clearDefinitionRoster: () => {

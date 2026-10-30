@@ -10965,14 +10965,72 @@ test("historical continuation re-parenting preserves every valid ownership path"
       },
     ],
   });
-  const request = async (entries: unknown[], callerId = LEAD_SESSION_ID) => {
-    const startup = startupExecutor("child", () => childId);
-    const pi = fakePi({ exec: startup.exec });
-    registerExtension!(pi.pi as never);
-    const context = fakeContext(entries) as any;
-    context.sessionManager.getSessionId = () => callerId;
-    await pi.events.get("session_start")![0](undefined, context);
+  const request = async (
+    entries: unknown[],
+    callerId = LEAD_SESSION_ID,
+    managedAgent = false,
+  ) => {
+    const identity = {
+      paneId: "parent-pane",
+      tabId: "parent-tab",
+      piSessionId: parentId,
+      piSessionFile: parentPath,
+    };
+    const mailbox = agentMailboxPath(WORKSPACE, "parent");
+    if (managedAgent) {
+      process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
+      process.env.PI_HERDSMAN_LABEL = "parent";
+      process.env.PI_HERDSMAN_MAILBOX = mailbox;
+      process.env.PI_HERDSMAN_RUN_ID = AGENT_ID;
+      process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
+      process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
+      process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+      process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify([
+        "agent",
+      ]);
+      process.env.HERDR_PANE_ID = identity.paneId;
+      writeAgentState(mailbox, managedState("parent", undefined, identity));
+    }
+    const startup = startupExecutor(
+      "child",
+      () => childId,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      "parent-pane",
+    );
+    const startupExec = managedAgent
+      ? (command: string, args: string[]) => {
+          const result = startup.exec(command, args);
+          if (
+            command === "herdr" &&
+            args[0] === "pane" &&
+            args[1] === "split"
+          ) {
+            const response = JSON.parse(result.stdout);
+            response.result.pane.terminal_id = "startup-terminal";
+            return { ...result, stdout: JSON.stringify(response) };
+          }
+          return result;
+        }
+      : startup.exec;
+    const pi = fakePi({ exec: startupExec });
     try {
+      registerExtension!(pi.pi as never);
+      const context = fakeContext(entries) as any;
+      context.sessionManager.getSessionId = () => callerId;
+      if (managedAgent)
+        context.sessionManager.getSessionFile = () => parentPath;
+      await pi.events.get("session_start")![0](undefined, context);
       const result = await agentTool(pi, "continue").execute(
         "id",
         { session: childId, task: "continue child" },
@@ -10986,17 +11044,30 @@ test("historical continuation re-parenting preserves every valid ownership path"
       pi.events.get("session_shutdown")?.[0]();
       startup.stopMailboxConsumer();
       resetAgentMailbox(startup.mailbox);
+      if (managedAgent) {
+        setLeadEnvironment();
+        resetAgentMailbox(mailbox);
+      }
     }
   };
   try {
     const first = await request(leadEntries);
     assert.equal(first.details.ok, true, JSON.stringify(first.details));
-    const fromParent = await request(parentEntries, parentId);
+    const fromParent = await request(parentEntries, parentId, true);
     assert.equal(
       fromParent.details.ok,
       true,
       JSON.stringify(fromParent.details),
     );
+    const rootParentOnly = await request(parentEntries, LEAD_SESSION_ID);
+    assert.equal(
+      rootParentOnly.details.ok,
+      false,
+      JSON.stringify(rootParentOnly.details),
+    );
+    assert.equal(rootParentOnly.details.error.category, "invalid_request");
+    assert.equal(rootParentOnly.details.error.operation, "continue");
+    assert.match(rootParentOnly.details.error.message, /ownership tree/);
     // The completed continuation delivers a new result for the same Pi ID
     // directly to L, without erasing P's older child result.
     leadEntries.push(

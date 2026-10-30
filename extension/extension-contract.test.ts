@@ -4437,6 +4437,232 @@ test("managed Lead prompt keeps the managed charter without an active assignment
   }
 });
 
+test("native managed-Agent restore quarantines the exact session", async () => {
+  setLeadEnvironment();
+  const sessionId = randomUUID();
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId, definition: "implementer", label: "interrupted-work" },
+    },
+  ];
+  const initialTools = REGISTERED_ROLE_TOOLS.map(({ name }) => name);
+  const pi = fakePi({
+    entries,
+    activeTools: initialTools,
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(entries) as any;
+  const ordinarySessionId = randomUUID();
+  let currentSessionId = ordinarySessionId;
+  ctx.sessionManager.getSessionId = () => currentSessionId;
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    pi.events.get("agent_start")![0]({}, ctx);
+    pi.events.get("turn_end")![0](
+      {
+        outcome: "error",
+        messageEntryId: randomUUID(),
+        message: { role: "assistant", content: "seeded ordinary observation" },
+      },
+      ctx,
+    );
+    currentSessionId = sessionId;
+    await pi.events.get("session_start")![0](undefined, ctx);
+    assert.ok(
+      entries.some(
+        (entry) => entry.customType === "pi-herdsman-agent-definition",
+      ),
+    );
+    assert.equal(
+      entries.some(
+        (entry) =>
+          entry.customType === "pi-herdsman-session-kind" &&
+          entry.data.sessionId === sessionId,
+      ),
+      false,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), []);
+    pi.events.get("turn_end")![0](
+      {
+        outcome: "completed",
+        messageEntryId: randomUUID(),
+        message: { role: "assistant", content: "quarantined response marker" },
+      },
+      ctx,
+    );
+    assert.equal(
+      entries.some(
+        (entry) =>
+          entry.customType === "pi-herdsman-session-kind" &&
+          entry.data.sessionId === sessionId,
+      ),
+      false,
+    );
+    currentSessionId = ordinarySessionId;
+    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, ctx);
+    await pi.events.get("agent_settled")![0]({ aborted: false }, ctx);
+    const seededRunReport = entries.find(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.sessionId === ordinarySessionId,
+    );
+    assert.ok(
+      seededRunReport?.data?.message?.includes("seeded ordinary observation") &&
+        !seededRunReport.data.message.includes("quarantined response marker"),
+      "quarantined turn_end must not replace the seeded ordinary run observation",
+    );
+    currentSessionId = sessionId;
+    assert.equal(
+      pi.events.get("tool_call")![0]({ toolName: "exec" }, ctx).block,
+      true,
+    );
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, ctx);
+    assert.match(
+      event.systemPrompt,
+      /managed Agent restored without its authorized launch context/,
+    );
+    assert.doesNotMatch(
+      event.systemPrompt,
+      /You are (?:a )?(?:Lead|Manager|Agent)/,
+    );
+    pi.events.get("session_tree")![0](undefined, ctx);
+    assert.deepEqual(pi.pi.getActiveTools(), []);
+
+    const nextContext = fakeContext([]) as any;
+    nextContext.sessionManager.getSessionId = () => randomUUID();
+    await pi.events.get("session_start")![0](undefined, nextContext);
+    assert.notDeepEqual(pi.pi.getActiveTools(), []);
+    assert.ok(pi.pi.getActiveTools().includes("list_agents"));
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  }
+});
+
+test("native managed-Agent restore quarantines malformed and conflicting exact-session identities only", async () => {
+  setLeadEnvironment();
+  const sessionId = randomUUID();
+  const malformed = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: {
+      sessionId,
+      definition: "implementer",
+      label: "interrupted-work",
+      extra: true,
+    },
+  };
+  const conflicting = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId, definition: "scout", label: "different-work" },
+  };
+  const foreign = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: {
+      sessionId: randomUUID(),
+      definition: "implementer",
+      label: "other-session",
+    },
+  };
+
+  for (const [entries, diagnostic] of [
+    [[malformed], /invalid pi-herdsman-agent-definition entry/],
+    [
+      [
+        {
+          ...malformed,
+          data: {
+            sessionId,
+            definition: "implementer",
+            label: "interrupted-work",
+          },
+        },
+        conflicting,
+      ],
+      /conflicting pi-herdsman-agent-definition entries/,
+    ],
+  ] as const) {
+    const pi = fakePi({
+      entries: [...entries],
+      activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
+    registerExtension!(pi.pi as never);
+    const ctx = fakeContext([...entries]) as any;
+    ctx.sessionManager.getSessionId = () => sessionId;
+    try {
+      await pi.events.get("session_start")![0](undefined, ctx);
+      assert.deepEqual(pi.pi.getActiveTools(), []);
+      assert.equal(
+        pi.entries.some(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-session-kind" &&
+            entry.data?.sessionId === sessionId &&
+            entry.data?.kind === "ordinary",
+        ),
+        false,
+        "quarantined identity must not acquire ordinary session-kind identity",
+      );
+      assert.equal(
+        pi.entries.some(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-role" &&
+            entry.data?.sessionId === sessionId &&
+            ["lead", "chief", "manager"].includes(entry.data?.role),
+        ),
+        false,
+        "quarantined identity must not acquire Lead, Chief, or Manager role identity",
+      );
+      assert.ok(
+        pi.entries.some(
+          (entry: any) =>
+            entry.customType === "pi_herdsman_state_error" &&
+            diagnostic.test(entry.data.error),
+        ),
+        "quarantine must retain an actionable identity-validation diagnostic",
+      );
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+    }
+  }
+
+  const foreignEntries = [foreign];
+  const pi = fakePi({
+    entries: foreignEntries,
+    activeTools: [],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(foreignEntries) as any;
+  ctx.sessionManager.getSessionId = () => sessionId;
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    assert.ok(
+      pi.pi.getActiveTools().includes("list_agents"),
+      "foreign-session Agent identity must not quarantine this session",
+    );
+    assert.equal(
+      pi.entries.some(
+        (entry: any) => entry.customType === "pi-herdsman_state_error",
+      ),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+  }
+});
+
 test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
@@ -6224,21 +6450,32 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
   pi.events.get("session_shutdown")?.[0]();
 });
 
-test("invalid agent owner identity registers no managed agent hooks", () => {
+test("invalid agent owner identity registers fail-closed managed hooks", async () => {
   const mailbox = setAgentEnvironment();
   process.env.PI_HERDSMAN_OWNER_SESSION_ID = "not-a-session-id";
-  const invalid = fakePi();
+  const invalid = fakePi({ activeTools: ["exec"] });
   registerExtension!(invalid.pi as never);
   assert.equal(invalid.tools.length, 0);
-  assert.equal(invalid.events.has("before_agent_start"), false);
-  assert.equal(invalid.events.size, 1);
+  assert.equal(invalid.events.has("before_agent_start"), true);
+  assert.equal(invalid.events.has("tool_call"), true);
+  assert.equal(invalid.events.has("session_start"), true);
+  const context = fakeContext() as any;
+  await invalid.events.get("session_start")![0](undefined, context);
+  assert.deepEqual(invalid.pi.getActiveTools(), []);
+  invalid.pi.setActiveTools(["exec"]);
+  await invalid.events.get("before_agent_start")![0](undefined, context);
+  assert.deepEqual(invalid.pi.getActiveTools(), []);
+  assert.equal(
+    invalid.events.get("tool_call")![0]({ toolName: "exec" }, context).block,
+    true,
+  );
   assert.equal(readAgentState(mailbox), undefined);
 
   const missingDisplayMailbox = setAgentEnvironment();
   delete process.env.PI_HERDSMAN_OWNER_DISPLAY;
   const missingDisplay = fakePi();
   registerExtension!(missingDisplay.pi as never);
-  assert.equal(missingDisplay.events.has("before_agent_start"), false);
+  assert.equal(missingDisplay.events.has("before_agent_start"), true);
   assert.equal(readAgentState(missingDisplayMailbox), undefined);
   resetAgentMailbox(missingDisplayMailbox);
 });
