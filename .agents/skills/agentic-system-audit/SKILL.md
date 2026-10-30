@@ -1,6 +1,6 @@
 ---
 name: agentic-system-audit
-description: Audit an agentic software system end to end for contradictions, gaps, inconsistent contracts, capability mismatches, instruction conflicts, ambiguous results, stale documentation, unsafe lifecycle behavior, redundant guidance, missing enforcement, test blind spots, and architectural drift. Use when reviewing the overall health and coherence of an agent/tool system, especially systems with prompts, tools, subagents, lifecycle state, dynamic results, configuration, documentation, and multiple instruction layers.
+description: Audit an agentic software system end to end for contradictions, gaps, inconsistent contracts, capability mismatches, instruction conflicts, ambiguous results, stale documentation, unsafe lifecycle behavior, redundant guidance, missing enforcement, test blind spots, and architectural drift. Use primarily for Pi Herdsman and comparable agent/tool systems with prompts, tools, subagents, lifecycle state, dynamic results, configuration, documentation, and multiple instruction layers.
 ---
 
 # Agentic System Audit
@@ -12,6 +12,29 @@ Find where code, prompts, tools, state, results, docs, tests, configuration, pac
 Prefer deletion, consolidation, one canonical owner, and the smallest durable correction.
 
 This is a **read-only audit**. Do not modify the repository.
+
+# Scope and execution boundary
+
+Establish the actual audited snapshot before investigating: exact commit SHA for
+committed source; base SHA and included staged, unstaged, or untracked changes
+(with an exact diff or snapshot reference) for a working tree; base and head
+SHAs for a PR. Attribute CI, tests, and prior reviews to the revisions they
+actually cover. Record relevant supported upstream versions.
+
+During scoping, identify relevant active ADR decisions and follow their
+supersession chains. Runtime and supported external contracts establish actual
+behavior; active decisions constrain architectural recommendations, while
+superseded decisions explain history rather than current semantics. Revalidate
+applicable decisions when closing material findings.
+
+Permission to inspect source does not authorize executing it. Run a targeted
+smoke only when execution is authorized and a disposable environment is
+verified isolated from the audited checkout and live user resources, including
+configuration, credentials, and processes. Otherwise use read-only evidence
+and report any material unresolved uncertainty.
+
+Apply Herdsman-specific checks only where the target has equivalent capabilities
+or lifecycle concepts; otherwise mark those checks not applicable.
 
 # Operating model
 
@@ -68,7 +91,9 @@ investigators instead of making them rediscover the same material.
 
 # Material finding closure
 
-Each lens returns **candidate evidence**. The audit owner closes candidates before severity is assigned.
+Each lens returns **candidate evidence**. The audit owner closes candidates
+before severity is assigned, rechecking applicable active ADR constraints for
+architectural findings and corrections.
 
 Trace every boundary used by the claim. For result/state findings, prefer:
 
@@ -119,7 +144,7 @@ Prefer:
 supported-version primary source/API/type contract
 → supported-version official docs
 → installed dependency source
-→ targeted runtime smoke only if still unresolved
+→ authorized isolated runtime smoke only if still unresolved
 ```
 
 Do not substitute latest behavior for the supported range. Do not require a smoke test when source plus local integration already establishes the behavior.
@@ -494,15 +519,21 @@ Optimize for useful evidence per agent, not agent count.
 
 ## 1. Verdict
 
-Exactly one:
+Issue a verdict only after completing the required investigation for the
+declared scope. Skipped available evidence means the audit is incomplete:
+continue investigating; do not issue a verdict or reclassify the omission
+as an `Unverified risk`.
 
-```text
-PASS
-PASS WITH FINDINGS
-FAIL
-```
+For a completed audit, apply the first matching rule:
 
-`PASS` means no material P0-P2 findings after required surfaces were covered and material candidates were closed.
+- `FAIL`: at least one verified P0/P1 defect.
+- `PASS WITH FINDINGS`: no verified P0/P1, but verified P2/P3 findings or
+  material evidence genuinely unavailable after investigation.
+- `PASS`: no findings or material unresolved risks within the completed scope.
+
+State unavailable evidence and its potential consequence explicitly:
+`PASS WITH FINDINGS` does not establish the absence of unverified
+higher-severity defects. A scoped `PASS` does not imply whole-system verification.
 
 ## 2. Executive summary
 
@@ -576,7 +607,7 @@ recovery | verified | startup rollback, retained cleanup evidence, retry markers
 completion | finding | compact cleanup-warning projection
 ```
 
-`verified` applies only to the stated scope. Do not claim whole-system PASS with unexplained `not verified`.
+`verified` applies only to the stated scope. Use `not verified` for required evidence genuinely unavailable after investigation, not skipped available evidence. State exclusions from a bounded scope explicitly; do not claim whole-system PASS from partial verification.
 
 ## 6. Remediation order
 
@@ -611,7 +642,9 @@ Return the synthesized report without repeating completed review work.
 
 Before returning, verify:
 
-- every required contract chain has scoped coverage;
+- the audited source snapshot and relevant active ADR constraints are established;
+- every applicable contract chain has scoped coverage and honest limitations;
+- effective capabilities, authority, identity, liveness, and legal next actions were assessed where applicable;
 - P0/P1 findings have exact evidence;
 - material P2 findings have closed evidence;
 - result/state findings trace producer, reachability, and consumer semantics;
@@ -620,7 +653,8 @@ Before returning, verify:
 - fixes target root owners, not symptoms;
 - only genuinely unresolved claims are `Unverified risk`;
 - no answerable material question was deferred to follow-up;
-- implementation remains separate from diagnosis.
+- implementation remains separate from diagnosis;
+- a verdict is issued only for completed investigation and follows the rules above.
 
 If a check fails, reconcile the affected finding before finalizing.
 
@@ -638,27 +672,3 @@ If implementation is requested later:
 4. independently review the final diff against the audit findings;
 5. run focused and repository validation appropriate to the change.
 
-# Success criteria
-
-A successful audit can answer without material guessing:
-
-```text
-What can each agent actually do?
-What is each agent told to do?
-Who owns each normative rule?
-Which identity is authoritative for each operation?
-What does each public state permit next?
-What changes by depth and generation?
-What does the model see versus human/API surfaces?
-Can each result be attributed to source/request?
-Can each failure be acted on safely?
-Can unresolved directly-owned work remain unnoticed forever?
-Does effective configuration match prompts/presentation?
-Are reported states and error fields reachable?
-Do tests discriminate the important contracts?
-Do docs/package contents describe what ships?
-Is important authority duplicated or missing?
-Is unjustified complexity present?
-```
-
-If a material answer still requires guessing and the evidence was available, the audit is incomplete.
