@@ -4369,6 +4369,35 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
+    const agentGuidance =
+      pi.tools
+        .find((tool) => tool.name === "list_agents")
+        ?.promptGuidelines?.join(" ") ?? "";
+    const effectiveRecoveryContract = `${charter} ${agentGuidance}`;
+    assert.match(
+      effectiveRecoveryContract,
+      /unknown Agent remains fail-closed/i,
+    );
+    assert.match(effectiveRecoveryContract, /independent work/i);
+    assert.match(effectiveRecoveryContract, /do not take over/i);
+    assert.match(
+      effectiveRecoveryContract,
+      /Do not take over the Agent's unresolved assignment/i,
+    );
+    assert.match(effectiveRecoveryContract, /new evidence/i);
+    assert.match(
+      effectiveRecoveryContract,
+      /do not control, close, replace, or infer completion/i,
+    );
+    assert.match(
+      effectiveRecoveryContract,
+      /If evidence is insufficient to exclude competing execution, preserve the affected scope and identify the specific missing evidence or external action/i,
+    );
+    assert.match(
+      effectiveRecoveryContract,
+      /Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed/i,
+    );
+    assert.doesNotMatch(charter, /SKILL\.md|Recovery judgment/);
     assertProtectedHandoff(charter);
     assert.match(
       charter,
@@ -4748,7 +4777,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.match(sharedGuidance, /physical disappearance is not completion/);
   assert.match(
     sharedGuidance,
-    /Unknown or conflicting identity remains fail-closed/,
+    /A physically unknown Agent remains fail-closed/,
   );
   for (const file of ["AGENTS\\.md", "CLAUDE\\.md", "GEMINI\\.md"])
     assert.match(sharedGuidance, new RegExp(file));
@@ -4869,6 +4898,16 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     await pi.events.get("before_agent_start")![0](event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(prompt, /verified Manager for this Pi session/);
+    assert.match(
+      prompt,
+      /Recovery of a Lead's directly owned Agents belongs to that Lead/,
+    );
+    assert.match(prompt, /Do not reconstruct child-Agent ownership/);
+    assert.match(
+      prompt,
+      /allow the Lead to continue independently authorized work/,
+    );
+    assert.match(prompt, /supervision alone grants no Agent ownership/);
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);

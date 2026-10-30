@@ -136,6 +136,36 @@ Refresh with `list_agents` and resolve the identity/lifecycle condition when new
 evidence is available. If a cleanup or recovery error is present, inspect its
 exact details.
 
+### Continuing assigned work with an unresolved Agent
+
+Keep three questions separate:
+
+1. Is the Agent controllable under its exact identity and ownership?
+2. Does current evidence establish, exclude within the supported observation
+   boundary, or leave unresolved potentially competing execution?
+3. Is the work still within the Lead's own execution scope, or does it belong
+   to the unresolved Agent?
+
+An unknown identity remains unmodifiable and does not by itself establish a
+currently active competing writer. Use available current evidence for a
+concrete decision and at most one bounded diagnostic read when needed; do not
+repeat an unchanged identity investigation. A current Herdr inventory and
+relevant pane process information can help assess competing execution, but
+cannot establish ownership or prove that arbitrary background OS writers are
+absent. If a potentially conflicting execution cannot be excluded, preserve
+that scope and report the specific missing evidence or external action.
+Continue only independently authorized work with no unresolved execution
+conflict, and do not take over the unresolved Agent's assignment.
+
+For example, if `agent-amber` becomes unknown after an interruption while its
+Lead still has independent `agent-blue` work, the Lead preserves the amber
+assignment and does not try to control or replace it. The Lead may assess
+current competing execution once for a necessary decision, then continue
+blue's authorized scope if evidence permits; the Manager coordinates through
+the Lead rather than reconstructing amber's historical identity. An externally
+stopped process is a reason to refresh current observations, not to close the
+unknown Agent automatically.
+
 ## Agent is `lost`
 
 `lost` means the expected physical execution is proven gone before a durable
