@@ -6405,7 +6405,7 @@ async function managerRemovalFixture(
       rmSync(persistedCheckoutPath, { recursive: true, force: true }),
     );
   const branch = "feat/remove-test";
-  const sourceBranch = options.sourceBranch ?? branch;
+  let sourceBranch = options.sourceBranch ?? branch;
   const manager = {
     repoKey,
     workspaceId: "manager-workspace",
@@ -6854,6 +6854,13 @@ async function managerRemovalFixture(
     },
     assignment: () => assignment,
     checkoutPath,
+    switchObservedBranch: (nextBranch: string) => {
+      sourceBranch = nextBranch;
+    },
+    closeWorkspace: () => {
+      workspaceId = undefined;
+      topologyWorkspaceId = undefined;
+    },
     repoKey,
     calls,
     gitMutations,
@@ -7950,10 +7957,18 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
   for (const scenario of [
     { name: "paused", runningLead: false, closedWorkspace: false },
     { name: "running", runningLead: true, closedWorkspace: false },
-    { name: "closed", runningLead: false, closedWorkspace: true },
+    {
+      name: "closed after branch switch",
+      runningLead: false,
+      closedWorkspace: false,
+    },
   ]) {
     await t.test(scenario.name, async (subtest) => {
       const fixture = await managerRemovalFixture(subtest, scenario);
+      if (scenario.name === "closed after branch switch") {
+        fixture.switchObservedBranch("feat/switched-branch");
+        fixture.closeWorkspace();
+      }
       const result = await fixture.runtime.removeWorktree(
         "feat/remove-test",
         fixture.ctx,
@@ -7964,15 +7979,15 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
       assert.equal(fixture.assignment(), undefined);
       if (scenario.runningLead) assert.equal(result.details.lead_stopped, true);
       else assert.equal(result.details.lead_stopped, false);
-      if (scenario.closedWorkspace) {
-        assert.ok(
-          fixture.calls.some(
-            (args) =>
-              args[1] === "open" &&
-              args.includes("--branch") &&
-              args.includes("feat/remove-test"),
-          ),
+      if (scenario.name === "closed after branch switch") {
+        const reopen = fixture.calls.find((args) => args[1] === "open");
+        assert.ok(reopen);
+        assert.ok(reopen.includes("--path"));
+        assert.equal(
+          reopen[reopen.indexOf("--path") + 1],
+          fixture.checkoutPath,
         );
+        assert.equal(reopen.includes("--branch"), false);
         assert.deepEqual(fixture.removals, ["new-child-workspace"]);
       } else {
         assert.deepEqual(fixture.removals, ["child-workspace"]);

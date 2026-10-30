@@ -3807,6 +3807,36 @@ test("project work derives active, paused, or conflict from runtime placement", 
   assert.equal(switched[0]!.status, "active");
   assert.equal(switched[0]!.branch, assignment.branch);
 
+  const competing = { ...assignment, id: id(), branch: "feat/other" };
+  for (const assignments of [
+    [assignment, competing],
+    [competing, assignment],
+  ]) {
+    const placements = new Map(
+      assignments.map((item) => [
+        item.id,
+        {
+          status: "conflict" as const,
+          reason: "multiple assignments claim the same checkout",
+        },
+      ]),
+    );
+    const snapshot = projectWorkSnapshot({
+      assignments,
+      worktrees: [{ branch: "feat/renamed", open_workspace_id: "child" }],
+      placements,
+      leads: assignments.map((item) => ({
+        lead: item.id,
+        workspaceId: "child",
+        runtimeState: "working" as const,
+      })),
+    });
+    assert.deepEqual(
+      snapshot.map(({ status }) => status),
+      ["conflict", "conflict"],
+    );
+  }
+
   const bounded = projectWorkSnapshot({
     assignments: [
       {

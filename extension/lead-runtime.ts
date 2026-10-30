@@ -464,6 +464,10 @@ type LeadInboxBaseHost = {
 };
 
 type LeadInboxHost = LeadInboxBaseHost & {
+  SessionManager: Pick<
+    typeof import("@earendil-works/pi-coding-agent").SessionManager,
+    "open"
+  >;
   projectAssignmentInstruction(
     assignment: Pick<ProjectAssignment, "text">,
   ): string;
@@ -2231,6 +2235,7 @@ export function registerLeadRuntime(
   });
   const inboxServices = {
     ...options.inboxHost,
+    SessionManager: options.projectHost.SessionManager,
     projectAssignmentInstruction,
     leadRuntime: options.leadRuntime,
     leadInstanceId: () => options.leadRuntime.instanceId,
@@ -2976,7 +2981,9 @@ export function registerLeadRuntime(
         if (!expectedCheckout) {
           if (!assignment.piSessionFile)
             throw new Error("Managed Lead checkout provenance is unavailable");
-          const saved = roleHost.SessionManager.open(assignment.piSessionFile);
+          const saved = projectHost.SessionManager.open(
+            assignment.piSessionFile,
+          );
           if (saved.getSessionId() !== identity.sessionId)
             throw new Error(
               "Managed Lead session provenance does not match assignment",
@@ -3739,22 +3746,28 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         );
         placements.set(assignment.id, placement);
       }
-      for (const assignment of assignments) {
+      const conflictingAssignments = new Set<string>();
+      for (let i = 0; i < assignments.length; i++) {
+        const assignment = assignments[i]!;
         const placement = placements.get(assignment.id);
         if (placement?.status !== "matched") continue;
-        if (
-          assignments.some(
-            (other) =>
-              other.id !== assignment.id &&
-              placements.get(other.id)?.status === "matched" &&
-              sameDirectory(placement.path, placements.get(other.id)!.path),
-          )
-        )
-          placements.set(assignment.id, {
-            status: "conflict",
-            reason: "multiple assignments claim the same checkout",
-          });
+        for (let j = i + 1; j < assignments.length; j++) {
+          const other = assignments[j]!;
+          const otherPlacement = placements.get(other.id);
+          if (
+            otherPlacement?.status === "matched" &&
+            sameDirectory(placement.path, otherPlacement.path)
+          ) {
+            conflictingAssignments.add(assignment.id);
+            conflictingAssignments.add(other.id);
+          }
+        }
       }
+      for (const id of conflictingAssignments)
+        placements.set(id, {
+          status: "conflict",
+          reason: "multiple assignments claim the same checkout",
+        });
       const openWorkspaces = topology.worktrees.flatMap((worktree: any) =>
         typeof worktree?.open_workspace_id === "string" &&
         worktree.open_workspace_id
@@ -6339,10 +6352,59 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       managerDiagnostic("project_assignment_live_lead_complete");
       if (live.length !== 1)
         return projectAssignmentAuthorized(false, "live_lead_mismatch");
+      let savedSessionCwd: string | undefined;
+      if (!assignment.checkoutPath) {
+        if (!assignment.piSessionFile)
+          return projectAssignmentAuthorized(
+            false,
+            "session_provenance_unavailable",
+          );
+        try {
+          const saved = host.SessionManager.open(assignment.piSessionFile);
+          if (saved.getSessionId() !== assignment.id)
+            return projectAssignmentAuthorized(
+              false,
+              "session_provenance_mismatch",
+            );
+          savedSessionCwd = saved.getCwd();
+          if (!savedSessionCwd || !isAbsolute(savedSessionCwd))
+            return projectAssignmentAuthorized(
+              false,
+              "session_provenance_unavailable",
+            );
+          const common = await pi.exec(
+            "git",
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            {
+              cwd: savedSessionCwd,
+              signal: ctx.signal,
+              timeout: 10_000,
+            },
+          );
+          if (
+            common.code !== 0 ||
+            common.killed ||
+            common.stderr?.trim() ||
+            !sameDirectory(
+              String(common.stdout ?? "").trim(),
+              assignment.repoKey,
+            )
+          )
+            return projectAssignmentAuthorized(
+              false,
+              "session_provenance_mismatch",
+            );
+        } catch {
+          return projectAssignmentAuthorized(
+            false,
+            "session_provenance_unavailable",
+          );
+        }
+      }
       const placement = resolveAssignmentCheckout(
         assignment,
         topology.worktrees,
-        typeof live[0].cwd === "string" ? live[0].cwd : undefined,
+        savedSessionCwd,
       );
       if (placement.status !== "matched")
         return projectAssignmentAuthorized(
@@ -6350,6 +6412,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           "checkout_placement_mismatch",
         );
       if (
+        typeof live[0].cwd !== "string" ||
+        !sameDirectory(live[0].cwd, placement.path) ||
         !scope.workspaceIds.includes(live[0].workspace_id) ||
         placement.worktree.open_workspace_id !== live[0].workspace_id
       )

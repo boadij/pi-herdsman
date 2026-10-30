@@ -1,4 +1,7 @@
-import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import {
+  ProjectTrustStore,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -1424,6 +1427,7 @@ test("message_supervisor tool cancellation prevents project publication while wa
 
 test("project Lead observes Manager availability across turnover without exposing identity", async () => {
   setLeadEnvironment();
+  const repoKey = "repo-key";
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `project-supervisor-state-${randomUUID()}.sock`,
@@ -1439,7 +1443,7 @@ test("project Lead observes Manager availability across turnover without exposin
   const assignment = {
     version: 2 as const,
     id: leadId,
-    repoKey: "repo-key",
+    repoKey,
     branch: "smoke/supervisor-state",
     checkoutPath,
     text: "project assignment",
@@ -1450,7 +1454,7 @@ test("project Lead observes Manager availability across turnover without exposin
     paneId: "manager-pane",
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
-    repoKey: "repo-key",
+    repoKey,
   });
   let managerReleased = false;
   let replacement: ReturnType<typeof claimManagerLease> | undefined;
@@ -1654,7 +1658,7 @@ test("project Lead observes Manager availability across turnover without exposin
       paneId: "manager-replacement-pane",
       tabId: "manager-replacement-tab",
       workspaceId: WORKSPACE,
-      repoKey: "repo-key",
+      repoKey,
     });
     agents.push({
       agent_session: {
@@ -2972,6 +2976,20 @@ for (const scenario of [
     prospectivePath: false,
   },
   {
+    name: "accepts a legacy assignment at its saved session checkout",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+    legacy: true,
+  },
+  {
+    name: "denies a legacy assignment moved from its saved checkout",
+    moved: true,
+    mismatchedPath: false,
+    prospectivePath: false,
+    legacy: true,
+  },
+  {
     name: "denies a mismatched prospective session path",
     moved: false,
     mismatchedPath: true,
@@ -2991,11 +3009,34 @@ for (const scenario of [
     const managerId = randomUUID();
     const sessionPath = join(tmpdir(), `${sessionId}.jsonl`);
     const checkoutPath = join(tmpdir(), `${sessionId}-checkout`);
+    const repoKey = join(tmpdir(), `${sessionId}-repo`);
+    realFs.mkdirSync(repoKey, { recursive: true });
     realFs.mkdirSync(checkoutPath, { recursive: true });
     realFs.mkdirSync(join(tmpdir(), `${sessionId}-sibling`), {
       recursive: true,
     });
     if (scenario.mismatchedPath) writeFileSync(sessionPath, "");
+    if ("legacy" in scenario && scenario.legacy) {
+      writeFileSync(
+        sessionPath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: checkoutPath,
+        })}\n`,
+      );
+      nativeSessions.set(sessionId, {
+        id: sessionId,
+        path: sessionPath,
+        cwd: checkoutPath,
+        entries: [],
+      });
+      const savedSession = SessionManager.open(sessionPath);
+      assert.equal(savedSession.getSessionId(), sessionId);
+      assert.equal(savedSession.getCwd(), checkoutPath);
+    }
     if (scenario.prospectivePath)
       assert.equal(realFs.existsSync(sessionPath), false);
     const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
@@ -3019,9 +3060,11 @@ for (const scenario of [
     const assignment = {
       version: 2 as const,
       id: sessionId,
-      repoKey: "repo-key",
+      repoKey,
       branch: "smoke/delivery-placement",
-      checkoutPath,
+      ...("legacy" in scenario && scenario.legacy
+        ? { piSessionFile: sessionPath }
+        : { checkoutPath }),
       text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
       resultBindings: [expectedBinding],
     };
@@ -3068,6 +3111,9 @@ for (const scenario of [
             : sessionId,
       },
       workspace_id: scenario.moved ? "sibling-workspace" : "branch-workspace",
+      cwd: scenario.moved
+        ? join(tmpdir(), `${sessionId}-sibling`)
+        : checkoutPath,
       pane_id: "lead-pane",
       tab_id: "lead-tab",
     };
@@ -3091,7 +3137,7 @@ for (const scenario of [
           version: 1,
           sessionId,
           kind: "managed",
-          repoKey: "repo-key",
+          repoKey,
           branch: assignment.branch,
         },
       },
@@ -3099,7 +3145,13 @@ for (const scenario of [
     const pi = fakeChiefPi({
       entries,
       persistMessages: true,
-      exec: (_command, args) => {
+      exec: (command, args) => {
+        if (
+          command === "git" &&
+          args[0] === "rev-parse" &&
+          args.includes("--git-common-dir")
+        )
+          return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
         let result: unknown = {};
         if (isApiSnapshot(args))
           result = {
@@ -3110,13 +3162,13 @@ for (const scenario of [
         else if (args[0] === "workspace" && args[1] === "get")
           result = {
             workspace: {
-              worktree: { repo_key: "repo-key", is_linked_worktree: true },
+              worktree: { repo_key: repoKey, is_linked_worktree: true },
             },
           };
         else if (args[0] === "worktree" && args[1] === "list") {
           result = {
             source: {
-              repo_key: "repo-key",
+              repo_key: repoKey,
               repo_name: "project",
               source_workspace_id: WORKSPACE,
             },
@@ -3202,7 +3254,9 @@ for (const scenario of [
           line.startsWith("[pi-herdsman-manager-diagnostic] "),
         );
         const stateErrors = entries.filter(
-          (entry: any) => entry.customType === "pi_herdsman_state_error",
+          (entry: any) =>
+            typeof entry.customType === "string" &&
+            /pi_herdsman_(?:state|role)_error/.test(entry.customType),
         );
         throw new Error(
           `Timed out waiting for chief messages to clear; remaining count=${remainingPaths.length}, paths=${JSON.stringify(remainingPaths)}, manager diagnostics=${JSON.stringify(managerDiagnostics)}, state errors=${JSON.stringify(stateErrors)}`,
@@ -3342,11 +3396,12 @@ for (const scenario of [
         );
       assert.match(JSON.stringify(saved), /Project message saved for Manager/);
       assert.equal(
-        listProjectMessages(runtime, "repo-key", assignment.branch).length,
+        listProjectMessages(runtime, repoKey, assignment.branch).length,
         1,
       );
     } finally {
       if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
+      nativeSessions.delete(sessionId);
       if (scenario.prospectivePath || scenario.presentationThrows) {
         realFs.rmSync(sessionPath, { force: true });
         console.error = previousConsoleError;
@@ -9966,6 +10021,7 @@ test("scoped continuation revalidates terminal provenance immediately before adm
 
 test("valid scoped historical continuation ignores an unrelated corrupt mailbox", async () => {
   setLeadEnvironment();
+  const repoKey = "repo-key";
   const id = randomUUID();
   const requestId = randomUUID();
   const runId = randomUUID();
@@ -9983,7 +10039,7 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
   writeProjectAssignment(projectRuntime, {
     version: 2,
     id: LEAD_SESSION_ID,
-    repoKey: "repo-key",
+    repoKey,
     branch: "continuation-isolation",
     checkoutPath,
     text: "Current project",
@@ -10114,11 +10170,7 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(
-      projectRuntime,
-      "repo-key",
-      "continuation-isolation",
-    );
+    removeProjectAssignment(projectRuntime, repoKey, "continuation-isolation");
     realFs.rmSync(unrelatedMailbox, { recursive: true, force: true });
     nativeSessions.delete(id);
     realFs.rmSync(path, { force: true });

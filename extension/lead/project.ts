@@ -1089,8 +1089,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     "open",
                     "--workspace",
                     current.manager.workspaceId,
-                    "--branch",
-                    branch,
+                    "--path",
+                    current.checkoutPath,
                     "--no-focus",
                   ],
                   { signal: operationSignal },
@@ -1099,7 +1099,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 if (
                   !workspaceId ||
                   workspaceId === current.manager.workspaceId ||
-                  opened?.worktree?.branch !== branch ||
                   !sameDirectory(
                     opened?.worktree?.path ?? "",
                     current.checkoutPath,
