@@ -2090,13 +2090,14 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
       ),
       false,
     );
+    const recoveryStatusCall = recovered.sentMessageCalls[0];
+    assert.ok(recoveryStatusCall, "recovery should send delegation status");
     assert.equal(
-      (recovered.sentMessageCalls[0]?.message as any).details
-        .unresolvedDirectChildCount,
+      (recoveryStatusCall.message as any).details.unresolvedDirectChildCount,
       1,
     );
     const recoveredContent = String(
-      (recovered.sentMessageCalls[0]?.message as any).content,
+      (recoveryStatusCall.message as any).content,
     );
     const recoveredStatus = recoveredContent.slice(
       recoveredContent.lastIndexOf("Delegation status:"),
@@ -2110,13 +2111,11 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
       recoveredStatus.includes("physical disappearance is not completion"),
     );
     assert.equal(
-      (recovered.sentMessageCalls[0]?.message as any).details
-        .activeDirectChildCount,
+      (recoveryStatusCall.message as any).details.activeDirectChildCount,
       1,
     );
     assert.equal(
-      (recovered.sentMessageCalls[0]?.message as any).details
-        .pendingDirectResultCount,
+      (recoveryStatusCall.message as any).details.pendingDirectResultCount,
       0,
     );
     assert.equal(readResult(childMailbox, REQUEST_ID), undefined);
