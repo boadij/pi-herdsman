@@ -1450,6 +1450,10 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
   const incompatibleId = id();
   const compatibleId = id();
   const differentSha = { version: BUILD.version, sha256: "b".repeat(64) };
+  const incompatibleState = state(incompatibleId, {
+    role: "lead",
+    build: differentSha,
+  });
   const snapshot = projectSupervision({
     agents: [
       {
@@ -1470,7 +1474,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
     ],
     managedAgents: [],
     coordinationStates: [
-      state(incompatibleId, { role: "lead", build: differentSha }),
+      incompatibleState,
       state(compatibleId, { role: "lead", build: BUILD }),
     ],
     localBuild: BUILD,
@@ -1482,6 +1486,20 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
   assert.deepEqual(
     snapshot.incompatible?.map((report) => report.session),
     [incompatibleId],
+  );
+  assert.deepEqual(
+    snapshot.incompatible?.[0] && {
+      instanceId: snapshot.incompatible[0].instanceId,
+      paneId: snapshot.incompatible[0].paneId,
+      tabId: snapshot.incompatible[0].tabId,
+      workspaceId: snapshot.incompatible[0].workspaceId,
+    },
+    {
+      instanceId: incompatibleState.instanceId,
+      paneId: "pane-a",
+      tabId: "tab-a",
+      workspaceId: "workspace-a",
+    },
   );
   assert.equal(snapshot.incompatible?.[0]?.build.sha256, differentSha.sha256);
 });

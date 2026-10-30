@@ -3998,8 +3998,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           incompatible?.push({
             role: "manager",
             session: descriptor.piSessionId,
+            instanceId: state.instanceId,
             displayName: scope.repoName,
             workspaceId: descriptor.workspaceId,
+            paneId: descriptor.paneId,
+            tabId: descriptor.tabId,
             runtimeState: host.normalizeHerdrLifecycleState(live),
             build: remoteBuild,
             reason: "incompatible_build",
@@ -4088,6 +4091,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         leads: [
           ...leads.map((lead) => ({
             session: lead.lead,
+            instanceId: lead.instanceId,
+            paneId: lead.paneId,
+            tabId: lead.tabId,
+            workspaceId: lead.workspaceId,
             displayName: lead.displayName,
             ...(lead.branch ? { branch: lead.branch } : {}),
             runtimeState: lead.runtimeState,
@@ -4095,7 +4102,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           })),
           ...incompatibleLeads.map((lead) => ({
             session: lead.session,
+            instanceId: lead.instanceId,
             displayName: lead.displayName,
+            workspaceId: lead.workspaceId,
+            paneId: lead.paneId,
+            tabId: lead.tabId,
             runtimeState: lead.runtimeState,
             compatibility: "incompatible" as const,
             build: lead.build,
@@ -4245,15 +4256,29 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         .managerSupervisionItems(fresh)
         .filter((item) =>
           item.kind === "lead"
-            ? item.lead.lead === leadId &&
-              item.lead.compatibility !== "incompatible"
-            : item.work.status === "active" &&
-              item.lead?.lead === leadId &&
-              item.lead.compatibility !== "incompatible",
+            ? item.lead.lead === leadId
+            : item.work.status === "active" && item.lead?.lead === leadId,
         ).length !== 1
     )
       throw new Error("Lead is no longer available.");
     const managers = host.listManagerDescriptors(host.supervisionRuntime());
+    const managerIdentityIsCurrent = (report: any): boolean => {
+      if (report.compatibility !== "incompatible") return true;
+      const coordination = host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        report.lead,
+      );
+      return (
+        !!report.instanceId &&
+        coordination?.piSessionId === report.lead &&
+        coordination.role === "manager" &&
+        coordination.instanceId === report.instanceId
+      );
+    };
+    const managerDescriptorIsCurrent = (descriptor: any): boolean =>
+      host
+        .listManagerDescriptors(host.supervisionRuntime())
+        .some((candidate) => host.sameManagerDescriptor(candidate, descriptor));
     const verifyManager = async (sessionId: string, report?: any) => {
       const candidates = managers.filter(
         (candidate) => candidate.piSessionId === sessionId,
@@ -4261,6 +4286,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (candidates.length !== 1) return undefined;
       const descriptor = candidates[0]!;
       const agents = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
+      if (!isCurrent() || currentGeneration !== generation(ctx))
+        return undefined;
       const placements = agents.agents.filter(
         (candidate: any) =>
           host.isPiAgent(candidate) &&
@@ -4294,12 +4321,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const child = children?.length === 1 ? children[0] : undefined;
       if (
         !parent ||
-        parent.compatibility === "incompatible" ||
         !child ||
-        child.compatibility === "incompatible"
+        !child.instanceId ||
+        !child.paneId ||
+        !child.tabId ||
+        !child.workspaceId
       )
-        throw new Error("Lead changed or is incompatible; reopen staff.");
-      lead = { lead: leadId };
+        throw new Error("Lead changed; reopen staff.");
+      lead = { ...child, lead: leadId };
     } else {
       const matches = host
         .presentationReports(fresh)
@@ -4307,15 +4336,25 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
       lead = matches[0];
     }
-    if (lead.compatibility === "incompatible")
-      throw new Error(
-        "Lead is incompatible; reload the matching Herdsman build.",
-      );
+    if (
+      (lead.role !== "manager" && !lead.instanceId) ||
+      !lead.paneId ||
+      !lead.tabId ||
+      !lead.workspaceId
+    )
+      throw new Error("Lead identity is unavailable; reopen staff.");
     if (parent || lead.role === "manager") {
       const managerSessionId = parent?.lead ?? lead.lead;
       const report = parent ?? lead;
+      if (!managerIdentityIsCurrent(report))
+        throw new Error("Manager changed; reopen staff.");
       const manager = await verifyManager(managerSessionId, report);
-      if (!manager || !isCurrent() || currentGeneration !== generation(ctx))
+      if (
+        !manager ||
+        !managerIdentityIsCurrent(report) ||
+        !isCurrent() ||
+        currentGeneration !== generation(ctx)
+      )
         throw new Error("Manager changed; reopen staff.");
       verifiedParent = manager.descriptor;
       if (!parent) {
@@ -4336,6 +4375,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         );
         if (
           !isCurrent() ||
+          currentGeneration !== generation(ctx) ||
+          !managerIdentityIsCurrent(report) ||
           host.herdrSessionId(currentAgent?.agent) !== managerSessionId ||
           currentAgent?.agent?.pane_id !== manager.paneId ||
           currentAgent?.agent?.tab_id !== manager.descriptor.tabId ||
@@ -4364,22 +4405,33 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     if (
       !coordination ||
       coordination.piSessionId !== leadId ||
-      (lead.instanceId !== undefined &&
-        coordination.instanceId !== lead.instanceId)
+      coordination.instanceId !== lead.instanceId
     )
       throw new Error("Lead changed; reopen staff.");
+    const leadIdentityIsCurrent = (): boolean => {
+      const current = host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        leadId,
+      );
+      return (
+        current?.piSessionId === leadId &&
+        current.instanceId === lead.instanceId
+      );
+    };
     const verified = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
-    if (!isCurrent() || currentGeneration !== generation(ctx))
+    if (
+      !isCurrent() ||
+      currentGeneration !== generation(ctx) ||
+      !leadIdentityIsCurrent()
+    )
       throw new Error("Lead changed; reopen staff.");
     const matches = verified.agents.filter(
       (candidate: any) =>
         host.isPiAgent(candidate) &&
         host.herdrSessionId(candidate) === leadId &&
-        typeof candidate?.pane_id === "string" &&
-        (parentManagerSessionId ||
-          (candidate?.pane_id === lead.paneId &&
-            candidate?.tab_id === lead.tabId &&
-            candidate?.workspace_id === lead.workspaceId)),
+        candidate?.pane_id === lead.paneId &&
+        candidate?.tab_id === lead.tabId &&
+        candidate?.workspace_id === lead.workspaceId,
     );
     if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
     if (
@@ -4401,6 +4453,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     );
     if (
       !isCurrent() ||
+      currentGeneration !== generation(ctx) ||
+      !leadIdentityIsCurrent() ||
+      (parent && !managerIdentityIsCurrent(parent)) ||
+      (verifiedParent && !managerDescriptorIsCurrent(verifiedParent)) ||
       host.herdrSessionId(currentAgent?.agent) !== leadId ||
       currentAgent?.agent?.pane_id !== matches[0]!.pane_id ||
       currentAgent?.agent?.workspace_id !== matches[0]!.workspace_id ||
@@ -4464,12 +4520,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           session: string;
           status: string;
           liveLead: boolean;
+          incompatible: boolean;
         }
       | {
           kind: "lead";
           session: string;
           label: string;
           relationship?: "assigned" | "supervised";
+          incompatible: boolean;
         };
     let selected: string | undefined;
     while (true) {
@@ -4525,7 +4583,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                             entry.work.runtimeState,
                             entry.work.issue,
                             entry.lead?.compatibility === "incompatible"
-                              ? "build mismatch · reload Pi session"
+                              ? "build mismatch"
                               : undefined,
                           ]
                             .filter(Boolean)
@@ -4542,7 +4600,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                               ? `${entry.lead.runtimeState} · supervised`
                               : entry.lead.runtimeState,
                             entry.lead.compatibility === "incompatible"
-                              ? "build mismatch · reload Pi session"
+                              ? "build mismatch"
                               : undefined,
                           ]
                             .filter(Boolean)
@@ -4571,18 +4629,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             };
             list.onSelect = (item) => {
               if (!item || !isCurrentOverview()) return;
-              if (
-                host
-                  .presentationReports(snapshot)
-                  .find(
-                    (candidate) =>
-                      candidate.lead ===
-                      (item.value.startsWith("lead:")
-                        ? item.value.slice("lead:".length)
-                        : item.value),
-                  )?.compatibility === "incompatible"
-              )
-                return;
               if (item.value.startsWith("work:")) {
                 const branch = item.value.slice("work:".length);
                 const entry = work.find(
@@ -4595,12 +4641,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                       candidate.kind === "work" &&
                       candidate.work.branch === branch,
                   );
-                if (
-                  !entry ||
-                  workItem?.kind !== "work" ||
-                  workItem.lead?.compatibility === "incompatible"
-                )
-                  return;
+                if (!entry || workItem?.kind !== "work") return;
                 const liveLead = !!workItem.lead;
                 finish({
                   kind: "project",
@@ -4608,6 +4649,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   session: entry.session,
                   status: entry.status,
                   liveLead,
+                  incompatible: workItem.lead?.compatibility === "incompatible",
                 });
                 return;
               }
@@ -4617,13 +4659,15 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               const report = host
                 .presentationReports(snapshot)
                 .find((candidate) => candidate.lead === leadSession);
+              if (!report) return;
               finish({
                 kind: "lead",
                 session: leadSession,
                 label: item.label,
-                ...(report?.relationship
+                ...(report.relationship
                   ? { relationship: report.relationship }
                   : {}),
+                incompatible: report.compatibility === "incompatible",
               });
             };
             list.onCancel = finish;
@@ -4815,7 +4859,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         if (host.activeRole() === "manager") {
           const action = await uiActions.selectMenu(ctx, selection.label, [
             { value: "focus", label: "Focus" },
-            ...(selection.relationship === "supervised"
+            ...(selection.relationship === "supervised" ||
+            selection.incompatible
               ? []
               : [{ value: "stop", label: "Stop Lead" }]),
           ]);
@@ -4848,7 +4893,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           : selection.liveLead
             ? [
                 { value: "focus", label: "Focus Lead" },
-                { value: "stop", label: "Stop Lead" },
+                ...(!selection.incompatible
+                  ? [{ value: "stop", label: "Stop Lead" }]
+                  : []),
               ]
             : []),
         { value: "remove", label: "Remove worktree…" },

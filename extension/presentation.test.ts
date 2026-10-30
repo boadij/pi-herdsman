@@ -6816,7 +6816,7 @@ test("Manager standalone Lead rows expose their exact click target", () => {
   ]);
 });
 
-test("incompatible Manager Leads have no standalone or assigned-work click target", () => {
+test("incompatible Manager Leads retain standalone and active-work click targets", () => {
   const incompatible = {
     ...lead({ lead: "incompatible-lead", branch: "feat/older" }),
     compatibility: "incompatible" as const,
@@ -6848,17 +6848,17 @@ test("incompatible Manager Leads have no standalone or assigned-work click targe
       stripVTControlCharacters(widget.render(120)[1]!),
       /build mismatch/,
     );
-    assert.equal(
-      widget.handleMouse({
-        type: "click",
-        button: "left",
-        x: 4,
-        y: 1,
-        width: 120,
-      }),
-      undefined,
-    );
-    assert.deepEqual(focused, []);
+    const result = widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 1,
+      width: 120,
+    });
+    assert.equal(result?.handled, true);
+    assert.deepEqual(focused, [
+      { kind: "session", sessionId: incompatible.lead },
+    ]);
   }
 });
 
@@ -6881,15 +6881,18 @@ test("truncated supervision rows are not clickable when their name is hidden", (
   assert.deepEqual(focused, []);
 });
 
-test("incompatible staff rows are bounded, counted, and never focusable", () => {
+test("incompatible staff rows are bounded, counted, and focusable", () => {
   const snapshot = {
     managers: [],
     incompatible: [
       {
         role: "manager" as const,
         session: "incompatible-manager",
+        instanceId: "manager-instance",
         displayName: "Project B",
         workspaceId: "workspace-b",
+        paneId: "manager-pane",
+        tabId: "manager-tab",
         runtimeState: "idle" as const,
         build: { version: "0.31.1", sha256: "a".repeat(64) },
         reason: "incompatible_build" as const,
@@ -6915,16 +6918,18 @@ test("incompatible staff rows are bounded, counted, and never focusable", () => 
       x: 4,
       y: 1,
       width: 120,
-    }),
-    undefined,
+    })?.handled,
+    true,
   );
-  assert.deepEqual(focused, []);
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "incompatible-manager" },
+  ]);
   const context = formatSupervisionContext(snapshot, { status: "fresh" });
   assert.match(context, /observed; no available staff tools/);
   assert.match(context, /incompatible \(observed; no available staff tools\)/);
 });
 
-test("incompatible Lead nested under a Manager is visibly observation-only", () => {
+test("incompatible Lead nested under a Manager remains focusable", () => {
   const focused: unknown[] = [];
   const widget = createSupervisionWidget(
     () => ({
@@ -6940,6 +6945,10 @@ test("incompatible Lead nested under a Manager is visibly observation-only", () 
           leads: [
             {
               session: "old-lead",
+              instanceId: "old-instance",
+              paneId: "old-pane",
+              tabId: "old-tab",
+              workspaceId: "old-workspace",
               display_name: "Old Lead",
               displayName: "Old Lead",
               runtimeState: "idle" as const,
@@ -6966,10 +6975,12 @@ test("incompatible Lead nested under a Manager is visibly observation-only", () 
       x: 4,
       y: 2,
       width: 120,
-    }),
-    undefined,
+    })?.handled,
+    true,
   );
-  assert.deepEqual(focused, []);
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "old-lead", parentSessionId: "manager" },
+  ]);
   const context = formatSupervisionContext(
     {
       managers: [
@@ -7180,12 +7191,20 @@ test("hidden and ineligible truncated Manager work targets remain inert", () => 
     const width = 30;
     const row = stripVTControlCharacters(widget.render(width)[1]!);
     assert.match(row, /feature.*…/u, item.name);
-    assert.equal(
-      widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width }),
-      undefined,
-      item.name,
-    );
-    assert.deepEqual(focused, [], item.name);
+    const click = widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 5,
+      y: 1,
+      width,
+    });
+    if (item.incompatible) {
+      assert.equal(click?.handled, true, item.name);
+      assert.deepEqual(focused, [{ kind: "session", sessionId }], item.name);
+    } else {
+      assert.equal(click, undefined, item.name);
+      assert.deepEqual(focused, [], item.name);
+    }
   }
 
   const focused: unknown[] = [];
