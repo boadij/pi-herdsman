@@ -3626,7 +3626,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /When assigned Leads need to exchange technical information,[\s\S]*coordinate directly when eligible/,
+      /When assigned Leads need technical information from one another, prefer[\s\S]*direct peer coordination when eligible[\s\S]*Resolve concrete\s+cross-assignment scope, priority, or sequencing conflicts with the smallest\s+decision needed for progress[\s\S]*Do not require repeated confirmations before\s+unaffected work continues/,
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,

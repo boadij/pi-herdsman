@@ -203,6 +203,17 @@ Coordination crosses one authority edge at a time:
 | Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager                |
 | Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent                      |
 
+### Coordination does not imply dependency
+
+A peer message, shared source file, or pending supervisor question does not
+by itself suspend an assignment. Leads continue independently safe work and
+defer only steps with actual prerequisites.
+
+Technical conflicts remain with the responsible Leads. The Manager resolves
+cross-assignment scope, priority, and sequencing decisions when needed.
+When no independent work remains, ordinary reporting and event-driven
+continuation replace repeated messages or polling.
+
 A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through
 intermediate coordinators.

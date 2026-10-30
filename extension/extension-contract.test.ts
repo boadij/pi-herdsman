@@ -4244,6 +4244,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   assert.match(ordinaryCharter, /You are an ordinary Lead/);
   assert.match(ordinaryCharter, /Own architecture/);
   assert.doesNotMatch(ordinaryCharter, /ProjectAssignment/);
+  assert.doesNotMatch(
+    ordinaryCharter,
+    /An overlap with another assignment or unanswered coordination message does not itself block/,
+  );
   assert.doesNotMatch(ordinaryCharter, /fresh managed project execution/);
   assert.doesNotMatch(
     ordinaryCharter,
@@ -4369,6 +4373,14 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
+    assert.match(
+      charter,
+      /An overlap with another assignment or unanswered coordination message does not itself block/,
+    );
+    assert.match(
+      charter,
+      /report the blocker in your normal response and end the turn rather than polling/,
+    );
     const agentGuidance =
       pi.tools
         .find((tool) => tool.name === "list_agents")
@@ -4911,6 +4923,14 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
+    assert.match(
+      prompt,
+      /overlapping assignments or unanswered coordination messages do not themselves block project work/,
+    );
+    assert.match(
+      prompt,
+      /keep unaffected assignments progressing independently/,
+    );
     assert.match(
       pi.tools.find((tool) => tool.name === "message_supervisor")
         ?.description ?? "",

@@ -63,7 +63,9 @@ message_supervisor
 
 Managed Leads use nonblocking `message_supervisor` for timely questions,
 clarifications, or warnings needed before the automatic completed-result
-handoff. A Lead may choose to wait for a response through `message_staff`.
+handoff. Continue independently safe work while a reply is pending. Defer only
+steps that genuinely require the response; when no actionable work remains,
+end the turn and rely on normal message delivery rather than polling.
 Routine information that can wait belongs in the result; there is no
 message/result deduplication. `stop_lead` pauses execution without removing the
 assignment, and `resume_work` resumes it.
