@@ -3421,6 +3421,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (!params.branch?.trim())
         throw new Error("Provide the exact assigned branch");
       const selected = await resolveActiveAssignedBranch(params.branch);
+      const current = (
+        await directReports(ctx, undefined, undefined, undefined, {
+          exactSession: selected.assignment.id,
+        })
+      ).filter(
+        (lead) =>
+          (lead.session ?? lead.lead) === selected.assignment.id &&
+          lead.relationship === "assigned" &&
+          lead.branch === selected.assignment.branch,
+      );
+      if (current.length !== 1)
+        throw new Error("Assigned Lead is no longer eligible for stop");
       return projectStop(
         selected.assignment.id,
         ctx,

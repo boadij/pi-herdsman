@@ -3650,6 +3650,7 @@ async function runManagerStartupScenario(
   let projectTopologyListCalls = 0;
   let assignedLeadRepositoryScopeCalls = 0;
   let failNextAssignedLeadRepositoryScope = false;
+  let failAssignedLeadRepositoryScopeAt: number | undefined;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
   let inspectionReached!: () => void;
   const inspectionReadReached = new Promise<void>((resolve) => {
@@ -3804,8 +3805,12 @@ async function runManagerStartupScenario(
       if (args.includes("--workspace")) projectTopologyListCalls++;
       if (args.includes("--cwd") && args.includes(childPath)) {
         assignedLeadRepositoryScopeCalls++;
-        if (failNextAssignedLeadRepositoryScope) {
+        if (
+          failNextAssignedLeadRepositoryScope ||
+          assignedLeadRepositoryScopeCalls === failAssignedLeadRepositoryScopeAt
+        ) {
           failNextAssignedLeadRepositoryScope = false;
+          failAssignedLeadRepositoryScopeAt = undefined;
           return respond({ source: {}, worktrees: [] });
         }
       }
@@ -5291,6 +5296,27 @@ async function runManagerStartupScenario(
           messages().map((message) => [message.toSessionId, message.text]),
           [[staleId, "VERIFIED_MESSAGE"]],
         );
+        const repositoryBeforeStop = assignedLeadRepositoryScopeCalls;
+        const stopAttemptsBefore = leadStopAttempts;
+        failAssignedLeadRepositoryScopeAt = repositoryBeforeStop + 2;
+        await assert.rejects(
+          pi.tools
+            .find((tool) => tool.name === "stop_lead")!
+            .execute(
+              "stop",
+              { branch: "smoke/recover" },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          /Assigned Lead is no longer eligible for stop/,
+        );
+        assert.equal(
+          assignedLeadRepositoryScopeCalls,
+          repositoryBeforeStop + 2,
+          "initial selection succeeds before fresh stop verification fails",
+        );
+        assert.equal(leadStopAttempts, stopAttemptsBefore);
         return;
       }
       if (mode === "active-live-mismatch") {
