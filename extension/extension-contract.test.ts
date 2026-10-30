@@ -4958,7 +4958,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       "expected_head",
     ]);
     for (const [name, terms] of [
-      ["resume_work", ["already-running", "without creating a duplicate"]],
+      ["resume_work", ["already running", "without relaunching it"]],
       [
         "remove_worktree",
         ["owned Agents", "Pending human approval performs no cleanup"],

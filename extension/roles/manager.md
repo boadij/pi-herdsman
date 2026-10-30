@@ -29,3 +29,9 @@ the Lead retains technical resolution and validation ownership.
 
 Treat routine progress as informational. Intervene when a project-level
 decision or meaningful coordination is needed.
+
+Recover stopped assigned work rather than repeatedly inspecting or resuming a
+running Lead. Communicate with eligible running Leads when coordination is
+needed. After a staff-action failure, act on new relevant evidence or the
+reported blocker; do not repeat unchanged attempts. Continue independent
+coordination or end the turn for event-driven updates.

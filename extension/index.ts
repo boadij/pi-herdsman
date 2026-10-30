@@ -2200,7 +2200,7 @@ function registerExtensionImpl(
           name: "resume_work",
           label: "resume work",
           description:
-            "Reuse an already-running Lead for the exact branch; otherwise resume its existing assignment without creating a duplicate.",
+            "Resume an existing work assignment by exact branch when recovery is needed. If its Lead is already running, return that Lead without relaunching it. This does not recover the Lead's Agents or refresh its progress. Use message_staff to communicate with an eligible running Lead; do not repeatedly resume work after staff-action failures.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
           execute: (

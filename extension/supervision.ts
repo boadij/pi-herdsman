@@ -3591,7 +3591,12 @@ export type OpenProjectWorkspace = Readonly<{
   path: string;
   linked: boolean;
 }>;
-export type ProjectWorkStatus = "active" | "paused" | "conflict";
+export type ProjectWorkStatus = "active" | "paused" | "unknown" | "conflict";
+export type UnverifiedAssignedLead = Readonly<{
+  lead: string;
+  status: "unknown" | "conflict";
+  issue: string;
+}>;
 export type ProjectWorkSnapshot = Readonly<{
   branch: string;
   session: string;
@@ -3624,18 +3629,29 @@ export function projectWorkSnapshot(options: {
     SupervisedLead,
     "lead" | "workspaceId" | "runtimeState"
   >[];
+  unverified?: readonly UnverifiedAssignedLead[];
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
     const worktrees = options.worktrees.filter(
       (item) => item.branch === assignment.branch,
     );
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
+    const uncertain =
+      options.unverified?.filter((lead) => lead.lead === assignment.id) ?? [];
     let status: ProjectWorkStatus;
     let runtimeState: RuntimeState | undefined;
     let issue: string | undefined;
-    if (worktrees.length > 1 || exact.length > 1) {
+    if (
+      worktrees.length > 1 ||
+      exact.length > 1 ||
+      uncertain.length > 1 ||
+      (exact.length > 0 && uncertain.length > 0)
+    ) {
       status = "conflict";
       issue = "project runtime identity is ambiguous";
+    } else if (uncertain.length === 1) {
+      status = uncertain[0]!.status;
+      issue = uncertain[0]!.issue;
     } else {
       const workspaceId = worktrees[0]?.open_workspace_id ?? undefined;
       if (

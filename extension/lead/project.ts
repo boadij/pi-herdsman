@@ -3310,10 +3310,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "staff action",
           `lead on branch ${branch}`,
         );
+      if (matches?.length === 1 && matches[0]?.status === "unknown")
+        throw new Error(
+          "Assigned Lead verification is unavailable; no staff action was taken",
+        );
       if (matches?.length !== 1 || matches[0]?.status !== "active") {
         throw new Error("Assigned work is not uniquely active");
       }
-      return assignment;
+      const leads = snapshot.leads.filter(
+        (lead: any) =>
+          (lead.session ?? lead.lead) === assignment.id &&
+          lead.relationship === "assigned" &&
+          lead.branch === assignment.branch,
+      );
+      if (leads.length !== 1)
+        throw new Error("Assigned Lead is not eligible for staff action");
+      return { assignment, lead: leads[0] };
     };
     if (params.action === "delegate" || params.action === "resume") {
       if (activeRole() !== "manager")
@@ -3408,15 +3420,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error("Only Managers can control project work");
       if (!params.branch?.trim())
         throw new Error("Provide the exact assigned branch");
-      const assignment = await resolveActiveAssignedBranch(params.branch);
-      const matches = (await directReports(ctx)).filter(
-        (report: any) =>
-          (report.session ?? report.lead) === assignment.id &&
-          report.relationship === "assigned",
+      const selected = await resolveActiveAssignedBranch(params.branch);
+      return projectStop(
+        selected.assignment.id,
+        ctx,
+        signal,
+        selected.assignment,
+        selected.lead,
       );
-      if (matches.length !== 1)
-        throw new Error("Assigned Lead is not eligible for stop");
-      return projectStop(assignment.id, ctx, signal, assignment, matches[0]);
     }
     if (
       params.action !== "list" &&
@@ -3426,10 +3437,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     )
       throw new Error("Provide exactly one of branch or target");
     let selectedAssignment: ProjectAssignment | undefined;
+    let selectedLead: any;
     if (params.action !== "list" && params.branch !== undefined) {
       if (activeRole() !== "manager" || !params.branch.trim())
         throw new Error("Only Managers can target an exact assigned branch");
-      selectedAssignment = await resolveActiveAssignedBranch(params.branch);
+      const selected = await resolveActiveAssignedBranch(params.branch);
+      selectedAssignment = selected.assignment;
+      selectedLead = selected.lead;
     }
     const refresh = async () => directReports(ctx);
     const result = (value: Record<string, unknown>) => {
@@ -3453,8 +3467,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
       [];
     let discoveryWarning: string | undefined;
+    let managerSnapshot:
+      Awaited<ReturnType<typeof loadSupervisionSnapshot>> | undefined;
     if (params.action === "list") {
       const current = await loadSupervisionSnapshot(ctx);
+      if (activeRole() === "manager") managerSnapshot = current;
       reports = [
         ...(current.managers ?? []).map((item: any) => ({
           ...item,
@@ -3472,7 +3489,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         discoveryWarning =
           "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
     } else {
-      reports = await refresh();
+      reports = selectedLead ? [selectedLead] : await refresh();
     }
     const reportSession = (report: any): string =>
       report.session ?? report.lead;
@@ -3483,10 +3500,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           : await currentManager(ctx))
       )
         throw new Error("Supervisor lease is no longer active");
-      const managerSnapshot =
-        leadRuntime.controllerRole === "manager" && leadRuntime.managerLease
-          ? await loadSupervisionSnapshot(ctx)
-          : undefined;
       return result({
         ok: true,
         action: "list",
@@ -3587,6 +3600,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ? resolveCoordinatorTarget(ctx, params.target)
         : undefined;
     const targetSession = selectedAssignment?.id ?? resolvedTarget?.sessionId;
+    const revalidateTarget = async () =>
+      (
+        await directReports(
+          ctx,
+          undefined,
+          undefined,
+          undefined,
+          selectedAssignment ? { exactSession: targetSession } : undefined,
+        )
+      ).find((candidate: any) => reportSession(candidate) === targetSession);
     const targets = reports.filter(
       (candidate: any) => reportSession(candidate) === targetSession,
     );
@@ -3684,9 +3707,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
-      const currentLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === targetSession,
-      );
+      const currentLead = await revalidateTarget();
       const finalAuthority =
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
@@ -3730,9 +3751,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
-      const currentLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === targetSession,
-      );
+      const currentLead = await revalidateTarget();
       const finalAuthority =
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
@@ -3768,9 +3787,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : await currentManager(ctx);
     if (!currentChief || currentChief.leaseId !== authority.leaseId)
       throw new Error("Chief lease is no longer active");
-    const currentLead = (await directReports(ctx)).find(
-      (candidate: any) => reportSession(candidate) === targetSession,
-    );
+    const currentLead = await revalidateTarget();
     if (
       !currentLead ||
       !sameLeadTarget(currentLead, lead) ||
@@ -3867,9 +3884,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
-      const writeLead = (await directReports(ctx)).find(
-        (candidate: any) => reportSession(candidate) === targetSession,
-      );
+      const writeLead = await revalidateTarget();
       const finalAuthority =
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)

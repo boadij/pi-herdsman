@@ -3658,6 +3658,54 @@ test("project work derives active, paused, or conflict from runtime placement", 
       status: "paused",
     },
     {
+      name: "unverified assigned Lead",
+      input: {
+        worktrees: [worktree],
+        leads: [],
+        unverified: [
+          {
+            lead: assignment.id,
+            status: "unknown" as const,
+            issue: "verification unavailable",
+          },
+        ],
+      },
+      status: "unknown",
+      issue: "verification unavailable",
+    },
+    {
+      name: "unverified assigned Lead without established worktree placement",
+      input: {
+        worktrees: [],
+        leads: [],
+        unverified: [
+          {
+            lead: assignment.id,
+            status: "unknown" as const,
+            issue: "verification unavailable",
+          },
+        ],
+      },
+      status: "unknown",
+      issue: "verification unavailable",
+    },
+    {
+      name: "verified repository mismatch",
+      input: {
+        worktrees: [worktree],
+        leads: [],
+        unverified: [
+          {
+            lead: assignment.id,
+            status: "conflict" as const,
+            issue: "repository mismatch",
+          },
+        ],
+      },
+      status: "conflict",
+      issue: "repository mismatch",
+    },
+    {
       name: "duplicate worktree topology",
       input: { worktrees: [worktree, worktree], leads: [] },
       status: "conflict",
@@ -3666,6 +3714,27 @@ test("project work derives active, paused, or conflict from runtime placement", 
     {
       name: "duplicate exact Lead inventory",
       input: { worktrees: [worktree], leads: [lead, lead] },
+      status: "conflict",
+      issue: "project runtime identity is ambiguous",
+    },
+    {
+      name: "multiple unverified observations",
+      input: {
+        worktrees: [worktree],
+        leads: [],
+        unverified: [
+          {
+            lead: assignment.id,
+            status: "unknown" as const,
+            issue: "verification unavailable",
+          },
+          {
+            lead: assignment.id,
+            status: "unknown" as const,
+            issue: "identity changed",
+          },
+        ],
+      },
       status: "conflict",
       issue: "project runtime identity is ambiguous",
     },
@@ -3702,6 +3771,9 @@ test("project work derives active, paused, or conflict from runtime placement", 
       assignments: [assignment],
       worktrees: scenario.input.worktrees,
       leads: scenario.input.leads,
+      ...("unverified" in scenario.input
+        ? { unverified: scenario.input.unverified }
+        : {}),
     });
     assert.equal(snapshot[0]!.status, scenario.status, scenario.name);
     assert.equal(snapshot[0]!.task, "implement work", scenario.name);
