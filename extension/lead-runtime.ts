@@ -4641,16 +4641,15 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                       candidate.kind === "work" &&
                       candidate.work.branch === branch,
                   );
-                if (!entry || workItem?.kind !== "work" || !workItem.lead)
-                  return;
-                const liveLead = true;
+                if (!entry || workItem?.kind !== "work") return;
+                const liveLead = !!workItem.lead;
                 finish({
                   kind: "project",
                   branch,
                   session: entry.session,
                   status: entry.status,
                   liveLead,
-                  incompatible: workItem.lead.compatibility === "incompatible",
+                  incompatible: workItem.lead?.compatibility === "incompatible",
                 });
                 return;
               }
