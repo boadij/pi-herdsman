@@ -9700,7 +9700,7 @@ test("Manager session binding holds the assignment lock before Lead publication"
 test("Lead publication holds the assignment lock before Manager session binding", (t) =>
   managerDelegateAssignmentTest(t, false, "lead-first"));
 
-test("Manager supervises project Leads while Chief keeps only unclaimed Leads in scope", async () => {
+test("Manager supervision keeps incompatible Leads observational", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -10211,27 +10211,16 @@ test("Manager supervises project Leads while Chief keeps only unclaimed Leads in
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     const overviewLines = overview.render(120).join("\n");
-    assert.match(overviewLines, /build mismatch · reload Pi session/);
-    assert.match(
-      overviewLines,
-      /assigned-branch.*build mismatch · reload Pi session/,
-    );
-    assert.match(overviewLines, /unknown · build mismatch · reload Pi session/);
+    assert.match(overviewLines, /build mismatch/);
+    assert.match(overviewLines, /assigned-branch.*build mismatch/);
+    assert.match(overviewLines, /unknown · build mismatch/);
     overview.handleInput("\r");
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(
-      focusCalls,
-      [],
-      "incompatible overview selection sends no focus",
-    );
+    assert.deepEqual(focusCalls, []);
     overview.handleInput("\u001b[B");
     overview.handleInput("\r");
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(
-      focusCalls,
-      [],
-      "incompatible standalone selection sends no focus",
-    );
+    assert.deepEqual(focusCalls, []);
     overview.handleInput("\u001b");
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
@@ -14307,6 +14296,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     leads: [
       {
         lead: assignedLeadId,
+        instanceId: "assigned-instance",
         displayName: "assigned",
         branch: "feat/assigned",
         runtimeState: "working" as const,
@@ -14314,9 +14304,11 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         tabId: "tab",
         workspaceId: WORKSPACE,
         availableActions: [],
+        compatibility: "incompatible" as const,
       },
       {
         lead: leadId,
+        instanceId: "standalone-instance",
         displayName: "standalone",
         branch: "feat/standalone",
         runtimeState: "working" as const,
@@ -14324,10 +14316,20 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         tabId: "tab",
         workspaceId: WORKSPACE,
         availableActions: [],
+        compatibility: "incompatible" as const,
       },
     ],
   };
   const focused: string[] = [];
+  const coordinationInstances: Record<string, string> = {
+    [leadId]: "standalone-instance",
+    [assignedLeadId]: "assigned-instance",
+    [managerId]: "manager-instance",
+  };
+  let changeLeadInstanceOnList = false;
+  let changeLeadInstanceOnGet = false;
+  let changeManagerInstanceOnList = false;
+  let changeManagerInstanceOnGet = false;
   let mismatch = false;
   let deferNextLookup = false;
   let loadCount = 0;
@@ -14385,33 +14387,57 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
       left.piSessionId === right.piSessionId && left.paneId === right.paneId,
     supervisionRuntime: () => ({}),
     readLeadCoordinationState: (_runtime: unknown, id: string) =>
-      [leadId, assignedLeadId].includes(id) ? { piSessionId: id } : undefined,
-    listAllHerdrAgents: async () => ({
-      agents: [
-        {
-          sessionId: managerId,
-          pane_id: managerPaneId,
-          tab_id: "manager-tab",
-          workspace_id: WORKSPACE,
-        },
-        {
-          sessionId: assignedLeadId,
-          pane_id: assignedPaneId,
-          tab_id: "tab",
-          workspace_id: WORKSPACE,
-        },
-        {
-          sessionId: leadId,
-          pane_id: paneId,
-          tab_id: "tab",
-          workspace_id: WORKSPACE,
-        },
-      ],
-    }),
+      coordinationInstances[id]
+        ? {
+            piSessionId: id,
+            role: id === managerId ? "manager" : "lead",
+            instanceId: coordinationInstances[id],
+          }
+        : undefined,
+    listAllHerdrAgents: async () => {
+      if (changeLeadInstanceOnList) {
+        changeLeadInstanceOnList = false;
+        coordinationInstances[leadId] = "replacement-instance";
+      }
+      if (changeManagerInstanceOnList) {
+        changeManagerInstanceOnList = false;
+        coordinationInstances[managerId] = "replacement-manager-instance";
+      }
+      return {
+        agents: [
+          {
+            sessionId: managerId,
+            pane_id: managerPaneId,
+            tab_id: "manager-tab",
+            workspace_id: WORKSPACE,
+          },
+          {
+            sessionId: assignedLeadId,
+            pane_id: assignedPaneId,
+            tab_id: "tab",
+            workspace_id: WORKSPACE,
+          },
+          {
+            sessionId: leadId,
+            pane_id: paneId,
+            tab_id: "tab",
+            workspace_id: WORKSPACE,
+          },
+        ],
+      };
+    },
     isPiAgent: () => true,
     herdrSessionId: (agent: any) => agent.sessionId,
     runHerdr: async (_pi: unknown, _ctx: unknown, args: string[]) => {
       if (args[0] === "agent" && args[1] === "get") {
+        if (changeLeadInstanceOnGet) {
+          changeLeadInstanceOnGet = false;
+          coordinationInstances[leadId] = "replacement-instance";
+        }
+        if (changeManagerInstanceOnGet) {
+          changeManagerInstanceOnGet = false;
+          coordinationInstances[managerId] = "replacement-manager-instance";
+        }
         const agent = [
           [managerPaneId, managerId, "manager-tab"],
           [assignedPaneId, assignedLeadId, "tab"],
@@ -14461,6 +14487,17 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(focused, [paneId, assignedPaneId]);
+  changeLeadInstanceOnList = true;
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, [paneId, assignedPaneId]);
+  coordinationInstances[leadId] = "standalone-instance";
+  await runtime.refresh(ctx);
+  changeLeadInstanceOnGet = true;
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, [paneId, assignedPaneId]);
+  coordinationInstances[leadId] = "standalone-instance";
   await runtime.refresh(ctx);
   mismatch = true;
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
@@ -14502,6 +14539,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         leads: [
           {
             session: leadId,
+            instanceId: "standalone-instance",
+            paneId,
+            tabId: "tab",
+            workspaceId: WORKSPACE,
             displayName: "nested-lead",
             branch: "feat/nested",
             runtimeState: "working",
@@ -14536,8 +14577,43 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(
     focused,
-    [paneId, assignedPaneId, managerPaneId, paneId],
+    [paneId, assignedPaneId, managerPaneId, paneId, paneId],
     "a stale clickable nested Lead row must not focus after fresh discovery finds a build mismatch",
+  );
+  currentSnapshot = {
+    managers: [],
+    incompatible: [
+      {
+        role: "manager",
+        session: managerId,
+        instanceId: "manager-instance",
+        displayName: "project-manager",
+        workspaceId: WORKSPACE,
+        paneId: managerPaneId,
+        tabId: "manager-tab",
+        runtimeState: "working",
+        build: { version: "older", sha256: "a".repeat(64) },
+        reason: "incompatible_build",
+      },
+    ],
+  };
+  changeManagerInstanceOnList = true;
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    [paneId, assignedPaneId, managerPaneId, paneId, paneId],
+    "an incompatible Manager generation change during discovery must not focus",
+  );
+  coordinationInstances[managerId] = "manager-instance";
+  await runtime.refresh(ctx);
+  changeManagerInstanceOnGet = true;
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    [paneId, assignedPaneId, managerPaneId, paneId, paneId],
+    "an incompatible Manager generation change during agent get must not focus",
   );
   assert.equal(currentRole, "chief", "nested navigation remains observational");
   runtime.stopPeriodic();
@@ -14909,7 +14985,7 @@ test("Chief overview reports unavailable when its first refresh fails", async ()
   }
 });
 
-test("Chief overview renders incompatible staff without counts or selection actions", async () => {
+test("Chief overview renders incompatible staff without counts and allows focus selection", async () => {
   const harness = await openChiefOverview(true, {
     incompatibleBuild: { version: "older", sha256: "a".repeat(64) },
   });
@@ -14920,7 +14996,7 @@ test("Chief overview renders incompatible staff without counts or selection acti
     assert.doesNotMatch(output, /0 agents/);
     harness.component.handleInput(" ");
     harness.component.handleInput("\r");
-    assert.equal(harness.doneCalls, 0);
+    assert.equal(harness.doneCalls, 1);
   } finally {
     await harness.cleanup();
   }

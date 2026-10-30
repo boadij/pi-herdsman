@@ -3546,6 +3546,10 @@ export type SupervisedManager = {
   incompatibleLeadCount?: number;
   leads: Array<{
     session: string;
+    instanceId?: string;
+    paneId?: string;
+    tabId?: string;
+    workspaceId?: string;
     displayName: string;
     runtimeState: RuntimeState;
     agentCounts?: { active: number; blocked: number; total: number };
@@ -3564,8 +3568,11 @@ export type ChiefManagerReportSnapshot = {
 export type IncompatibleStaff = Readonly<{
   role: "manager" | "lead";
   session: string;
+  instanceId: string;
   displayName: string;
   workspaceId: string;
+  paneId: string;
+  tabId: string;
   runtimeState: RuntimeState;
   build: RuntimeBuild;
   reason: "incompatible_build";
@@ -3887,8 +3894,11 @@ export function projectSupervision(options: {
       incompatible.push({
         role: "lead",
         session: agent.sessionId,
+        instanceId: state.instanceId,
         displayName: `${agent.workspaceId}/lead-${agent.sessionId.slice(0, 8)}`,
         workspaceId: agent.workspaceId,
+        paneId: agent.paneId,
+        tabId: agent.tabId,
         runtimeState: agent.runtimeState ?? "unknown",
         build: state.build,
         reason: "incompatible_build",

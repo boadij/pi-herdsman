@@ -721,6 +721,10 @@ export type SupervisedLeadSnapshot = Readonly<{
   incompatibleLeadCount?: number;
   leads?: readonly Readonly<{
     session: string;
+    instanceId?: string;
+    paneId?: string;
+    tabId?: string;
+    workspaceId?: string;
     branch?: string;
     display_name: string;
     runtime_state: LifecyclePresentationState;
@@ -760,6 +764,10 @@ function managerPresentationSnapshot(
     availableActions: manager.availableActions,
     leads: manager.leads.map((lead) => ({
       session: lead.session,
+      ...("instanceId" in lead ? { instanceId: lead.instanceId } : {}),
+      ...("paneId" in lead ? { paneId: lead.paneId } : {}),
+      ...("tabId" in lead ? { tabId: lead.tabId } : {}),
+      ...("workspaceId" in lead ? { workspaceId: lead.workspaceId } : {}),
       branch: "branch" in lead ? lead.branch : undefined,
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
@@ -782,9 +790,12 @@ export function supervisionPresentationReports(
       ...directLeads.map((lead) => ({ ...lead, role: "lead" as const })),
       ...(snapshot.incompatible ?? []).map((staff) => ({
         lead: staff.session,
+        instanceId: staff.instanceId,
         role: staff.role,
         displayName: staff.displayName,
         workspaceId: staff.workspaceId,
+        paneId: staff.paneId,
+        tabId: staff.tabId,
         runtimeState: staff.runtimeState,
         availableActions: [],
         compatibility: "incompatible" as const,
@@ -796,9 +807,12 @@ export function supervisionPresentationReports(
     ...snapshot.leads.map((lead) => ({ ...lead, role: "lead" as const })),
     ...(snapshot.incompatible ?? []).map((staff) => ({
       lead: staff.session,
+      instanceId: staff.instanceId,
       role: staff.role,
       displayName: staff.displayName,
       workspaceId: staff.workspaceId,
+      paneId: staff.paneId,
+      tabId: staff.tabId,
       runtimeState: staff.runtimeState,
       availableActions: [],
       compatibility: "incompatible" as const,
@@ -1238,7 +1252,7 @@ function renderSupervisionRows(
               `${themed(options.theme, item.lead.compatibility === "incompatible" ? "warning" : supervisionLeadColor(item.lead), `${branch} ${navigation}${item.lead.compatibility === "incompatible" ? "!" : supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead${item.lead.compatibility === "incompatible" ? " · build mismatch" : ""}`)}`,
               width,
             ),
-            ...(status === "fresh" && item.lead.compatibility !== "incompatible"
+            ...(status === "fresh"
               ? {
                   label: item.lead.branch ?? item.lead.displayName,
                   intent: {
@@ -1295,10 +1309,7 @@ function renderSupervisionRows(
               }
             : undefined;
         const canFocusLead =
-          status === "fresh" &&
-          item.work.status === "active" &&
-          lead &&
-          lead.compatibility !== "incompatible";
+          status === "fresh" && item.work.status === "active" && lead;
         return {
           text: safeLine(
             `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
@@ -1334,7 +1345,7 @@ function renderSupervisionRows(
           .length ??
         0;
       const intent =
-        status === "fresh" && !isIncompatible
+        status === "fresh"
           ? { kind: "session" as const, sessionId: lead.lead }
           : undefined;
       const row = {
@@ -1362,7 +1373,7 @@ function renderSupervisionRows(
                 : `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, childMarker === "◉" ? "accent" : lifecycleColor(child.runtime_state), childMarker)} ${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts?.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
               width,
             ),
-            ...(status === "fresh" && child.compatibility !== "incompatible"
+            ...(status === "fresh"
               ? {
                   label: child.branch ?? child.display_name,
                   intent: {

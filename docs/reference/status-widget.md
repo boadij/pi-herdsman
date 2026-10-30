@@ -143,13 +143,15 @@ control require the Lead's current exact project assignment. Direct-report
 inspection and messaging use their own fresh supervision authorization;
 focus/navigation alone grants neither. Chief-visible nested Leads remain
 observational. A visible truncated Manager project-work branch can focus its
-exact verified Lead only for a fresh, active row with a compatible Lead; only
-the rendered branch segment is clickable, not its status suffix. Paused or
-conflicted project work, incompatible Leads, lost or unresolved sessions,
-stale projections, wholly hidden labels, omitted entries, and targets without
-a uniquely verified live Herdr pane are inert. Current placement is checked
-again when a click is handled; the status projection itself is never
-authorization.
+exact verified Lead only for a fresh, active row; only the rendered branch
+segment is clickable, not its status suffix. A build mismatch remains visible
+but does not by itself disable native Herdr focus. Paused or conflicted project
+work, lost or unresolved sessions, stale projections, wholly hidden labels,
+omitted entries, and targets without a uniquely verified live Herdr pane are
+inert. Current placement is checked again when a click is handled; the status
+projection itself is never authorization. Focus grants no cross-build
+staff-operation authority; inspection, messaging, and control retain their
+existing authorization checks.
 
 Headless mode has no UI-only periodic supervision observation. Explicit and
 model-context refreshes still acquire fresh state. A refresh failure never
