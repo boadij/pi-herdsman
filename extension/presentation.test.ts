@@ -655,6 +655,14 @@ test("Manager supervision context uses the assigned branch and ordinary session"
   };
   const text = formatSupervisionContext(
     {
+      work: [
+        {
+          branch: "feat/unverified",
+          session: "assigned-session",
+          status: "unknown" as const,
+          issue: "Assigned Lead verification unavailable",
+        },
+      ],
       leads: [
         {
           ...lead,
@@ -676,6 +684,10 @@ test("Manager supervision context uses the assigned branch and ordinary session"
     },
   );
   assert.match(text, /branch: feat\/exact/);
+  assert.match(
+    text,
+    /project_work:[\s\S]*feat\/unverified · unknown · Assigned Lead verification unavailable/,
+  );
   assert.doesNotMatch(text, /session: assigned-session/);
   assert.match(text, /target: lead:0123456789/);
 });
@@ -7142,6 +7154,13 @@ test("hidden and ineligible truncated Manager work targets remain inert", () => 
       incompatible: false,
     },
     {
+      name: "unknown",
+      projectionStatus: "fresh" as const,
+      workStatus: "unknown" as const,
+      lead: true,
+      incompatible: false,
+    },
+    {
       name: "conflicted",
       projectionStatus: "fresh" as const,
       workStatus: "conflict" as const,
@@ -7279,6 +7298,7 @@ test("Manager work status outranks live Lead markers except when active", () => 
   for (const [status, marker, color] of [
     ["active", "●", "success"],
     ["paused", "○", "muted"],
+    ["unknown", "?", "muted"],
     ["conflict", "!", "warning"],
   ] as const) {
     const snapshot = {

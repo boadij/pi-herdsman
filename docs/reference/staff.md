@@ -56,11 +56,14 @@ evidence. Use `list_staff` when a fresh complete roster is materially needed.
 
 Returns a fresh direct-report projection and fresh `available_tools`. For
 Manager, `work` lists durable project assignments by branch with derived status
-and a bounded task summary. Status is `active`, `paused`, or `conflict`; active
-work may include the live Lead's separate `runtime_state`. Paused work remains
-listed without a running Lead. Verified checkout absence retires the assignment;
-unavailable or ambiguous Git inventory preserves it. Work items do not expose
-assignment session IDs, workspace IDs, or pane IDs.
+and a bounded task summary. Status is `active`, `paused`, `unknown`, or
+`conflict`; active work may include the live Lead's separate `runtime_state`.
+`paused` means no matching Lead appeared in the successfully collected
+observation. `unknown` means a matching candidate was observed but could not
+currently be verified. Neither `unknown` nor `conflict` authorizes staff
+actions. Verified checkout absence retires the assignment; unavailable or
+ambiguous Git inventory preserves it. Work items do not expose assignment
+session IDs, workspace IDs, or pane IDs.
 
 For Manager, `open_workspaces` separately reports current Herdr topology. It is
 not assignment ownership. An assigned report's branch is the handle for its
@@ -186,10 +189,13 @@ Manager only. Resume existing unresolved project work using its exact branch:
 
 The assignment must already exist; resume does not create or replace it.
 Resuming already-running work returns the current exact Lead instead of
-starting another. A stopped Lead is relaunched with the same assignment while
-its worktree exists. Verified checkout absence retires the assignment rather
-than recreating it. A retired assignment cannot be resumed; new work may use
-`delegate_work` with the remaining branch.
+starting another. This recovers no stopped Lead and does not recover its Agents
+or refresh its progress; use `message_staff` to communicate with an eligible
+running Lead. `resume_work` is not a general progress-refresh mechanism. A
+stopped Lead is relaunched with the same assignment while its worktree exists.
+Verified checkout absence retires the assignment rather than recreating it. A
+retired assignment cannot be resumed; new work may use `delegate_work` with the
+remaining branch.
 
 ## `stop_lead`
 

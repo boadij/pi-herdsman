@@ -1204,6 +1204,7 @@ function renderSupervisionRows(
     const workMarkers = {
       active: "·",
       paused: "○",
+      unknown: "?",
       conflict: "!",
     };
     const layout =
