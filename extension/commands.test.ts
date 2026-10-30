@@ -291,6 +291,14 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
         items: readonly any[],
       ) => {
         menuTitles.push(title);
+        if (title === assignment.branch) {
+          assert.ok(items.some((item) => item.value === "required-evidence"));
+          assert.equal(
+            items.some((item) => item.value === "focus"),
+            false,
+            "Focus is unavailable when the assigned work item has no live Lead",
+          );
+        }
         if (title.startsWith("Retained evidence ·")) {
           assert.deepEqual(
             items.map((item) => item.value),
