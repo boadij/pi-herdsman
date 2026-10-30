@@ -397,8 +397,10 @@ Managed Leads contact their assigned Manager; ordinary Leads contact their
 active project Manager or Chief when eligible, and Managers contact Chief. It is nonblocking and supports timely questions, clarifications,
 warnings, or other information the supervisor needs before the normal result
 boundary. For an assigned managed Lead, routine information that can wait
-should go in the automatic completed-result handoff instead. The Lead may choose
-to wait for a response through `message_staff`. Ordinary Leads and Managers
+should go in the automatic completed-result handoff instead. Continue
+independently safe work while a reply is pending. Defer only steps that
+genuinely require the response; when no actionable work remains, end the turn
+and rely on normal message delivery rather than polling. Ordinary Leads and Managers
 have no automatic result handoff to Chief. Ordinary Leads without a verified
 Chief continue independently.
 While a project Lead remains assigned, Herdsman automatically returns each

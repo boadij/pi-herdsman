@@ -133,6 +133,12 @@ not imply ownership, and Manager must not start another writer beside a Lead
 that already occupies the relevant worktree. Use separate Leads when work is
 independent enough to justify separate branch and execution boundaries.
 
+Two Leads modifying the same module on separate branches may coordinate their
+interface expectations while continuing independent implementation. If an
+actual incompatible dependency emerges, the Manager clarifies ownership or
+sequencing, and only dependent steps wait. Integrating branches sequentially
+does not necessarily require implementing them sequentially.
+
 ## Integrate completed branches
 
 When an assigned Lead has completed and validated its branch, the Manager can
@@ -167,8 +173,10 @@ close project work: assignments remain open through
 review and requested corrections. Routine information that can wait should go
 through the automatic result handoff. A managed Lead may use nonblocking
 `message_supervisor` for a timely question, clarification, warning, or other
-information the Manager needs before that boundary; the Lead may choose to wait
-for a response through `message_staff`. A later automatic result may repeat
+information the Manager needs before that boundary. Continue independently
+safe work while a reply is pending. Defer only steps that genuinely require the
+response; when no actionable work remains, end the turn and rely on normal
+message delivery rather than polling. A later automatic result may repeat
 some information; separate messages and results are not deduplicated.
 
 Automatic project reports transfer summary text only, not files. A result
