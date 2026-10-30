@@ -358,7 +358,7 @@ function seedSessionKind(
 
 function assignedWorktree(branch: string) {
   return {
-    path: "/tmp",
+    path: tmpdir(),
     branch,
     is_linked_worktree: true,
     open_workspace_id: WORKSPACE,
@@ -3144,7 +3144,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
   });
   const startedAt = 1_700_000_000_000;
@@ -3168,7 +3168,15 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     },
   ];
   const label = "agent";
-  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    tmpdir(),
+  );
   const exec = async (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return {
@@ -3180,7 +3188,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
               repo_name: "project",
               source_workspace_id: WORKSPACE,
             },
-            worktrees: [],
+            worktrees: [assignedWorktree(branch)],
           },
         }),
         stderr: "",
@@ -3190,6 +3198,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
   };
   const pi = fakePi({ entries, exec });
   const context = fakeContext(entries);
+  context.cwd = tmpdir();
   const herdEntries = () =>
     entries.filter(
       (entry: any) => entry.customType === "pi-herdsman-herd-run",
@@ -3277,7 +3286,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
   });
   const startedAt = Date.now();
@@ -3302,7 +3311,15 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     started?: () => void;
     unavailable?: boolean;
   }[] = [];
-  const startup = startupExecutor("agent", () => DEFAULT_PI_SESSION_ID);
+  const startup = startupExecutor(
+    "agent",
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    tmpdir(),
+  );
   const pi = fakePi({
     entries,
     allTools: [{ name: "read_evidence" }, { name: "message_supervisor" }],
@@ -3347,7 +3364,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
                   },
                   worktrees: [
                     {
-                      path: "/tmp",
+                      path: tmpdir(),
                       branch,
                       is_linked_worktree: true,
                       open_workspace_id: WORKSPACE,
@@ -3363,6 +3380,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     },
   });
   const context = fakeContext(entries);
+  context.cwd = tmpdir();
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.hasUI = true;
   context.isIdle = () => false;
@@ -5552,7 +5570,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
   });
 
@@ -5564,7 +5582,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -5582,7 +5600,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
             },
             worktrees: [
               {
-                path: "/tmp",
+                path: tmpdir(),
                 branch,
                 is_linked_worktree: true,
                 open_workspace_id: WORKSPACE,
@@ -5597,6 +5615,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   };
   const pi = fakePi({ exec });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.hasUI = true;
   let widget: any;
@@ -5776,7 +5795,7 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "initial brief: preserve backward compatibility",
     requiredEvidence: [snapshot],
   };
@@ -5791,7 +5810,7 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -5814,7 +5833,7 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
               },
               worktrees: [
                 {
-                  path: "/tmp",
+                  path: tmpdir(),
                   branch,
                   is_linked_worktree: true,
                   open_workspace_id: WORKSPACE,
@@ -5829,6 +5848,7 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
@@ -6056,7 +6076,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     id: assignedSessionId,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: brief,
     requiredEvidence: [
       legacySnapshot,
@@ -6075,7 +6095,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -6094,7 +6114,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
       },
       worktrees: [
         {
-          path: "/tmp",
+          path: tmpdir(),
           branch,
           is_linked_worktree: true,
           open_workspace_id: WORKSPACE,
@@ -6144,6 +6164,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   context.sessionManager.getSessionId = () => assignedSessionId;
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
@@ -6406,7 +6427,7 @@ test("managed project delegation references supported evidence larger than the i
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
     currentEvidenceIds: [snapshot.id],
@@ -6422,7 +6443,7 @@ test("managed project delegation references supported evidence larger than the i
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -6456,6 +6477,7 @@ test("managed project delegation references supported evidence larger than the i
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
@@ -6601,9 +6623,9 @@ test("managed project delegation keeps small changed content and deduplicates ma
     "duplicate plan body",
   );
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
-  const originalPath = join("/tmp", originalRelativePath);
+  const originalPath = join(tmpdir(), originalRelativePath);
   const matchingRelativePath = `matching-plan-${LEAD_SESSION_ID}.md`;
-  const matchingPath = join("/tmp", matchingRelativePath);
+  const matchingPath = join(tmpdir(), matchingRelativePath);
   realFs.writeFileSync(originalPath, "newer plan body");
   realFs.writeFileSync(matchingPath, "duplicate plan body");
   const assignment = {
@@ -6611,7 +6633,7 @@ test("managed project delegation keeps small changed content and deduplicates ma
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -6625,7 +6647,7 @@ test("managed project delegation keeps small changed content and deduplicates ma
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -6656,6 +6678,7 @@ test("managed project delegation keeps small changed content and deduplicates ma
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
@@ -6736,7 +6759,7 @@ test("managed project delegation keeps changed original-path content alongside r
   const inheritedContent = `Inherited evidence body ${"i".repeat(75000)}`;
   const currentContent = `Current review evidence ${"c".repeat(75000)}`;
   const originalRelativePath = `retained-plan-${LEAD_SESSION_ID}.md`;
-  const originalPath = join("/tmp", originalRelativePath);
+  const originalPath = join(tmpdir(), originalRelativePath);
   const snapshot = persistRequiredEvidenceSnapshot(
     LEAD_SESSION_ID,
     originalRelativePath,
@@ -6748,7 +6771,7 @@ test("managed project delegation keeps changed original-path content alongside r
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -6762,7 +6785,7 @@ test("managed project delegation keeps changed original-path content alongside r
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -6793,6 +6816,7 @@ test("managed project delegation keeps changed original-path content alongside r
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   context.hasUI = true;
   const branchEntries: any[] = (
@@ -6881,7 +6905,7 @@ test("managed project delegation preserves inherited semantic result identity ov
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [inherited],
     currentEvidenceIds: [inherited.id],
@@ -6896,7 +6920,7 @@ test("managed project delegation preserves inherited semantic result identity ov
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -6927,6 +6951,7 @@ test("managed project delegation preserves inherited semantic result identity ov
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   context.hasUI = true;
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -7002,7 +7027,7 @@ test("managed Lead prepares upgraded evidence while another process holds global
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -7024,7 +7049,7 @@ test("managed Lead prepares upgraded evidence while another process holds global
       starts++;
       started();
     },
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -7053,6 +7078,7 @@ test("managed Lead prepares upgraded evidence while another process holds global
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   const branchEntries = context.sessionManager.getBranch() as any[];
   registerExtensionForTest!(pi.pi as never, {
@@ -7156,7 +7182,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -7173,7 +7199,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
     undefined,
     false,
     started,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -7202,6 +7228,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   const branchEntries = context.sessionManager.getBranch() as any[];
   let published = 0;
@@ -7316,7 +7343,7 @@ test("legacy evidence migration does not overwrite a changed assignment after co
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [legacySnapshot],
   };
@@ -7402,7 +7429,7 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [legacySnapshot],
   };
@@ -7420,7 +7447,7 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     undefined,
     false,
     () => starts++,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -7449,6 +7476,7 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   const branchEntries = context.sessionManager.getBranch() as any[];
   registerExtension!(pi.pi as never);
@@ -7557,7 +7585,7 @@ async function exerciseManagedLeadInvalidation(
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -7616,7 +7644,7 @@ async function exerciseManagedLeadInvalidation(
       else assert.deepEqual(current?.requiredEvidence, [changedSnapshot]);
       assert.equal(typeof mutationOutput, "string");
     },
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -7647,6 +7675,7 @@ async function exerciseManagedLeadInvalidation(
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   seedSessionKind(context, "managed", "repo-key", branch);
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
@@ -7801,7 +7830,7 @@ test("each direct managed Lead turn returns its response", async () => {
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
   });
   const pi = fakePi({
@@ -7826,6 +7855,7 @@ test("each direct managed Lead turn returns its response", async () => {
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   const branchEntries: any[] = (
     context.sessionManager.getBranch as () => any[]
   )();
@@ -8061,7 +8091,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Implement the assigned project",
   });
   const label = `handoff-race-${randomUUID().slice(0, 8)}`;
@@ -8072,7 +8102,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -8112,6 +8142,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   context.sessionManager.getEntries = () => pi.entries;
   seedLeadRole(context, false);
@@ -10388,7 +10419,7 @@ test("session continuation starts a new agent generation with current prompt con
     id: projectAssignmentId,
     repoKey: "repo-key",
     branch: projectBranch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Current project",
     requiredEvidence: [inheritedEvidence, localEvidence],
   };
@@ -10409,7 +10440,7 @@ test("session continuation starts a new agent generation with current prompt con
   const session = {
     id: DEFAULT_PI_SESSION_ID,
     path: join(PI_AGENT_ROOT, `${name}-session.jsonl`),
-    cwd: "/tmp",
+    cwd: tmpdir(),
     entries: [
       {
         type: "custom",
@@ -10469,7 +10500,7 @@ test("session continuation starts a new agent generation with current prompt con
     (args) => {
       launched.push({ args: [...args], contents: promptLaunchContents(args) });
     },
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     false,
@@ -10549,6 +10580,7 @@ test("session continuation starts a new agent generation with current prompt con
     content: `Project assignment for branch\n${currentAssignment.text}`,
   };
   const projectAssignmentContext = fakeContext(pi.entries) as any;
+  projectAssignmentContext.cwd = tmpdir();
   projectAssignmentContext.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   seedLeadRole(projectAssignmentContext, false);
   await pi.events.get("session_start")![0](undefined, projectAssignmentContext);
@@ -10862,14 +10894,14 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     "plan.md",
     "accepted inherited plan",
   );
-  const localFile = join("/tmp", `${label}-review.md`);
+  const localFile = join(tmpdir(), `${label}-review.md`);
   realFs.writeFileSync(localFile, "accepted local review", "utf8");
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "Current cleanup project",
     requiredEvidence: [inherited],
     currentEvidenceIds: [inherited.id],
@@ -10883,7 +10915,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     undefined,
     false,
     undefined,
-    "/tmp",
+    tmpdir(),
     AGENT_ID,
     false,
     true,
@@ -10894,7 +10926,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
       const session = {
         id: DEFAULT_PI_SESSION_ID,
         path: sessionPath,
-        cwd: "/tmp",
+        cwd: tmpdir(),
         entries: [
           {
             type: "custom",
@@ -10955,6 +10987,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     },
   });
   const context = fakeContext(pi.entries);
+  context.cwd = tmpdir();
   context.hasUI = true;
   const branchEntries = context.sessionManager.getBranch() as any[];
   registerExtension!(pi.pi as never);

@@ -6515,7 +6515,7 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
     id: sessionId,
     repoKey,
     branch,
-    checkoutPath: "/tmp",
+    checkoutPath: tmpdir(),
     text: "registered message supervisor integration test",
   });
   const pi = fakePi({
@@ -6532,7 +6532,7 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
                 },
                 worktrees: [
                   {
-                    path: "/tmp",
+                    path: tmpdir(),
                     branch,
                     is_linked_worktree: true,
                     open_workspace_id: WORKSPACE,
@@ -6547,6 +6547,7 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
+  context.cwd = tmpdir();
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
