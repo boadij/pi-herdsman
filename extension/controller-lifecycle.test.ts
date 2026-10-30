@@ -545,6 +545,7 @@ test("parent delegates two same-definition children with exact ownership", async
       "A steer queued during that unchanged episode cannot have taken effect yet",
       "otherwise use interrupt_agent",
       "Do not take over the Agent's unresolved assignment.",
+      "Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed.",
     ])
       assert.ok(content.includes(phrase), phrase);
     const sharedGuidance = pi.tools
@@ -557,6 +558,7 @@ test("parent delegates two same-definition children with exact ownership", async
       "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
       "Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because they exist.",
       "A proven lost Agent remains unresolved; physical disappearance is not completion. A physically unknown Agent remains fail-closed: do not control, close, replace, or infer completion of that generation.",
+      "Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed.",
     ])
       assert.ok(sharedGuidance.includes(phrase), phrase);
     const labels = mailboxes.map(

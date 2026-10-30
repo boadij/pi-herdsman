@@ -4380,15 +4380,22 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     );
     assert.match(effectiveRecoveryContract, /independent work/i);
     assert.match(effectiveRecoveryContract, /do not take over/i);
+    assert.match(
+      effectiveRecoveryContract,
+      /Do not take over the Agent's unresolved assignment/i,
+    );
     assert.match(effectiveRecoveryContract, /new evidence/i);
     assert.match(
       effectiveRecoveryContract,
       /do not control, close, replace, or infer completion/i,
     );
-    assert.doesNotMatch(effectiveRecoveryContract, /guess ownership/i);
-    assert.doesNotMatch(
+    assert.match(
       effectiveRecoveryContract,
-      /take over unresolved delegated work/i,
+      /If evidence is insufficient to exclude competing execution, preserve the affected scope and identify the specific missing evidence or external action/i,
+    );
+    assert.match(
+      effectiveRecoveryContract,
+      /Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed/i,
     );
     assert.doesNotMatch(charter, /SKILL\.md|Recovery judgment/);
     assertProtectedHandoff(charter);
@@ -4901,7 +4908,6 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       /allow the Lead to continue independently authorized work/,
     );
     assert.match(prompt, /supervision alone grants no Agent ownership/);
-    assert.doesNotMatch(prompt, /close_agent|take over.*Agent/i);
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
