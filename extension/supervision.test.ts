@@ -3790,6 +3790,23 @@ test("project work derives active, paused, or conflict from runtime placement", 
     );
   }
 
+  const switched = projectWorkSnapshot({
+    assignments: [assignment],
+    worktrees: [{ branch: "feat/renamed", open_workspace_id: "child" }],
+    placements: new Map([
+      [
+        assignment.id,
+        {
+          status: "matched" as const,
+          worktree: { branch: "feat/renamed", open_workspace_id: "child" },
+        },
+      ],
+    ]),
+    leads: [lead],
+  });
+  assert.equal(switched[0]!.status, "active");
+  assert.equal(switched[0]!.branch, assignment.branch);
+
   const bounded = projectWorkSnapshot({
     assignments: [
       {

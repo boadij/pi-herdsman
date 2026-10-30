@@ -254,6 +254,8 @@ test(
     const chiefId = randomUUID();
     const managerId = randomUUID();
     const leadId = randomUUID();
+    const checkoutPath = join(tmpdir(), `${leadId}-checkout`);
+    realFs.mkdirSync(checkoutPath, { recursive: true });
     const runtime = supervisionRuntime();
     const chief = claimChiefLease({
       piSessionId: chiefId,
@@ -317,7 +319,14 @@ test(
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [{ open_workspace_id: "linked-workspace" }],
+              worktrees: [
+                {
+                  path: checkoutPath,
+                  is_linked_worktree: true,
+                  branch: "smoke/after-switch",
+                  open_workspace_id: "linked-workspace",
+                },
+              ],
             };
       return {
         stdout: JSON.stringify({ id: AGENT_ID, result }),
@@ -328,6 +337,7 @@ test(
     const pi = fakeChiefPi({ exec });
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(pi.entries, []) as any;
+    ctx.cwd = checkoutPath;
     ctx.sessionManager = {
       ...ctx.sessionManager,
       getSessionId: () => leadId,
@@ -352,6 +362,7 @@ test(
         id: leadId,
         repoKey: realpathSync(tmpdir()),
         branch: "smoke/routing",
+        checkoutPath,
         text: "routing assignment",
       });
       writeLeadCoordinationState(runtime, {
@@ -733,6 +744,7 @@ test(
         id: leadId,
         repoKey: realpathSync(tmpdir()),
         branch: "smoke/routing",
+        checkoutPath,
         text: "routing assignment",
       });
       const inconclusiveText = "retain while scope is unavailable";
@@ -1276,12 +1288,15 @@ test("message_supervisor tool cancellation prevents project publication while wa
   const runtime = supervisionRuntime();
   const leadId = randomUUID();
   const managerId = randomUUID();
+  const checkoutPath = join(tmpdir(), `${leadId}-checkout`);
+  realFs.mkdirSync(checkoutPath, { recursive: true });
   const branch = "smoke/cancel-message";
   const assignment = {
     version: 2 as const,
     id: leadId,
     repoKey: "repo-key",
     branch,
+    checkoutPath,
     text: "project assignment",
   };
   writeProjectAssignment(runtime, assignment);
@@ -1344,7 +1359,14 @@ test("message_supervisor tool cancellation prevents project publication while wa
             repo_name: "project",
             source_workspace_id: WORKSPACE,
           },
-          worktrees: [{ branch, open_workspace_id: "linked-workspace" }],
+          worktrees: [
+            {
+              branch,
+              path: checkoutPath,
+              is_linked_worktree: true,
+              open_workspace_id: "linked-workspace",
+            },
+          ],
         };
       return {
         stdout: JSON.stringify({ id: AGENT_ID, result }),
@@ -1361,6 +1383,7 @@ test("message_supervisor tool cancellation prevents project publication while wa
     afterOccupied: async () => lockContentionObserved(),
   });
   const ctx = fakeContext(pi.entries, []) as any;
+  ctx.cwd = checkoutPath;
   const contextAbort = new AbortController();
   ctx.signal = contextAbort.signal;
   ctx.sessionManager = {
@@ -1411,11 +1434,14 @@ test("project Lead observes Manager availability across turnover without exposin
   const runtime = supervisionRuntime();
   const leadId = randomUUID();
   const managerId = randomUUID();
+  const checkoutPath = join(tmpdir(), `${leadId}-checkout`);
+  realFs.mkdirSync(checkoutPath, { recursive: true });
   const assignment = {
     version: 2 as const,
     id: leadId,
     repoKey: "repo-key",
     branch: "smoke/supervisor-state",
+    checkoutPath,
     text: "project assignment",
   };
   writeProjectAssignment(runtime, assignment);
@@ -1480,7 +1506,12 @@ test("project Lead observes Manager availability across turnover without exposin
           source_workspace_id: WORKSPACE,
         },
         worktrees: [
-          { branch: assignment.branch, open_workspace_id: "linked-workspace" },
+          {
+            branch: "smoke/supervisor-state-after-switch",
+            path: checkoutPath,
+            is_linked_worktree: true,
+            open_workspace_id: "linked-workspace",
+          },
         ],
       };
     return {
@@ -1519,6 +1550,7 @@ test("project Lead observes Manager availability across turnover without exposin
   });
   registerExtension!(pi.pi as never);
   const ctx = fakeContext(pi.entries, branch) as any;
+  ctx.cwd = checkoutPath;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => leadId,
@@ -2416,6 +2448,12 @@ for (const reachable of [true, false]) {
       `manager-bootstrap-${randomUUID()}.sock`,
     );
     const runtime = supervisionRuntime();
+    let reportedGitCommonDir = realpathSync(tmpdir());
+    const checkoutPath = join(
+      tmpdir(),
+      `manager-bootstrap-${randomUUID()}-checkout`,
+    );
+    realFs.mkdirSync(checkoutPath, { recursive: true });
     let managerSessionFile = join(
       tmpdir(),
       `pi-herdsman-manager-${randomUUID()}.jsonl`,
@@ -2433,7 +2471,7 @@ for (const reachable of [true, false]) {
     };
     const exec = async (_command: string, args: string[]) => {
       if (_command === "git")
-        return { stdout: realpathSync(tmpdir()), stderr: "", code: 0 };
+        return { stdout: reportedGitCommonDir, stderr: "", code: 0 };
       let result: unknown = {};
       if (args[0] === "workspace" && args[1] === "get")
         result = { workspace: { workspace_id: args[2], worktree: null } };
@@ -2444,7 +2482,14 @@ for (const reachable of [true, false]) {
             repo_name: "project",
             source_workspace_id: WORKSPACE,
           },
-          worktrees: [],
+          worktrees: [
+            {
+              branch: "smoke/manager-replay",
+              path: checkoutPath,
+              is_linked_worktree: true,
+              open_workspace_id: "lead-workspace",
+            },
+          ],
         };
       } else if (isAgentList(args))
         result = { agents: reachable ? [managerAgent] : [] };
@@ -2514,11 +2559,29 @@ for (const reachable of [true, false]) {
           text: "project-review-evidence-478\n".repeat(1_500),
           createdAt: managerA.createdAt + 1,
         };
+        const leadSessionFile = join(tmpdir(), `${leadId}.jsonl`);
+        writeFileSync(
+          leadSessionFile,
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: leadId,
+            timestamp: new Date().toISOString(),
+            cwd: checkoutPath,
+          }) + "\n",
+        );
+        nativeSessions.set(leadId, {
+          id: leadId,
+          path: leadSessionFile,
+          cwd: checkoutPath,
+          entries: [],
+        });
         writeProjectAssignment(runtime, {
           version: 2,
           id: leadId,
           repoKey: realpathSync(tmpdir()),
           branch,
+          piSessionFile: leadSessionFile,
           text: "project assignment",
         });
         writeProjectMessage(liveRecord, runtime);
@@ -2717,6 +2780,7 @@ for (const reachable of [true, false]) {
         );
         process.env.HERDR_PANE_ID = "lead-pane";
         process.env.HERDR_TAB_ID = "lead-tab";
+        process.env.HERDR_WORKSPACE_ID = "lead-workspace";
         const lead = fakeChiefPi({ exec });
         lead.entries.push({
           type: "custom",
@@ -2731,6 +2795,7 @@ for (const reachable of [true, false]) {
         });
         registerExtension!(lead.pi as never);
         const leadCtx = fakeContext(lead.entries) as any;
+        leadCtx.cwd = checkoutPath;
         leadCtx.sessionManager = {
           ...leadCtx.sessionManager,
           getSessionId: () => leadId,
@@ -2769,6 +2834,83 @@ for (const reachable of [true, false]) {
                 projectDeliveries(result.details.id)[0]?.content.includes(plan),
               ),
           );
+          const originalCwd = leadCtx.cwd;
+          leadCtx.cwd = join(tmpdir(), `${leadId}-other-checkout`);
+          const denied = await lead.tools
+            .find((tool) => tool.name === "message_supervisor")!
+            .execute(
+              "message",
+              { message: "WRONG_CHECKOUT_MUST_NOT_BE_AUTHORIZED" },
+              undefined,
+              undefined,
+              leadCtx,
+            );
+          assert.equal(denied.isError, true);
+          assert.match(denied.content[0].text, /assigned checkout|provenance/i);
+          assert.equal(
+            listProjectMessages(runtime, realpathSync(tmpdir()), branch).some(
+              (message) =>
+                message.text.includes("WRONG_CHECKOUT_MUST_NOT_BE_AUTHORIZED"),
+            ),
+            false,
+          );
+          leadCtx.cwd = originalCwd;
+          const savedSession = readFileSync(leadSessionFile, "utf8");
+          writeFileSync(
+            leadSessionFile,
+            savedSession.replace(leadId, randomUUID()),
+          );
+          nativeSessions.set(leadId, {
+            id: randomUUID(),
+            path: leadSessionFile,
+            cwd: checkoutPath,
+            entries: [],
+          });
+          const rejectUnmatchedSession = await lead.tools
+            .find((tool) => tool.name === "message_supervisor")!
+            .execute(
+              "message",
+              { message: "WRONG_SESSION_MUST_NOT_BE_AUTHORIZED" },
+              undefined,
+              undefined,
+              leadCtx,
+            );
+          assert.equal(rejectUnmatchedSession.isError, true);
+          assert.equal(
+            listProjectMessages(runtime, realpathSync(tmpdir()), branch).some(
+              (message) =>
+                message.text.includes("WRONG_SESSION_MUST_NOT_BE_AUTHORIZED"),
+            ),
+            false,
+          );
+          writeFileSync(leadSessionFile, savedSession);
+          nativeSessions.set(leadId, {
+            id: leadId,
+            path: leadSessionFile,
+            cwd: checkoutPath,
+            entries: [],
+          });
+          reportedGitCommonDir = checkoutPath;
+          const rejectUnmatchedRepository = await lead.tools
+            .find((tool) => tool.name === "message_supervisor")!
+            .execute(
+              "message",
+              { message: "WRONG_REPOSITORY_MUST_NOT_BE_AUTHORIZED" },
+              undefined,
+              undefined,
+              leadCtx,
+            );
+          assert.equal(rejectUnmatchedRepository.isError, true);
+          assert.equal(
+            listProjectMessages(runtime, realpathSync(tmpdir()), branch).some(
+              (message) =>
+                message.text.includes(
+                  "WRONG_REPOSITORY_MUST_NOT_BE_AUTHORIZED",
+                ),
+            ),
+            false,
+          );
+          reportedGitCommonDir = realpathSync(tmpdir());
         } finally {
           await lead.events.get("session_shutdown")?.[0]();
           process.env.HERDR_PANE_ID = "root-pane";
@@ -2848,6 +2990,11 @@ for (const scenario of [
     const sessionId = randomUUID();
     const managerId = randomUUID();
     const sessionPath = join(tmpdir(), `${sessionId}.jsonl`);
+    const checkoutPath = join(tmpdir(), `${sessionId}-checkout`);
+    realFs.mkdirSync(checkoutPath, { recursive: true });
+    realFs.mkdirSync(join(tmpdir(), `${sessionId}-sibling`), {
+      recursive: true,
+    });
     if (scenario.mismatchedPath) writeFileSync(sessionPath, "");
     if (scenario.prospectivePath)
       assert.equal(realFs.existsSync(sessionPath), false);
@@ -2874,6 +3021,7 @@ for (const scenario of [
       id: sessionId,
       repoKey: "repo-key",
       branch: "smoke/delivery-placement",
+      checkoutPath,
       text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
       resultBindings: [expectedBinding],
     };
@@ -2974,11 +3122,15 @@ for (const scenario of [
             },
             worktrees: [
               {
-                branch: assignment.branch,
+                branch: "smoke/delivery-after-switch",
+                path: checkoutPath,
+                is_linked_worktree: true,
                 open_workspace_id: "branch-workspace",
               },
               {
                 branch: "smoke/sibling",
+                path: join(tmpdir(), `${sessionId}-sibling`),
+                is_linked_worktree: true,
                 open_workspace_id: "sibling-workspace",
               },
             ],
@@ -3002,6 +3154,7 @@ for (const scenario of [
     let throwNextSessionId = false;
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(entries) as any;
+    ctx.cwd = checkoutPath;
     if (scenario.diagnosticThrows) {
       ctx.ui.notify = () => {
         throw new Error("injected diagnostic notification failure");
@@ -3743,7 +3896,7 @@ async function runManagerStartupScenario(
           ...(hasManagedCheckout
             ? (realFs.mkdirSync(existingGitWorktree, { recursive: true }),
               [
-                `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${gitBranchOutput}\0\0`,
+                `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${mode === "reconcile-changed-branch" ? "feat/switched" : gitBranchOutput}\0\0`,
               ])
             : []),
           ...([
@@ -3842,8 +3995,16 @@ async function runManagerStartupScenario(
                 ? [{ branch: "smoke/unassigned" }]
                 : listProjectAssignments(supervisionRuntime(), repoKey)
               ).map((assignment) => ({
-                branch: assignment.branch,
-                path: childPath,
+                branch:
+                  (mode === "active-live" || mode === "close-resume") &&
+                  assignment.branch === "smoke/recover"
+                    ? "smoke/after-switch"
+                    : assignment.branch,
+                path:
+                  mode === "active-live" &&
+                  assignment.branch !== "smoke/recover"
+                    ? survivingGitWorktree
+                    : childPath,
                 is_linked_worktree: true,
                 ...(mode === "active-closed" && !openCalls
                   ? {}
@@ -4591,7 +4752,9 @@ async function runManagerStartupScenario(
           : {}),
         ...([
           "reconcile-present",
+          "reconcile-changed-branch",
           "reconcile-locked",
+          "reconcile-stale-unprunable",
           "reconcile-prunable-absent",
           "reconcile-aliased-provenance",
         ].includes(mode)
@@ -4824,6 +4987,7 @@ async function runManagerStartupScenario(
     ].includes(mode);
     const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
+      realFs.mkdirSync(childPath, { recursive: true });
       childSession = staleId;
       created = ![
         "active-missing",
@@ -4838,6 +5002,20 @@ async function runManagerStartupScenario(
         id: staleId,
         repoKey: repoKey,
         branch: "smoke/recover",
+        ...(mode === "active-live" ||
+        mode === "close-resume" ||
+        mode.startsWith("active-live-inspect-") ||
+        mode === "active-live-verification-failure" ||
+        mode === "active-live-wrong-worktree" ||
+        mode === "active-live-mismatch" ||
+        mode === "active-loss" ||
+        mode === "active-closed" ||
+        mode === "close-failure" ||
+        mode === "close-retirement-race" ||
+        mode === "close-tree" ||
+        mode === "close-tree-failure"
+          ? { checkoutPath: childPath }
+          : {}),
         text: "  recover\n exact Lead  ",
         ...(mode === "active-missing"
           ? { piSessionFile: `/tmp/${staleId}.jsonl` }
@@ -5373,6 +5551,36 @@ async function runManagerStartupScenario(
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
         assert.equal(running.details.session, staleId);
+        const listed = await pi.tools
+          .find((tool) => tool.name === "list_staff")!
+          .execute("list", {}, undefined, undefined, ctx);
+        assert.deepEqual(
+          listed.details.work
+            .filter((work: any) => work.branch === "smoke/recover")
+            .map((work: any) => work.status),
+          ["active"],
+          "the original assignment remains active on its switched checkout",
+        );
+        await pi.tools
+          .find((tool) => tool.name === "message_staff")!
+          .execute(
+            "message",
+            { branch: "smoke/recover", message: "AFTER_BRANCH_SWITCH" },
+            undefined,
+            undefined,
+            ctx,
+          );
+        assert.ok(
+          listChiefMessagePaths(supervisionRuntime(), staleId)
+            .map((path) => readChiefMessage(path))
+            .some(
+              (message) =>
+                message.kind === "manager_message" &&
+                message.toSessionId === staleId &&
+                message.text === "AFTER_BRANCH_SWITCH",
+            ),
+          "a genuine Manager staff action targets the exact Lead by original handle",
+        );
         assert.equal(running.details.presentation_task, "recover exact Lead");
         assert.doesNotMatch(
           (running.content[0] as { text: string }).text,
@@ -7036,6 +7244,10 @@ async function runManagerStartupScenario(
       );
       assert.equal(createCalls, createsBeforeMissingResume);
       assert.equal(startCalls, startsBeforeMissingResume);
+      const assignmentsBeforeCheckoutClaim = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      );
       await assert.rejects(
         staff.execute(
           "delegate",
@@ -7047,9 +7259,14 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /already has live Lead session/,
+        /already has live Lead session|Checkout is already claimed by managed assignment/,
       );
       assert.equal(createCalls, 2);
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), repoKey),
+        assignmentsBeforeCheckoutClaim,
+        "a different branch cannot publish a second assignment for the claimed checkout",
+      );
       assert.equal(
         listProjectAssignments(supervisionRuntime(), repoKey).filter(
           (item) => item.id === childSession,
@@ -7318,6 +7535,7 @@ test("delegate_work reconciles an absent failed-start assignment before branch r
 for (const mode of [
   "reconcile-absent",
   "reconcile-present",
+  "reconcile-changed-branch",
   "reconcile-locked",
   "reconcile-prunable-absent",
   "reconcile-stale-unprunable",
@@ -9753,18 +9971,21 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
   const runId = randomUUID();
   const label = `isolated-${id.slice(0, 8)}`;
   const path = join(testTmpRoot, `continuation-isolated-${id}.jsonl`);
+  const checkoutPath = join(testTmpRoot, `continuation-lead-${randomUUID()}`);
   const socketPath = join(tmpdir(), `continuation-isolated-${id}.sock`);
   const unrelatedMailbox = agentMailboxPath(
     WORKSPACE,
     `malformed-${id.slice(0, 8)}`,
   );
   process.env.HERDR_SOCKET_PATH = socketPath;
+  realFs.mkdirSync(checkoutPath, { recursive: true });
   const projectRuntime = supervisionRuntime(socketPath);
   writeProjectAssignment(projectRuntime, {
     version: 2,
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch: "continuation-isolation",
+    checkoutPath,
     text: "Current project",
   });
   const acceptedEvidence = {
@@ -9834,7 +10055,14 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [
+                {
+                  branch: "continuation-isolation",
+                  path: checkoutPath,
+                  is_linked_worktree: true,
+                  open_workspace_id: WORKSPACE,
+                },
+              ],
             },
           }),
           stderr: "",
@@ -9844,9 +10072,24 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext([terminal]) as any;
+  const context = fakeContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId: LEAD_SESSION_ID,
+        kind: "managed",
+        repoKey: "repo-key",
+        branch: "continuation-isolation",
+      },
+    },
+    terminal,
+  ]) as any;
+  context.cwd = checkoutPath;
+  seedLeadRole(context);
   try {
-    await pi.events.get("session_start")![0](undefined, fakeContext());
+    await pi.events.get("session_start")![0](undefined, context);
     assert.equal(
       realFs.existsSync(startup.mailbox),
       false,
@@ -9879,6 +10122,7 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     realFs.rmSync(unrelatedMailbox, { recursive: true, force: true });
     nativeSessions.delete(id);
     realFs.rmSync(path, { force: true });
+    realFs.rmSync(checkoutPath, { recursive: true, force: true });
     realFs.rmSync(socketPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
   }

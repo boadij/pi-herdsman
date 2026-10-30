@@ -64,6 +64,7 @@ import {
   localRepositoryScope,
   sameDirectory,
   sameObservedSessionPath,
+  resolveAssignmentCheckout,
   verifiedHerdrAgent,
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
@@ -2971,20 +2972,50 @@ export function registerLeadRuntime(
           throw new Error(
             "Project assignment conflicts with permanent session identity",
           );
+        let expectedCheckout = assignment.checkoutPath;
+        if (!expectedCheckout) {
+          if (!assignment.piSessionFile)
+            throw new Error("Managed Lead checkout provenance is unavailable");
+          const saved = roleHost.SessionManager.open(assignment.piSessionFile);
+          if (saved.getSessionId() !== identity.sessionId)
+            throw new Error(
+              "Managed Lead session provenance does not match assignment",
+            );
+          expectedCheckout = saved.getCwd();
+          if (!expectedCheckout || !isAbsolute(expectedCheckout))
+            throw new Error("Managed Lead checkout provenance is unavailable");
+          const common = await pi.exec(
+            "git",
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            { cwd: expectedCheckout, signal: ctx.signal, timeout: 10_000 },
+          );
+          if (
+            common.code !== 0 ||
+            common.killed ||
+            common.stderr?.trim() ||
+            !sameDirectory(String(common.stdout ?? "").trim(), identity.repoKey)
+          )
+            throw new Error(
+              "Managed Lead session checkout repository does not match assignment",
+            );
+        }
+        if (!sameDirectory(expectedCheckout, ctx.cwd))
+          throw new Error("Managed Lead is outside its assigned checkout");
         publish("assigned");
         roleTransitions.reconcileRoleTools();
         return assignment;
       }
-      const pendingRetirement =
+      const pendingRecord =
         !replacement &&
         listPendingRetirements(
           roleHost.supervisionRuntime(),
           identity.repoKey,
-        ).some(
+        ).find(
           (retired) =>
             retired.id === identity.sessionId &&
             retired.branch === identity.branch,
         );
+      const pendingRetirement = !!pendingRecord;
       let retirementVerified = false;
       if (pendingRetirement) {
         // The retirement commit is durable; verify checkout absence again before presenting it.
@@ -3003,14 +3034,29 @@ export function registerLeadRuntime(
             ctx.sessionManager.getSessionId() !== identity.sessionId
           )
             throw new Error("Session changed while verifying retirement");
-          if (
+          let checkoutPath = pendingRecord?.checkoutPath;
+          if (!checkoutPath && pendingRecord?.piSessionFile) {
+            try {
+              const saved = roleHost.SessionManager.open(
+                pendingRecord.piSessionFile,
+              );
+              if (saved.getSessionId() === identity.sessionId)
+                checkoutPath = saved.getCwd();
+            } catch {
+              // Without exact session provenance retirement remains uncertain.
+            }
+          }
+          const checkoutAbsent =
+            typeof checkoutPath === "string" &&
             topology?.source?.repo_key === identity.repoKey &&
-            typeof topology.source.source_checkout_path === "string" &&
             Array.isArray(topology.worktrees) &&
             !topology.worktrees.some(
-              (worktree: any) => worktree.branch === identity.branch,
-            )
-          ) {
+              (worktree: any) =>
+                worktree.is_linked_worktree === true &&
+                typeof worktree.path === "string" &&
+                sameDirectory(worktree.path, checkoutPath!),
+            );
+          if (checkoutAbsent && gitPathStatus(checkoutPath!) === "absent") {
             const inventory = await pi.exec(
               "git",
               ["worktree", "list", "--porcelain", "-z"],
@@ -3033,7 +3079,9 @@ export function registerLeadRuntime(
               throw new Error("Session changed while verifying retirement");
             if (
               worktrees &&
-              !worktrees.some((worktree) => worktree.branch === identity.branch)
+              !worktrees.some((worktree) =>
+                sameDirectory(worktree.path, checkoutPath!),
+              )
             ) {
               publish("retired");
               retirementVerified = true;
@@ -3669,6 +3717,44 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         host.supervisionRuntime(),
         group.repoKey,
       );
+      const placements = new Map<
+        string,
+        ReturnType<typeof resolveAssignmentCheckout>
+      >();
+      for (const assignment of assignments) {
+        let sessionCwd: string | undefined;
+        if (assignment.piSessionFile) {
+          try {
+            const saved = host.SessionManager.open(assignment.piSessionFile);
+            if (saved.getSessionId() === assignment.id)
+              sessionCwd = saved.getCwd();
+          } catch {
+            // Missing exact-session provenance remains unknown; branch is not identity.
+          }
+        }
+        const placement = resolveAssignmentCheckout(
+          assignment,
+          topology.worktrees,
+          sessionCwd,
+        );
+        placements.set(assignment.id, placement);
+      }
+      for (const assignment of assignments) {
+        const placement = placements.get(assignment.id);
+        if (placement?.status !== "matched") continue;
+        if (
+          assignments.some(
+            (other) =>
+              other.id !== assignment.id &&
+              placements.get(other.id)?.status === "matched" &&
+              sameDirectory(placement.path, placements.get(other.id)!.path),
+          )
+        )
+          placements.set(assignment.id, {
+            status: "conflict",
+            reason: "multiple assignments claim the same checkout",
+          });
+      }
       const openWorkspaces = topology.worktrees.flatMap((worktree: any) =>
         typeof worktree?.open_workspace_id === "string" &&
         worktree.open_workspace_id
@@ -3689,6 +3775,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         work: host.projectWorkSnapshot({
           assignments,
           worktrees: topology.worktrees,
+          placements,
           leads: [
             ...leads,
             ...incompatible
@@ -6243,11 +6330,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         !Array.isArray(topology?.worktrees)
       )
         return projectAssignmentAuthorized(false, "worktree_topology_mismatch");
-      const worktrees = topology.worktrees.filter(
-        (worktree: any) => worktree.branch === assignment.branch,
-      );
-      if (worktrees.length !== 1)
-        return projectAssignmentAuthorized(false, "branch_placement_mismatch");
       managerDiagnostic("project_assignment_live_lead_start");
       const live = await liveLead(
         ctx,
@@ -6257,9 +6339,19 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       managerDiagnostic("project_assignment_live_lead_complete");
       if (live.length !== 1)
         return projectAssignmentAuthorized(false, "live_lead_mismatch");
+      const placement = resolveAssignmentCheckout(
+        assignment,
+        topology.worktrees,
+        typeof live[0].cwd === "string" ? live[0].cwd : undefined,
+      );
+      if (placement.status !== "matched")
+        return projectAssignmentAuthorized(
+          false,
+          "checkout_placement_mismatch",
+        );
       if (
         !scope.workspaceIds.includes(live[0].workspace_id) ||
-        worktrees[0].open_workspace_id !== live[0].workspace_id
+        placement.worktree.open_workspace_id !== live[0].workspace_id
       )
         return projectAssignmentAuthorized(
           false,
@@ -8183,19 +8275,6 @@ export function createLeadRoleTransitions(
         checkoutMaySurvive(observed, initialInventory, observedProvenance.path)
       )
         continue;
-      const initialMatches = initialInventory.filter(
-        (worktree) => worktree.branch === observed.branch,
-      );
-      if (
-        initialMatches.length > 1 ||
-        initialMatches.some(
-          (worktree) =>
-            worktree.locked ||
-            !worktree.prunable ||
-            gitPathStatus(worktree.path) !== "absent",
-        )
-      )
-        continue;
       const retireIfAbsent = async () => {
         const latestManager = await currentManager(ctx);
         if (
@@ -8233,19 +8312,6 @@ export function createLeadRoleTransitions(
           if (
             currentProvenance.conflicting ||
             checkoutMaySurvive(current, inventory, currentProvenance.path)
-          )
-            return;
-          const matches = inventory.filter(
-            (worktree) => worktree.branch === observed.branch,
-          );
-          if (
-            matches.length > 1 ||
-            matches.some(
-              (worktree) =>
-                worktree.locked ||
-                !worktree.prunable ||
-                gitPathStatus(worktree.path) !== "absent",
-            )
           )
             return;
           removeProjectAssignmentState(current, ctx);

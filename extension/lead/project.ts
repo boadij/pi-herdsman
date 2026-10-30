@@ -25,6 +25,7 @@ import {
   localRepositoryScope,
   sameDirectory,
   sameObservedSessionPath,
+  resolveAssignmentCheckout,
 } from "../herdr.ts";
 import { claimSessionActivationLock } from "../lock.ts";
 import {
@@ -569,12 +570,28 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       current.repoKey !== manager.repoKey
     )
       throw new Error("Project assignment changed during removal");
-    const matches = topology.worktrees.filter(
-      (worktree: any) => worktree?.branch === branch,
+    let sessionCwd: string | undefined;
+    if (assignment.piSessionFile) {
+      try {
+        const session = host.SessionManager.open(assignment.piSessionFile);
+        if (session.getSessionId() !== assignment.id) throw new Error();
+        sessionCwd = session.getCwd();
+      } catch {
+        throw new Error(
+          "Persisted project session provenance is unavailable; worktree preserved",
+        );
+      }
+    }
+    const placement = resolveAssignmentCheckout(
+      assignment,
+      topology.worktrees,
+      sessionCwd,
     );
-    if (matches.length !== 1)
-      throw new Error("Branch does not identify exactly one Herdr worktree");
-    const worktree = matches[0];
+    if (placement.status !== "matched")
+      throw new Error(
+        `Assigned checkout is not verified (${placement.reason}); worktree preserved`,
+      );
+    const worktree = placement.worktree;
     if (
       typeof worktree.path !== "string" ||
       !worktree.path ||
@@ -643,10 +660,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           manager.repoKey,
         ) ||
         !gitWorktrees ||
-        gitWorktrees.filter(
-          (entry) =>
-            sameDirectory(entry.path, checkoutPath) && entry.branch === branch,
-        ).length !== 1
+        gitWorktrees.filter((entry) => sameDirectory(entry.path, checkoutPath))
+          .length !== 1
       )
         throw new Error();
     } catch {
@@ -701,6 +716,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       assignment,
       worktree,
       checkoutPath,
+      checkedOutBranch:
+        typeof worktree.branch === "string" ? worktree.branch : undefined,
       sourceCheckoutPath: topology.source.source_checkout_path,
       liveLead: leads[0],
     };
@@ -747,6 +764,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     repoKey: string;
     assignmentId: string;
     checkoutPath: string;
+    checkedOutBranch?: string;
     sessionId: string;
   };
   const parseRemovalEntry = (
@@ -796,6 +814,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "repoKey",
             "assignmentId",
             "checkoutPath",
+            "checkedOutBranch",
           ].includes(key),
       ) ||
       !valid("branch", 256) ||
@@ -812,6 +831,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       repoKey: value.repoKey as string,
       assignmentId: value.assignmentId as string,
       checkoutPath: value.checkoutPath as string,
+      ...(typeof value.checkedOutBranch === "string"
+        ? { checkedOutBranch: value.checkedOutBranch }
+        : {}),
     };
   };
   const pendingRemovals = (ctx: ExtensionContext) => {
@@ -880,6 +902,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (options.expected.repoKey !== candidate.manager.repoKey ||
         options.expected.assignmentId !== candidate.assignment.id ||
         options.expected.checkoutPath !== candidate.checkoutPath ||
+        !options.expected.checkedOutBranch ||
+        options.expected.checkedOutBranch !== candidate.checkedOutBranch ||
         options.expected.sessionId !== ctx.sessionManager.getSessionId())
     )
       throw new Error("Pending removal target changed; worktree preserved");
@@ -957,6 +981,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "Remove worktree",
             "",
             `Branch: ${branch}`,
+            ...(candidate.checkedOutBranch &&
+            candidate.checkedOutBranch !== branch
+              ? [`Checked-out branch: ${candidate.checkedOutBranch}`]
+              : []),
             `Checkout: ${candidate.checkoutPath}`,
             "",
             "Removes this checkout and Herdr workspace.",
@@ -2046,6 +2074,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ]);
     if (sourceHead !== expectedHead)
       throw new Error("Accepted source SHA is stale; worktree preserved");
+    const sourceBranch = await output(candidate.checkoutPath, [
+      "symbolic-ref",
+      "--short",
+      "HEAD",
+    ]).catch(() => "");
+    if (!sourceBranch || sourceBranch !== candidate.checkedOutBranch)
+      throw new Error(
+        "Assigned checkout must be on its verified named branch; worktree preserved",
+      );
+    if (
+      (await output(candidate.checkoutPath, [
+        "show-ref",
+        "--verify",
+        "--hash",
+        `refs/heads/${sourceBranch}`,
+      ])) !== expectedHead
+    )
+      throw new Error(
+        "Accepted source branch ref is stale; worktree preserved",
+      );
     const targetPath = candidate.sourceCheckoutPath;
     const targetBranch = await output(targetPath, [
       "symbolic-ref",
@@ -2178,6 +2226,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               if (
                 current.assignment.id !== candidate.assignment.id ||
                 current.checkoutPath !== candidate.checkoutPath ||
+                current.checkedOutBranch !== sourceBranch ||
                 current.sourceCheckoutPath !== targetPath
               )
                 throw new Error(
@@ -2246,6 +2295,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 "rev-parse",
                 "HEAD",
               ]);
+              const currentSourceBranch = await output(current.checkoutPath, [
+                "symbolic-ref",
+                "--short",
+                "HEAD",
+              ]).catch(() => "");
               const currentTargetBranch = await output(targetPath, [
                 "symbolic-ref",
                 "--short",
@@ -2255,9 +2309,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 "rev-parse",
                 "HEAD",
               ]);
-              if (currentSource !== expectedHead)
+              if (
+                currentSource !== expectedHead ||
+                currentSourceBranch !== sourceBranch ||
+                (await output(current.checkoutPath, [
+                  "show-ref",
+                  "--verify",
+                  "--hash",
+                  `refs/heads/${sourceBranch}`,
+                ])) !== expectedHead
+              )
                 throw new Error(
-                  "Accepted source SHA changed before integration",
+                  "Accepted source branch or SHA changed before integration",
                 );
               if (currentTargetBranch !== targetBranch)
                 throw new Error(
@@ -2449,6 +2512,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branch,
           target_branch: integration.targetBranch,
           source_head: expectedHead,
+          source_branch: sourceBranch,
           target_head: integration.targetHead,
           status: "cleanup_pending",
           integrated: true,
@@ -2484,6 +2548,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branch,
           target_branch: integration.targetBranch,
           source_head: expectedHead,
+          source_branch: sourceBranch,
           target_head: integration.targetHead,
           status: complete ? "complete" : "cleanup_pending",
           integrated: true,
@@ -2506,6 +2571,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branch,
           target_branch: integration.targetBranch,
           source_head: expectedHead,
+          source_branch: sourceBranch,
           target_head: integration.targetHead,
           status: "cleanup_pending",
           integrated: true,
@@ -2599,13 +2665,36 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : undefined;
     const id =
       operation.action === "resume" ? currentAssignment!.id : operation.id;
-    const branchWorktrees = topology.worktrees.filter(
-      (worktree: any) => worktree?.branch === branch,
-    );
-    if (operation.action === "resume" && branchWorktrees.length === 0)
+    let savedSessionCwd: string | undefined;
+    if (operation.action === "resume" && currentAssignment!.piSessionFile) {
+      try {
+        const saved = host.SessionManager.open(
+          currentAssignment!.piSessionFile!,
+        );
+        if (saved.getSessionId() === currentAssignment!.id)
+          savedSessionCwd = saved.getCwd();
+      } catch {
+        // Keep unavailable exact-session provenance fail-closed.
+      }
+    }
+    const placement =
+      operation.action === "resume"
+        ? resolveAssignmentCheckout(
+            currentAssignment!,
+            topology.worktrees,
+            savedSessionCwd,
+          )
+        : undefined;
+    if (placement && placement.status !== "matched")
       throw new Error(
-        "Worktree availability could not be verified; the existing assignment was preserved. Retry when repository access is available.",
+        `Assigned checkout could not be verified: ${placement.reason}; existing work was preserved.`,
       );
+    const branchWorktrees =
+      operation.action === "resume"
+        ? [placement!.worktree]
+        : topology.worktrees.filter(
+            (worktree: any) => worktree?.branch === branch,
+          );
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
     const live =
@@ -2796,9 +2885,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let paneId: string | undefined;
       let tabId: string | undefined;
       let cwd: string | undefined;
-      const matchingWorktrees = topology.worktrees.filter(
-        (worktree: any) => worktree?.branch === assignment.branch,
-      );
+      const assignedPlacement =
+        operation.action === "resume"
+          ? resolveAssignmentCheckout(
+              assignment,
+              topology.worktrees,
+              savedSessionCwd,
+            )
+          : undefined;
+      const matchingWorktrees =
+        operation.action === "resume"
+          ? assignedPlacement?.status === "matched"
+            ? [assignedPlacement.worktree]
+            : []
+          : topology.worktrees.filter(
+              (worktree: any) => worktree?.branch === assignment.branch,
+            );
       if (matchingWorktrees.length > 1)
         throw new Error(
           `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
@@ -2819,8 +2921,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               "open",
               "--cwd",
               localScope.checkoutPath,
-              "--branch",
-              assignment.branch,
+              ...(assignedPlacement?.status === "matched"
+                ? ["--path", assignedPlacement.path]
+                : ["--branch", assignment.branch]),
               "--no-focus",
             ],
             { signal },
@@ -2830,11 +2933,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           tabId = opened?.tab?.tab_id ?? opened?.root_pane?.tab_id;
           cwd = opened?.worktree?.path;
           if (
-            opened?.worktree?.branch &&
-            opened.worktree.branch !== assignment.branch
+            assignedPlacement?.status === "matched" &&
+            (!opened?.worktree?.path ||
+              !sameDirectory(opened.worktree.path, assignedPlacement.path))
           )
             throw new Error(
-              "Herdr opened a worktree on a different branch than the persisted assignment",
+              "Herdr opened a different checkout than the persisted assignment",
             );
         }
       } else {
@@ -2928,6 +3032,31 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             )
               throw new Error(
                 `Work already exists on ${assignment.branch}; resume it with resume_work.`,
+              );
+            const competingClaim = host
+              .listProjectAssignments(runtime, manager.repoKey)
+              .find((existing) => {
+                if (existing.id === assignment.id) return false;
+                let claimedPath = existing.checkoutPath;
+                if (!claimedPath && existing.piSessionFile) {
+                  try {
+                    const saved = host.SessionManager.open(
+                      existing.piSessionFile,
+                    );
+                    if (saved.getSessionId() === existing.id)
+                      claimedPath = saved.getCwd();
+                  } catch {
+                    // Unverifiable legacy records do not establish a checkout claim.
+                  }
+                }
+                return (
+                  !!claimedPath &&
+                  sameDirectory(claimedPath, assignment.checkoutPath!)
+                );
+              });
+            if (competingClaim)
+              throw new Error(
+                `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
               );
             writeProjectAssignment(runtime, assignment);
           },
@@ -3360,6 +3489,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         repoKey: target.manager.repoKey,
         assignmentId: target.assignment.id,
         checkoutPath: target.checkoutPath,
+        checkedOutBranch: target.checkedOutBranch,
         sessionId: ctx.sessionManager.getSessionId(),
       };
       const verifiedAgain = await inspectRemovalTarget(
@@ -3376,6 +3506,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ) ||
         verifiedAgain.assignment.id !== pending.assignmentId ||
         verifiedAgain.checkoutPath !== pending.checkoutPath ||
+        verifiedAgain.checkedOutBranch !== pending.checkedOutBranch ||
         verifiedAgain.manager.repoKey !== pending.repoKey
       )
         throw new Error("Manager authority changed while preparing approval");
@@ -3383,7 +3514,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const request =
         existing?.repoKey === pending.repoKey &&
         existing.assignmentId === pending.assignmentId &&
-        existing.checkoutPath === pending.checkoutPath
+        existing.checkoutPath === pending.checkoutPath &&
+        existing.checkedOutBranch === pending.checkedOutBranch
           ? existing
           : pending;
       if (request === pending)

@@ -3625,6 +3625,16 @@ export function projectWorkSnapshot(options: {
     branch: string;
     open_workspace_id?: string | null;
   }>[];
+  placements?: ReadonlyMap<
+    string,
+    Readonly<{
+      status: "matched" | "unknown" | "conflict";
+      worktree?: Readonly<{
+        branch?: string;
+        open_workspace_id?: string | null;
+      }>;
+    }>
+  >;
   leads: readonly Pick<
     SupervisedLead,
     "lead" | "workspaceId" | "runtimeState"
@@ -3632,9 +3642,12 @@ export function projectWorkSnapshot(options: {
   unverified?: readonly UnverifiedAssignedLead[];
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
-    const worktrees = options.worktrees.filter(
-      (item) => item.branch === assignment.branch,
-    );
+    const placement = options.placements?.get(assignment.id);
+    const worktrees = placement
+      ? placement.status === "matched" && placement.worktree
+        ? [placement.worktree]
+        : []
+      : options.worktrees.filter((item) => item.branch === assignment.branch);
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
     const uncertain =
       options.unverified?.filter((lead) => lead.lead === assignment.id) ?? [];
@@ -3649,6 +3662,12 @@ export function projectWorkSnapshot(options: {
     ) {
       status = "conflict";
       issue = "project runtime identity is ambiguous";
+    } else if (placement && placement.status !== "matched") {
+      status = placement.status;
+      issue =
+        placement.status === "conflict"
+          ? "assigned checkout placement conflicts"
+          : "assigned checkout placement is unavailable";
     } else if (uncertain.length === 1) {
       status = uncertain[0]!.status;
       issue = uncertain[0]!.issue;

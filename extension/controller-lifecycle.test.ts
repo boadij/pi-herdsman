@@ -356,6 +356,15 @@ function seedSessionKind(
   seedLeadRole(context, kind === "ordinary");
 }
 
+function assignedWorktree(branch: string) {
+  return {
+    path: "/tmp",
+    branch,
+    is_linked_worktree: true,
+    open_workspace_id: WORKSPACE,
+  };
+}
+
 test("parent delegates two same-definition children with exact ownership", async () => {
   setAgentEnvironment("multiplicity-parent", ["child"]);
   const previousForwardingSession = process.env.PI_SUBAGENT_PARENT_SESSION;
@@ -3135,6 +3144,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
   });
   const startedAt = 1_700_000_000_000;
@@ -3267,6 +3277,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
   });
   const startedAt = Date.now();
@@ -3334,7 +3345,14 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
                     repo_name: "project",
                     source_workspace_id: WORKSPACE,
                   },
-                  worktrees: [],
+                  worktrees: [
+                    {
+                      path: "/tmp",
+                      branch,
+                      is_linked_worktree: true,
+                      open_workspace_id: WORKSPACE,
+                    },
+                  ],
                 },
               }),
               stderr: "",
@@ -5534,6 +5552,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
   });
 
@@ -5561,7 +5580,14 @@ test("assigned project herd settlement publishes one nonterminal current-run han
               repo_name: "project",
               source_workspace_id: WORKSPACE,
             },
-            worktrees: [],
+            worktrees: [
+              {
+                path: "/tmp",
+                branch,
+                is_linked_worktree: true,
+                open_workspace_id: WORKSPACE,
+              },
+            ],
           },
         }),
         stderr: "",
@@ -5750,6 +5776,7 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "initial brief: preserve backward compatibility",
     requiredEvidence: [snapshot],
   };
@@ -5785,7 +5812,14 @@ test("assigned Lead cannot retain project evidence through delegation", async (t
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [
+                {
+                  path: "/tmp",
+                  branch,
+                  is_linked_worktree: true,
+                  open_workspace_id: WORKSPACE,
+                },
+              ],
             },
           }),
           stderr: "",
@@ -6022,6 +6056,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     id: assignedSessionId,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: brief,
     requiredEvidence: [
       legacySnapshot,
@@ -6057,7 +6092,14 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
         repo_name: "project",
         source_workspace_id: WORKSPACE,
       },
-      worktrees: [{ open_workspace_id: WORKSPACE }],
+      worktrees: [
+        {
+          path: "/tmp",
+          branch,
+          is_linked_worktree: true,
+          open_workspace_id: WORKSPACE,
+        },
+      ],
     },
   };
   const startedAt = Date.now();
@@ -6364,6 +6406,7 @@ test("managed project delegation references supported evidence larger than the i
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
     currentEvidenceIds: [snapshot.id],
@@ -6403,7 +6446,7 @@ test("managed project delegation references supported evidence larger than the i
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -6568,6 +6611,7 @@ test("managed project delegation keeps small changed content and deduplicates ma
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -6602,7 +6646,7 @@ test("managed project delegation keeps small changed content and deduplicates ma
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -6704,6 +6748,7 @@ test("managed project delegation keeps changed original-path content alongside r
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -6738,7 +6783,7 @@ test("managed project delegation keeps changed original-path content alongside r
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -6836,6 +6881,7 @@ test("managed project delegation preserves inherited semantic result identity ov
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [inherited],
     currentEvidenceIds: [inherited.id],
@@ -6871,7 +6917,7 @@ test("managed project delegation preserves inherited semantic result identity ov
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -6956,6 +7002,7 @@ test("managed Lead prepares upgraded evidence while another process holds global
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -6996,7 +7043,7 @@ test("managed Lead prepares upgraded evidence while another process holds global
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [{ open_workspace_id: WORKSPACE }],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -7109,6 +7156,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -7144,7 +7192,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [{ open_workspace_id: WORKSPACE }],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -7268,6 +7316,7 @@ test("legacy evidence migration does not overwrite a changed assignment after co
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [legacySnapshot],
   };
@@ -7353,6 +7402,7 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [legacySnapshot],
   };
@@ -7389,7 +7439,7 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [{ open_workspace_id: WORKSPACE }],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -7424,6 +7474,12 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
       projectAssignmentPath(runtime, assignment.repoKey, branch),
       JSON.stringify(assignment),
     );
+    assert.equal(
+      readProjectAssignment(runtime, assignment.repoKey, branch)
+        ?.requiredEvidence?.[0]?.ref,
+      undefined,
+      "the authority-lock case starts from legacy evidence",
+    );
     authority = await holdProjectAuthorityInChild(
       projectAssignmentAuthorityLockPath(),
     );
@@ -7439,15 +7495,15 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     void migrating.catch(() => {});
     const settledWhileHeld = await Promise.race([
       migrating.then(
-        () => true,
-        () => true,
+        (result) => ({ settled: true, result }),
+        (error) => ({ settled: true, error: String(error) }),
       ),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
     ]);
     assert.equal(
       settledWhileHeld,
       false,
-      "migration must remain pending while authority is held",
+      `migration must remain pending while authority is held; observed ${JSON.stringify(settledWhileHeld)}`,
     );
     assert.equal(starts, 0);
     assert.equal(accepted, 0);
@@ -7501,6 +7557,7 @@ async function exerciseManagedLeadInvalidation(
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
@@ -7580,7 +7637,7 @@ async function exerciseManagedLeadInvalidation(
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -7744,6 +7801,7 @@ test("each direct managed Lead turn returns its response", async () => {
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
   });
   const pi = fakePi({
@@ -7758,7 +7816,7 @@ test("each direct managed Lead turn returns its response", async () => {
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -8003,6 +8061,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Implement the assigned project",
   });
   const label = `handoff-race-${randomUUID().slice(0, 8)}`;
@@ -8043,7 +8102,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",
@@ -10329,6 +10388,7 @@ test("session continuation starts a new agent generation with current prompt con
     id: projectAssignmentId,
     repoKey: "repo-key",
     branch: projectBranch,
+    checkoutPath: "/tmp",
     text: "Current project",
     requiredEvidence: [inheritedEvidence, localEvidence],
   };
@@ -10444,7 +10504,7 @@ test("session continuation starts a new agent generation with current prompt con
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(projectBranch)],
             },
           }),
           stderr: "",
@@ -10809,6 +10869,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
+    checkoutPath: "/tmp",
     text: "Current cleanup project",
     requiredEvidence: [inherited],
     currentEvidenceIds: [inherited.id],
@@ -10884,7 +10945,7 @@ test("scoped assignment result delivery persists terminal ownership and removes 
                 repo_name: "project",
                 source_workspace_id: WORKSPACE,
               },
-              worktrees: [],
+              worktrees: [assignedWorktree(branch)],
             },
           }),
           stderr: "",

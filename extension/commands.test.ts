@@ -926,6 +926,12 @@ test("managed identity survives tree and assignment loss while native new-sessio
 
 test("unverifiable exact assignment initialization never persists ordinary identity", async (t) => {
   setLeadEnvironment();
+  const repoKey = spawnSync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: process.cwd(), encoding: "utf8" },
+  ).stdout.trim();
+  assert.ok(repoKey);
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `unknown-identity-${randomUUID()}.sock`,
@@ -933,9 +939,10 @@ test("unverifiable exact assignment initialization never persists ordinary ident
   const assignment = {
     version: 2 as const,
     id: LEAD_SESSION_ID,
-    repoKey: "peer-test-repo",
+    repoKey,
     branch: "unknown-project",
     text: "project",
+    checkoutPath: process.cwd(),
   };
   writeProjectAssignment(supervisionRuntime(), assignment);
   let herdrAvailable = false;
@@ -979,6 +986,7 @@ test("unverifiable exact assignment initialization never persists ordinary ident
           : { stdout: "", stderr: "Herdr disconnected", code: 1 },
   });
   const context = fakeContext(pi.entries) as any;
+  context.cwd = process.cwd();
   registerExtension!(pi.pi as never);
   t.after(async () => {
     await pi.events.get("session_shutdown")?.[0]();
@@ -6343,6 +6351,7 @@ async function managerRemovalFixture(
     persistedCheckoutPath?: string;
     persistedSessionId?: string;
     missingSessionProvenance?: boolean;
+    legacyAssignment?: boolean;
     primaryWorkspaceInitially?: boolean;
     primaryWorkspaceAfterConfirmation?: boolean;
     replaceManagerAfterConfirmation?: boolean;
@@ -6362,6 +6371,7 @@ async function managerRemovalFixture(
     targetOccupants?: any[];
     targetAdvanceAtWorkLock?: string;
     branchRefHead?: string;
+    sourceBranch?: string;
     absentCheckout?: boolean;
     revokeRemovalPreapprovalAfterPreflight?: boolean;
     replaceManagerBeforeFinalReconcile?: boolean;
@@ -6395,6 +6405,7 @@ async function managerRemovalFixture(
       rmSync(persistedCheckoutPath, { recursive: true, force: true }),
     );
   const branch = "feat/remove-test";
+  const sourceBranch = options.sourceBranch ?? branch;
   const manager = {
     repoKey,
     workspaceId: "manager-workspace",
@@ -6409,6 +6420,13 @@ async function managerRemovalFixture(
     repoKey,
     branch,
     text: "test assignment",
+    ...(!options.legacyAssignment
+      ? {
+          checkoutPath: options.primaryCheckoutAsWorktree
+            ? repoKey
+            : checkoutPath,
+        }
+      : {}),
     ...(!options.missingSessionProvenance
       ? { piSessionFile: "persisted-session.jsonl" }
       : {}),
@@ -6449,7 +6467,7 @@ async function managerRemovalFixture(
         ? [
             `worktree ${checkoutPath}`,
             `HEAD ${"1".repeat(40)}`,
-            `branch refs/heads/${branch}`,
+            `branch refs/heads/${sourceBranch}`,
             "",
           ]
         : []),
@@ -6525,12 +6543,14 @@ async function managerRemovalFixture(
           return { code: 0, stdout: inventoryOutput(), stderr: "" };
         if (args[0] === "worktree" && args[1] === "list")
           return { code: 0, stdout: inventoryOutput(), stderr: "" };
-        if (args[0] === "show-ref" && args[1] === "--verify")
+        if (args[0] === "show-ref" && args[1] === "--verify") {
+          const ref = args.at(-1);
           return {
             code: 0,
-            stdout: `${options.branchRefHead ?? "2".repeat(40)}\n`,
+            stdout: `${options.branchRefHead ?? (ref === `refs/heads/${sourceBranch}` ? "2".repeat(40) : "4".repeat(40))}\n`,
             stderr: "",
           };
+        }
         if (args[0] === "rev-parse" && args[1] === "HEAD") {
           if (options.sourceHead && runOptions.cwd === checkoutPath)
             return { code: 0, stdout: `${options.sourceHead}\n`, stderr: "" };
@@ -6542,6 +6562,8 @@ async function managerRemovalFixture(
           return { code: 0, stdout: `${value}\n`, stderr: "" };
         }
         if (args[0] === "symbolic-ref") {
+          if (runOptions.cwd === checkoutPath)
+            return { code: 0, stdout: `${sourceBranch}\n`, stderr: "" };
           if (options.replaceManagerBeforeFinalReconcile)
             managerReplaced = true;
           if (options.replaceAssignmentBeforeFinalReconcile)
@@ -6608,7 +6630,10 @@ async function managerRemovalFixture(
     SessionManager: {
       open: () => ({
         getSessionId: () => options.persistedSessionId ?? assignment?.id,
-        getCwd: () => persistedCheckoutPath ?? checkoutPath,
+        getCwd: () =>
+          options.primaryCheckoutAsWorktree
+            ? repoKey
+            : (persistedCheckoutPath ?? checkoutPath),
       }),
     },
     liveLead: async () => {
@@ -6650,7 +6675,7 @@ async function managerRemovalFixture(
               ? [
                   {
                     open_workspace_id: topologyWorkspaceId,
-                    branch,
+                    branch: sourceBranch,
                     path: options.primaryCheckoutAsWorktree
                       ? repoKey
                       : options.extendedPaths
@@ -6683,7 +6708,7 @@ async function managerRemovalFixture(
         return {
           workspace: { workspace_id: "new-child-workspace" },
           worktree: {
-            branch,
+            branch: sourceBranch,
             path: options.extendedPaths
               ? toNamespacedPath(checkoutPath)
               : checkoutPath,
@@ -6847,6 +6872,7 @@ test("Manager explicitly releases a legacy assignment without touching an unrela
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedDetachedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     confirmationResponse: `forget ${branch}`,
@@ -6895,6 +6921,7 @@ test("legacy assignment release cancellation and stale Manager leave authority i
   const cancelled = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     confirmationResponse: "cancel",
@@ -6909,6 +6936,7 @@ test("legacy assignment release cancellation and stale Manager leave authority i
   const stale = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     confirmationResponse: "forget feat/remove-test",
@@ -6925,6 +6953,7 @@ test("legacy assignment release refuses known live execution before confirmation
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     runningLead: true,
@@ -6945,6 +6974,7 @@ test("legacy assignment release refuses the exact live Pi session without Lead c
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     targetOccupants: [{ pi_session_id: "assigned-lead" }],
@@ -6965,6 +6995,7 @@ test("legacy assignment release refuses incomplete durable Agent ownership inven
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     agentStateIssues: true,
@@ -6985,6 +7016,7 @@ test("legacy assignment release refuses a nested Agent retained by project assig
   const fixture = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     extraAgentStates: [
@@ -7011,6 +7043,7 @@ test("legacy assignment release preserves authority on unavailable observations 
   const unavailable = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     snapshotErrorAfterStop: true,
@@ -7029,6 +7062,7 @@ test("legacy assignment release preserves authority on unavailable observations 
   const replaced = await managerRemovalFixture(t, {
     absentCheckout: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
     unrelatedCheckout: true,
     preserveAssignmentDuringReconciliation: true,
     changeAssignmentAfterConfirmation: true,
@@ -7099,6 +7133,7 @@ test("Manager merge runtime reports target divergence without checkout mutation"
   );
   assert.equal(result.details.status, "needs_update");
   assert.equal(result.details.integrated, false);
+  assert.equal(result.details.source_branch, undefined);
   assert.deepEqual(fixture.gitMutations, []);
   assert.deepEqual(fixture.removals, []);
 });
@@ -7187,6 +7222,7 @@ test("target divergence discovered under integration lock returns needs_update w
   );
   assert.equal(result.details.status, "needs_update");
   assert.equal(result.details.integrated, false);
+  assert.equal(result.details.source_branch, undefined);
   assert.equal(fixture.stoppedLeadCount(), 0);
   assert.deepEqual(fixture.gitMutations, []);
   assert.deepEqual(fixture.removals, []);
@@ -7242,6 +7278,30 @@ test("absent checkout recovery reconciles an exact accepted source revision with
   assert.equal(fixture.reconciliationProjectWorkLocked(), false);
   assert.deepEqual(fixture.removals, []);
   assert.equal(fixture.assignment(), undefined);
+});
+
+test("absent integrated checkout cleanup pending omits an unverified source branch", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    absentCheckout: true,
+    branchRefHead: acceptedHead,
+    targetHead: acceptedHead,
+    preserveAssignmentDuringReconciliation: true,
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: acceptedHead,
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.status, "cleanup_pending");
+  assert.equal(result.details.integrated, true);
+  assert.equal(result.details.source_branch, undefined);
 });
 
 test("absent checkout recovery refuses reconciliation after Manager identity changes", async (t) => {
@@ -7356,6 +7416,10 @@ test("Manager merge preserves the source if the primary branch changes after int
 
     assert.equal(result.details.status, status);
     assert.equal(result.details.checkout_removed, false);
+    assert.equal(
+      result.details.source_branch,
+      status === "blocked" ? undefined : "feat/remove-test",
+    );
     assert.equal(fixture.removals.length, 0);
     assert.ok(existsSync(fixture.checkoutPath));
     if (status === "blocked") assert.equal(result.details.integrated, false);
@@ -7367,6 +7431,7 @@ test("Manager merge runtime fast-forwards and verifies cleanup against the exact
   const acceptedHead = "2".repeat(40);
   const fixture = await managerRemovalFixture(t, {
     sourceHead: acceptedHead,
+    sourceBranch: "feat/switched-source",
     targetHead: "0".repeat(40),
     integratedTargetCodes: [1, 0, 1, 0, 1, 0, 0],
   });
@@ -7384,6 +7449,7 @@ test("Manager merge runtime fast-forwards and verifies cleanup against the exact
   assert.equal(result.details.status, "complete");
   assert.equal(result.details.integrated, true);
   assert.equal(result.details.target_head, acceptedHead);
+  assert.equal(result.details.source_branch, "feat/switched-source");
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.assignment_retired, true);
   assert.deepEqual(fixture.gitMutations, [
@@ -8049,7 +8115,7 @@ test("Manager removal requires persisted session checkout provenance", async (t)
   });
   await assert.rejects(
     stale.runtime.removeWorktree("feat/remove-test", stale.ctx),
-    /Persisted project session provenance does not match the checkout/,
+    /checkout provenance disagrees/,
   );
   assert.equal(stale.confirmationCount(), 0);
   assert.deepEqual(stale.removals, []);
@@ -8059,7 +8125,7 @@ test("Manager removal requires persisted session checkout provenance", async (t)
   });
   await assert.rejects(
     wrongSession.runtime.removeWorktree("feat/remove-test", wrongSession.ctx),
-    /Persisted project session provenance does not match the checkout/,
+    /Persisted project session provenance is unavailable/,
   );
   assert.equal(wrongSession.confirmationCount(), 0);
   assert.deepEqual(wrongSession.removals, []);
@@ -8797,6 +8863,7 @@ async function managerDelegateAssignmentTest(
     if (lockOrder) registerExtensionForTest(lead.pi as never, leadLockHooks);
     else registerExtension!(lead.pi as never);
     leadCtx = fakeContext(lead.entries) as any;
+    leadCtx.cwd = childCwd;
     leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
@@ -9812,6 +9879,9 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     updatedAt: Date.now(),
   });
   const assignedLeadSession = randomUUID();
+  const assignedCheckoutPath = realFs.mkdtempSync(
+    join(tmpdir(), "manager-supervised-assigned-checkout-"),
+  );
   const assignedWorkspace = `workspace-${randomUUID()}`;
   const assignedLead = {
     agent_session: {
@@ -9823,7 +9893,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: assignedWorkspace,
     pane_id: "assigned-pane",
     tab_id: "assigned-tab",
-    cwd: "/tmp",
+    cwd: assignedCheckoutPath,
   };
   const ordinaryLeadSession = randomUUID();
   const ordinaryWorkspace = `workspace-${randomUUID()}`;
@@ -9903,6 +9973,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     repoKey: "/tmp",
     branch: "assigned-branch",
     text: "assigned work",
+    checkoutPath: assignedCheckoutPath,
   });
   const liveAgents = [managerAgent, assignedLead, ordinaryLead];
   const manyCompatibleLeads = Array.from({ length: 33 }, (_, index) => {
@@ -9962,7 +10033,12 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
           repo_name: "project",
         },
         worktrees: [
-          { branch: "assigned-branch", open_workspace_id: assignedWorkspace },
+          {
+            branch: "assigned-branch",
+            open_workspace_id: assignedWorkspace,
+            path: assignedCheckoutPath,
+            is_linked_worktree: true,
+          },
           { branch: "ordinary-branch", open_workspace_id: ordinaryWorkspace },
         ],
       });
@@ -10511,6 +10587,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       );
     }
   } finally {
+    realFs.rmSync(assignedCheckoutPath, { recursive: true, force: true });
     nativeSessions.delete(ordinarySessionPath);
     realFs.rmSync(ordinarySessionPath, { force: true });
     incompatibleManagerLease.release();
@@ -11068,7 +11145,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
             undefined,
             managerCtx,
           ),
-        /Assigned work is not uniquely active/,
+        /Assigned Lead verification is unavailable; no staff action was taken/,
       );
       assert.deepEqual(
         listCoordinationMessagePaths(supervisionRuntime(), leadSession),
@@ -19161,6 +19238,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     repoKey,
     branch,
     text: "assigned work",
+    checkoutPath: process.cwd(),
   };
   writeProjectAssignment(supervisionRuntime(), assignment);
   const managerId = randomUUID();
@@ -19211,7 +19289,13 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
                 repo_key: repoKey,
                 repo_name: "project",
               },
-              worktrees: [{ open_workspace_id: assignedWorkspace }],
+              worktrees: [
+                {
+                  open_workspace_id: assignedWorkspace,
+                  path: process.cwd(),
+                  is_linked_worktree: true,
+                },
+              ],
             },
           }),
           stderr: "",
@@ -19245,6 +19329,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   const ctx = fakeContext() as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
+  ctx.cwd = process.cwd();
   let widget: StatusWidget | undefined;
   const notices: string[] = [];
   ctx.ui = {

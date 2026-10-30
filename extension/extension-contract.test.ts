@@ -37,6 +37,8 @@ import {
   listProjectMessageHeaders,
   readProjectMessage,
   writeChiefMessage,
+  retireProjectAssignment,
+  listPendingRetirements,
   supervisionRuntime,
   readLeadCoordinationState,
   writeLeadCoordinationState,
@@ -4805,6 +4807,239 @@ test("managed Lead prompt remains managed after its assignment is replaced", asy
   }
 });
 
+test("pending retirement survives branch switch in the exact assigned checkout", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `retirement-switch-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  const sessionId = randomUUID();
+  const managerId = randomUUID();
+  const branch = `managed-retirement-a-${randomUUID()}`;
+  const repoKey = realFs.realpathSync(process.cwd());
+  const checkoutPath = realFs.mkdtempSync(
+    join(tmpdir(), "retirement-switch-checkout-"),
+  );
+  const sessionFile = join(testTmpRoot, `${sessionId}.jsonl`);
+  const runtime = supervisionRuntime();
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-session-kind",
+    data: { version: 1, sessionId, kind: "managed", repoKey, branch },
+  };
+  nativeSessions.set(sessionFile, {
+    id: sessionId,
+    path: sessionFile,
+    cwd: checkoutPath,
+  });
+  const assignment = {
+    version: 2 as const,
+    id: sessionId,
+    repoKey,
+    branch,
+    text: "pending retirement branch-switch regression",
+    piSessionFile: sessionFile,
+    checkoutPath,
+  };
+  writeProjectAssignment(runtime, assignment);
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const managerIdentity = {
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+  };
+  const leadAgent = {
+    pane_id: "lead-pane",
+    tab_id: "lead-tab",
+    workspace_id: WORKSPACE,
+    cwd: checkoutPath,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: sessionId,
+    },
+  };
+  const pi = fakePi({
+    entries: [identity],
+    exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+      if (command === "git" && args[0] === "worktree")
+        return {
+          stdout: `worktree ${repoKey}\nHEAD 1234567890abcdef\nbranch refs/heads/branch-b\n\n`,
+          stderr: "",
+          code: 0,
+        };
+      if (command !== "herdr") return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            workspace_id: WORKSPACE,
+            worktree: { repo_key: repoKey, is_linked_worktree: true },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            repo_key: repoKey,
+            repo_name: "project",
+            source_checkout_path: repoKey,
+            source_workspace_id: WORKSPACE,
+          },
+          worktrees: [
+            {
+              path: checkoutPath,
+              branch: "branch-b",
+              is_linked_worktree: true,
+              open_workspace_id: WORKSPACE,
+            },
+          ],
+        });
+      if (isAgentList(args))
+        return respond({ agents: [managerIdentity, leadAgent] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({
+          agent: args[2] === "manager-pane" ? managerIdentity : leadAgent,
+        });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([identity]) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+    getSessionFile: () => sessionFile,
+  };
+  let managerPi: ReturnType<typeof fakePi> | undefined;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const event: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.match(prompt, /You are a Managed Lead/);
+    const supervisorTool = pi.tools.find(
+      (candidate) => candidate.name === "message_supervisor",
+    );
+    assert.ok(supervisorTool);
+    // Exercise the registered Manager staff tool while assignment A is current.
+    // The exact assigned checkout is still present, but Git reports branch B.
+    process.env.HERDR_PANE_ID = "manager-pane";
+    process.env.HERDR_TAB_ID = "manager-tab";
+    managerPi = fakePi({
+      persistMessages: true,
+      exec: (command, args) => {
+        if (command === "git" && args[0] === "rev-parse")
+          return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+        if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+          return respond({
+            workspace: { workspace_id: WORKSPACE, worktree: null },
+          });
+        if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+          return respond({
+            source: {
+              repo_key: repoKey,
+              repo_name: "project",
+              source_checkout_path: repoKey,
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [
+              {
+                path: checkoutPath,
+                branch: "branch-b",
+                is_linked_worktree: true,
+                open_workspace_id: WORKSPACE,
+              },
+            ],
+          });
+        if (command === "herdr" && isAgentList(args))
+          return respond({ agents: [managerIdentity, leadAgent] });
+        if (command === "herdr" && isApiSnapshot(args))
+          return respond({
+            snapshot: {
+              agents: [managerIdentity, leadAgent],
+              panes: [managerIdentity, leadAgent],
+              workspaces: [],
+            },
+          });
+        if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+          return respond({
+            agent: args[2] === "manager-pane" ? managerIdentity : leadAgent,
+          });
+        return respond({});
+      },
+    });
+    registerExtension!(managerPi.pi as never);
+    const managerContext = fakeContext(managerPi.entries) as any;
+    managerContext.sessionManager = {
+      ...managerContext.sessionManager,
+      getSessionId: () => managerId,
+    };
+    await managerPi.events.get("session_start")![0](undefined, managerContext);
+    await managerPi.commandOptions.get("manager").handler("", managerContext);
+    const staffList = await managerPi.tools
+      .find((candidate) => candidate.name === "list_staff")!
+      .execute("list", {}, undefined, undefined, managerContext);
+    const projectedAssignment = staffList.details.work.find(
+      (work: { branch: string }) => work.branch === branch,
+    );
+    assert.ok(projectedAssignment, "Manager projection retains assignment A");
+    assert.notEqual(
+      projectedAssignment.status,
+      "retired",
+      "a surviving checkout on branch B is not projected as retired",
+    );
+    if ("checked_out_branch" in projectedAssignment)
+      assert.equal(projectedAssignment.checked_out_branch, "branch-b");
+
+    assert.equal(retireProjectAssignment(runtime, assignment), true);
+    const message = await supervisorTool.execute(
+      "retirement-branch-switch",
+      { message: "assignment remains active" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      message.isError,
+      true,
+      "pending retirement is not promoted to active authority",
+    );
+    assert.equal(
+      listPendingRetirements(runtime, repoKey).some(
+        (item) => item.id === sessionId && item.branch === branch,
+      ),
+      true,
+      "the exact pending assignment is preserved while its checkout survives",
+    );
+    assert.equal(realFs.existsSync(checkoutPath), true);
+  } finally {
+    await managerPi?.events.get("session_shutdown")?.[0]();
+    await pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.delete(sessionFile);
+    removeProjectAssignment(runtime, repoKey, branch);
+    realFs.rmSync(checkoutPath, { recursive: true, force: true });
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_WORKSPACE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("delegating agents receive only their allowed definition roster", async () => {
   const mailbox = setAgentEnvironment("delegating-agent", ["scout"]);
   const controllerState = {
@@ -6280,6 +6515,7 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
     id: sessionId,
     repoKey,
     branch,
+    checkoutPath: "/tmp",
     text: "registered message supervisor integration test",
   });
   const pi = fakePi({
@@ -6294,7 +6530,14 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
                   repo_name: repoKey,
                   source_workspace_id: WORKSPACE,
                 },
-                worktrees: [{ branch, open_workspace_id: WORKSPACE }],
+                worktrees: [
+                  {
+                    path: "/tmp",
+                    branch,
+                    is_linked_worktree: true,
+                    open_workspace_id: WORKSPACE,
+                  },
+                ],
               },
             }),
             stderr: "",
