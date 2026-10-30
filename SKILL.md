@@ -329,6 +329,13 @@ Treat inactivity as advisory evidence, not proof of a hang. Preserve exact
 identity and cleanup evidence on failure. Do not guess through uncertain state,
 retry destructive cleanup blindly, or silently take over delegated work.
 
+An unknown Agent blocks unsafe control of that Agent, not automatically all
+independent work. Distinguish historical identity, current competing execution,
+and ownership of the specific unfinished scope. Perform a bounded relevant
+check when needed; do not repeat an unchanged failed identity investigation.
+Continue independent authorized work where evidence permits, otherwise report
+the specific blocker.
+
 See [Recovery](docs/guides/recovery.md) for operator procedures and the
 [Agent tools](docs/reference/agent.md) for the exact machine contract.
 
@@ -390,8 +397,10 @@ Managed Leads contact their assigned Manager; ordinary Leads contact their
 active project Manager or Chief when eligible, and Managers contact Chief. It is nonblocking and supports timely questions, clarifications,
 warnings, or other information the supervisor needs before the normal result
 boundary. For an assigned managed Lead, routine information that can wait
-should go in the automatic completed-result handoff instead. The Lead may choose
-to wait for a response through `message_staff`. Ordinary Leads and Managers
+should go in the automatic completed-result handoff instead. Continue
+independently safe work while a reply is pending. Defer only steps that
+genuinely require the response; when no actionable work remains, end the turn
+and rely on normal message delivery rather than polling. Ordinary Leads and Managers
 have no automatic result handoff to Chief. Ordinary Leads without a verified
 Chief continue independently.
 While a project Lead remains assigned, Herdsman automatically returns each

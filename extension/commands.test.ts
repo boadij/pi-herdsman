@@ -3626,7 +3626,11 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /When assigned Leads need to exchange technical information,[\s\S]*coordinate directly when eligible/,
+      /When assigned Leads need technical information from one another, prefer[\s\S]*direct peer coordination when eligible[\s\S]*Resolve concrete\s+cross-assignment scope, priority, or sequencing conflicts with the smallest\s+decision needed for progress[\s\S]*Do not require repeated confirmations before\s+unaffected work continues/,
+    );
+    assert.match(
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
+      /Recover stopped assigned work rather than repeatedly inspecting or resuming a\s+running Lead[\s\S]*do not repeat unchanged attempts/,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
@@ -3659,6 +3663,12 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     const resume = first.tools.find((tool) => tool.name === "resume_work");
     assert.ok(staff);
     assert.ok(resume);
+    assert.match(resume.description, /when recovery is needed/i);
+    assert.match(
+      resume.description,
+      /does not recover the Lead's Agents or refresh its progress/i,
+    );
+    assert.match(resume.description, /Use message_staff to communicate/i);
     assert.equal(staff.parameters.properties.assignment, undefined);
     assert.match(staff.description, /start a new work assignment/i);
     assert.equal(
@@ -14210,6 +14220,7 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     }),
   );
   const calls = new Map<string, number>();
+  const repositoryChecks = new Map<string, number>();
   let abort: AbortController | undefined;
   const runtime = createLeadSupervisionRuntime({
     activeRole: () => "manager",
@@ -14228,7 +14239,7 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     ],
     currentChief: () => undefined,
     supervisionRuntime: () => ({}),
-    listProjectAssignments: () => [{ id: "same" }],
+    listProjectAssignments: () => [{ id: "same" }, { id: "other" }],
     remoteChiefAgent: async (_ctx: unknown, descriptor: any) => {
       if (abort) {
         abort.abort(new Error("verification cancelled"));
@@ -14247,12 +14258,14 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     pi: {
       exec: async (command: string, args: string[], options: any) => {
         const cwd = options.cwd;
-        if (command === "git")
+        if (command === "git") {
+          repositoryChecks.set(cwd, (repositoryChecks.get(cwd) ?? 0) + 1);
           return {
             code: 0,
             stdout: args.includes("--show-toplevel") ? cwd : join(cwd, ".git"),
             stderr: "",
           };
+        }
         return {
           code: 0,
           stdout: JSON.stringify({
@@ -14274,6 +14287,36 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     reports.map((lead: any) => [lead.lead, lead.relationship]),
     [["same", "assigned"]],
   );
+  const unverified: any[] = [];
+  await runtime.directReports(
+    fakeContext() as any,
+    undefined,
+    undefined,
+    undefined,
+    { unverified },
+  );
+  assert.deepEqual(unverified, [
+    {
+      lead: "other",
+      status: "conflict",
+      issue: "Assigned Lead repository does not match the project",
+    },
+  ]);
+  calls.clear();
+  repositoryChecks.clear();
+  const exact = await runtime.directReports(
+    fakeContext() as any,
+    undefined,
+    undefined,
+    undefined,
+    { exactSession: "same" },
+  );
+  assert.deepEqual(
+    exact.map((lead: any) => lead.lead),
+    ["same"],
+  );
+  assert.deepEqual([...calls], [["same", 2]]);
+  assert.deepEqual([...repositoryChecks], [[repo, 3]]);
   abort = new AbortController();
   await assert.rejects(
     runtime.directReports({ ...fakeContext(), signal: abort.signal } as any),

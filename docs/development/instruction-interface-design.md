@@ -59,6 +59,20 @@ Every representation must preserve the same semantics. When practical, projectio
 
 When representations drift or conflict, fix the underlying invariant and its projections rather than adding clarification around the inconsistency.
 
+## Keep coordination convergent
+
+Coordination should produce actionable information, a decision, an identified
+blocker, or normal completion, rather than further coordination by default.
+
+An overlapping assignment or unanswered message does not itself create an
+execution dependency. Continue independently safe work, defer only genuinely
+dependent steps, and end idle turns rather than polling for responses.
+
+Resolve questions at the lowest appropriate ownership level. Supervisors
+settle decisions within their authority without taking over technical
+execution or requiring unnecessary agreement. Preserve actual authority,
+writer-safety, and dependent-work constraints.
+
 ## Keep replaceable definitions strategy-only
 
 Bundled Agent and role definition bodies describe specialization,

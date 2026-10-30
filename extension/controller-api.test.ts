@@ -3510,6 +3510,7 @@ async function runManagerStartupScenario(
     | "active-live-inspect-lease-replaced"
     | "active-live-inspect-assignment-replaced"
     | "active-live-wrong-worktree"
+    | "active-live-verification-failure"
     | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
@@ -3606,6 +3607,7 @@ async function runManagerStartupScenario(
     mode === "active-live-inspect-lease-replaced" ||
     mode === "active-live-inspect-assignment-replaced" ||
     mode === "active-live-wrong-worktree" ||
+    mode === "active-live-verification-failure" ||
     [
       "close-resume",
       "close-failure",
@@ -3645,6 +3647,10 @@ async function runManagerStartupScenario(
   const observedLeadCwd = () =>
     mode === "active-live-wrong-worktree" ? gitCwd : childPath;
   let worktreeListCalls = 0;
+  let projectTopologyListCalls = 0;
+  let assignedLeadRepositoryScopeCalls = 0;
+  let failNextAssignedLeadRepositoryScope = false;
+  let failAssignedLeadRepositoryScopeAt: number | undefined;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
   let inspectionReached!: () => void;
   const inspectionReadReached = new Promise<void>((resolve) => {
@@ -3796,6 +3802,18 @@ async function runManagerStartupScenario(
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
       worktreeListCalls++;
+      if (args.includes("--workspace")) projectTopologyListCalls++;
+      if (args.includes("--cwd") && args.includes(childPath)) {
+        assignedLeadRepositoryScopeCalls++;
+        if (
+          failNextAssignedLeadRepositoryScope ||
+          assignedLeadRepositoryScopeCalls === failAssignedLeadRepositoryScopeAt
+        ) {
+          failNextAssignedLeadRepositoryScope = false;
+          failAssignedLeadRepositoryScopeAt = undefined;
+          return respond({ source: {}, worktrees: [] });
+        }
+      }
       return respond({
         source:
           mode === "invalid-topology" &&
@@ -4423,6 +4441,7 @@ async function runManagerStartupScenario(
           ...((mode === "active-live" && !hideActiveLead) ||
           mode.startsWith("active-live-inspect-") ||
           mode === "active-live-wrong-worktree" ||
+          mode === "active-live-verification-failure" ||
           mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
           ([
@@ -4798,6 +4817,7 @@ async function runManagerStartupScenario(
       "active-live-inspect-lease-replaced",
       "active-live-inspect-assignment-replaced",
       "active-live-wrong-worktree",
+      "active-live-verification-failure",
       "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
@@ -4866,7 +4886,11 @@ async function runManagerStartupScenario(
           });
         }
       }
-      if (mode === "active-live" || mode.startsWith("active-live-inspect-")) {
+      if (
+        mode === "active-live" ||
+        mode.startsWith("active-live-inspect-") ||
+        mode === "active-live-verification-failure"
+      ) {
         writeFileSync(
           childSessionPath,
           JSON.stringify({ type: "session", id: staleId }),
@@ -4882,6 +4906,7 @@ async function runManagerStartupScenario(
         mode === "active-live" ||
         mode.startsWith("active-live-inspect-") ||
         mode === "active-live-wrong-worktree" ||
+        mode === "active-live-verification-failure" ||
         mode === "active-live-mismatch"
       )
         writeLeadCoordinationState(supervisionRuntime(), {
@@ -5176,6 +5201,122 @@ async function runManagerStartupScenario(
             (agent: any) => agent.agent_session?.value === staleId,
           ),
         );
+        return;
+      }
+      if (mode === "active-live-verification-failure") {
+        const listStaff = pi.tools.find((tool) => tool.name === "list_staff")!;
+        const messages = () =>
+          listChiefMessagePaths(supervisionRuntime(), staleId)
+            .map((path) => readChiefMessage(path))
+            .filter((message) => message.kind === "manager_message");
+        const topologyBeforeList = projectTopologyListCalls;
+        const repositoryBeforeList = assignedLeadRepositoryScopeCalls;
+        failNextAssignedLeadRepositoryScope = true;
+        const unknown = await listStaff.execute(
+          "list",
+          {},
+          undefined,
+          undefined,
+          ctx,
+        );
+        assert.deepEqual(
+          unknown.details.work
+            .filter((work: any) => work.branch === "smoke/recover")
+            .map((work: any) => work.status),
+          ["unknown"],
+        );
+        assert.equal(
+          assignedLeadRepositoryScopeCalls,
+          repositoryBeforeList + 1,
+        );
+        assert.equal(
+          projectTopologyListCalls,
+          topologyBeforeList + 4,
+          "one Manager snapshot performs its existing scope and topology reads",
+        );
+
+        failNextAssignedLeadRepositoryScope = true;
+        await assert.rejects(
+          pi.tools
+            .find((tool) => tool.name === "message_staff")!
+            .execute(
+              "message",
+              {
+                branch: "smoke/recover",
+                message: "DO_NOT_PUBLISH_UNVERIFIED",
+              },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          /Assigned Lead verification is unavailable; no staff action was taken/,
+        );
+        assert.deepEqual(messages(), []);
+
+        const repositoryBeforeRecovery = assignedLeadRepositoryScopeCalls;
+        const topologyBeforeRecovery = projectTopologyListCalls;
+        const recovered = await listStaff.execute(
+          "list",
+          {},
+          undefined,
+          undefined,
+          ctx,
+        );
+        assert.deepEqual(
+          recovered.details.work
+            .filter((work: any) => work.branch === "smoke/recover")
+            .map((work: any) => work.status),
+          ["active"],
+        );
+        assert.equal(
+          assignedLeadRepositoryScopeCalls,
+          repositoryBeforeRecovery + 1,
+        );
+        assert.equal(projectTopologyListCalls, topologyBeforeRecovery + 4);
+
+        const repositoryBeforeMessage = assignedLeadRepositoryScopeCalls;
+        await pi.tools
+          .find((tool) => tool.name === "message_staff")!
+          .execute(
+            "message",
+            {
+              branch: "smoke/recover",
+              message: "VERIFIED_MESSAGE",
+            },
+            undefined,
+            undefined,
+            ctx,
+          );
+        assert.equal(
+          assignedLeadRepositoryScopeCalls,
+          repositoryBeforeMessage + 3,
+          "one initial snapshot plus two selected-session revalidations",
+        );
+        assert.deepEqual(
+          messages().map((message) => [message.toSessionId, message.text]),
+          [[staleId, "VERIFIED_MESSAGE"]],
+        );
+        const repositoryBeforeStop = assignedLeadRepositoryScopeCalls;
+        const stopAttemptsBefore = leadStopAttempts;
+        failAssignedLeadRepositoryScopeAt = repositoryBeforeStop + 2;
+        await assert.rejects(
+          pi.tools
+            .find((tool) => tool.name === "stop_lead")!
+            .execute(
+              "stop",
+              { branch: "smoke/recover" },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          /Assigned Lead is no longer eligible for stop/,
+        );
+        assert.equal(
+          assignedLeadRepositoryScopeCalls,
+          repositoryBeforeStop + 2,
+          "initial selection succeeds before fresh stop verification fails",
+        );
+        assert.equal(leadStopAttempts, stopAttemptsBefore);
         return;
       }
       if (mode === "active-live-mismatch") {
@@ -7001,6 +7142,8 @@ test("Manager preserves project assignment and skips notification for incompatib
   runManagerStartupScenario("incompatible-build"));
 test("Manager rejects branch messaging and stopping for conflicted assigned work", () =>
   runManagerStartupScenario("active-live-wrong-worktree"));
+test("Manager reports transient assigned-Lead verification failure as unknown and recovers safely", () =>
+  runManagerStartupScenario("active-live-verification-failure"));
 test("Manager message_staff rejects incompatible Leads and delivers complete attachments", () =>
   runManagerStartupScenario("staff-message-mismatch"));
 test("Manager message_staff waits for cross-process assignment authority before retaining evidence", () =>

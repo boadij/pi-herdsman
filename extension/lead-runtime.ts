@@ -22,6 +22,7 @@ import type {
   ManagerDescriptor,
   ManagerLease,
   ProjectAssignment,
+  UnverifiedAssignedLead,
   ProjectMessage,
   ChiefMessageRecord,
   ChiefInboxDrainOptions,
@@ -3639,8 +3640,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (group.repoKey !== manager.repoKey)
         throw new Error("Manager workspace is not the assigned project");
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
+      const unverified: UnverifiedAssignedLead[] = [];
       const [leads, topology] = await Promise.all([
-        directReports(ctx, suppliedInventory, suppliedAgents, incompatible),
+        directReports(ctx, suppliedInventory, suppliedAgents, incompatible, {
+          unverified,
+        }),
         host.runHerdr(
           host.pi,
           ctx,
@@ -3695,6 +3699,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 runtimeState: report.runtimeState,
               })),
           ],
+          unverified,
         }),
         openWorkspaces,
         leads: leads.flatMap((lead: any) => {
@@ -3821,6 +3826,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     suppliedInventory?: HerdrSessionSnapshot,
     suppliedAgents?: ManagedAgentSnapshotCollection,
     incompatible?: import("./supervision.ts").IncompatibleStaff[],
+    options?: {
+      exactSession?: string;
+      unverified?: UnverifiedAssignedLead[];
+    },
   ) => {
     if (host.activeRole() === "manager" && !host.state.roleSuspended) {
       const manager = await host.currentManager(ctx);
@@ -3862,8 +3871,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const ordinarySupervisionAvailable =
         repoManagers.length === 1 &&
         host.sameManagerDescriptor(repoManagers[0], manager);
+      const candidates = options?.exactSession
+        ? snapshot.leads.filter((lead) => lead.lead === options.exactSession)
+        : snapshot.leads;
       const leads = await Promise.all(
-        snapshot.leads.map(async (lead) => {
+        candidates.map(async (lead) => {
+          const unverified = (
+            status: UnverifiedAssignedLead["status"],
+            issue: string,
+          ) => {
+            if (sessions.has(lead.lead))
+              options?.unverified?.push({ lead: lead.lead, status, issue });
+            return undefined;
+          };
           try {
             const descriptor = {
               piSessionId: lead.lead,
@@ -3873,22 +3893,37 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               workspaceId: lead.workspaceId,
             };
             const agent = await host.remoteChiefAgent(ctx, descriptor);
-            if (typeof agent?.cwd !== "string" || !agent.cwd) return undefined;
+            if (typeof agent?.cwd !== "string" || !agent.cwd)
+              return unverified(
+                "unknown",
+                "Assigned Lead identity could not be verified",
+              );
             const repository = await localRepositoryScope(
               host.pi,
               { ...ctx, cwd: agent.cwd },
               lead.workspaceId,
               ctx.signal,
             );
-            if (repository.repoKey !== manager.repoKey) return undefined;
+            if (repository.repoKey !== manager.repoKey)
+              return unverified(
+                "conflict",
+                "Assigned Lead repository does not match the project",
+              );
             const current = await host.remoteChiefAgent(ctx, descriptor);
-            if (!current || current.cwd !== agent.cwd) return undefined;
+            if (!current || current.cwd !== agent.cwd)
+              return unverified(
+                "unknown",
+                "Assigned Lead identity changed during verification",
+              );
             return lead;
           } catch (error) {
             if (ctx.signal?.aborted) throw ctx.signal.reason;
             if (error instanceof Error && error.name === "AbortError")
               throw error;
-            return undefined;
+            return unverified(
+              "unknown",
+              "Assigned Lead verification unavailable",
+            );
           }
         }),
       );

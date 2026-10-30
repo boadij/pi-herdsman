@@ -34,8 +34,9 @@ Available to Leads and Managers.
 `message_supervisor` is asynchronous and nonblocking. Use it for material
 information the direct supervisor needs, such as a timely question,
 clarification, blocker, warning, scope conflict, risk, decision request, or
-important evidence. Continue working as appropriate; the Lead may also choose
-to wait for a response through ordinary `message_staff`.
+important evidence. Continue independently safe work while a reply is pending.
+Defer only steps that genuinely require the response; when no actionable work
+remains, end the turn and rely on normal message delivery rather than polling.
 
 For an assigned project Lead, information that can wait for the normal automatic
 completed-result handoff should go there instead. Do not message solely to
