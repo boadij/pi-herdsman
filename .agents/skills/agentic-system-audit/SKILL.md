@@ -671,4 +671,3 @@ If implementation is requested later:
 3. keep unrelated cleanup out unless it simplifies the same proven root cause;
 4. independently review the final diff against the audit findings;
 5. run focused and repository validation appropriate to the change.
-
