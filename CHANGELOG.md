@@ -9,6 +9,49 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.36.2](https://github.com/boadij/pi-herdsman/compare/v0.36.1...v0.36.2) (2026-10-30)
+
+
+### Fixes
+
+* **coordination:** prevent circular waits across managed work ([#698](https://github.com/boadij/pi-herdsman/issues/698)) ([48bfd0a](https://github.com/boadij/pi-herdsman/commit/48bfd0a9fdadce6a17014e5b65fe24dbcc57d9a6)), closes [#692](https://github.com/boadij/pi-herdsman/issues/692)
+* **manager:** preserve live work state across build mismatches ([#687](https://github.com/boadij/pi-herdsman/issues/687)) ([c7fe051](https://github.com/boadij/pi-herdsman/commit/c7fe0516dfe4c99db84cdddc0e2560c4502cfedc))
+* **recovery:** fail closed on native managed-Agent session restore ([#702](https://github.com/boadij/pi-herdsman/issues/702)) ([2bd2e85](https://github.com/boadij/pi-herdsman/commit/2bd2e856af37950fc98f1f303fe020bb2c3b055e)), closes [#690](https://github.com/boadij/pi-herdsman/issues/690)
+* **recovery:** keep assigned work progressing when Agent state is unresolved ([#695](https://github.com/boadij/pi-herdsman/issues/695)) ([b02af5b](https://github.com/boadij/pi-herdsman/commit/b02af5b35dc3950f6fd3d444fc5d9ee3f544b2f6))
+* **supervision:** stabilize Manager staff discovery and recovery ([#697](https://github.com/boadij/pi-herdsman/issues/697)) ([5a0ca67](https://github.com/boadij/pi-herdsman/commit/5a0ca67fb5d88f2710c19dca7d5d26e2fd74ca6c))
+* **ui:** allow verified focus across Herdsman builds ([#689](https://github.com/boadij/pi-herdsman/issues/689)) ([b28d5fe](https://github.com/boadij/pi-herdsman/commit/b28d5fea429ca0e00f97ed4fefd77374dd5dd94d))
+
+
+### Performance
+
+* **ci:** scope validation by affected repository surfaces ([#700](https://github.com/boadij/pi-herdsman/issues/700)) ([78f4af0](https://github.com/boadij/pi-herdsman/commit/78f4af0c593180033f905374165dc0b6fecbfe90))
+
+
+### Refactoring
+
+* **lead:** extract command runtime ([#680](https://github.com/boadij/pi-herdsman/issues/680)) ([26343d8](https://github.com/boadij/pi-herdsman/commit/26343d84a787091b3ee277a49865d42097fefffe))
+* **lead:** extract coordination runtime ([#683](https://github.com/boadij/pi-herdsman/issues/683)) ([a00abf8](https://github.com/boadij/pi-herdsman/commit/a00abf88ed7dc5bffb02edbeaeb0be4b4934f082))
+* **lead:** extract managed work runtime ([#682](https://github.com/boadij/pi-herdsman/issues/682)) ([98d8f1c](https://github.com/boadij/pi-herdsman/commit/98d8f1c634cdc5e53614ba7c77fc1e44f2bb6c82))
+
+
+### Documentation
+
+* **agentic-system-audit:** clarify evidence and verdict boundaries ([#699](https://github.com/boadij/pi-herdsman/issues/699)) ([ea0a506](https://github.com/boadij/pi-herdsman/commit/ea0a5067cbd9cce9d37210bafef6a8576889f6e6))
+
+
+### Tests
+
+* **ci:** identify lifecycle wait failure stages ([#684](https://github.com/boadij/pi-herdsman/issues/684)) ([8a21567](https://github.com/boadij/pi-herdsman/commit/8a21567941b47cec386874dadb7789cbf827f63f))
+* escape preview regex in PowerShell fixture ([#704](https://github.com/boadij/pi-herdsman/issues/704)) ([a49e38d](https://github.com/boadij/pi-herdsman/commit/a49e38d5cf58accb1d0a1e02d60585dcfc4dd6c4))
+* guard recovery status call access ([#703](https://github.com/boadij/pi-herdsman/issues/703)) ([5482f18](https://github.com/boadij/pi-herdsman/commit/5482f185a4ac5f8d3211999f69b72d9bfa83784b))
+* remove dead controller-api gate fixture ([#705](https://github.com/boadij/pi-herdsman/issues/705)) ([d005a26](https://github.com/boadij/pi-herdsman/commit/d005a262243ba65ac921f25c07964c1e1d783ab6))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.24 ([#696](https://github.com/boadij/pi-herdsman/issues/696)) ([19e431b](https://github.com/boadij/pi-herdsman/commit/19e431babb3dcf8bec0df89e410f3727a04b1f64))
+* **tooling:** add Oxlint lint command ([#701](https://github.com/boadij/pi-herdsman/issues/701)) ([846c0fe](https://github.com/boadij/pi-herdsman/commit/846c0fed48657da8a7330d900f9d1ae761fda4ca))
+
 ## [0.36.1](https://github.com/boadij/pi-herdsman/compare/v0.36.0...v0.36.1) (2026-10-29)
 
 
