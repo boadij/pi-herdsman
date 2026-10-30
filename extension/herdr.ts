@@ -555,6 +555,37 @@ export function sameDirectory(left: string, right: string): boolean {
   }
 }
 
+/** Resolve an assignment only from its persisted physical checkout provenance. */
+export function resolveAssignmentCheckout<T extends HerdrRecord>(
+  assignment: { checkoutPath?: string },
+  worktrees: readonly T[],
+  sessionCwd?: string,
+):
+  | { status: "matched"; worktree: T; path: string }
+  | {
+      status: "unknown" | "conflict";
+      reason: string;
+    } {
+  const recorded = assignment.checkoutPath;
+  if (recorded && sessionCwd && !sameDirectory(recorded, sessionCwd))
+    return { status: "conflict", reason: "checkout provenance disagrees" };
+  const path = recorded ?? sessionCwd;
+  if (!path)
+    return { status: "unknown", reason: "checkout provenance unavailable" };
+  const matches = worktrees.filter(
+    (item) =>
+      item.is_linked_worktree === true &&
+      typeof item.path === "string" &&
+      sameDirectory(item.path, path),
+  );
+  if (matches.length !== 1)
+    return {
+      status: matches.length ? "conflict" : "unknown",
+      reason: "assigned checkout placement is not uniquely verified",
+    };
+  return { status: "matched", worktree: matches[0]!, path };
+}
+
 export async function localRepositoryScope(
   pi: ExtensionAPI,
   ctx: ExtensionContext,

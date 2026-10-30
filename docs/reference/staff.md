@@ -11,12 +11,14 @@ the branch-based project operations `delegate_work`, `resume_work`,
 `stop_lead`, `remove_worktree`, and `integrate_branch`. Chief has no
 project-operation tools.
 
-Managers select assigned Leads by `branch`; ordinary supervised Leads and
-Chief's actionable direct reports use the stable `target` discovered in the
-current supervision context or `list_staff`. Project actions use the Git
-branch. A target resolves to an exact coordinator identity, but is not
-authorization: every action revalidates current identity and direct-report
-authority.
+Managers select assigned Leads by the original assignment `branch`; ordinary
+supervised Leads and Chief's actionable direct reports use the stable `target`
+discovered in the current supervision context or `list_staff`. Project actions
+use the Git branch handle. Exact session and verified physical checkout are
+established independently; the checked-out branch may differ and is observed
+Git state, not an alternate selector or authority. A target resolves to an
+exact coordinator identity, but is not authorization: every action revalidates
+current identity and direct-report authority.
 
 Target bindings are scoped to the caller's current Pi-session history. If a
 target cannot be resolved in the current history, the operation rejects it;
@@ -55,9 +57,11 @@ evidence. Use `list_staff` when a fresh complete roster is materially needed.
 ```
 
 Returns a fresh direct-report projection and fresh `available_tools`. For
-Manager, `work` lists durable project assignments by branch with derived status
-and a bounded task summary. Status is `active`, `paused`, `unknown`, or
-`conflict`; active work may include the live Lead's separate `runtime_state`.
+Manager, `work` lists durable project assignments by their original branch
+handle with derived status and a bounded task summary. Status is `active`,
+`paused`, `unknown`, or `conflict`; active work may include the live Lead's
+separate `runtime_state`. When exposed, the checked-out branch is observed
+state, not the assignment selector.
 `paused` means no matching Lead appeared in the successfully collected
 observation. `unknown` means a matching candidate was observed but could not
 currently be verified. Neither `unknown` nor `conflict` authorizes staff
@@ -181,7 +185,8 @@ decision for that run; this does not modify Pi's persistent trust store.
 
 ## `resume_work`
 
-Manager only. Resume existing unresolved project work using its exact branch:
+Manager only. Resume existing unresolved project work using its original
+assignment branch handle:
 
 ```json
 { "branch": "feat/example" }
@@ -192,7 +197,9 @@ Resuming already-running work returns the current exact Lead instead of
 starting another. This recovers no stopped Lead and does not recover its Agents
 or refresh its progress; use `message_staff` to communicate with an eligible
 running Lead. `resume_work` is not a general progress-refresh mechanism. A
-stopped Lead is relaunched with the same assignment while its worktree exists.
+stopped Lead is relaunched with the same exact session in its existing verified
+checkout while that checkout exists; its current branch is not reset to the
+assignment handle.
 Verified checkout absence retires the assignment rather than recreating it. A
 retired assignment cannot be resumed; new work may use `delegate_work` with the
 remaining branch.
@@ -204,8 +211,8 @@ remaining branch.
 ```
 
 Stops only an exact currently assigned project Lead and its owned Agent
-execution tree. The assignment, Pi session, Git branch, and worktree are
-preserved. Resume the work with
+execution tree. The assignment, Pi session, linked checkout, and its current
+Git state are preserved. Resume the work with
 `resume_work` using its branch. An unassigned Lead is not a Manager staff-stop
 target. Failed or ambiguous cleanup does not retire an assignment. Successful
 Herdr worktree removal or verified checkout absence retires the assignment and
@@ -216,8 +223,8 @@ exact-owner recovery remains independently authorized.
 
 ## `remove_worktree`
 
-Manager only. Remove an explicitly requested assigned project's linked
-checkout, or register an actionable approval request:
+Manager only. Remove the exact verified linked checkout of an explicitly
+requested assignment, or register an actionable approval request:
 
 ```json
 { "branch": "feat/example" }
@@ -249,10 +256,12 @@ not automatically restarted. A closed Herdr workspace may be reopened to
 address its verified checkout. Herdr remains responsible for removing the
 worktree.
 
-The confirmation identifies the branch and project checkout, explains that
-managed execution may be stopped, and says the Git branch and Pi conversation
-remain while the assignment will be retired only after verified checkout
-removal. Type the exact word `remove`; cancellation or any other response has
+The confirmation identifies the assignment handle and exact project checkout,
+including its current checked-out branch when different. The assignment
+branch is not proof that a checkout currently has that branch checked out. It
+explains that managed execution may be stopped, and says the Git branch and Pi
+conversation remain while the assignment will be retired only after verified
+checkout removal. Type the exact word `remove`; cancellation or any other response has
 no destructive effect. Successful checkout removal is followed by
 the existing assignment reconciliation, which retires the matching assignment
 and pending project messages when authoritative checkout absence is verified.
@@ -265,7 +274,8 @@ deletes the Git branch or Pi conversation.
 
 ## `integrate_branch`
 
-Manager only. Integrate an assigned local branch into the verified primary
+Manager only. Use the assignment branch to select work, then integrate the
+actual named source branch at its verified checkout into the verified primary
 branch using fast-forward-only Git:
 
 ```json
@@ -273,8 +283,9 @@ branch using fast-forward-only Git:
 ```
 
 `expected_head` is the exact source revision the Manager accepted after
-validation; the source branch must still point to it. This operation is
-separately controlled by the Manager local-merge policy (see
+validation; the actual source branch must still point to it and may differ from
+the assignment handle. This operation is separately controlled by the Manager
+local-merge policy (see
 [Configuration](configuration.md#manager-local-merge)). It does not fetch,
 push, create a merge commit, or delete the Git branch. Divergence returns
 `needs_update` with the observed target revision; this means the source branch

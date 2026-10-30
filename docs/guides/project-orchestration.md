@@ -61,14 +61,19 @@ Ask Manager for a bounded objective:
 Implement the API change on branch feat/api-change.
 ```
 
-Manager delegates the work to a Lead. The Git branch is the durable semantic
-work handle; the Lead is the current executor. Internal assignment IDs are not
-project-work handles. A branch is optional when starting new work. If omitted,
+Manager delegates the work to a Lead. The original Git branch is the durable
+assignment handle used to select the work; the exact Pi session is its
+executor, and its physical linked checkout is verified independently. The
+branch currently checked out there is mutable Git state and may differ from
+the assignment handle. Internal assignment IDs are not project-work handles.
+A branch is optional when starting new work. If omitted,
 Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
 Start new work with `delegate_work`. Resume existing work with
-`resume_work` using its branch. A verified Git inventory showing the
+`resume_work` using its original assignment branch handle; resume reuses the
+existing verified checkout and exact Pi session without switching its current
+branch. A verified Git inventory showing the
 assignment's worktree checkout is absent retires that assignment and its
 pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
@@ -141,9 +146,12 @@ does not necessarily require implementing them sequentially.
 
 ## Integrate completed branches
 
-When an assigned Lead has completed and validated its branch, the Manager can
-accept its exact source commit and use the Manager-only `integrate_branch` staff
-tool to fast-forward the verified primary branch. This is local Git
+When an assigned Lead has completed and validated its work, the Manager can
+accept the exact commit on the named branch currently checked out in its
+verified checkout and use the Manager-only `integrate_branch` staff tool to
+fast-forward the verified primary branch. The assignment branch remains the
+selector; the actual source branch may differ and must still point to the
+accepted SHA. This is local Git
 integration; it does not fetch, push, or merge a hosted pull request. The source
 and target must be clean, and a branch that does not contain the current target
 is returned as `needs_update`. That result is not proof of a content conflict.
@@ -154,7 +162,7 @@ the exact validated new source HEAD. Then accept that revision before retrying.
 Independent feature branches may be integrated one at a time; a later branch
 may need to incorporate earlier integration first. The Git branch is preserved.
 After verified integration, the operation attempts guarded removal of the
-exact source checkout and retirement of its assignment. `cleanup_pending`
+exact assigned checkout and retirement of its assignment. `cleanup_pending`
 means integration is verified but at least one cleanup fact is not; retry
 with the same accepted SHA while permission remains enabled to retry the
 guarded cleanup. If the checkout is already absent, reconciliation requires
@@ -230,9 +238,11 @@ evidence only when it materially matters.
 
 ## Pause and resume
 
-`stop_lead` selects the assigned Lead by branch and stops its owned Agent execution tree while preserving
-the assignment, Pi session, Git branch, and worktree. Resume the same work with
-`resume_work` using its branch. `stop_lead` does not resolve project work.
+`stop_lead` selects the assigned Lead by its original branch handle and stops
+its owned Agent execution tree while preserving the assignment, Pi session,
+verified checkout, and current Git state. Resume the same work with
+`resume_work` using that assignment handle. `stop_lead` does not resolve
+project work.
 
 See [`stop_lead`](../reference/staff.md#stop_lead) and
 [`resume_work`](../reference/staff.md#resume_work).

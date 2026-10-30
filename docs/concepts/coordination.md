@@ -133,16 +133,21 @@ Workspace membership is physical placement, not assignment ownership. Multiple
 Leads can share a workspace, and a branch can have a worktree without implying
 that every session in that workspace owns its work.
 
-## Work assignments belong to a branch
+## Work assignments use a branch-scoped handle
 
 A **work assignment** is one durable, branch-scoped objective assigned to an
-exact managed Lead. It is keyed by repository identity plus semantic Git
-branch. An **Agent assignment** is bounded work delegated to an exact
-owner-managed Agent; it is separate from a work assignment.
+exact managed Lead. Its immutable public handle is repository identity plus
+the original semantic Git branch. An **Agent assignment** is bounded work
+delegated to an exact owner-managed Agent; it is separate from a work
+assignment.
 
-Within one repository, the branch is the public work handle. A Lead is the
-current executor. The assignment's exact Pi session ID is an internal executor
-identity; exact session IDs are used only when acting on a live Lead.
+Within one repository, the original branch is the public assignment selector.
+The exact Pi session ID is the immutable managed executor identity. The
+assignment's linked checkout is verified independently from session and
+Herdr/Git evidence; the branch currently checked out there is mutable Git state,
+not the assignment handle. A branch-name match alone proves neither session
+identity nor physical checkout placement. A Lead may switch branches in its
+verified checkout without changing which assignment the Manager selects.
 
 Because durable work is not keyed by a Manager or primary workspace identity, a
 replacement Manager or replacement primary workspace for the same repository
@@ -151,8 +156,9 @@ again when the work is observed or resumed.
 
 ```text
 project work
-    ├─ branch feat/a → current Lead → Agent tree
-    └─ branch feat/b → current Lead → Agent tree
+    ├─ assignment handle feat/a → exact Lead/session → verified checkout
+    │                                      └─ currently checked out: feat/a or feat/c
+    └─ assignment handle feat/b → exact Lead/session → verified checkout
 ```
 
 The assignment is the durable indicator that project work remains open. It
@@ -173,11 +179,15 @@ ownership without asserting completion or acceptance. See
 [Project orchestration](../guides/project-orchestration.md) for the workflow.
 
 `stop_lead` pauses assigned execution while preserving the assignment, Pi
-session, branch, and worktree; `resume_work` resumes the existing
-assignment while its checkout exists. These operations do not change project
-authority. Successful Herdr worktree removal or verified checkout absence
-retires the matching assignment and any still-pending project messages while
-preserving the Git branch. Manually continuing the
+session, checkout, and its current Git state; `resume_work` resumes the exact
+session in the existing verified checkout without switching branches. These
+operations do not change project authority. Integration selects work by its
+assignment handle but validates and integrates the actual named branch and
+accepted SHA at the assigned checkout. Removal targets that exact checkout
+under the existing authorization and safety checks. Successful Herdr worktree
+removal or verified checkout absence retires the matching assignment and any
+still-pending project messages while preserving the Git branch. A changed
+checked-out branch is not checkout absence. Manually continuing the
 exact assigned Pi session remains managed; `managed-lead` is launch policy,
 not authority.
 A complete Git worktree inventory that verifies the checkout is absent retires
