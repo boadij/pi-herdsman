@@ -287,6 +287,28 @@ same target. Wait for the existing assignment to finish and clean up, or close
 its exact live agent when abandoning it, then retry. Do not delegate another
 task through an agent label.
 
+## Native Pi restoration of a managed Agent
+
+Pi's native session restore can reopen a managed Agent's transcript without
+restoring its managed launch environment. Quarantine applies when Herdsman's
+extension is loaded in a Herdr-hosted root Lead process. There, such a transcript
+cannot run tools or assume an ordinary Lead role. Return to the original Lead
+to reconcile the saved assignment; only its proven direct owner may use the
+existing recovery and continuation controls. Transcript history and
+working-tree changes are preserved, and the interrupted assignment is not
+replayed automatically.
+
+A process that is otherwise unmanaged—for example, one launched outside Herdr
+without a valid managed-Agent environment—does not receive the root Lead
+quarantine. If Pi is launched without Herdsman's extension, Herdsman cannot
+enforce tool restrictions at all. Separately, when the extension detects an
+invalid partial managed-Agent environment, its fail-closed hooks disable tools
+and block tool calls even though normal role registration is skipped. Until
+selective Herdr restoration is supported and verified, operators who need to
+prevent Agent restoration before process launch can set Herdr's global
+`resume_agents_on_restore = false` setting. This disables restoration globally,
+not only for the affected Agent.
+
 ## Before retrying
 
 Check:

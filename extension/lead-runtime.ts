@@ -71,6 +71,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
   createAgentController,
+  sessionAgentIdentity,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
   type AgentControllerOptions,
@@ -162,6 +163,7 @@ type LeadIdentityHost = {
 };
 
 type LeadTransitionHost = {
+  isQuarantinedSession?(): boolean;
   runHerdr: typeof import("./herdr.ts").runHerdr;
   SessionManager: Pick<
     typeof import("@earendil-works/pi-coding-agent").SessionManager,
@@ -863,7 +865,7 @@ export function createLeadSessionStartRuntime(host: {
     projectTrusted: boolean;
   }>;
   setLeadExecutionPending(pending: boolean): void;
-  clearLeadExecution(): void;
+  clearLeadExecution(ctx: ExtensionContext): void;
   hasLeadExecutionState(ctx: ExtensionContext): boolean;
   diagnostic(): void;
   autoActivateManager(ctx: ExtensionContext): boolean;
@@ -877,6 +879,9 @@ export function createLeadSessionStartRuntime(host: {
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void>;
+  rejectNativeAgentRestore?(ctx: ExtensionContext): boolean;
+  quarantineNativeAgentRestore?(ctx: ExtensionContext): void;
+  resetNativeAgentRestoreQuarantine?(ctx: ExtensionContext): void;
   sessionLeadRoleState(
     entries: readonly any[],
     sessionId: string,
@@ -933,10 +938,8 @@ export function createLeadSessionStartRuntime(host: {
       host.controller.clearPendingStarts();
       host.leadStatusRuntime.prepareSession(ctx);
       if (isRoot()) {
-        host.clearLeadExecution();
+        host.clearLeadExecution(ctx);
         host.setLeadExecutionPending(true);
-        // Start the first inventory read before delegation can race it.
-        host.leadStatusRuntime.prime(ctx);
       }
       const sessionSignal = host.controller.beginSession();
       host.controller.sessionStart();
@@ -952,6 +955,13 @@ export function createLeadSessionStartRuntime(host: {
       )
         host.clearSupervisionUI(true);
       if (lifecycleError) host.appendRoleError(ctx, lifecycleError);
+      host.resetNativeAgentRestoreQuarantine?.(ctx);
+      if (isRoot() && host.rejectNativeAgentRestore?.(ctx)) {
+        host.quarantineNativeAgentRestore?.(ctx);
+        host.setLeadExecutionPending(false);
+        return;
+      }
+      if (isRoot()) host.leadStatusRuntime.prime(ctx);
       let skipLeadExecutionProfileResolution = false;
       let malformedRole = false;
       if (isRoot()) {
@@ -1354,6 +1364,10 @@ export function registerLeadRuntime(
   let leadExecutionPending = false;
   let startupTools: string[] = [];
   let startupWasManaged = false;
+  let quarantinedSessionId: string | undefined;
+  const isQuarantinedSession = (ctx?: ExtensionContext): boolean =>
+    !!quarantinedSessionId &&
+    (!ctx || ctx.sessionManager.getSessionId() === quarantinedSessionId);
   let supervisoryProfile: SupervisoryProfile | undefined;
   let inheritedProjection:
     { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
@@ -2199,6 +2213,7 @@ export function registerLeadRuntime(
   };
   roleTransitions = createLeadRoleTransitions(options.leadRuntime, {
     ...roleTransitionServices,
+    isQuarantinedSession: () => isQuarantinedSession(),
     invalidateManagerRemovalRequests: (ctx: ExtensionContext) =>
       projectRuntime.invalidatePendingRemovals(ctx),
     ownedAgentManagementTools,
@@ -3354,10 +3369,23 @@ export function registerLeadRuntime(
       };
     },
     initializeSessionKind,
+    quarantineNativeAgentRestore: (ctx: ExtensionContext) => {
+      quarantinedSessionId = ctx.sessionManager.getSessionId();
+      roleTransitions.suspendMalformedRole(ctx);
+      coordinationRuntime.removePeerPresence();
+    },
+    resetNativeAgentRestoreQuarantine: (ctx: ExtensionContext) => {
+      if (quarantinedSessionId !== ctx.sessionManager.getSessionId())
+        quarantinedSessionId = undefined;
+    },
     activeTools: () =>
       leadExecutionPending ? startupTools : pi.getActiveTools(),
-    clearLeadExecution: () => {
-      startupTools = pi.getActiveTools();
+    clearLeadExecution: (ctx: ExtensionContext) => {
+      if (
+        !quarantinedSessionId ||
+        quarantinedSessionId === ctx.sessionManager.getSessionId()
+      )
+        startupTools = pi.getActiveTools();
       startupWasManaged = sessionKind?.kind === "managed";
       assignmentVerificationGeneration++;
       sessionKind = undefined;
@@ -3404,13 +3432,18 @@ export function registerLeadRuntime(
     herdRun: herdRunRuntime,
   });
   pi.on("turn_start", () => controller.resetAssignmentGuidance());
-  pi.on("before_agent_start", (event: any, ctx: ExtensionContext) =>
-    agentEvents.beforeAgentStart(event, ctx),
-  );
+  pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
+    if (!isQuarantinedSession(ctx))
+      return agentEvents.beforeAgentStart(event, ctx);
+    pi.setActiveTools([]);
+    event.systemPrompt = `${event.systemPrompt}\n\nThis session belongs to a managed Agent restored without its authorized launch context. Execution is disabled. Return to its original Lead and use Herdsman's recovery controls to reconcile the assignment.`;
+    return event;
+  });
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
-    agentEvents.agentStart(ctx),
+    isQuarantinedSession(ctx) ? undefined : agentEvents.agentStart(ctx),
   );
   pi.on("agent_before_settle", (event: any) => {
+    if (isQuarantinedSession()) return;
     if (
       activeLeadRole(leadRuntime) === "lead" ||
       herdRunRuntime!.hasActiveTurn()
@@ -3420,13 +3453,20 @@ export function registerLeadRuntime(
   pi.on(
     "agent_settled",
     (event: { aborted: boolean }, ctx: ExtensionContext) => {
+      if (isQuarantinedSession(ctx)) return;
       const result = agentEvents.agentSettled(ctx, event.aborted);
       projectRuntime.updateRemovalStatus(ctx);
       return result;
     },
   );
   pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
-    agentEvents.toolCall(event, ctx),
+    isQuarantinedSession(ctx)
+      ? {
+          block: true,
+          reason:
+            "Managed Agent session requires recovery by its original Lead.",
+        }
+      : agentEvents.toolCall(event, ctx),
   );
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
@@ -3439,6 +3479,7 @@ export function registerLeadRuntime(
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
   pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
+    if (isQuarantinedSession(ctx)) return;
     if (
       activeLeadRole(leadRuntime) === "lead" ||
       herdRunRuntime!.hasActiveTurn()
@@ -3450,6 +3491,10 @@ export function registerLeadRuntime(
     options.queueLeadPresentation(ctx),
   );
   pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
+    if (isQuarantinedSession(ctx)) {
+      pi.setActiveTools([]);
+      return;
+    }
     inheritedProjection = undefined;
     projectRuntime.updateRemovalStatus(ctx);
     return sessionTree.sessionTree(ctx);
@@ -9114,6 +9159,10 @@ export function createLeadRoleTransitions(
   };
   const reconcileRoleTools = (): void => {
     if (host.controllerScope?.kind !== "root") return;
+    if (host.isQuarantinedSession?.()) {
+      host.pi.setActiveTools([]);
+      return;
+    }
     try {
       host.captureInheritedTools?.();
     } catch (error) {

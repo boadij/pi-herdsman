@@ -18333,6 +18333,19 @@ for (const acceptedChild of [true, false]) {
     assert.equal(reopenedParent.getSessionFile(), parent.piSessionFile);
     const resumedParentEntries = reopenedParent.getEntries() as any[];
     const resumedParentPi = fakePi({ exec, entries: resumedParentEntries });
+    process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
+    process.env.PI_HERDSMAN_RUN_ID = lifecycle.live.get(
+      parent.agentLabel,
+    )!.runId;
+    process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+    process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
+    process.env.PI_HERDSMAN_LABEL = parent.agentLabel;
+    process.env.PI_HERDSMAN_WORKSPACE_ID = parent.workspaceId;
+    process.env.PI_HERDSMAN_AGENT_DEFINITION = parent.agentDefinition;
+    process.env.HERDR_PANE_ID = lifecycle.live.get(parent.agentLabel)!.paneId;
+    process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify([
+      "agent",
+    ]);
     registerExtension!(resumedParentPi.pi as never);
     const resumedParentContext = fakeContext(resumedParentEntries) as any;
     resumedParentContext.sessionManager.getSessionId = () =>
