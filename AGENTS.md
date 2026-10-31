@@ -146,11 +146,13 @@ in `AGENTS.md`.
 
 ## GitHub workflow
 
-- Submit changes to protected `main` through pull requests; do not push directly.
-- Before merging, bring the PR branch up to date with `main` and ensure required
-  CI checks pass.
-- Squash-merge only; follow `CONTRIBUTING.md` for Conventional Commit PR titles.
-- Do not bypass branch protection.
+- Submit pull requests against upstream `main` from a branch in this repository
+  or a fork. Do not push directly to upstream `main`.
+- Before merging, ensure the PR branch is up to date with upstream `main` and
+  required CI checks pass.
+- The upstream repository squash-merges PRs; follow `CONTRIBUTING.md` for
+  Conventional Commit PR titles.
+- Do not bypass upstream branch protection.
 
 ## Development loop
 
