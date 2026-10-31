@@ -3,6 +3,7 @@ import test from "node:test";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
@@ -110,6 +111,25 @@ test("remote peer outbox survives until acknowledged delivery", () => {
     listRemotePeerOutbounds().some((item) => item.id === id),
     false,
   );
+});
+
+test("targeted outbound read does not initialize its directory", () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "herdsman-peer-outbound-read-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(readRemotePeerOutbound(randomUUID()), undefined);
+    assert.equal(
+      existsSync(
+        join(agentDir, "pi-herdsman", "runtime", "peers-v2", "remote-outbound"),
+      ),
+      false,
+    );
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("queued transfer retries only after definitive absence and exact-session generation proof", () => {

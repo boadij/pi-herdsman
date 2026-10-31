@@ -173,13 +173,12 @@ export function resolveRemotePeerOutboundRetry(
   return { kind: "retry", envelope: JSON.stringify(envelope) };
 }
 
+function outboundDirectoryPath(): string {
+  return join(herdsmanDataRoot(), "runtime", "peers-v2", "remote-outbound");
+}
+
 function outboundDirectory(): string {
-  const path = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "peers-v2",
-    "remote-outbound",
-  );
+  const path = outboundDirectoryPath();
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
   return path;
@@ -291,7 +290,10 @@ export function readRemotePeerOutbound(
   id: string,
 ): RemotePeerOutbound | undefined {
   if (!UUID.test(id)) return undefined;
-  return loadRemotePeerOutbound(join(outboundDirectory(), `${id}.json`), id);
+  return loadRemotePeerOutbound(
+    join(outboundDirectoryPath(), `${id}.json`),
+    id,
+  );
 }
 
 export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
