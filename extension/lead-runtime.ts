@@ -5850,7 +5850,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         const outcome = lastSettledRun;
         // Failed/cancelled herd runs are reported at settlement, before children
         // finish. Assigned projects require a completion handoff.
-        if (outcome?.outcome === "completed") {
+        if (outcome?.outcome === "completed" && !outcome.aborted) {
           const message = outcome.summary
             ? `Herd run settled.\n\n${outcome.summary}`
             : "Herd run settled without a verified Lead integration summary.";
@@ -5866,7 +5866,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 entry.data?.sessionId === sessionId &&
                 entry.data?.phase === "report_pending" &&
                 ((entry.data?.reportId === herdReportId &&
-                  entry.data?.kind !== "execution_failure") ||
+                  (entry.data?.kind === "successful_handoff" ||
+                    entry.data?.kind === "herd_settlement" ||
+                    entry.data?.kind === undefined)) ||
                   (entry.data?.runReportId === herdReportId &&
                     entry.data?.kind === "successful_handoff")),
             )?.data;
@@ -5890,7 +5892,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 ...(legacyFailureOccupiesHerdId
                   ? { runReportId: herdReportId }
                   : {}),
-                kind: "successful_handoff",
+                kind: "herd_settlement",
               };
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
@@ -5909,6 +5911,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               : await host.currentProjectAssignment(ctx)
             : undefined;
           if (managed && !assignment) return;
+          const publicationKind = pending
+            ? pending.kind === "successful_handoff"
+              ? undefined
+              : pending.kind
+            : "herd_settlement";
           if (assignment) {
             if (
               !(await host.publishProjectMessage(
@@ -5918,6 +5925,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 [],
                 "herd_run",
                 pending?.reportId ?? herdReportId,
+                publicationKind,
               ))
             )
               return;
@@ -5926,6 +5934,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               sessionId,
               startedAt,
               reportId: pending?.reportId ?? herdReportId,
+              ...(publicationKind !== undefined
+                ? { kind: publicationKind }
+                : {}),
             });
           }
         } else if (outcome) {
@@ -5965,6 +5976,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 startedAt: pending.startedAt,
                 reportId: pending.reportId,
                 runReportId: herdReportId,
+                kind: pending.kind,
               });
             }
           }
@@ -6012,6 +6024,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             startedAt,
             reportId,
             runReportId: herdReportId,
+            kind: "execution_failure",
           });
         }
         host.pi.appendEntry(host.entryName, {
@@ -6125,6 +6138,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           startedAt: report.startedAt,
           reportId,
           ...(report.runReportId ? { runReportId: report.runReportId } : {}),
+          ...(report.kind !== undefined ? { kind: report.kind } : {}),
         });
     }
   };
@@ -6251,6 +6265,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               startedAt: turnStartedAt,
               reportId: leadReportId,
               ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
+              kind: "execution_failure",
             });
         } catch (error) {
           host.appendDurableError(
@@ -6273,6 +6288,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             createdAt: reportCreatedAt,
             ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
             message,
+            kind: "execution_cancelled",
             target: "project",
           });
           if (
@@ -6280,7 +6296,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               ctx,
               message,
               leadReportId,
-              undefined,
+              "execution_cancelled",
               reportCreatedAt,
               "project",
             )
@@ -6291,6 +6307,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               startedAt: turnStartedAt,
               reportId: leadReportId,
               ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
+              kind: "execution_cancelled",
             });
         } catch (error) {
           host.appendDurableError(
@@ -6308,9 +6325,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         leadReportId
       ) {
         try {
+          let pending: any;
           if (host.isManagedLead()) {
             const sessionId = ctx.sessionManager.getSessionId();
-            const pending = (ctx.sessionManager.getEntries() as any[]).some(
+            pending = (ctx.sessionManager.getEntries() as any[]).find(
               (entry) =>
                 entry?.type === "custom" &&
                 entry.customType === host.entryName &&
@@ -6325,6 +6343,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 startedAt: turnStartedAt,
                 reportId: leadReportId,
                 message: summary,
+                kind: "direct_response",
                 target: "project",
               });
           }
@@ -6350,6 +6369,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 [],
                 "herd_run",
                 leadReportId,
+                pending ? pending.data?.kind : "direct_response",
               )
             )
               host.pi.appendEntry(host.entryName, {
@@ -6357,6 +6377,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 sessionId: ctx.sessionManager.getSessionId(),
                 startedAt: turnStartedAt,
                 reportId: leadReportId,
+                kind: pending ? pending.data?.kind : "direct_response",
               });
           }
         } catch (error) {
@@ -6462,7 +6483,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         } else if (
           data.phase === "report_pending" &&
           data.reportId !== herdReportId &&
-          data.kind !== "successful_handoff"
+          data.kind !== "successful_handoff" &&
+          data.kind !== "herd_settlement"
         ) {
           latestExecution = {
             index,
@@ -6547,7 +6569,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             if (
               data.phase === "report_pending" &&
               data.reportId !== herdReportId &&
-              data.kind !== "successful_handoff"
+              data.kind !== "successful_handoff" &&
+              data.kind !== "herd_settlement"
             ) {
               latestExecution = index;
               latestExecutionReportId = data.reportId;
@@ -6581,7 +6604,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 pending.data?.phase === "report_pending" &&
                 pending.data?.reportId === data.reportId &&
                 ((pending.data?.reportId === herdReportId &&
-                  pending.data?.kind !== "execution_failure") ||
+                  (pending.data?.kind === "successful_handoff" ||
+                    pending.data?.kind === "herd_settlement" ||
+                    pending.data?.kind === undefined)) ||
                   (pending.data?.runReportId === herdReportId &&
                     pending.data?.kind === "successful_handoff")),
             )
@@ -6658,6 +6683,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 startedAt: herdRunStartedAt,
                 reportId,
                 runReportId: herdReportId,
+                kind: "execution_failure",
               });
             if (published)
               lastSettledRun = { aborted: false, outcome: "reported" };

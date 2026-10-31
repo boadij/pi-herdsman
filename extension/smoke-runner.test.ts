@@ -7149,8 +7149,10 @@ test("manager handoff requires exact repository, assignment, sender, id, and con
       branch: "feature/one",
       fromSessionId: "lead-session",
       id: "message-id",
+      kind: "supervisor_message",
     },
-    content: "Project feature/one from lead lead-session:\n\nHANDOFF",
+    content:
+      "Lead → Manager for assignment feature/one from lead lead-session:\n\nHANDOFF",
   };
   const contents = JSON.stringify(record);
   assert.deepEqual(
@@ -7272,7 +7274,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
   const ready = {
     role: "user",
     content:
-      "Project smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
+      "Lead → Manager for assignment smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
   };
   assert.match(
     decide("manager-handoff", { messages: [...assigned, ready] }).content[0]
@@ -7926,8 +7928,12 @@ test("Manager READY answer follows delivered message even on a separate followUp
       type: "custom_message",
       id: "receipt",
       customType: "pi-herdsman-project_message",
-      details: { branch, fromSessionId: lead },
-      content: `Project ${branch} from lead ${lead}:\n\nMANAGER_RECOVERY_READY`,
+      details: {
+        branch,
+        fromSessionId: lead,
+        kind: "supervisor_message",
+      },
+      content: `Lead → Manager for assignment ${branch} from lead ${lead}:\n\nMANAGER_RECOVERY_READY`,
     },
     {
       type: "message",
@@ -8029,8 +8035,12 @@ test("Manager READY timeout diagnostics recognize exact project-message receipts
   const receipt = {
     type: "custom_message",
     customType: "pi-herdsman-project_message",
-    details: { branch, fromSessionId: "lead-id" },
-    content: `Project ${branch} from lead lead-id:\n\nMANAGER_RECOVERY_READY`,
+    details: {
+      branch,
+      fromSessionId: "lead-id",
+      kind: "supervisor_message",
+    },
+    content: `Lead → Manager for assignment ${branch} from lead lead-id:\n\nMANAGER_RECOVERY_READY`,
   };
   for (const [entry, expected] of [
     [receipt, true],
@@ -8041,14 +8051,14 @@ test("Manager READY timeout diagnostics recognize exact project-message receipts
       {
         ...receipt,
         content:
-          "Project manager-recovery from lead wrong-lead:\n\nMANAGER_RECOVERY_READY",
+          "Lead → Manager for assignment manager-recovery from lead wrong-lead:\n\nMANAGER_RECOVERY_READY",
       },
       false,
     ],
     [
       {
         ...receipt,
-        content: `Project ${branch} from lead lead-id to chief chief-id: MANAGER_RECOVERY_READY`,
+        content: `Lead → Manager for assignment ${branch} from lead lead-id to chief chief-id: MANAGER_RECOVERY_READY`,
       },
       false,
     ],

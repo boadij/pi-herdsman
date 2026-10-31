@@ -50,11 +50,6 @@ main() {
   need awk
   need grep
 
-  node -e '
-const [major, minor] = process.versions.node.split(".").map(Number);
-if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
-' || err "requires Node >=22.19.0"
-
   case "$(uname -s)" in
     Linux) os=linux ;;
     Darwin) os=macos ;;
@@ -79,6 +74,16 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   log "resolving released Pi Herdsman stack"
   npm view "$PACKAGE@latest" --json > "$manifest" ||
     err "could not resolve $PACKAGE@latest from npm"
+
+  node_requirement="$(package_field engines.node)" ||
+    err "released package is missing its Node.js engine requirement"
+  case "$node_requirement" in
+    ">="*) node_minimum="${node_requirement#>=}" ;;
+    *) err "unsupported Node engine requirement: $node_requirement" ;;
+  esac
+  node_cmp="$(version_compare "$(node -p 'process.versions.node')" "$node_minimum")" ||
+    err "unsupported Node engine requirement: $node_requirement"
+  [ "$node_cmp" -ge 0 ] || err "requires Node $node_requirement"
 
   herdsman_version="$(package_field version)" ||
     err "released package is missing its version"

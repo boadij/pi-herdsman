@@ -211,6 +211,12 @@ reported as unresolved unless a later Lead execution completes successfully.
 Cancellation is reported separately as a factual, nonterminal message without
 partial assistant output.
 
+Manager-bound Lead messages are labeled by source: explicit `message_supervisor`
+messages, completed direct responses, settled herd runs, execution failures, and
+cancellations have distinct headings. These labels describe the message only;
+they do not imply assignment acceptance, review readiness, integration, or
+retirement.
+
 An assigned Lead reports an execution failure to its Manager through the
 durable project-message path. If the Manager is absent, the report remains
 pending; when the exact current Manager returns idle, an unreceived failure
