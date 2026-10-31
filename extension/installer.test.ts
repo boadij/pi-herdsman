@@ -383,6 +383,7 @@ function executable(path, content) {
 
 function fixture({
   badChecksum = false,
+  nodeRequirement = packageJson.engines.node,
   initialPiVersion = "0.1.0",
   initialHerdrVersion = "0.1.0",
   piInstallerVersion = packageJson.piHerdsman.runtime.pi,
@@ -428,6 +429,7 @@ esac
     JSON.stringify({
       name: packageJson.name,
       version: packageJson.version,
+      engines: { node: nodeRequirement },
       piHerdsman: { runtime },
     }),
   );
@@ -551,6 +553,25 @@ process.stdin.on("end", () => {
     },
   };
 }
+
+test(
+  "installer rejects a Node version below the published package requirement",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture({ nodeRequirement: ">=99.0.0" });
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /requires Node >=99\\.0\\.0/u);
+      assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^(?:pi |curl |herdr )/mu);
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "installer raises older runtimes to tested baselines and repeat runs leave them alone",
