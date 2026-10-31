@@ -1,7 +1,108 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createLeadInboxRuntime } from "./lead-runtime.ts";
+import {
+  listChiefMessagePaths,
+  readChiefMessage,
+  supervisionRuntime,
+  writeChiefMessage,
+} from "./supervision.ts";
 import { fakeContext } from "./support.ts";
+
+test("managed peer inbox cleanup removes messages only for a verified scope mismatch", async () => {
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const socket = join(
+    mkdtempSync(join(tmpdir(), "lead-inbox-cleanup-")),
+    "sock",
+  );
+  process.env.HERDR_SOCKET_PATH = socket;
+  const context = fakeContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId: "lead-session",
+        kind: "managed",
+        repoKey: "assigned-repo",
+        branch: "feature",
+      },
+    },
+  ]);
+  context.sessionManager.getSessionId = () => "lead-session";
+  const peerInboxRuntime = supervisionRuntime(socket);
+  const record = {
+    version: 2 as const,
+    build: { version: "0.18.0", sha256: "a".repeat(64) },
+    id: randomUUID(),
+    leaseId: randomUUID(),
+    kind: "peer_message" as const,
+    fromSessionId: "sender",
+    toSessionId: "lead-session",
+    leadSessionId: "lead-session",
+    text: "stale",
+    peerSource: {
+      role: "lead" as const,
+      socket,
+      group: { repoKey: "assigned-repo", primaryWorkspaceId: "workspace" },
+      managed: true,
+    },
+    createdAt: 1,
+  };
+  let currentScope: any = {
+    repoKey: "current-repo",
+    repoName: "current",
+    primaryWorkspaceId: "workspace",
+    workspaceIds: ["workspace"],
+  };
+  const runtime = createLeadInboxRuntime({
+    leadRuntime: {
+      chiefMode: "inactive",
+      sessionGeneration: 0,
+      chiefModeGeneration: 0,
+    },
+    peerRuntime: () => peerInboxRuntime,
+    listChiefMessagePaths,
+    currentWorktreeScope: async (_ctx: unknown) => currentScope,
+  } as any);
+
+  try {
+    writeChiefMessage(record, peerInboxRuntime);
+    await runtime.cleanupManagedPeerInbox(context as any);
+    assert.deepEqual(
+      listChiefMessagePaths(peerInboxRuntime, "lead-session"),
+      [],
+    );
+
+    for (const scope of [
+      {
+        repoKey: "assigned-repo",
+        repoName: "assigned",
+        primaryWorkspaceId: "workspace",
+        workspaceIds: ["workspace"],
+      },
+      undefined,
+    ]) {
+      const retained = { ...record, id: randomUUID() };
+      writeChiefMessage(retained, peerInboxRuntime);
+      currentScope = scope;
+      await runtime.cleanupManagedPeerInbox(context as any);
+      assert.equal(
+        listChiefMessagePaths(peerInboxRuntime, "lead-session").some(
+          (path) => readChiefMessage(path).id === retained.id,
+        ),
+        true,
+      );
+    }
+  } finally {
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;

@@ -6737,6 +6737,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     assertCurrentLeadCoordination,
     currentChiefAuthority,
     currentManager,
+    currentWorktreeScope,
     worktreeGroupScope,
     readProjectAssignment,
     managerForScope,
