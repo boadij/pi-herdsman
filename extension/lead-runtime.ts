@@ -5574,19 +5574,39 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 entry.customType === host.entryName &&
                 entry.data?.sessionId === sessionId &&
                 entry.data?.phase === "report_pending" &&
-                entry.data?.reportId === herdReportId &&
+                (entry.data?.reportId === herdReportId ||
+                  entry.data?.runReportId === herdReportId) &&
                 entry.data?.kind !== "execution_failure",
             )?.data;
             reportMessage = pending?.message ?? message;
-            if (!pending)
+            if (!pending) {
+              const legacyFailureOccupiesHerdId = entries.some(
+                (entry) =>
+                  entry?.type === "custom" &&
+                  entry.customType === host.entryName &&
+                  entry.data?.sessionId === sessionId &&
+                  entry.data?.phase === "report_pending" &&
+                  entry.data?.reportId === herdReportId &&
+                  entry.data?.kind === "execution_failure",
+              );
+              pending = {
+                reportId: legacyFailureOccupiesHerdId
+                  ? randomUUID()
+                  : herdReportId,
+                message: reportMessage,
+                target: "project",
+                ...(legacyFailureOccupiesHerdId
+                  ? { runReportId: herdReportId }
+                  : {}),
+              };
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
                 sessionId,
                 startedAt,
-                reportId: herdReportId,
+                ...pending,
                 message: reportMessage,
-                target: "project",
               });
+            }
           }
           const assignment = managed
             ? pending
@@ -5604,7 +5624,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 reportMessage,
                 [],
                 "herd_run",
-                herdReportId,
+                pending?.reportId ?? herdReportId,
               ))
             )
               return;
@@ -5612,7 +5632,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               phase: "report_sent",
               sessionId,
               startedAt,
-              reportId: herdReportId,
+              reportId: pending?.reportId ?? herdReportId,
             });
           }
         } else if (outcome) {
@@ -6257,14 +6277,16 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             entry.customType === host.entryName &&
             data?.sessionId === ctx.sessionManager.getSessionId() &&
             data?.phase === "report_sent" &&
-            data?.reportId === herdReportId &&
+            typeof data?.reportId === "string" &&
             currentEntries.some(
               (pending) =>
                 pending?.type === "custom" &&
                 pending.customType === host.entryName &&
                 pending.data?.sessionId === ctx.sessionManager.getSessionId() &&
                 pending.data?.phase === "report_pending" &&
-                pending.data?.reportId === herdReportId &&
+                pending.data?.reportId === data.reportId &&
+                (pending.data?.reportId === herdReportId ||
+                  pending.data?.runReportId === herdReportId) &&
                 pending.data?.kind !== "execution_failure",
             )
           );

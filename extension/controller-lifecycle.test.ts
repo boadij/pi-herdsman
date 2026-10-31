@@ -5177,7 +5177,6 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
         createdAt: startedAt,
         target: "project",
       },
-      { phase: "report_sent", reportId: herdId },
       {
         phase: "lead_settled",
         reportId: herdId,
@@ -5199,6 +5198,9 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   );
   let childActive = true;
   const messages: string[] = [];
+  const projectMessages = new Map([
+    [herdId, { text: "Earlier recovery failure", kind: "execution_failure" }],
+  ]);
   const createRuntime = () =>
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
@@ -5210,7 +5212,28 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
       listAgentStates: () =>
         childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
       currentProjectAssignment: async () => ({ project: "assigned" }) as any,
-      publishProjectMessage: async (_ctx, _assignment, message) => {
+      publishProjectMessage: async (
+        _ctx,
+        _assignment,
+        message,
+        _attachments,
+        _channel,
+        reportId,
+        kind,
+      ) => {
+        const payload = {
+          text: message,
+          kind: kind ?? "herd_run",
+        };
+        const existing = projectMessages.get(reportId);
+        if (
+          existing &&
+          (existing.text !== payload.text || existing.kind !== payload.kind)
+        )
+          throw new Error(
+            "Project message identity conflicts with durable payload",
+          );
+        if (!existing) projectMessages.set(reportId, payload);
         messages.push(message);
         return true as any;
       },
@@ -5224,7 +5247,7 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   restored.restoreSession(pi.entries, LEAD_SESSION_ID);
   restored.finishIfIdle(context);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(messages, []);
+  assert.deepEqual(messages, ["Earlier recovery failure"]);
   assert.equal(
     pi.entries.some((entry: any) => entry.data?.phase === "finished"),
     false,
@@ -5235,12 +5258,27 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   finalRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
   finalRestore.finishIfIdle(context);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(messages, ["Herd run settled.\n\nNew verified summary"]);
+  assert.deepEqual(messages, [
+    "Earlier recovery failure",
+    "Herd run settled.\n\nNew verified summary",
+  ]);
+  const successIntent = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.kind !== "execution_failure" &&
+      entry.data?.runReportId === herdId,
+  );
+  assert.ok(successIntent);
+  assert.notEqual(successIntent.data.reportId, herdId);
+  assert.equal(
+    projectMessages.get(successIntent.data.reportId)?.text,
+    "Herd run settled.\n\nNew verified summary",
+  );
   assert.equal(
     pi.entries.filter(
       (entry: any) =>
         entry.data?.phase === "report_pending" &&
-        entry.data?.reportId === herdId &&
+        entry.data?.reportId === successIntent.data.reportId &&
         entry.data?.kind !== "execution_failure",
     ).length,
     1,
@@ -5248,9 +5286,18 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   assert.equal(
     pi.entries.filter(
       (entry: any) =>
-        entry.data?.phase === "report_sent" && entry.data?.reportId === herdId,
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === successIntent.data.reportId,
     ).length,
-    2,
+    1,
+  );
+  assert.ok(
+    pi.entries.some(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === herdId &&
+        entry.data?.kind === "execution_failure",
+    ),
   );
 });
 
