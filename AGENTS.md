@@ -144,6 +144,16 @@ in `AGENTS.md`.
 - `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
 - `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
 
+## GitHub workflow
+
+- Work on a feature branch, either in this repository or a fork, depending
+  on write access. Open pull requests against upstream `main`.
+- Never push directly to upstream `main` or bypass branch protection.
+- Use Conventional Commit PR titles (see `CONTRIBUTING.md`). Pull requests
+  are squash-merged.
+- Before merging, required CI checks must pass and the branch must be up
+  to date with upstream `main`.
+
 ## Development loop
 
 During implementation, run the smallest relevant test file first:
