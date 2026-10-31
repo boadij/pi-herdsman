@@ -5601,7 +5601,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 ...(legacyFailureOccupiesHerdId
                   ? { runReportId: herdReportId }
                   : {}),
-                kind: "successful_handoff",
+                kind: "herd_settlement",
               };
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
@@ -5620,6 +5620,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               : await host.currentProjectAssignment(ctx)
             : undefined;
           if (managed && !assignment) return;
+          const publicationKind = pending
+            ? pending.kind === "successful_handoff"
+              ? undefined
+              : pending.kind
+            : "herd_settlement";
           if (assignment) {
             if (
               !(await host.publishProjectMessage(
@@ -5629,11 +5634,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 [],
                 "herd_run",
                 pending?.reportId ?? herdReportId,
-                pending
-                  ? pending.kind === "successful_handoff"
-                    ? "herd_settlement"
-                    : pending.kind
-                  : "herd_settlement",
+                publicationKind,
               ))
             )
               return;
@@ -5642,7 +5643,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               sessionId,
               startedAt,
               reportId: pending?.reportId ?? herdReportId,
-              ...(pending?.kind !== undefined ? { kind: pending.kind } : {}),
+              ...(publicationKind !== undefined
+                ? { kind: publicationKind }
+                : {}),
             });
           }
         } else if (outcome) {
@@ -5833,9 +5836,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           ctx,
           report.message,
           reportId,
-          report.kind === "successful_handoff"
-            ? "herd_settlement"
-            : report.kind,
+          report.kind === "successful_handoff" ? undefined : report.kind,
           report.createdAt,
           report.target,
         )
@@ -6191,7 +6192,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         } else if (
           data.phase === "report_pending" &&
           data.reportId !== herdReportId &&
-          data.kind !== "successful_handoff"
+          data.kind !== "successful_handoff" &&
+          data.kind !== "herd_settlement"
         ) {
           latestExecution = {
             index,
@@ -6276,7 +6278,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             if (
               data.phase === "report_pending" &&
               data.reportId !== herdReportId &&
-              data.kind !== "successful_handoff"
+              data.kind !== "successful_handoff" &&
+              data.kind !== "herd_settlement"
             ) {
               latestExecution = index;
               latestExecutionReportId = data.reportId;
@@ -6344,23 +6347,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           );
         });
         if (hasUnsentHerdIntent) return;
-        if (
-          herdReportId &&
-          currentEntries.some(
-            (entry) =>
-              entry?.type === "custom" &&
-              entry.customType === host.entryName &&
-              entry.data?.sessionId === ctx.sessionManager.getSessionId() &&
-              entry.data?.phase === "report_sent" &&
-              (entry.data?.kind === "herd_settlement" ||
-                entry.data?.kind === "successful_handoff" ||
-                (entry.data?.kind === undefined &&
-                  entry.data?.reportId === herdReportId)) &&
-              (entry.data?.reportId === herdReportId ||
-                entry.data?.runReportId === herdReportId),
-          )
-        )
-          lastSettledRun = { aborted: false, outcome: "reported" };
         if (herdRunStartedAt !== undefined) {
           leadSettled = true;
           if (!lastSettledRun) {
