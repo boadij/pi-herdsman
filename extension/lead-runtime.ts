@@ -120,6 +120,7 @@ import {
 } from "./agent-definitions.ts";
 import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
+import { listAgentStateIssues } from "./mailbox.ts";
 import {
   populateMenuFrame,
   nameSessionIfUnset,
@@ -5854,29 +5855,12 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             reportId: herdReportId,
           });
         } catch (error) {
-          lastSettledRun = { aborted: false, outcome: "unverified" };
           host.appendDurableError(
             host.pi,
             ctx,
             "pi_herdsman_state_error",
             error,
           );
-          try {
-            host.pi.appendEntry(host.entryName, {
-              phase: "lead_start_unpersisted",
-              sessionId: ctx.sessionManager.getSessionId(),
-              reportId: leadReportId,
-              runReportId: herdReportId,
-            });
-          } catch (markerError) {
-            // If both journal writes fail, reload has no durable invalidation evidence.
-            host.appendDurableError(
-              host.pi,
-              ctx,
-              "pi_herdsman_state_error",
-              markerError,
-            );
-          }
         }
       }
     },
@@ -6100,129 +6084,109 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         });
       }
       const records = (entries as any[])
-        .map((entry, index) => ({
-          entry,
-          index,
-          data: entry?.data,
-        }))
-        .filter(
-          ({ entry, data }) =>
+        .filter((entry) => {
+          const data = entry?.data;
+          return (
             entry?.type === "custom" &&
             entry.customType === host.entryName &&
             data?.sessionId === sessionId &&
             !!herdReportId &&
             (data.reportId === herdReportId ||
-              data.runReportId === herdReportId),
-        );
-      let latestExecution:
-        | {
-            index: number;
-            outcome: "completed" | "unverified";
-            summary?: string;
-            reportId?: string;
-          }
-        | undefined;
-      let latestReceipt = -1;
-      const sentReports = new Set<string>();
-      for (const { index, data } of records) {
+              data.runReportId === herdReportId)
+          );
+        })
+        .map((entry) => entry.data);
+      const pending = new Map<
+        string,
+        { kind?: string; runReportId?: string; index: number }
+      >();
+      const sent = new Set<string>();
+      let latestEvidence = -1;
+      let responseText: string | undefined;
+      let failureId: string | undefined;
+      for (const [index, data] of records.entries()) {
         if (
           data.phase === "lead_started" ||
           data.phase === "lead_start_unpersisted"
-        )
-          latestExecution = { index, outcome: "unverified" };
-        else if (data.phase === "lead_settled") {
-          const response =
-            typeof data.responseEntryId === "string"
-              ? (entries as any[]).find(
-                  (item) =>
-                    item?.type === "message" &&
-                    item.id === data.responseEntryId &&
-                    item.message?.role === "assistant" &&
-                    Array.isArray(item.message.content) &&
-                    item.message.content.every((part: any) => {
-                      if (!part || typeof part !== "object") return false;
-                      if (part.type === "text")
-                        return typeof part.text === "string";
-                      if (part.type === "thinking")
-                        return typeof part.thinking === "string";
-                      if (part.type === "image")
-                        return (
-                          typeof part.data === "string" &&
-                          typeof part.mimeType === "string"
-                        );
-                      if (part.type === "toolCall")
-                        return (
-                          typeof part.id === "string" &&
-                          typeof part.name === "string" &&
-                          part.arguments !== null &&
-                          typeof part.arguments === "object"
-                        );
-                      return false;
-                    }),
-                )
-              : undefined;
-          if (data.reportId === herdReportId && response) {
-            latestExecution = {
-              index,
-              outcome: "completed",
-              summary: contentText(response.message.content, "").trim(),
-            };
-          } else latestExecution = { index, outcome: "unverified" };
-        } else if (
-          data.phase === "report_pending" &&
-          data.reportId !== herdReportId &&
-          data.kind !== "successful_handoff"
         ) {
-          latestExecution = {
-            index,
-            outcome: "unverified",
-            reportId: data.reportId,
-          };
-        } else if (data.phase === "report_sent") {
-          latestReceipt = index;
-          if (typeof data.reportId === "string") sentReports.add(data.reportId);
-        }
+          latestEvidence = index;
+          responseText = undefined;
+          failureId = undefined;
+        } else if (data.phase === "lead_settled") {
+          latestEvidence = index;
+          failureId = undefined;
+          const response = (entries as any[]).find(
+            (entry) =>
+              entry?.type === "message" &&
+              entry.id === data.responseEntryId &&
+              entry.message?.role === "assistant" &&
+              Array.isArray(entry.message.content) &&
+              entry.message.content.every((part: any) => {
+                if (!part || typeof part !== "object") return false;
+                if (part.type === "text")
+                  return typeof part.text === "string";
+                if (part.type === "thinking")
+                  return typeof part.thinking === "string";
+                if (part.type === "image")
+                  return (
+                    typeof part.data === "string" &&
+                    typeof part.mimeType === "string"
+                  );
+                if (part.type === "toolCall")
+                  return (
+                    typeof part.id === "string" &&
+                    typeof part.name === "string" &&
+                    part.arguments !== null &&
+                    typeof part.arguments === "object"
+                  );
+                return false;
+              }),
+          );
+          responseText =
+            data.reportId === herdReportId && response
+              ? contentText(response.message.content, "").trim()
+              : undefined;
+        } else if (data.phase === "report_pending") {
+          if (typeof data.reportId === "string")
+            pending.set(data.reportId, {
+              kind: data.kind,
+              runReportId: data.runReportId,
+              index,
+            });
+          if (
+            data.reportId !== herdReportId &&
+            data.kind !== "successful_handoff"
+          ) {
+            latestEvidence = index;
+            responseText = undefined;
+            failureId = data.reportId;
+          }
+        } else if (
+          data.phase === "report_sent" &&
+          typeof data.reportId === "string"
+        )
+          sent.add(data.reportId);
       }
-      const hasReportIntent = records.some(
-        ({ data }) => data.phase === "report_sent",
+      const successSent = [...pending].some(
+        ([id, data]) =>
+          sent.has(id) &&
+          data.index >= latestEvidence &&
+          ((id === herdReportId && data.kind !== "execution_failure") ||
+            (data.runReportId === herdReportId &&
+              data.kind === "successful_handoff")),
       );
-      const hasUnsentHerdIntent = (entries as any[]).some((entry) => {
-        const data = entry?.data;
-        return (
-          entry?.type === "custom" &&
-          entry.customType === host.entryName &&
-          data?.sessionId === sessionId &&
-          data?.phase === "report_pending" &&
-          !!herdReportId &&
-          (data.reportId === herdReportId ||
-            data.runReportId === herdReportId) &&
-          !(entries as any[]).some(
-            (sent) =>
-              sent?.type === "custom" &&
-              sent.customType === host.entryName &&
-              sent.data?.sessionId === sessionId &&
-              sent.data?.phase === "report_sent" &&
-              sent.data?.reportId === data.reportId,
-          )
-        );
-      });
+      const unsent = [...pending.keys()].some((id) => !sent.has(id));
       lastSettledRun =
-        latestExecution?.outcome === "completed"
+        responseText !== undefined
           ? {
               aborted: false,
-              outcome: "completed",
-              summary: latestExecution.summary,
+              outcome: successSent ? "reported" : "completed",
+              summary: responseText,
             }
-          : latestExecution?.outcome === "unverified"
-            ? latestExecution.reportId &&
-              sentReports.has(latestExecution.reportId)
-              ? { aborted: false, outcome: "reported" }
-              : undefined
-            : hasReportIntent &&
-                !hasUnsentHerdIntent &&
-                latestReceipt >= (latestExecution?.index ?? -1)
-              ? { aborted: false, outcome: "reported" }
-              : undefined;
+          : (failureId && sent.has(failureId)) ||
+              (latestEvidence < 0 && sent.size > 0 && !unsent)
+            ? { aborted: false, outcome: "reported" }
+            : undefined;
       leadSettled = herdRunStartedAt === undefined;
     },
     finishIfIdle: (ctx: ExtensionContext) => {
@@ -6231,76 +6195,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       idleFinishing = (async () => {
         await restorePendingReports(ctx, ctx.sessionManager.getEntries());
         const currentEntries = ctx.sessionManager.getEntries() as any[];
-        if (!lastSettledRun && herdReportId) {
-          let latestExecution = -1;
-          let latestExecutionReportId: string | undefined;
-          const sentReports = new Set<string>();
-          currentEntries.forEach((entry, index) => {
-            const data = entry?.data;
-            if (
-              entry?.type !== "custom" ||
-              entry.customType !== host.entryName ||
-              data?.sessionId !== ctx.sessionManager.getSessionId() ||
-              (data.reportId !== herdReportId &&
-                data.runReportId !== herdReportId)
-            )
-              return;
-            if (
-              data.phase === "lead_started" ||
-              data.phase === "lead_start_unpersisted" ||
-              data.phase === "lead_settled"
-            ) {
-              latestExecution = index;
-              latestExecutionReportId = undefined;
-            }
-            if (
-              data.phase === "report_pending" &&
-              data.reportId !== herdReportId &&
-              data.kind !== "successful_handoff"
-            ) {
-              latestExecution = index;
-              latestExecutionReportId = data.reportId;
-            }
-            if (
-              data.phase === "report_sent" &&
-              typeof data.reportId === "string"
-            )
-              sentReports.add(data.reportId);
-          });
-          if (
-            (latestExecutionReportId &&
-              sentReports.has(latestExecutionReportId)) ||
-            (latestExecution < 0 && sentReports.size > 0)
-          )
-            lastSettledRun = { aborted: false, outcome: "reported" };
-        }
-        const sentSuccessfulHerdHandoff = currentEntries.some((entry) => {
-          const data = entry?.data;
-          return (
-            entry?.type === "custom" &&
-            entry.customType === host.entryName &&
-            data?.sessionId === ctx.sessionManager.getSessionId() &&
-            data?.phase === "report_sent" &&
-            typeof data?.reportId === "string" &&
-            currentEntries.some(
-              (pending) =>
-                pending?.type === "custom" &&
-                pending.customType === host.entryName &&
-                pending.data?.sessionId === ctx.sessionManager.getSessionId() &&
-                pending.data?.phase === "report_pending" &&
-                pending.data?.reportId === data.reportId &&
-                ((pending.data?.reportId === herdReportId &&
-                  pending.data?.kind !== "execution_failure") ||
-                  (pending.data?.runReportId === herdReportId &&
-                    pending.data?.kind === "successful_handoff")),
-            )
-          );
-        });
-        if (
-          lastSettledRun?.outcome === "completed" &&
-          sentSuccessfulHerdHandoff
-        )
-          lastSettledRun = { aborted: false, outcome: "reported" };
         const hasUnsentHerdIntent = currentEntries.some((entry) => {
           const data = entry?.data;
           return (
@@ -6325,6 +6219,16 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         if (herdRunStartedAt !== undefined) {
           leadSettled = true;
           if (!lastSettledRun) {
+            // Unresolved child work is not a failed Lead execution.
+            if (
+              host.hasPendingStarts() ||
+              host.listAgentStates().some(
+                ({ state }) =>
+                  state.ownerSessionId === ctx.sessionManager.getSessionId(),
+              ) ||
+              listAgentStateIssues().length > 0
+            )
+              return;
             const entries = ctx.sessionManager.getEntries() as any[];
             const pending = recoveryFailure(
               entries,
