@@ -1057,11 +1057,12 @@ function supervisionLeadColor(lead: SupervisedLeadDisplay): string {
     : lifecycleColor(lead.runtimeState);
 }
 
-const MANAGER_METADATA_LAYOUTS = [
-  { elapsed: true, context: true },
-  { elapsed: false, context: true },
-  { elapsed: false, context: false },
-] as const;
+export type GitChangeSummary = Readonly<{
+  dirty: boolean;
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+}>;
 
 type SupervisionRow = {
   text: string;
@@ -1135,6 +1136,7 @@ function renderSupervisionRows(
     theme?: any;
   } = {},
   selectedLead?: string,
+  getGitSummary?: (work: ProjectWorkSnapshot) => GitChangeSummary | undefined,
 ): SupervisionRow[] {
   const status = options.status ?? "fresh";
   const role = options.role ?? "chief";
@@ -1200,6 +1202,13 @@ function renderSupervisionRows(
       )
         ? `${item.kind === "work" ? item.lead!.contextPercent : ""}%`
         : "",
+      git:
+        item.kind === "work" &&
+        status === "fresh" &&
+        (item.work.status === "active" || item.work.status === "paused") &&
+        item.lead?.compatibility !== "incompatible"
+          ? getGitSummary?.(item.work)
+          : undefined,
     }));
     const workMarkers = {
       active: "·",
@@ -1207,40 +1216,6 @@ function renderSupervisionRows(
       unknown: "?",
       conflict: "!",
     };
-    const layout =
-      MANAGER_METADATA_LAYOUTS.find((candidate) =>
-        visible.every((item, index) => {
-          if (item.kind !== "work") return true;
-          const branch =
-            index === visible.length - 1 && !remaining ? "└─" : "├─";
-          const marker =
-            item.lead?.compatibility === "incompatible"
-              ? "!"
-              : item.work.status === "active" && item.lead
-                ? supervisionLeadMarker(item.lead)
-                : workMarkers[item.work.status];
-          const prefixWidth = visibleWidth(`${branch}  ${marker} `);
-          const suffixWidth = visibleWidth(
-            item.lead?.compatibility === "incompatible"
-              ? " · build mismatch"
-              : ` · ${item.work.status}`,
-          );
-          const telemetryWidth =
-            (candidate.elapsed && metadata[index]!.elapsed
-              ? visibleWidth(metadata[index]!.elapsed) + 2
-              : 0) +
-            (candidate.context && metadata[index]!.context
-              ? visibleWidth(metadata[index]!.context) + 2
-              : 0);
-          return (
-            prefixWidth +
-              visibleWidth(item.work.branch) +
-              suffixWidth +
-              telemetryWidth <=
-            width
-          );
-        }),
-      ) ?? MANAGER_METADATA_LAYOUTS.at(-1)!;
     return [
       { text: safeLine(header, width) },
       ...visible.map((item, index) => {
@@ -1274,14 +1249,41 @@ function renderSupervisionRows(
           lead?.compatibility === "incompatible"
             ? " · build mismatch"
             : ` · ${item.work.status}`;
-        const telemetry = [
-          ...(layout.elapsed && metadata[index]!.elapsed
-            ? [metadata[index]!.elapsed]
-            : []),
-          ...(layout.context && metadata[index]!.context
-            ? [metadata[index]!.context]
-            : []),
+        const elapsed = metadata[index]!.elapsed;
+        const context = metadata[index]!.context;
+        const git = metadata[index]!.git;
+        const diff =
+          git?.additions !== undefined &&
+          git.deletions !== undefined &&
+          git.changedFiles !== undefined
+            ? git.additions + git.deletions > 0
+              ? `+${git.additions} -${git.deletions}`
+              : git.changedFiles > 0
+                ? `${git.changedFiles}f`
+                : "±0"
+            : "";
+        const optionsToFit = [
+          ...(elapsed ? [{ value: elapsed, kind: "elapsed" }] : []),
+          ...(diff ? [{ value: diff, kind: "stats" }] : []),
+          ...(git?.dirty ? [{ value: "*", kind: "dirty" }] : []),
+          ...(context ? [{ value: context, kind: "context" }] : []),
         ];
+        const fixedWidth = visibleWidth(prefix) + visibleWidth(suffix);
+        const kept = [...optionsToFit];
+        const rowFits = () =>
+          fixedWidth +
+            visibleWidth(item.work.branch) +
+            kept.reduce(
+              (sum, option) => sum + visibleWidth(option.value) + 2,
+              0,
+            ) <=
+          width;
+        for (const kind of ["elapsed", "stats", "dirty", "context"])
+          if (!rowFits()) {
+            const at = kept.findIndex((option) => option.kind === kind);
+            if (at >= 0) kept.splice(at, 1);
+          }
+        const telemetry = kept.map((option) => option.value);
         const telemetryWidth = telemetry.reduce(
           (total, value) => total + visibleWidth(value) + 2,
           0,
@@ -1303,7 +1305,9 @@ function renderSupervisionRows(
         const branchText = themed(options.theme, "muted", displayedBranch);
         const truncatedBranch = displayedBranch !== item.work.branch;
         const clickRegion =
-          truncatedBranch && visibleWidth(displayedBranch) > visibleWidth("…")
+          (git || truncatedBranch) &&
+          visibleWidth(displayedBranch) >
+            (truncatedBranch ? visibleWidth("…") : 0)
             ? {
                 from: visibleWidth(prefix),
                 to: visibleWidth(prefix) + visibleWidth(displayedBranch),
@@ -1313,7 +1317,7 @@ function renderSupervisionRows(
           status === "fresh" && item.work.status === "active" && lead;
         return {
           text: safeLine(
-            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
+            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${kept.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && kept[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
             width,
           ),
           ...(canFocusLead && (!truncatedBranch || clickRegion)
@@ -1668,6 +1672,7 @@ export function createSupervisionWidget(
   role: "chief" | "manager" = "chief",
   theme?: any,
   onFocus?: (intent: FocusIntent) => void,
+  getGitSummary?: (work: ProjectWorkSnapshot) => GitChangeSummary | undefined,
 ): {
   render(width: number): string[];
   handleMouse(event: {
@@ -1684,12 +1689,18 @@ export function createSupervisionWidget(
   return {
     render(width) {
       renderedWidth = width;
-      const rows = renderSupervisionRows(getLeads(), width, {
-        status: getStatus(),
-        ordinaryCap: 6,
-        role,
-        theme,
-      }).filter(({ text }) => text.length > 0);
+      const rows = renderSupervisionRows(
+        getLeads(),
+        width,
+        {
+          status: getStatus(),
+          ordinaryCap: 6,
+          role,
+          theme,
+        },
+        undefined,
+        getGitSummary,
+      ).filter(({ text }) => text.length > 0);
       hits = [];
       rows.forEach((row, index) => {
         if (!row.intent || !row.label) return;

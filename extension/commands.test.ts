@@ -14476,10 +14476,38 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
   );
 });
 
-test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async () => {
+test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   const { managerSupervisionItems, supervisionPresentationReports } =
     await import("./presentation.ts");
+  const gitTestRoot = mkdtempSync(join(tmpdir(), "manager-git-sampler-"));
+  const managerCheckout = join(gitTestRoot, "manager");
+  const assignedCheckout = join(gitTestRoot, "assigned");
+  mkdirSync(managerCheckout);
+  const runGit = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  runGit(["init", "-b", "manager"], managerCheckout);
+  runGit(["config", "user.name", "Sampler Test"], managerCheckout);
+  runGit(["config", "user.email", "sampler@example.invalid"], managerCheckout);
+  writeFileSync(join(managerCheckout, ".gitignore"), "ignored.txt\n");
+  writeFileSync(join(managerCheckout, "file.txt"), "base\n");
+  runGit(["add", ".gitignore", "file.txt"], managerCheckout);
+  runGit(["commit", "-m", "base"], managerCheckout);
+  runGit(
+    ["worktree", "add", "-b", "feat/assigned", assignedCheckout],
+    managerCheckout,
+  );
+  writeFileSync(join(assignedCheckout, "file.txt"), "base\nchanged\n");
+  runGit(["add", "file.txt"], assignedCheckout);
+  runGit(["commit", "-m", "assigned change"], assignedCheckout);
+  writeFileSync(join(managerCheckout, "manager-only.txt"), "manager change\n");
+  runGit(["add", "manager-only.txt"], managerCheckout);
+  runGit(["commit", "-m", "manager change"], managerCheckout);
+  writeFileSync(join(assignedCheckout, "ignored.txt"), "ignored\n");
+  t.after(() => rmSync(gitTestRoot, { recursive: true, force: true }));
   const leadId = "standalone-click-lead";
   const paneId = "standalone-click-pane";
   const assignedLeadId = "assigned-click-lead";
@@ -14494,8 +14522,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         branch: "feat/assigned",
         session: assignedLeadId,
         status: "active" as const,
+        checkoutPath: assignedCheckout,
       },
     ],
+    managerCheckoutPath: managerCheckout,
     leads: [
       {
         lead: assignedLeadId,
@@ -14507,7 +14537,6 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         tabId: "tab",
         workspaceId: WORKSPACE,
         availableActions: [],
-        compatibility: "incompatible" as const,
       },
       {
         lead: leadId,
@@ -14536,6 +14565,8 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   let mismatch = false;
   let deferNextLookup = false;
   let loadCount = 0;
+  let sampleRefresh = false;
+  const untrackedFile = join(assignedCheckout, "untracked.txt");
   let markFocusLookupStarted!: () => void;
   const focusLookupStarted = new Promise<void>(
     (resolve) => (markFocusLookupStarted = resolve),
@@ -14546,7 +14577,15 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     chiefMode: "inactive" as "inactive" | "active",
     controllerRole: "manager" as const,
     roleSuspended: false,
-    managerLease: undefined,
+    managerLease: {
+      descriptor: {
+        leaseId: "manager-lease",
+        repoKey: resolve(
+          managerCheckout,
+          runGit(["rev-parse", "--git-common-dir"], managerCheckout),
+        ),
+      },
+    } as any,
     chiefLease: undefined,
     leadContext: undefined,
     chiefModeGeneration: 0,
@@ -14554,14 +14593,108 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     chiefActivationRollback: false,
     instanceId: "test",
   };
+  const gitCalls: Array<{ cwd: string; args: string[] }> = [];
+  const managerHead = runGit(["rev-parse", "HEAD"], managerCheckout);
+  let assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  let resolveGitDiff!: () => void;
+  const gitDiff = new Promise<void>((resolve) => (resolveGitDiff = resolve));
+  let diffMode:
+    "text" | "binary" | "malformed" | "fail" | "deferred" | "cancelDeferred" =
+    "text";
+  let failStatus = false;
+  let wrongStatusBranch = false;
+  let detachedStatusHead = false;
+  let resolveDeferredDiff!: () => void;
+  let markDeferredDiffStarted!: () => void;
+  const deferredDiffStarted = new Promise<void>(
+    (resolve) => (markDeferredDiffStarted = resolve),
+  );
+  let resolveCancelledDiff!: () => void;
+  let markCancelledDiffStarted!: () => void;
+  const cancelledDiffStarted = new Promise<void>(
+    (resolve) => (markCancelledDiffStarted = resolve),
+  );
+  let samplerSignal: AbortSignal | undefined;
+  const originalDateNow = Date.now;
+  let testNow = originalDateNow();
+  Date.now = () => testNow;
+  t.after(() => {
+    Date.now = originalDateNow;
+  });
   const host: any = {
     activeRole: () => currentRole,
     state: currentState,
-    pi: {},
+    pi: {
+      exec: async (_command: string, args: string[], options: any) => {
+        gitCalls.push({ cwd: options.cwd, args });
+        if (
+          args[0] === "rev-parse" &&
+          args[1] === "--verify" &&
+          options.cwd === assignedCheckout &&
+          diffMode !== "text"
+        )
+          return { code: 0, stdout: assignedHead };
+        if (args.includes("diff")) {
+          resolveGitDiff();
+          if (diffMode === "binary")
+            return { code: 0, stdout: "-\t-\tbinary.dat\0" };
+          if (diffMode === "malformed")
+            return { code: 0, stdout: "not-numstat\0" };
+          if (diffMode === "fail") return { code: 1, stdout: "" };
+          if (diffMode === "deferred") {
+            markDeferredDiffStarted();
+            return await new Promise<{ code: number; stdout: string }>(
+              (resolve) => {
+                resolveDeferredDiff = () =>
+                  resolve({ code: 0, stdout: "9\t2\tlate.txt\0" });
+              },
+            );
+          }
+          if (diffMode === "cancelDeferred") {
+            samplerSignal = options.signal;
+            markCancelledDiffStarted();
+            return await new Promise<{ code: number; stdout: string }>(
+              (resolve) => {
+                resolveCancelledDiff = () =>
+                  resolve({ code: 0, stdout: "11\t4\tcancelled.txt\0" });
+              },
+            );
+          }
+          const result = spawnSync("git", args, {
+            cwd: options.cwd,
+            encoding: "utf8",
+          });
+          return { code: result.status === 0 ? 0 : 1, stdout: result.stdout };
+        }
+        if (failStatus && args.includes("status"))
+          return { code: 1, stdout: "" };
+        const result = spawnSync("git", args, {
+          cwd: options.cwd,
+          encoding: "utf8",
+        });
+        const stdout = args.includes("status")
+          ? result.stdout
+              .replace(/(# branch\.oid )[0-9a-f]+/u, `$1${assignedHead}`)
+              .replace(
+                detachedStatusHead ? "# branch.head feat/assigned" : "__none__",
+                detachedStatusHead ? "# branch.head (detached)" : "__none__",
+              )
+              .replace(
+                wrongStatusBranch ? "# branch.head feat/assigned" : "__none__",
+                wrongStatusBranch ? "# branch.head unexpected" : "__none__",
+              )
+          : result.stdout;
+        return { code: result.status === 0 ? 0 : 1, stdout };
+      },
+    },
     isCurrentChief: () => currentRole === "chief",
     herdrSessionSnapshot: async () => ({ agents: [] }),
     managedAgentSnapshots: async () => ({ agents: [] }),
     loadSnapshot: async () => {
+      if (sampleRefresh) {
+        sampleRefresh = false;
+        return currentSnapshot;
+      }
       loadCount++;
       if (loadCount === 2 || deferNextLookup) {
         deferNextLookup = false;
@@ -14665,6 +14798,8 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   const ctx = fakeContext() as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
+  const contextAbort = new AbortController();
+  ctx.signal = contextAbort.signal;
   ctx.ui = {
     ...ctx.ui,
     notify: (message: string) => focusNotices.push(message),
@@ -14679,6 +14814,329 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.registerWidget(ctx, "manager");
   runtime.startPeriodic(ctx);
   await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(
+    gitCalls.some(
+      (call) => call.cwd === assignedCheckout && call.args.includes("status"),
+    ),
+  );
+  await gitDiff;
+  assert.ok(
+    gitCalls.some(
+      (call) =>
+        call.cwd === managerCheckout && call.args.includes("--show-toplevel"),
+    ),
+  );
+  assert.ok(
+    gitCalls.some(
+      (call) => call.cwd === managerCheckout && call.args.includes("--verify"),
+    ),
+  );
+  assert.ok(
+    gitCalls.some(
+      (call) => call.cwd === assignedCheckout && call.args.includes("status"),
+    ),
+  );
+  assert.ok(
+    gitCalls.some(
+      (call) => call.cwd === assignedCheckout && call.args.includes("diff"),
+    ),
+  );
+  assert.ok(
+    gitCalls.some(
+      (call) =>
+        call.cwd === assignedCheckout &&
+        call.args.includes("--porcelain=v2") &&
+        call.args.includes("--untracked-files=normal"),
+    ),
+  );
+  assert.ok(
+    gitCalls.some(
+      (call) =>
+        call.cwd === assignedCheckout &&
+        call.args.includes("--numstat") &&
+        call.args.includes(`${managerHead}...${assignedHead}`),
+    ),
+    "diff must use immutable, diverged Manager and Lead SHAs",
+  );
+  for (const call of gitCalls.filter(
+    (call) => call.args.includes("status") || call.args.includes("diff"),
+  ))
+    assert.ok(
+      call.args.indexOf("--no-optional-locks") <
+        call.args.indexOf(call.args.includes("status") ? "status" : "diff"),
+    );
+  assert.match(
+    widget.render(120).join("\n"),
+    /\+1 -0(?!\*)/,
+    "ignored-only worktree is clean",
+  );
+
+  runGit(["switch", "--orphan", "feat/unrelated"], assignedCheckout);
+  writeFileSync(
+    join(assignedCheckout, "unrelated-root.txt"),
+    "unrelated root\n",
+  );
+  runGit(["add", "unrelated-root.txt"], assignedCheckout);
+  runGit(["commit", "-m", "unrelated root"], assignedCheckout);
+  const unrelatedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  writeFileSync(join(assignedCheckout, "untracked-unrelated.txt"), "dirty\n");
+  currentSnapshot.work[0].branch = "feat/unrelated";
+  assignedHead = unrelatedHead;
+  const unrelatedDiff = spawnSync(
+    "git",
+    [
+      "--no-optional-locks",
+      "diff",
+      "--numstat",
+      "-z",
+      "--no-renames",
+      `${managerHead}...${unrelatedHead}`,
+      "--",
+    ],
+    { cwd: assignedCheckout, encoding: "utf8" },
+  );
+  assert.notEqual(
+    unrelatedDiff.status,
+    0,
+    "real three-dot diff must fail without a common ancestor",
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(
+    gitCalls.some(
+      (call) =>
+        call.cwd === assignedCheckout &&
+        call.args.includes(`${managerHead}...${unrelatedHead}`),
+    ),
+    "sampler must attempt the real three-dot diff for unrelated history",
+  );
+  const unrelatedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/unrelated"))!;
+  assert.match(
+    unrelatedRow,
+    /\*/,
+    "verified dirty state survives a no-common-ancestor diff failure",
+  );
+  assert.doesNotMatch(
+    unrelatedRow,
+    /(?:\+\d+ -\d+|\d+f|±0)/,
+    "failed actual three-dot diff cannot claim numeric statistics",
+  );
+  assert.match(unrelatedRow, /active/);
+  assert.doesNotMatch(unrelatedRow, /unknown|stale/);
+  rmSync(join(assignedCheckout, "untracked-unrelated.txt"));
+  runGit(["switch", "feat/assigned"], assignedCheckout);
+  currentSnapshot.work[0].branch = "feat/assigned";
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const firstDiffCount = gitCalls.filter((call) =>
+    call.args.includes("diff"),
+  ).length;
+  const firstProbeCount = gitCalls.length;
+
+  writeFileSync(untrackedFile, "dirty\n");
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  assert.equal(
+    gitCalls.length,
+    firstProbeCount,
+    "refresh before 30 seconds must not start Git probes",
+  );
+  widget.render(120);
+  widget.render(120);
+  assert.equal(
+    gitCalls.length,
+    firstProbeCount,
+    "widget redraws must not start Git probes",
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    gitCalls.filter((call) => call.args.includes("diff")).length,
+    firstDiffCount,
+  );
+  assert.match(widget.render(120).join("\n"), /\+1 -0\*/);
+
+  const sampledCheckout = currentSnapshot.work[0].checkoutPath;
+  currentSnapshot.work[0].checkoutPath = `${sampledCheckout}/.`;
+  assert.doesNotMatch(
+    widget.render(120).join("\n"),
+    /\+1 -0\*/,
+    "rendering must reject summaries when the cached checkout path differs exactly",
+  );
+  currentSnapshot.work[0].checkoutPath = sampledCheckout;
+
+  failStatus = true;
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const failedProbeRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(failedProbeRow, /active/);
+  assert.doesNotMatch(failedProbeRow, /unknown|\+1 -0|\*/);
+  assert.equal(
+    currentSnapshot.work[0].status,
+    "active",
+    "failed Git probe must not alter project status",
+  );
+  failStatus = false;
+
+  wrongStatusBranch = true;
+  testNow += 30_001;
+  const rejectionStart = gitCalls.length;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const rejectedCalls = gitCalls
+    .slice(rejectionStart)
+    .filter((call) => call.cwd === assignedCheckout);
+  assert.ok(rejectedCalls.some((call) => call.args.includes("status")));
+  assert.ok(
+    !rejectedCalls.some((call) => call.args.includes("diff")),
+    "wrong branch must not receive statistics",
+  );
+  assert.doesNotMatch(widget.render(120).join("\n"), /\+1 -0\*/);
+  wrongStatusBranch = false;
+
+  detachedStatusHead = true;
+  testNow += 30_001;
+  const detachedStart = gitCalls.length;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const detachedCalls = gitCalls
+    .slice(detachedStart)
+    .filter((call) => call.cwd === assignedCheckout);
+  assert.ok(detachedCalls.some((call) => call.args.includes("status")));
+  assert.ok(
+    !detachedCalls.some((call) => call.args.includes("diff")),
+    "detached HEAD status cannot be attributed to the assigned branch",
+  );
+  let attributedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.doesNotMatch(attributedRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+  detachedStatusHead = false;
+
+  diffMode = "fail";
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  attributedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(
+    attributedRow,
+    /\*/,
+    "diff failure must retain successfully observed dirty state",
+  );
+  assert.doesNotMatch(
+    attributedRow,
+    /(?:\+\d+ -\d+|\d+f|±0)/,
+    "diff failure must not make numeric claims",
+  );
+  diffMode = "text";
+
+  const originalCheckout = currentSnapshot.work[0].checkoutPath;
+  const nestedCheckout = join(managerCheckout, "nested");
+  mkdirSync(nestedCheckout);
+  currentSnapshot.work[0].checkoutPath = nestedCheckout;
+  testNow += 30_001;
+  const invalidRootStart = gitCalls.length;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(
+    !gitCalls
+      .slice(invalidRootStart)
+      .some(
+        (call) =>
+          call.cwd === nestedCheckout &&
+          (call.args.includes("status") || call.args.includes("diff")),
+      ),
+    "invalid nested checkout root must not be sampled",
+  );
+  currentSnapshot.work[0].checkoutPath = originalCheckout;
+
+  const hiddenCheckout = join(gitTestRoot, "beyond-visible-limit");
+  currentSnapshot.work.push(
+    ...Array.from({ length: 6 }, (_, index) => ({
+      branch: `feat/extra-${index}`,
+      session: `extra-${index}`,
+      status: "active" as const,
+      checkoutPath:
+        index === 5 ? hiddenCheckout : join(gitTestRoot, `extra-${index}`),
+    })),
+  );
+  testNow += 30_001;
+  const visibleLimitStart = gitCalls.length;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(
+    !gitCalls
+      .slice(visibleLimitStart)
+      .some((call) => call.cwd === hiddenCheckout),
+    "rows after the first six visible items must not be probed",
+  );
+  currentSnapshot.work.splice(1);
+
+  diffMode = "binary";
+  writeFileSync(untrackedFile, "dirty again\n");
+  assignedHead = "c".repeat(40);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let assignedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(assignedRow, /1f\*/);
+
+  diffMode = "malformed";
+  assignedHead = "d".repeat(40);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assignedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(assignedRow, /\*/);
+  assert.doesNotMatch(assignedRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+
+  diffMode = "deferred";
+  assignedHead = "e".repeat(40);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await deferredDiffStarted;
+  currentState.sessionGeneration++;
+  resolveDeferredDiff();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  assignedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.doesNotMatch(
+    assignedRow,
+    /(?:\+\d+ -\d+|\d+f|±0|\*)/,
+    "late prior-generation diff must not be rendered",
+  );
   assert.match(widget.render(120).join("\n"), /feat\/standalone · Lead/);
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
   await focusLookupStarted;
@@ -14721,6 +15179,29 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     focused,
     [paneId, assignedPaneId],
     "generation replacement during fresh lookup must not focus",
+  );
+
+  diffMode = "cancelDeferred";
+  assignedHead = "f".repeat(40);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await cancelledDiffStarted;
+  contextAbort.abort();
+  assert.equal(
+    samplerSignal?.aborted,
+    true,
+    "context abort must cancel the active sampler signal",
+  );
+  resolveCancelledDiff();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assignedRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.doesNotMatch(
+    assignedRow,
+    /(?:\+11 -4|\*)/,
+    "cancelled sample must not publish its late result",
   );
 
   currentRole = "chief";

@@ -6794,6 +6794,121 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
 });
 
+test("Manager Git summaries fit per row and keep suffixes outside branch navigation", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [
+      lead({ lead: "git-lead", branch: "feat/git", runtimeState: "working" }),
+    ],
+    work: [
+      { branch: "feat/git", session: "git-lead", status: "active" as const },
+    ],
+  };
+  const summary = { dirty: true, additions: 12, deletions: 3, changedFiles: 2 };
+  const callback = () => summary;
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    callback,
+  );
+  const wide = widget.render(100);
+  assert.match(wide[1]!, /\+12 -3/);
+  assert.match(wide[1]!, /\*/);
+  const dirtyOnlyWidget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    () => ({ dirty: true }),
+  );
+  const dirtyOnly = dirtyOnlyWidget.render(100)[1]!;
+  assert.match(dirtyOnly, /\*/);
+  assert.doesNotMatch(dirtyOnly, /±0|\+\d+ -\d+|\d+f/);
+  const successfulZeroWidget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    () => ({ dirty: true, additions: 0, deletions: 0, changedFiles: 0 }),
+  );
+  assert.match(successfulZeroWidget.render(100)[1]!, /±0\*/);
+
+  for (let width = 1; width <= 100; width++)
+    assert.ok(widget.render(width).every((row) => visibleWidth(row) <= width));
+
+  const focused: unknown[] = [];
+  const clickableWidget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+    callback,
+  );
+  const row = clickableWidget.render(100)[1]!;
+  const suffixX = visibleWidth(row.slice(0, row.indexOf("+12 -3")));
+  assert.equal(
+    clickableWidget.handleMouse({
+      type: "click",
+      button: "left",
+      width: 100,
+      x: suffixX,
+      y: 1,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+  const branchX = visibleWidth(row.slice(0, row.indexOf("feat/git")));
+  clickableWidget.handleMouse({
+    type: "click",
+    button: "left",
+    width: 100,
+    x: branchX,
+    y: 1,
+  });
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "git-lead" }]);
+
+  const chiefWidget = createSupervisionWidget(
+    () => [lead({ lead: "git-lead", branch: "feat/git" })],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    callback,
+  );
+  const chief = chiefWidget.render(100);
+  assert.doesNotMatch(chief.join("\n"), /\+12 -3|\*/);
+  const ordinary = renderSupervisionLeads(snapshot, 100, { role: "manager" });
+  assert.doesNotMatch(ordinary.join("\n"), /\+12 -3|\*/);
+});
+
+test("Manager Git summaries are omitted for stale conflicting work", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [
+      lead({ lead: "git-lead", branch: "feat/git", runtimeState: "working" }),
+    ],
+    work: [
+      { branch: "feat/git", session: "git-lead", status: "conflict" as const },
+    ],
+  };
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "stale",
+    "manager",
+    undefined,
+    undefined,
+    () => ({ dirty: true, additions: 12, deletions: 3, changedFiles: 2 }),
+  );
+  const rows = widget.render(100);
+  assert.doesNotMatch(rows[1]!, /\+12 -3|\*/);
+});
+
 test("Manager standalone Lead rows expose their exact click target", () => {
   const snapshot = {
     project: "pi-herdsman",

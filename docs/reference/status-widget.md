@@ -98,6 +98,25 @@ can inspect an eligible direct report through the overview, independently of
 mouse focus/navigation. Branches are display handles; exact session identity is
 revalidated for control actions.
 
+### Manager Git indicators
+
+Eligible Manager work rows can show committed textual additions and deletions
+since the branch's merge base with the Manager's current `HEAD`, separately
+from working-tree state. `*` means the assigned checkout has staged, unstaged,
+unmerged, or non-ignored untracked changes. Thus `±0*` means no committed file
+differences but a dirty checkout; `±0` means a successful comparison found no
+committed differences and the checkout is clean. A changed-file count such as
+`2f` is used when files changed without textual line counts, such as
+binary-only changes.
+
+No Git suffix means the optional observation is unavailable or has not yet
+been sampled; it does not mean the checkout is clean. Sampling is approximate,
+with a minimum interval of about 30 seconds between attempts. Under width
+pressure, optional Git details may be omitted. The branch remains the
+navigation target; its suffix is not clickable. Git indicators are advisory
+display values only and do not establish project status, authority, or
+integration readiness.
+
 ## Installation
 
 The widget is installed only when the current session has a valid supported
