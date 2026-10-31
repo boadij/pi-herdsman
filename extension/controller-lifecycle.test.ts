@@ -4120,7 +4120,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     (entry: any) =>
       entry.customType === "pi-herdsman-herd-run" &&
       entry.data?.phase === "report_pending" &&
-      entry.data?.reportId === reportId,
+      entry.data?.runReportId === reportId,
   ) as any[];
   assert.equal(pending.length, 1, "a retry reuses the durable pending intent");
   assert.ok(Number.isFinite(pending[0].data.createdAt));
@@ -4128,6 +4128,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     message: pending[0].data.message,
     createdAt: pending[0].data.createdAt,
   };
+  const recoveryReportId = pending[0].data.reportId;
 
   first.finishIfIdle(context);
   await t.waitFor(() => assert.ok(publications >= 3));
@@ -4135,7 +4136,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     (entry: any) =>
       entry.customType === "pi-herdsman-herd-run" &&
       entry.data?.phase === "report_pending" &&
-      entry.data?.reportId === reportId,
+      entry.data?.runReportId === reportId,
   ) as any[];
   assert.equal(repeatedPending.length, 1);
   assert.deepEqual(
@@ -4155,7 +4156,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
       pi.entries.some(
         (entry: any) =>
           entry.data?.phase === "report_sent" &&
-          entry.data?.reportId === reportId,
+          entry.data?.reportId === recoveryReportId,
       ),
     ),
   );
@@ -4165,7 +4166,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
       (entry: any) =>
         entry.customType === "pi-herdsman-herd-run" &&
         entry.data?.phase === "report_sent" &&
-        entry.data?.reportId === reportId,
+        entry.data?.reportId === recoveryReportId,
     ).length,
     1,
   );
@@ -4990,6 +4991,7 @@ test("managed Lead herd preserves success before authority verification and repl
   context.isIdle = () => true;
   let authorityLookups = 0;
   let publications = 0;
+  const publishedKinds: unknown[] = [];
   const createRuntime = (restored: boolean) =>
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
@@ -5004,8 +5006,17 @@ test("managed Lead herd preserves success before authority verification and repl
         if (!restored) throw new Error("assignment temporarily unavailable");
         return { project: "assigned" } as any;
       },
-      publishProjectMessage: async (_ctx, _assignment, message) => {
+      publishProjectMessage: async (
+        _ctx,
+        _assignment,
+        message,
+        _attachments,
+        _source,
+        _reportId,
+        kind,
+      ) => {
         publications++;
+        publishedKinds.push(kind);
         assert.equal(message, "Herd run settled.\n\nOriginal herd summary");
         return true as any;
       },
@@ -5022,6 +5033,14 @@ test("managed Lead herd preserves success before authority verification and repl
     message: { role: "assistant", content: "Original herd summary" },
     messageEntryId: "herd-original-summary",
   });
+  pi.entries.push({
+    type: "message",
+    id: "herd-original-summary",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Original herd summary" }],
+    },
+  });
   first.beforeSettle({ outcome: "completed" });
   await first.agentSettled(context, false);
 
@@ -5034,6 +5053,7 @@ test("managed Lead herd preserves success before authority verification and repl
     intent?.data?.message,
     "Herd run settled.\n\nOriginal herd summary",
   );
+  assert.equal(intent?.data?.kind, "successful_handoff");
   assert.equal(
     publications,
     0,
@@ -5046,6 +5066,7 @@ test("managed Lead herd preserves success before authority verification and repl
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(authorityLookups, 2);
   assert.equal(publications, 1);
+  assert.deepEqual(publishedKinds, [undefined]);
   assert.equal(
     pi.entries.filter(
       (entry: any) =>
@@ -5060,6 +5081,487 @@ test("managed Lead herd preserves success before authority verification and repl
         entry.data?.phase === "report_pending" &&
         /outcome was not preserved/.test(entry.data.message),
     ),
+    false,
+  );
+});
+
+test("restored verified Lead settlement waits for children and hands off once", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.isIdle = () => true;
+  let childActive = true;
+  const messages: string[] = [];
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+  const first = createRuntime();
+  first.agentStarted();
+  first.begin(context);
+  const reportId = (
+    pi.entries.find((entry: any) => entry.data?.phase === "started") as any
+  ).data.reportId;
+  first.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Verified original summary" },
+    messageEntryId: "verified-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "verified-response",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Verified original summary" }],
+    },
+  });
+  first.beforeSettle({ outcome: "completed" });
+  await first.agentSettled(context, false);
+  assert.ok(
+    pi.entries.some((entry: any) => entry.data?.phase === "lead_settled"),
+  );
+
+  for (let reload = 0; reload < 2; reload++) {
+    const restored = createRuntime();
+    restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+    restored.finishIfIdle(context);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(messages.length, 0);
+    assert.equal(
+      pi.entries.some((entry: any) => entry.data?.phase === "finished"),
+      false,
+    );
+    assert.equal(
+      pi.entries.some((entry: any) => entry.data?.kind === "execution_failure"),
+      false,
+    );
+  }
+
+  childActive = false;
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(messages, [
+    "Herd run settled.\n\nVerified original summary",
+  ]);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "finished" && entry.data?.reportId === reportId,
+    ).length,
+    1,
+  );
+});
+
+test("legacy herd-ID recovery failure receipt does not suppress later successful handoff", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.isIdle = () => true;
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  const herdId = randomUUID();
+  const startedAt = 1_700_000_000_000;
+  pi.entries.push(
+    ...([
+      { phase: "started", reportId: herdId },
+      {
+        phase: "report_pending",
+        reportId: herdId,
+        message: "Earlier recovery failure",
+        kind: "execution_failure",
+        createdAt: startedAt,
+        target: "project",
+      },
+      {
+        phase: "lead_settled",
+        reportId: herdId,
+        responseEntryId: "new-response",
+      },
+    ].map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: { ...data, sessionId: LEAD_SESSION_ID, startedAt },
+    })) as any),
+    {
+      type: "message",
+      id: "new-response",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "New verified summary" }],
+      },
+    } as any,
+  );
+  let childActive = true;
+  const messages: string[] = [];
+  const projectMessages = new Map([
+    [herdId, { text: "Earlier recovery failure", kind: "execution_failure" }],
+  ]);
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (
+        _ctx,
+        _assignment,
+        message,
+        _attachments,
+        _channel,
+        reportId,
+        kind,
+      ) => {
+        const payload = {
+          text: message,
+          kind: kind ?? "herd_run",
+        };
+        const existing = projectMessages.get(reportId);
+        if (
+          existing &&
+          (existing.text !== payload.text || existing.kind !== payload.kind)
+        )
+          throw new Error(
+            "Project message identity conflicts with durable payload",
+          );
+        if (!existing) projectMessages.set(reportId, payload);
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(messages, ["Earlier recovery failure"]);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "finished"),
+    false,
+  );
+
+  childActive = false;
+  const finalRestore = createRuntime();
+  finalRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
+  finalRestore.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(messages, [
+    "Earlier recovery failure",
+    "Herd run settled.\n\nNew verified summary",
+  ]);
+  const successIntent = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.kind !== "execution_failure" &&
+      entry.data?.runReportId === herdId,
+  );
+  assert.ok(successIntent);
+  assert.notEqual(successIntent.data.reportId, herdId);
+  assert.equal(
+    projectMessages.get(successIntent.data.reportId)?.text,
+    "Herd run settled.\n\nNew verified summary",
+  );
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === successIntent.data.reportId &&
+        entry.data?.kind !== "execution_failure",
+    ).length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === successIntent.data.reportId,
+    ).length,
+    1,
+  );
+  assert.ok(
+    pi.entries.some(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === herdId &&
+        entry.data?.kind === "execution_failure",
+    ),
+  );
+});
+
+test("cancelled Lead report stays separate from later successful herd handoff", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  let childActive = true;
+  const messages: string[] = [];
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+
+  const first = createRuntime();
+  first.agentStarted();
+  first.begin(context);
+  await first.agentSettled(context, true);
+  const cancellation = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.message ===
+        "Lead execution was cancelled before a completed response.",
+  ) as any;
+  assert.ok(cancellation);
+  assert.ok(cancellation.data.runReportId);
+  assert.deepEqual(messages, [cancellation.data.message]);
+
+  // Keep the open herd across turns: the cancellation and success must share
+  // the same run linkage for the regression to exercise the collision.
+  const resumed = first;
+  resumed.agentStarted(context);
+  resumed.begin(context);
+  resumed.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Verified later summary" },
+    messageEntryId: "cancel-then-success-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "cancel-then-success-response",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Verified later summary" }],
+    },
+  } as any);
+  resumed.beforeSettle({ outcome: "completed" });
+  await resumed.agentSettled(context, false);
+
+  childActive = false;
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(messages, [
+    cancellation.data.message,
+    "Herd run settled.\n\nVerified later summary",
+  ]);
+  assert.ok(pi.entries.includes(cancellation), "cancellation remains durable");
+  const successful = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.kind === "successful_handoff",
+  ) as any;
+  assert.ok(successful, "success intent has an explicit durable discriminator");
+  const herdReportId = cancellation.data.runReportId;
+  assert.equal(
+    successful.data.runReportId ?? successful.data.reportId,
+    herdReportId,
+  );
+  assert.equal(
+    herdReportId,
+    pi.entries.find((entry: any) => entry.data?.phase === "started")?.data
+      ?.reportId,
+  );
+  assert.notEqual(successful.data.reportId, cancellation.data.reportId);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === successful.data.reportId,
+    ).length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === cancellation.data.reportId,
+    ).length,
+    1,
+  );
+});
+
+test("failed Lead-start marker does not restore an older settlement", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.isIdle = () => true;
+  const messages: string[] = [];
+  let childActive = true;
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+  const runtime = createRuntime();
+  runtime.agentStarted();
+  runtime.begin(context);
+  runtime.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Old successful summary" },
+    messageEntryId: "old-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "old-response",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Old successful summary" }],
+    },
+  });
+  runtime.beforeSettle({ outcome: "completed" });
+  await runtime.agentSettled(context, false);
+
+  const appendEntry = pi.pi.appendEntry.bind(pi.pi);
+  let fail = true;
+  (pi.pi as any).appendEntry = (type: string, data: any) => {
+    if (fail && data?.phase === "lead_started") {
+      fail = false;
+      throw new Error("simulated lead_started append failure");
+    }
+    appendEntry(type, data);
+  };
+  runtime.agentStarted(context as any);
+  assert.ok(
+    pi.entries.some(
+      (entry: any) => entry.data?.phase === "lead_start_unpersisted",
+    ),
+  );
+
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    messages.includes("Herd run settled.\n\nOld successful summary"),
+    false,
+  );
+  childActive = false;
+  const finalRestore = createRuntime();
+  finalRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
+  finalRestore.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    messages.includes("Herd run settled.\n\nOld successful summary"),
+    false,
+  );
+});
+
+test("malformed assistant content cannot restore a verified Lead settlement", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.isIdle = () => true;
+  const messages: string[] = [];
+  let childActive = true;
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+  const runtime = createRuntime();
+  runtime.agentStarted();
+  runtime.begin(context);
+  runtime.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Valid at settlement" },
+    messageEntryId: "malformed-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "malformed-response",
+    message: { role: "assistant", content: [{ type: "unknown" }] },
+  });
+  runtime.beforeSettle({ outcome: "completed" });
+  await runtime.agentSettled(context, false);
+
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    messages.some((message) => message.startsWith("Herd run settled.")),
+    false,
+  );
+  childActive = false;
+  const finalRestore = createRuntime();
+  finalRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
+  finalRestore.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    messages.some((message) => message.startsWith("Herd run settled.")),
     false,
   );
 });
@@ -8789,16 +9291,27 @@ test("restored herd waits for direct durable cleanup before finishing", async (t
       herdEntries().filter((entry) => entry.data?.phase === "finished").length,
       0,
     );
+    const pending = herdEntries().find(
+      (entry) => entry.data?.phase === "report_pending",
+    );
+    assert.ok(pending, "unverified recovery creates a durable failure intent");
+    const reportId = (pending as any).data.reportId;
+    assert.equal((pending as any).data.kind, "execution_failure");
+
     resetAgentMailbox(startup.mailbox);
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: false }, context);
-    await t.waitFor(() =>
-      assert.equal(
-        herdEntries().filter((entry) => entry.data?.phase === "finished")
-          .length,
-        1,
-        "herd run did not finish after direct durable cleanup",
-      ),
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "finished").length,
+      0,
+      "an undelivered failure report keeps the herd open after direct durable cleanup",
+    );
+    assert.deepEqual(
+      herdEntries()
+        .filter((entry) => entry.data?.phase === "report_pending")
+        .map((entry) => (entry as any).data.reportId),
+      [reportId],
+      "cleanup retries the existing intent rather than replacing its ID",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
