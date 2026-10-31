@@ -5974,6 +5974,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         (intent.runReportId === herdReportId ||
           intent.reportId === herdReportId) &&
         intent.kind !== "successful_handoff" &&
+        intent.kind !== "herd_settlement" &&
         !isLegacySyntheticFailure(intent),
     );
     requiredReportUnsent = unsent;
@@ -6116,7 +6117,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               entry.customType === host.entryName &&
               entry.data?.sessionId === sessionId &&
               entry.data?.phase === "report_pending" &&
-              entry.data?.runReportId === herdReportId,
+              entry.data?.runReportId === herdReportId &&
+              !isLegacySyntheticFailure(entry.data),
           )?.data;
           if (pending) {
             const sent = entries.some(
@@ -6355,11 +6357,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         }
       }
       leadSettled = true;
-      if (
-        !successful &&
-        current?.outcome === "error" &&
-        turnStartedAt !== undefined
-      ) {
+      if (!successful && !aborted && turnStartedAt !== undefined) {
         const reportCreatedAt = Date.now();
         const partial = current?.responseText?.slice(0, 1000);
         const detail = partial

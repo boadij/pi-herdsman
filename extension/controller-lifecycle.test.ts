@@ -3806,6 +3806,180 @@ test("aborted completed settlement is reported as cancellation, not herd success
   );
 });
 
+test("restored successful herd handoff retries after Manager availability returns", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  let available = false;
+  const published: string[] = [];
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      canFinalizeOwnedHerd: () => true,
+      currentProjectAssignment: async () =>
+        available ? ({} as any) : undefined,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        published.push(message);
+        return true;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+  const first = createRuntime();
+  first.agentStarted();
+  first.begin(context);
+  first.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "settled response" },
+    messageEntryId: "settled-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "settled-response",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "settled response" }],
+    },
+  } as any);
+  first.beforeSettle({ outcome: "completed" });
+  await first.agentSettled(context, false);
+  const intent = pi.entries.find(
+    (entry: any) => entry.data?.kind === "herd_settlement",
+  ) as any;
+  assert.ok(intent, "the successful handoff remains durably pending");
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  available = true;
+  await restored.maybeFinish(context);
+  assert.deepEqual(published, ["Herd run settled.\n\nsettled response"]);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === intent.data.reportId,
+    ).length,
+    1,
+  );
+});
+
+test("legacy synthetic failure cannot shadow a reported cancellation", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  const herdId = randomUUID();
+  const cancelId = randomUUID();
+  const syntheticId = randomUUID();
+  const startedAt = Date.now();
+  pi.entries.push(
+    ...([
+      { phase: "started", reportId: herdId },
+      {
+        phase: "report_pending",
+        reportId: syntheticId,
+        runReportId: herdId,
+        kind: "execution_failure",
+        message:
+          "Lead execution outcome was not preserved across restoration; work remains unresolved.",
+        target: "project",
+      },
+      {
+        phase: "report_pending",
+        reportId: cancelId,
+        runReportId: herdId,
+        kind: "execution_cancelled",
+        message: "Lead execution was cancelled before a completed response.",
+        target: "project",
+      },
+      { phase: "report_sent", reportId: cancelId, runReportId: herdId },
+    ].map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: { ...data, sessionId: LEAD_SESSION_ID, startedAt },
+    })) as any[]),
+  );
+  const publications: string[] = [];
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    canFinalizeOwnedHerd: () => true,
+    currentProjectAssignment: async () => ({}) as any,
+    publishProjectMessage: async (_ctx, _assignment, message) => {
+      publications.push(message);
+      return true;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+  herd.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    publications.includes(
+      "Lead execution outcome was not preserved across restoration; work remains unresolved.",
+    ),
+    false,
+  );
+  assert.equal(
+    pi.entries.some(
+      (entry: any) =>
+        entry.data?.phase === "finished" && entry.data?.reportId === herdId,
+    ),
+    true,
+    "the receipted cancellation permits finalization after child cleanup",
+  );
+});
+
+test("non-aborted Lead settlement without a verified response is reported", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  const publications: string[] = [];
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    canFinalizeOwnedHerd: () => true,
+    currentProjectAssignment: async () => ({}) as any,
+    publishProjectMessage: async (_ctx, _assignment, message) => {
+      publications.push(message);
+      return true;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.agentStarted();
+  herd.begin(context);
+  await herd.agentSettled(context, false);
+  const report = pi.entries.find(
+    (entry: any) => entry.data?.phase === "report_pending",
+  ) as any;
+  assert.equal(report.data.kind, "execution_failure");
+  assert.match(report.data.message, /settled without verified completion/);
+  assert.deepEqual(publications, [report.data.message]);
+});
+
 test("failed active Lead reports before child completion and does not hand off success", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
