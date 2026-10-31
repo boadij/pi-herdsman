@@ -29,7 +29,6 @@ import type {
   PeerLeadRecord,
   WorkspaceProvenance,
   SessionRole,
-  PeerRuntime,
   SupervisionSnapshot,
 } from "./supervision.ts";
 import {
@@ -503,7 +502,7 @@ type LeadHerdRunHost = {
 
 type LeadInboxBaseHost = {
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
-  peerRuntime: PeerRuntime;
+  peerRuntime: typeof import("./supervision.ts").peerRuntime;
   appendDurableError(
     pi: ExtensionAPI,
     ctx: ExtensionContext,

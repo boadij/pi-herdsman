@@ -14,7 +14,6 @@ import type {
   PeerLeadRecord,
   WorkspaceProvenance,
   SessionRole,
-  PeerRuntime,
 } from "../supervision.ts";
 import {
   projectMessageEnvelope,
@@ -116,7 +115,7 @@ export type LeadCoordinationBaseHost = {
     kind: string,
     error: unknown,
   ): void;
-  peerRuntime: PeerRuntime;
+  peerRuntime: typeof import("../supervision.ts").peerRuntime;
   listPeerLeadRecords: typeof import("../supervision.ts").listPeerLeadRecords;
   removePeerLeadRecord: typeof import("../supervision.ts").removePeerLeadRecord;
   acquireProcessLock: typeof import("../lock.ts").acquireProcessLock;
