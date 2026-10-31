@@ -1351,9 +1351,8 @@ function registerExtensionImpl(
     failOnVerificationError = false,
   ) => roleTransitions.currentChiefAuthority(ctx, failOnVerificationError);
   const activateChief = (
-    ctx: ExtensionCommandContext,
-    resumed = false,
-  ): Promise<string> => roleTransitions.activateChief(ctx, resumed);
+    ...args: Parameters<typeof roleTransitions.activateChief>
+  ): Promise<string> => roleTransitions.activateChief(...args);
   const roleTransitionHost = {
     processRole,
     build: HERDSMAN_BUILD,
