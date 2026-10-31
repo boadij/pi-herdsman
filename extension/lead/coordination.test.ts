@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
+import { supervisionRuntime } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
 
 test("scoped peer presence writes its worktree group", async () => {
@@ -87,6 +88,40 @@ test("scoped peer presence writes its worktree group", async () => {
     }
     runtime.removePeerPresence();
   }
+});
+
+test("empty project-message drain skips assignment listing", async () => {
+  let assignmentLists = 0;
+  const socket = `/tmp/empty-project-message-drain-${randomUUID()}.sock`;
+  const host = new Proxy(
+    {
+      pi: {},
+      leadRuntime: {
+        chiefMode: "inactive",
+        roleSuspended: false,
+        managerLease: { descriptor: { repoKey: "empty-repo" } },
+      },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "manager",
+      supervisionRuntime: () => supervisionRuntime(socket),
+      listProjectAssignments: () => {
+        assignmentLists++;
+        return [];
+      },
+    },
+    {
+      get(target, key: string) {
+        return key in target
+          ? target[key as keyof typeof target]
+          : () => undefined;
+      },
+    },
+  ) as any;
+  const runtime = createLeadCoordinationRuntime(host);
+
+  assert.equal(await runtime.drainProjectMessages(fakeContext() as any), 0);
+  assert.equal(assignmentLists, 0);
 });
 
 test("Managed supervisor messages never fall through when the active role is not Lead", async () => {

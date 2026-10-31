@@ -22,6 +22,7 @@ import {
   listPendingRetirements,
   removePendingRetirement,
   removeProjectMessagesForAssignment,
+  mightHaveProjectMessages,
   listProjectAssignments,
   removeChiefMessage,
   readProjectAssignment,
@@ -73,6 +74,7 @@ import {
   listSavedPeerMachines,
   peerRecoveryRequest,
   listRemotePeerOutbounds,
+  readRemotePeerOutbound,
   persistRemotePeerOutbound,
   probePeerEndpoint,
   removeRemotePeerOutbound,
@@ -87,6 +89,7 @@ import {
   createPeerCorrespondence,
   assertPeerDataRoot,
   listPeerCorrespondences,
+  readPeerCorrespondence,
   queuePeerReply,
   storePeerCorrespondence,
   peerPayloadDigest,
@@ -1498,6 +1501,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const discoveredAmbiguousSessions = new Set<string>();
       let machineListingFailed = false;
       let machineDiscoveryIncomplete = false;
+      let pendingOutbounds:
+        ReturnType<typeof listRemotePeerOutbounds> | undefined;
+      let pendingCorrespondences:
+        ReturnType<typeof listPeerCorrespondences> | undefined;
       if (remoteDiscoveryEligible) {
         let machines: SavedPeerMachine[];
         let machineListingSucceeded = false;
@@ -1626,21 +1633,34 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               });
             }
             if (activeRole() === "manager" || activeRole() === "lead") {
-              for (const outbound of listRemotePeerOutbounds()) {
+              for (const candidate of (pendingOutbounds ??=
+                listRemotePeerOutbounds())) {
                 if (
-                  outbound.machine.id !== machine.id ||
-                  outbound.session !== self
+                  candidate.machine.id !== machine.id ||
+                  candidate.session !== self ||
+                  candidate.dataRoot !== snapshot.dataRoot
                 )
                   continue;
-                if (snapshot.dataRoot !== outbound.dataRoot) {
-                  continue;
-                }
-                const releaseOutbound = tryClaimRemotePeerOutbound(outbound.id);
+                const releaseOutbound = tryClaimRemotePeerOutbound(
+                  candidate.id,
+                );
                 if (!releaseOutbound) {
                   continue;
                 }
-                let envelope = outbound.envelope;
                 try {
+                  const outbound = readRemotePeerOutbound(candidate.id);
+                  if (
+                    !outbound ||
+                    outbound.machine.id !== machine.id ||
+                    outbound.session !== self ||
+                    outbound.claimId !== candidate.claimId ||
+                    outbound.recipientSession !== candidate.recipientSession ||
+                    outbound.digest !== candidate.digest ||
+                    outbound.dataRoot !== candidate.dataRoot ||
+                    outbound.dataRoot !== snapshot.dataRoot
+                  )
+                    continue;
+                  let envelope = outbound.envelope;
                   const status = JSON.parse(
                     await runPeerEndpoint(
                       machine,
@@ -1691,22 +1711,41 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                   releaseOutbound();
                 }
               }
-              for (const correspondence of listPeerCorrespondences()) {
+              for (const candidate of (pendingCorrespondences ??=
+                listPeerCorrespondences())) {
                 if (
-                  correspondence.originSession !== self ||
-                  (correspondence.role ?? "manager") !== activeRole()
+                  candidate.originSession !== self ||
+                  (candidate.role ?? "manager") !== activeRole()
                 )
                   continue;
                 const remote = snapshot.peers.find(
                   (peer) =>
-                    peer.role === (correspondence.role ?? "manager") &&
-                    ((correspondence.role ?? "manager") !== "lead" ||
+                    peer.role === (candidate.role ?? "manager") &&
+                    ((candidate.role ?? "manager") !== "lead" ||
                       (snapshot.ordinaryLeadsComplete === true &&
                         peer.sessionKind === "ordinary")) &&
-                    peer.piSessionId === correspondence.recipientSession,
+                    peer.piSessionId === candidate.recipientSession,
                 );
                 if (!remote) continue;
+                let correspondence: PeerCorrespondence | undefined;
                 try {
+                  try {
+                    correspondence = readPeerCorrespondence(candidate.id);
+                  } catch {
+                    continue;
+                  }
+                  if (
+                    !correspondence ||
+                    correspondence.finalized ||
+                    correspondence.capability !== candidate.capability ||
+                    correspondence.acceptanceId !== candidate.acceptanceId ||
+                    correspondence.originSession !== candidate.originSession ||
+                    correspondence.recipientSession !==
+                      candidate.recipientSession ||
+                    (correspondence.role ?? "manager") !==
+                      (candidate.role ?? "manager")
+                  )
+                    continue;
                   if (remote.claim.id !== correspondence.recipientGeneration) {
                     const recovery = JSON.parse(
                       await runPeerEndpoint(
@@ -2587,14 +2626,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !ctx.isIdle()
     )
       return 0;
+    const lease = leadRuntime.managerLease;
+    if (!lease) return 0;
     const runtime = supervisionRuntime();
+    if (!mightHaveProjectMessages(runtime, lease.descriptor.repoKey)) return 0;
     const manager = await currentManager(ctx);
-    if (
-      !manager ||
-      !leadRuntime.managerLease ||
-      !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
-    )
-      return 0;
+    if (!manager || !sameManagerDescriptor(manager, lease.descriptor)) return 0;
     const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
       ctx.sessionManager
         .getEntries()

@@ -8,6 +8,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -49,6 +50,7 @@ const {
   writeProjectMessage,
   listProjectMessages,
   listProjectMessageHeaders,
+  mightHaveProjectMessages,
   readProjectMessage,
   findProjectAssignmentBySession,
   globalProjectAssignmentSnapshot,
@@ -3996,6 +3998,122 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
     [],
   );
+});
+
+test("project-message readiness probe is filename-based and fails open on uncertainty", (t) => {
+  const runtime = supervisionRuntime(socket());
+  const repoKey = "repo";
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), false);
+
+  const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
+  mkdirSync(directory, { recursive: true });
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: id(),
+    repoKey,
+    branch: "assigned-without-inbox",
+    text: "assigned",
+  });
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), false);
+
+  const candidateDirectory = (branch: string) => {
+    const assignment = projectAssignmentPath(runtime, repoKey, branch);
+    const messages = join(
+      dirname(assignment),
+      `${basename(assignment, ".json")}.messages`,
+    );
+    mkdirSync(messages, { recursive: true });
+    return messages;
+  };
+  const empty = candidateDirectory("empty");
+  candidateDirectory("another-empty");
+  writeFileSync(join(empty, `${id()}.json.body`), "sidecar");
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), false);
+
+  const pending = candidateDirectory("pending");
+  writeFileSync(join(pending, `${id()}.json`), "malformed");
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), true);
+
+  const validPending = candidateDirectory("valid-pending");
+  writeFileSync(join(validPending, `${id()}.json`), "unparsed by the probe");
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), true);
+
+  const unexpected = projectAssignmentPath(runtime, repoKey, "unexpected");
+  writeFileSync(`${unexpected.slice(0, -5)}.messages`, "not a directory");
+  assert.equal(mightHaveProjectMessages(runtime, repoKey), true);
+  unlinkSync(`${unexpected.slice(0, -5)}.messages`);
+
+  if (process.platform !== "win32") {
+    const linked = projectAssignmentPath(runtime, repoKey, "linked");
+    const target = mkdtempSync(join(tmpdir(), "project-message-probe-"));
+    t.after(() => rmSync(target, { recursive: true, force: true }));
+    symlinkSync(target, `${linked.slice(0, -5)}.messages`);
+    assert.equal(mightHaveProjectMessages(runtime, repoKey), true);
+  }
+});
+
+test("project-message readiness probe fails open on read errors and tolerates disappearance", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import { mock } from "node:test";
+import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
+const { default: ignored, ...namedExports } = fs;
+let mode;
+let target;
+mock.module("node:fs", {
+  namedExports: {
+    ...namedExports,
+    readdirSync: (path, ...args) => {
+      if (mode === "parent-error" && path === target) {
+        const error = new Error("injected EACCES");
+        error.code = "EACCES";
+        throw error;
+      }
+      if (mode === "candidate-error" && path === target) {
+        const error = new Error("injected EIO");
+        error.code = "EIO";
+        throw error;
+      }
+      const entries = fs.readdirSync(path, ...args);
+      if (mode === "disappear" && path === target) {
+        mode = undefined;
+        fs.rmSync(
+          join(path, entries.find((entry) => entry.name.endsWith(".messages")).name),
+          { recursive: true },
+        );
+      }
+      return entries;
+    },
+  },
+  defaultExport: { ...fs },
+});
+const storage = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)});
+const runtime = storage.supervisionRuntime("/tmp/probe-" + randomUUID() + ".sock");
+const repoKey = "probe";
+const directory = dirname(storage.projectAssignmentPath(runtime, repoKey, "lookup"));
+const candidate = join(directory, "a".repeat(64) + ".messages");
+fs.mkdirSync(candidate, { recursive: true });
+target = directory;
+mode = "parent-error";
+assert.equal(storage.mightHaveProjectMessages(runtime, repoKey), true);
+target = candidate;
+mode = "candidate-error";
+assert.equal(storage.mightHaveProjectMessages(runtime, repoKey), true);
+target = directory;
+mode = "disappear";
+assert.equal(storage.mightHaveProjectMessages(runtime, repoKey), false);
+fs.rmSync(runtime.root, { recursive: true, force: true });`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("project assignment uses durable project transport, not Manager message framing", async () => {
