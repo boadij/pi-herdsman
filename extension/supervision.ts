@@ -3389,6 +3389,37 @@ export function recoverStaleProjectMessages(
   });
 }
 
+/** Advisory only. Delivery must still verify current assignment authority. */
+export function mightHaveProjectMessages(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+): boolean {
+  const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+
+  for (const entry of entries) {
+    if (!/^[a-f0-9]{64}\.messages$/u.test(entry.name)) continue;
+    if (!entry.isDirectory() || entry.isSymbolicLink()) return true;
+
+    try {
+      if (
+        readdirSync(join(directory, entry.name)).some(
+          (name) => name.endsWith(".json") && UUID.test(name.slice(0, -5)),
+        )
+      )
+        return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+    }
+  }
+  return false;
+}
+
 export type CoordinatorState = {
   version: 1;
   build?: RuntimeBuild;

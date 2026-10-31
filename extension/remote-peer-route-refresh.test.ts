@@ -12,6 +12,13 @@ type Snapshot = realTransport.RemotePeerSnapshot;
 const machines: Machine[] = [];
 let listMachinesImpl: () => Promise<Machine[]> = async () => machines;
 const correspondences: any[] = [];
+let correspondenceListCalls = 0;
+let outboundListCalls = 0;
+let outboundReadCalls = 0;
+let currentCorrespondence: (id: string) => any;
+let currentOutbound: (id: string) => any;
+let onEndpointCall: (action: string) => void = () => {};
+let outboundInventory: any[] = [];
 const queuedReplies: any[] = [];
 const diagnostics: unknown[] = [];
 const deliveredReplies: any[] = [];
@@ -28,6 +35,8 @@ const cReply = {
   createdAt: 1,
 };
 const endpointCalls: { action: string; recipientSession?: string }[] = [];
+const acceptedEnvelopes: string[] = [];
+let outboundStatus: unknown;
 let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   const snapshot = nextSnapshots.shift();
   if (!snapshot) throw new Error("missing test snapshot");
@@ -38,6 +47,14 @@ let outboundCorrespondence: any;
 mock.module("./peer-transport.ts", {
   namedExports: {
     ...realTransport,
+    listRemotePeerOutbounds: () => {
+      outboundListCalls++;
+      return outboundInventory.map((item) => ({ ...item }));
+    },
+    readRemotePeerOutbound: (id: string) => {
+      outboundReadCalls++;
+      return currentOutbound(id);
+    },
     listSavedPeerMachines: () => listMachinesImpl(),
     probePeerEndpoint: (machine: Machine) => probeImpl(machine),
     runPeerEndpoint: async (
@@ -45,6 +62,7 @@ mock.module("./peer-transport.ts", {
       action: string,
       input?: string,
     ) => {
+      onEndpointCall(action);
       const request = JSON.parse(input ?? "{}") as {
         id?: string;
         recipientSession?: string;
@@ -54,6 +72,7 @@ mock.module("./peer-transport.ts", {
       };
       if (request.correspondence)
         outboundCorrespondence = request.correspondence;
+      if (action === "accept") acceptedEnvelopes.push(input ?? "");
       endpointCalls.push({
         action,
         recipientSession: request.recipientSession,
@@ -66,6 +85,12 @@ mock.module("./peer-transport.ts", {
         return JSON.stringify({ recovered: true });
       }
       if (action === "recover") return JSON.stringify({ recovered: true });
+      if (action === "status")
+        return JSON.stringify(
+          typeof outboundStatus === "function"
+            ? outboundStatus(request.id)
+            : outboundStatus,
+        );
       if (action === "poll")
         return JSON.stringify({
           dataRoot,
@@ -91,7 +116,11 @@ mock.module("./peer-transport.ts", {
 mock.module("./peer-correspondence.ts", {
   namedExports: {
     ...realCorrespondence,
-    listPeerCorrespondences: () => correspondences,
+    listPeerCorrespondences: () => {
+      correspondenceListCalls++;
+      return correspondences.map((item) => ({ ...item }));
+    },
+    readPeerCorrespondence: (id: string) => currentCorrespondence(id),
     updatePeerRecipientGeneration: (
       id: string,
       _capability: string,
@@ -183,12 +212,22 @@ function fixture(
   machines.length = 0;
   listMachinesImpl = async () => machines;
   correspondences.length = 0;
+  outboundInventory = [];
+  correspondenceListCalls = 0;
+  outboundListCalls = 0;
+  outboundReadCalls = 0;
+  onEndpointCall = () => {};
+  currentCorrespondence = (id) =>
+    correspondences.find((item) => item.id === id);
+  currentOutbound = () => undefined;
   queuedReplies.length = 0;
   diagnostics.length = 0;
   deliveredReplies.length = 0;
   diagnosticAttempts = 0;
   failNextDiagnosticAppend = false;
   endpointCalls.length = 0;
+  acceptedEnvelopes.length = 0;
+  outboundStatus = {};
   failRecoveryForB = false;
   abortRecoveryForB = undefined;
   cReplyAcknowledged = false;
@@ -328,6 +367,362 @@ const send = (
     context,
   );
 };
+
+test("remote inventories are loaded once per reconciliation, including empty snapshots", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"), machine("two"), machine("three"));
+  nextSnapshots = Array.from({ length: 6 }, () => snapshot([]));
+
+  await list(f.runtime, f.context);
+
+  assert.equal(outboundListCalls, 1);
+  assert.equal(
+    correspondenceListCalls,
+    2,
+    "one local-discovery read plus one remote read",
+  );
+  const id = "33333333-3333-4333-8333-333333333333";
+  const newRecord = {
+    id,
+    machine: machine("one"),
+    dataRoot,
+    session: self,
+    claimId: "claim",
+    recipientSession: "peer-B",
+    digest: "a".repeat(64),
+    envelope: "{}",
+  };
+  outboundInventory = [newRecord];
+  currentOutbound = () => newRecord;
+  outboundStatus = {
+    dataRoot,
+    id,
+    digest: newRecord.digest,
+    status: "accepted",
+  };
+  await list(f.runtime, f.context);
+  assert.equal(
+    outboundListCalls,
+    2,
+    "a later invocation takes a fresh inventory",
+  );
+  assert.equal(
+    outboundReadCalls,
+    1,
+    "the new record is visible next invocation",
+  );
+  assert.equal(correspondenceListCalls, 4);
+});
+
+test("stale correspondence inventory entries are revalidated before polling", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  correspondences.push({
+    id: "stale-correspondence",
+    capability: "capability",
+    acceptanceId: "acceptance",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-B",
+    recipientGeneration: "peer-B-generation",
+    finalized: false,
+  });
+  currentCorrespondence = () => undefined;
+  nextSnapshots = [snapshot([remote("peer-B")])];
+
+  await list(f.runtime, f.context);
+
+  assert.equal(
+    endpointCalls.some((call) => call.action === "poll"),
+    false,
+  );
+});
+
+test("later machine skips correspondence finalized during earlier machine processing", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"), machine("two"));
+  const first = {
+    id: "first-correspondence",
+    capability: "first-capability",
+    acceptanceId: "first-acceptance",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-B",
+    recipientGeneration: "peer-B-generation",
+    finalized: false,
+  };
+  const later = {
+    id: "later-correspondence",
+    capability: "later-capability",
+    acceptanceId: "later-acceptance",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-C",
+    recipientGeneration: "peer-C-generation",
+    finalized: false,
+  };
+  correspondences.push(first, later);
+  const durable = new Map([
+    [first.id, { ...first }],
+    [later.id, { ...later }],
+  ]);
+  currentCorrespondence = (id) => durable.get(id);
+  onEndpointCall = (action) => {
+    if (action === "poll") {
+      const current = durable.get(later.id);
+      if (current) durable.set(later.id, { ...current, finalized: true });
+    }
+  };
+  nextSnapshots = [
+    snapshot([remote("peer-B", "peer-B-generation")]),
+    snapshot([remote("peer-C", "peer-C-generation")]),
+  ];
+
+  await list(f.runtime, f.context);
+
+  assert.equal(correspondenceListCalls, 2);
+  assert.ok(
+    endpointCalls.some(
+      (call) => call.action === "poll" && call.recipientSession === "peer-B",
+    ),
+    "machine one processes the first correspondence and finalizes the later durable record",
+  );
+  assert.equal(
+    endpointCalls.some(
+      (call) => call.action === "poll" && call.recipientSession === "peer-C",
+    ),
+    false,
+    "machine two rereads current state and does not poll the stale inventory candidate",
+  );
+});
+
+test("outbound delivery uses the freshly read retargeted envelope", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const id = "22222222-2222-4222-8222-222222222222";
+  const record = {
+    id,
+    fromSessionId: self,
+    toSessionId: "peer-B",
+    peerSource: { role: "manager" },
+  };
+  const digest = realTransport.peerPayloadDigest({ record, attachments: [] });
+  const envelope = (generation: string) =>
+    JSON.stringify({
+      record,
+      attachments: [],
+      recipientClaimId: generation,
+      correspondence: {
+        role: "manager",
+        originSession: self,
+        recipientSession: "peer-B",
+        recipientGeneration: generation,
+      },
+    });
+  const candidate = {
+    id,
+    machine: machine("one"),
+    dataRoot,
+    session: self,
+    claimId: "outbound-claim",
+    recipientSession: "peer-B",
+    digest,
+    envelope: envelope("old-generation"),
+  };
+  outboundInventory = [candidate];
+  currentOutbound = () => ({
+    ...candidate,
+    envelope: envelope("current-generation"),
+  });
+  outboundStatus = { dataRoot, id, digest, status: "absent" };
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-B", "current-generation")])];
+
+  await list(f.runtime, f.context);
+
+  assert.deepEqual(acceptedEnvelopes, [envelope("current-generation")]);
+});
+
+test("later machine uses outbound retargeted during earlier machine processing", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const makeOutbound = (id: string, machineId: string, recipient: string) => {
+    const record = {
+      id,
+      fromSessionId: self,
+      toSessionId: recipient,
+      peerSource: { role: "manager" },
+    };
+    const digest = realTransport.peerPayloadDigest({ record, attachments: [] });
+    const envelope = (generation: string) =>
+      JSON.stringify({
+        record,
+        attachments: [],
+        recipientClaimId: generation,
+        correspondence: {
+          role: "manager",
+          originSession: self,
+          recipientSession: recipient,
+          recipientGeneration: generation,
+        },
+      });
+    return {
+      id,
+      machine: machine(machineId),
+      dataRoot,
+      session: self,
+      claimId: `${recipient}-claim`,
+      recipientSession: recipient,
+      digest,
+      envelope,
+    };
+  };
+  const first = makeOutbound(
+    "22222222-2222-4222-8222-222222222222",
+    "one",
+    "peer-B",
+  );
+  const later = makeOutbound(
+    "33333333-3333-4333-8333-333333333333",
+    "two",
+    "peer-C",
+  );
+  const durable = new Map([
+    [first.id, { ...first, envelope: first.envelope("peer-B-generation") }],
+    [later.id, { ...later, envelope: later.envelope("stale-generation") }],
+  ]);
+  outboundInventory = [first, later];
+  currentOutbound = (id) => durable.get(id);
+  onEndpointCall = (action) => {
+    if (action === "status")
+      durable.set(later.id, {
+        ...later,
+        envelope: later.envelope("peer-C-generation"),
+      });
+  };
+  outboundStatus = (id: string) => ({
+    dataRoot,
+    id,
+    digest: durable.get(id)?.digest,
+    status: "absent",
+  });
+  machines.push(machine("one"), machine("two"));
+  nextSnapshots = [snapshot([remote("peer-B")]), snapshot([remote("peer-C")])];
+
+  await list(f.runtime, f.context);
+
+  assert.deepEqual(acceptedEnvelopes, [
+    first.envelope("peer-B-generation"),
+    later.envelope("peer-C-generation"),
+  ]);
+  assert.equal(outboundListCalls, 1);
+});
+
+test("later machine skips outbound removed during earlier machine processing", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const makeOutbound = (id: string, machineId: string, recipient: string) => {
+    const record = {
+      id,
+      fromSessionId: self,
+      toSessionId: recipient,
+      peerSource: { role: "manager" },
+    };
+    const digest = realTransport.peerPayloadDigest({ record, attachments: [] });
+    const envelope = JSON.stringify({
+      record,
+      attachments: [],
+      recipientClaimId: `${recipient}-generation`,
+      correspondence: {
+        role: "manager",
+        originSession: self,
+        recipientSession: recipient,
+        recipientGeneration: `${recipient}-generation`,
+      },
+    });
+    return {
+      id,
+      machine: machine(machineId),
+      dataRoot,
+      session: self,
+      claimId: `${recipient}-claim`,
+      recipientSession: recipient,
+      digest,
+      envelope,
+    };
+  };
+  const first = makeOutbound(
+    "55555555-5555-4555-8555-555555555555",
+    "one",
+    "peer-B",
+  );
+  const later = makeOutbound(
+    "66666666-6666-4666-8666-666666666666",
+    "two",
+    "peer-C",
+  );
+  const durable = new Map([
+    [first.id, { ...first }],
+    [later.id, { ...later }],
+  ]);
+  // Keep the cached inventory independent from current durable records.
+  outboundInventory = [{ ...first }, { ...later }];
+  currentOutbound = (id) => durable.get(id);
+  onEndpointCall = (action) => {
+    if (action === "status") durable.delete(later.id);
+  };
+  outboundStatus = (id: string) => ({
+    dataRoot,
+    id,
+    digest: durable.get(id)?.digest,
+    status: "absent",
+  });
+  machines.push(machine("one"), machine("two"));
+  nextSnapshots = [snapshot([remote("peer-B")]), snapshot([remote("peer-C")])];
+
+  await list(f.runtime, f.context);
+
+  assert.deepEqual(
+    endpointCalls
+      .filter((call) => call.action === "status")
+      .map((call) => call.recipientSession),
+    ["peer-B"],
+  );
+  assert.deepEqual(deliveries, [first.id]);
+  assert.equal(outboundReadCalls, 2);
+  assert.equal(outboundListCalls, 1);
+});
+
+test("removed outbound candidates are ignored after the delivery claim", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  outboundInventory = [
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      machine: machine("one"),
+      dataRoot,
+      session: self,
+      claimId: "claim",
+      recipientSession: "peer-B",
+      digest: "a".repeat(64),
+      envelope: "{}",
+    },
+  ];
+  currentOutbound = () => undefined;
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-B")])];
+
+  await list(f.runtime, f.context);
+
+  assert.equal(outboundReadCalls, 1);
+  assert.equal(
+    endpointCalls.some((call) => call.action === "status"),
+    false,
+  );
+});
 
 test("internal peer reconciliation does not persist model-facing target bindings", async (t) => {
   const f = fixture();

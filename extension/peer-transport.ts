@@ -56,6 +56,7 @@ const COMMAND_TIMEOUT_MS = 15_000;
 export const PEER_TRANSPORT_FRAME_LIMIT_BYTES = 2 * 1024 * 1024;
 const OUTPUT_LIMIT = PEER_TRANSPORT_FRAME_LIMIT_BYTES;
 const OUTBOUND_RECORD_LIMIT_BYTES = 12 * 1024 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 export function peerPayloadDigest(value: unknown): string {
   const canonical = (item: unknown): string => {
@@ -172,13 +173,12 @@ export function resolveRemotePeerOutboundRetry(
   return { kind: "retry", envelope: JSON.stringify(envelope) };
 }
 
+function outboundDirectoryPath(): string {
+  return join(herdsmanDataRoot(), "runtime", "peers-v2", "remote-outbound");
+}
+
 function outboundDirectory(): string {
-  const path = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "peers-v2",
-    "remote-outbound",
-  );
+  const path = outboundDirectoryPath();
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
   return path;
@@ -202,9 +202,7 @@ export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
   const frameBytes = Buffer.byteLength(outbound.envelope, "utf8");
   const recordBytes = Buffer.byteLength(JSON.stringify(outbound), "utf8");
   if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
-      outbound.id,
-    ) ||
+    !UUID.test(outbound.id) ||
     frameBytes > PEER_TRANSPORT_FRAME_LIMIT_BYTES ||
     recordBytes > OUTBOUND_RECORD_LIMIT_BYTES
   )
@@ -262,44 +260,57 @@ export function retargetRemotePeerOutbound(
   }
 }
 
+function loadRemotePeerOutbound(
+  path: string,
+  id: string,
+): RemotePeerOutbound | undefined {
+  try {
+    const stat = lstatSync(path);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > OUTBOUND_RECORD_LIMIT_BYTES
+    )
+      return undefined;
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      !value ||
+      typeof value !== "object" ||
+      (value as RemotePeerOutbound).id !== id ||
+      typeof (value as RemotePeerOutbound).envelope !== "string"
+    )
+      return undefined;
+    return value as RemotePeerOutbound;
+  } catch {
+    return undefined;
+  }
+}
+
+export function readRemotePeerOutbound(
+  id: string,
+): RemotePeerOutbound | undefined {
+  if (!UUID.test(id)) return undefined;
+  return loadRemotePeerOutbound(
+    join(outboundDirectoryPath(), `${id}.json`),
+    id,
+  );
+}
+
 export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
   const directory = outboundDirectory();
   return readdirSync(directory)
-    .filter((name) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u.test(
-        name,
-      ),
-    )
+    .filter((name) => UUID.test(name.slice(0, -5)) && name.endsWith(".json"))
     .flatMap((name) => {
-      const path = join(directory, name);
-      try {
-        const stat = lstatSync(path);
-        if (
-          !stat.isFile() ||
-          stat.isSymbolicLink() ||
-          stat.size > OUTBOUND_RECORD_LIMIT_BYTES
-        )
-          return [];
-        const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-        if (
-          !value ||
-          typeof value !== "object" ||
-          (value as RemotePeerOutbound).id !== name.slice(0, -5) ||
-          typeof (value as RemotePeerOutbound).envelope !== "string"
-        )
-          return [];
-        return [value as RemotePeerOutbound];
-      } catch {
-        return [];
-      }
+      const outbound = loadRemotePeerOutbound(
+        join(directory, name),
+        name.slice(0, -5),
+      );
+      return outbound ? [outbound] : [];
     });
 }
 
 export function removeRemotePeerOutbound(id: string): void {
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(id)
-  )
-    return;
+  if (!UUID.test(id)) return;
   try {
     unlinkSync(join(outboundDirectory(), `${id}.json`));
   } catch (error) {
