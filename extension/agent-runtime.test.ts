@@ -36,6 +36,9 @@ import {
   persistRequiredEvidenceSnapshot,
   resultPath,
   resultRef,
+  publishScopedResult,
+  resolveScopedResult,
+  persistPeerResultArtifact,
 } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -87,8 +90,10 @@ const { updateConfig } = await import("./config.ts");
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,
+  managedAgentIdentity,
   managedAgentRequiredEvidence,
   readEvidencePage,
+  authorizedScopedResult,
   READ_EVIDENCE_MAX_BYTES,
   READ_EVIDENCE_MAX_LINES,
 } = await import("./managed-agent-runtime.ts");
@@ -96,8 +101,10 @@ const {
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
   resolveMessageFiles,
+  importResultBindings,
   statusBreadcrumb,
   visibleAgentSnapshots,
+  validateIdentity,
 } = await import("./agent-controller.ts");
 
 test("root status breadcrumb uses only the supplied verified role", () => {
@@ -481,7 +488,7 @@ test("imported semantic result refs remain usable in the next handoff", async ()
       { definition: "agent", task: "Continue review.", files: [semanticRef] },
       undefined,
       undefined,
-      fakeContext(agent.entries),
+      fakeAgentContext(agent.entries),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.match(grandchildTask, /<file name="result:researcher#1"/);
@@ -1074,6 +1081,7 @@ test("managed pump retries a request after acknowledgement persistence fails", a
 
 test("registered agent writes state, handles input, and settles one result", async () => {
   const mailbox = setAgentEnvironment();
+  process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
   const agent = fakePi();
   registerExtension!(agent.pi as never);
   assert.equal(
@@ -1122,6 +1130,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   await new Promise((resolve) => setImmediate(resolve));
   const started = readAgentState(mailbox);
   assert.equal(started?.agentLabel, "registered-agent");
+  assert.equal(started?.rootSessionId, LEAD_SESSION_ID);
   assert.equal(started?.activeRequestId, undefined);
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   const idleAfterStartup = readAgentState(mailbox);
@@ -1881,7 +1890,11 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
     const resultEntry = {
       type: "custom",
       customType: "pi-herdsman-result-ref",
-      data: { ref: semanticRef, canonicalRef },
+      data: {
+        ref: semanticRef,
+        canonicalRef,
+        requesterSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      },
     };
     const branch: unknown[] = [
       resultEntry,
@@ -2405,6 +2418,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
         workspaceId: child.workspaceId,
         agentLabel: child.agentLabel,
         paneId: child.paneId,
+        rootSessionId: child.rootSessionId,
         status: "completed",
         text,
         ...(resultBindings ? { resultBindings } : {}),
@@ -2578,6 +2592,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       workspaceId: childThree.workspaceId,
       agentLabel: childThree.agentLabel,
       paneId: childThree.paneId,
+      rootSessionId: childThree.rootSessionId,
       status: "completed",
       text: "three",
       completedAt: Date.now(),
@@ -2747,6 +2762,7 @@ test("owner delivery fails closed and retries selected evidence idempotently", a
       workspaceId: child.workspaceId,
       agentLabel: child.agentLabel,
       paneId: child.paneId,
+      rootSessionId: child.rootSessionId,
       status: "completed",
       text: "Review complete.",
       resultBindings: [forwardedBinding],
@@ -2799,7 +2815,10 @@ test("owner delivery fails closed and retries selected evidence idempotently", a
     );
     assert.equal(readResult(childMailbox, requestId)?.status, "completed");
     assert.equal(bindingEntries().length, 1);
-    assert.deepEqual((bindingEntries()[0] as any).data, forwardedBinding);
+    assert.deepEqual((bindingEntries()[0] as any).data, {
+      ...forwardedBinding,
+      requesterSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    });
 
     t.mock.timers.tick(250);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -2891,6 +2910,7 @@ test("independent producer branches publish globally unique semantic refs", asyn
         workspaceId: child.workspaceId,
         agentLabel: label,
         paneId: child.paneId,
+        rootSessionId: child.rootSessionId,
         status: "completed",
         text: `result from producer ${producer}`,
         completedAt: Date.now(),
@@ -4345,6 +4365,618 @@ test("read_evidence resolves only one exact supplied reference and hides failure
         return true;
       },
     );
+  }
+});
+
+test("read-time conflicting published result mappings fail closed", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const conflictingRef = resultRef(randomUUID());
+  const semantic = `result:conflict-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "published\n");
+  const conflictingArtifact = persistPeerResultArtifact(
+    conflictingRef,
+    "accepted\n",
+  );
+  publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+  try {
+    assert.equal(
+      authorizedScopedResult(
+        semantic,
+        LEAD_SESSION_ID,
+        [
+          {
+            id: randomUUID(),
+            name: "conflict",
+            result: { ref: semantic, canonicalRef: conflictingRef },
+          },
+        ],
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-result-ref",
+            data: {
+              ref: semantic,
+              canonicalRef: conflictingRef,
+              requesterSessionId: LEAD_SESSION_ID,
+            },
+          },
+        ],
+        LEAD_SESSION_ID,
+      ),
+      undefined,
+    );
+  } finally {
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+    realFs.rmSync(conflictingArtifact, { force: true });
+  }
+});
+
+test("copied branch result bindings do not authorize foreign-root reads", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const foreignSessionId = randomUUID();
+  const semantic = `result:copied-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "copied history\n");
+  publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+  try {
+    const copiedBinding = {
+      ref: semantic,
+      canonicalRef,
+      requesterSessionId: LEAD_SESSION_ID,
+    };
+    assert.equal(
+      authorizedScopedResult(
+        semantic,
+        foreignSessionId,
+        [],
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-result-ref",
+            data: copiedBinding,
+          },
+        ],
+        foreignSessionId,
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      authorizedScopedResult(
+        semantic,
+        foreignSessionId,
+        [
+          {
+            id: randomUUID(),
+            name: "accepted result",
+            result: { ref: semantic, canonicalRef },
+          },
+        ],
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-result-ref",
+            data: copiedBinding,
+          },
+        ],
+        foreignSessionId,
+      ),
+      { ref: semantic, canonicalRef },
+    );
+  } finally {
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("files reject copied foreign-session results and accept same-root publications", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const foreignSessionId = randomUUID();
+  const semantic = `result:files-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "private result\n");
+  const copied = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: { ref: semantic, canonicalRef, requesterSessionId: LEAD_SESSION_ID },
+  };
+  const context = fakeAgentContext([copied]);
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => foreignSessionId,
+  };
+  const previousRoot = process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+  try {
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = foreignSessionId;
+    publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+    assert.throws(() => resolveMessageFiles(context, [semantic], "files"));
+    context.sessionManager = {
+      ...context.sessionManager,
+      getSessionId: () => LEAD_SESSION_ID,
+    };
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
+    assert.deepEqual(resolveMessageFiles(context, [semantic], "files"), [
+      { ref: semantic, canonicalRef },
+    ]);
+  } finally {
+    if (previousRoot === undefined)
+      delete process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+    else process.env.PI_HERDSMAN_ROOT_SESSION_ID = previousRoot;
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("files reject copied mappings that conflict with same-root publications", () => {
+  const branchCanonicalRef = resultRef(randomUUID());
+  const publishedCanonicalRef = resultRef(randomUUID());
+  const semantic = `result:files-conflict-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const branchArtifact = persistPeerResultArtifact(
+    branchCanonicalRef,
+    "copied result\n",
+  );
+  const publishedArtifact = persistPeerResultArtifact(
+    publishedCanonicalRef,
+    "published result\n",
+  );
+  const copied = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: {
+      ref: semantic,
+      canonicalRef: branchCanonicalRef,
+      requesterSessionId: randomUUID(),
+    },
+  };
+  const context = fakeAgentContext([copied]);
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => LEAD_SESSION_ID,
+  };
+  const previousRoot = process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+  try {
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
+    publishScopedResult(label, 1, publishedCanonicalRef, LEAD_SESSION_ID);
+    assert.throws(() => resolveMessageFiles(context, [semantic], "files"));
+  } finally {
+    if (previousRoot === undefined)
+      delete process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+    else process.env.PI_HERDSMAN_ROOT_SESSION_ID = previousRoot;
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(branchArtifact, { force: true });
+    realFs.rmSync(publishedArtifact, { force: true });
+  }
+});
+
+test("direct completion result access requires matching owner provenance", () => {
+  const requestId = randomUUID();
+  const canonicalRef = resultRef(requestId);
+  const semantic = `result:completion-${randomUUID().slice(0, 8)}#1`;
+  const details = {
+    agentLabel: semantic.slice("result:".length, semantic.indexOf("#")),
+    resultIndex: 1,
+    status: "completed",
+    requestId,
+    resultRef: canonicalRef,
+    ownerSessionId: LEAD_SESSION_ID,
+  };
+  const completion = {
+    message: { customType: "pi-herdsman-agent-result", details },
+  };
+  assert.deepEqual(
+    authorizedScopedResult(
+      semantic,
+      LEAD_SESSION_ID,
+      [],
+      [completion],
+      LEAD_SESSION_ID,
+    ),
+    { ref: semantic, canonicalRef },
+  );
+
+  const foreignSessionId = randomUUID();
+  assert.equal(
+    authorizedScopedResult(
+      semantic,
+      foreignSessionId,
+      [],
+      [completion],
+      foreignSessionId,
+    ),
+    undefined,
+  );
+});
+
+test("verified imported branch result binding authorizes its exact requester", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const requesterSessionId = randomUUID();
+  const semantic = `result:branch-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "branch result\n");
+  try {
+    const binding = { ref: semantic, canonicalRef, requesterSessionId };
+    const branch = [
+      { type: "custom", customType: "pi-herdsman-result-ref", data: binding },
+    ];
+    assert.deepEqual(
+      authorizedScopedResult(
+        semantic,
+        undefined,
+        [],
+        branch,
+        requesterSessionId,
+      ),
+      {
+        ref: semantic,
+        canonicalRef,
+      },
+    );
+    assert.equal(
+      authorizedScopedResult(semantic, undefined, [], branch, randomUUID()),
+      undefined,
+    );
+  } finally {
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("a tampered mailbox root cannot authorize a result outside the runtime root", () => {
+  const state = managedState("tampered-root");
+  const runtime = {
+    label: state.agentLabel,
+    herdrAgent: "tampered-root",
+    workspaceId: state.workspaceId,
+    paneId: state.paneId,
+    cwd: state.cwd,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    rootSessionId: LEAD_SESSION_ID,
+    mailboxPath: agentMailboxPath(WORKSPACE, state.agentLabel),
+    piSessionId: state.piSessionId,
+    piSessionFile: state.piSessionFile,
+    agentDefinition: "agent",
+  };
+
+  assert.throws(
+    () =>
+      validateIdentity(runtime, {
+        ...state,
+        rootSessionId: "foreign-root-session",
+      }),
+    /rootSessionId=/,
+  );
+});
+
+test("fresh same-root recipient reads a task-only result after producer cleanup", async () => {
+  const requestId = randomUUID();
+  const canonicalRef = resultRef(requestId);
+  const semantic = `result:same-root-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const text = "diagnosis survives producer cleanup\n";
+  const artifact = persistPeerResultArtifact(canonicalRef, text);
+  const producerMailbox = setAgentEnvironment(
+    `producer-${randomUUID().slice(0, 8)}`,
+  );
+  const recipientMailbox = setAgentEnvironment("fresh-result-recipient");
+  const unrelatedEvidence = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "task-context.txt",
+    "ordinary task context\n",
+  );
+  const recipient = fakePi();
+  registerExtension!(recipient.pi as never);
+  const context = fakeAgentContext(recipient.entries);
+  try {
+    publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+    const producerRequestId = randomUUID();
+    const producerState = {
+      ...managedState("producer", producerRequestId),
+      activeRequestId: undefined,
+      completedRequestId: producerRequestId,
+    };
+    writeAgentState(producerMailbox, producerState);
+    writeResult(producerMailbox, {
+      version: 5,
+      runId: producerState.runId,
+      requestId: producerRequestId,
+      ownerSessionId: producerState.ownerSessionId,
+      workspaceId: producerState.workspaceId,
+      agentLabel: producerState.agentLabel,
+      paneId: producerState.paneId,
+      rootSessionId: producerState.rootSessionId,
+      status: "completed",
+      text,
+      completedAt: Date.now(),
+    });
+    assert.equal(
+      readResult(producerMailbox, producerRequestId)?.status,
+      "completed",
+    );
+    resetAgentMailbox(producerMailbox);
+
+    writeAgentState(recipientMailbox, managedState("fresh-result-recipient"));
+    await recipient.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(recipientMailbox)!;
+    const assignment: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: `Read ${semantic}`,
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: "",
+      requiredEvidence: [unrelatedEvidence],
+      createdAt: Date.now(),
+    };
+    assignment.evidenceAssignmentId = assignment.requestId;
+    writeRequest(recipientMailbox, assignment);
+    assert.deepEqual(
+      recipient.events.get("input")![0](
+        { text: controlMarker(assignment.requestId) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    const reader = recipient.tools.find(
+      (tool) => tool.name === "read_evidence",
+    );
+    assert.ok(reader, "managed Agent must register read_evidence");
+    const page = await reader.execute(
+      "same-root-task-only-read",
+      { ref: semantic },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(page.content[0].text, text);
+  } finally {
+    recipient.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(producerMailbox);
+    resetAgentMailbox(recipientMailbox);
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+    realFs.rmSync(
+      join(
+        herdsmanDataRoot(),
+        "assignments",
+        unrelatedEvidence.sourceAssignmentId,
+      ),
+      { recursive: true, force: true },
+    );
+  }
+});
+
+test("fresh foreign-root recipient reads an accepted result after producer cleanup without changing its owner", async () => {
+  const requestId = randomUUID();
+  const canonicalRef = resultRef(requestId);
+  const semantic = `result:cleanup-regression-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const text = "diagnosis survives producer cleanup\n";
+  const artifact = persistPeerResultArtifact(canonicalRef, text);
+  const producerMailbox = setAgentEnvironment(
+    `producer-${randomUUID().slice(0, 8)}`,
+  );
+  const recipientMailbox = setAgentEnvironment("fresh-result-recipient");
+  const foreignRoot = randomUUID();
+  const copiedBinding = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: {
+      ref: semantic,
+      canonicalRef,
+      requesterSessionId: LEAD_SESSION_ID,
+    },
+  };
+  const recipient = fakePi({ entries: [copiedBinding] });
+  registerExtension!(recipient.pi as never);
+  const context = fakeAgentContext(recipient.entries);
+  try {
+    // Publish the completed result before removing the producer's durable mailbox.
+    publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+    const producerRequestId = randomUUID();
+    const producerState = {
+      ...managedState("producer", producerRequestId),
+      activeRequestId: undefined,
+      completedRequestId: producerRequestId,
+    };
+    writeAgentState(producerMailbox, producerState);
+    writeResult(producerMailbox, {
+      version: 5,
+      runId: producerState.runId,
+      requestId: producerRequestId,
+      ownerSessionId: producerState.ownerSessionId,
+      workspaceId: producerState.workspaceId,
+      agentLabel: producerState.agentLabel,
+      paneId: producerState.paneId,
+      rootSessionId: producerState.rootSessionId,
+      status: "completed",
+      text,
+      completedAt: Date.now(),
+    });
+    assert.equal(
+      readResult(producerMailbox, producerRequestId)?.status,
+      "completed",
+    );
+    resetAgentMailbox(producerMailbox);
+    assert.equal(readAgentState(producerMailbox), undefined);
+
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = foreignRoot;
+    writeAgentState(recipientMailbox, {
+      ...managedState("fresh-result-recipient"),
+      rootSessionId: foreignRoot,
+    });
+    await recipient.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(recipientMailbox)!;
+    const transferredResult = {
+      id: randomUUID(),
+      name: "verified transferred result",
+      result: { ref: semantic, canonicalRef },
+    } as const;
+    importResultBindings(
+      recipient.pi as never,
+      context,
+      [{ ref: semantic, canonicalRef }],
+      "files",
+    );
+    assert.equal(
+      recipient.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-result-ref" &&
+          entry.data?.ref === semantic &&
+          entry.data?.requesterSessionId ===
+            context.sessionManager.getSessionId(),
+      ),
+      true,
+      "accepted transfer must add requester-scoped authorization despite copied metadata",
+    );
+    const assignment: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: `Read ${semantic}`,
+      projectAssignmentId: randomUUID(),
+      evidenceAssignmentId: "",
+      requiredEvidence: [transferredResult],
+      createdAt: Date.now(),
+    };
+    assignment.evidenceAssignmentId = assignment.requestId;
+    writeRequest(recipientMailbox, assignment);
+    const reader = recipient.tools.find(
+      (tool) => tool.name === "read_evidence",
+    );
+    assert.ok(reader, "managed Agent must register read_evidence");
+    await assert.rejects(
+      reader.execute(
+        "task-only-cross-root-read",
+        { ref: semantic },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Evidence reference unavailable or invalid/,
+    );
+    assert.deepEqual(
+      recipient.events.get("input")![0](
+        { text: controlMarker(assignment.requestId) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    assert.equal(
+      readAgentState(recipientMailbox)?.activeRequestId,
+      assignment.requestId,
+    );
+    assert.ok(
+      recipient.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-result-ref" &&
+          entry.data?.canonicalRef === canonicalRef,
+      ),
+      "accepted requiredEvidence must import the exact result binding",
+    );
+    const transferredPage = await reader.execute(
+      "accepted-cross-root-read",
+      { ref: semantic },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(transferredPage.content[0].text, text);
+    assert.equal(resolveScopedResult(semantic)?.rootSessionId, LEAD_SESSION_ID);
+
+    // Legacy valid state has no ownership scope: accepted result access still works,
+    // but the arbitrary inherited environment scope is not used for authorization.
+    const { rootSessionId: _missingScope, ...legacyState } =
+      readAgentState(recipientMailbox)!;
+    writeAgentState(recipientMailbox, legacyState);
+    delete process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+    assert.equal(managedAgentIdentity(context).rootSessionId, undefined);
+    const legacyPage = await reader.execute(
+      "legacy-accepted-cross-root-read",
+      { ref: semantic },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(legacyPage.content[0].text, text);
+
+    writeFileSync(
+      join(herdsmanDataRoot(), "result-ref-reservations", label, "1"),
+      "reserved\n",
+    );
+    assert.equal(resolveScopedResult(semantic), "reserved");
+    const reservedPage = await reader.execute(
+      "reserved-registry-read",
+      { ref: semantic },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(reservedPage.content[0].text, text);
+
+    writeFileSync(
+      join(herdsmanDataRoot(), "result-ref-reservations", label, "1"),
+      "{corrupt registry mapping",
+    );
+    await assert.rejects(
+      reader.execute(
+        "corrupt-registry-with-accepted-binding",
+        { ref: semantic },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Evidence reference unavailable or invalid/,
+    );
+    await assert.rejects(
+      reader.execute(
+        "foreign-root-read",
+        { ref: `result:unbound-${randomUUID()}#1` },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Evidence reference unavailable or invalid/,
+    );
+  } finally {
+    recipient.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(producerMailbox);
+    resetAgentMailbox(recipientMailbox);
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
   }
 });
 

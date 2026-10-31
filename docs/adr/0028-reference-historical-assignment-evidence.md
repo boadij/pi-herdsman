@@ -18,17 +18,25 @@ ownership.
 Retained text snapshots have stable `evidence:<name>#<index>` references,
 allocated uniquely within the Herdsman data root. Agent results retain their
 existing `result:<agent>#<index>` references. References identify immutable
-evidence but do not authorize access; retrieval is limited to evidence accepted
-by the requesting assignment. A scoped, read-only `read_evidence` operation
-provides bounded access to authorized references. Internal storage paths and
-UUIDs are not model-facing identities.
+evidence but do not authorize access. Retained assignment evidence retrieval is
+limited to evidence accepted by the requesting assignment. A scoped, read-only
+`read_evidence` operation provides bounded access to authorized references;
+completed results also follow the same-root registration exception below.
+Internal storage paths and UUIDs are not model-facing identities.
+
+Separately, a completed result is readable when it is either explicitly
+accepted or registered as published within the requester's exact verified
+ownership root. Registered same-root results are readable without being
+selected through `files`; selected `files` handoffs remain the explicit path
+for cross-root or other transferred artifacts. This ownership-tree access
+does not expand the accepted required-evidence set or grant project authority.
 
 This decision supersedes ADR 0025 only where it specifies embedding small
 historical required evidence by default. Its decisions about evidence
 ownership, retention, assignment scope, and inheritance remain in force, as
 modified by ADR 0026. ADR 0001's semantic result identity, ADR 0005's explicit
-`files` handoffs, and ADR 0027's complete-text coordination messages remain
-unchanged.
+`files` handoffs for cross-tree transfers, and ADR 0027's complete-text
+coordination messages remain unchanged.
 
 ## Rationale
 

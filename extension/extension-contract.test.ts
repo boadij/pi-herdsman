@@ -1047,6 +1047,7 @@ test("list peers and message use global peer presence, not caller inventory", as
       status: "completed",
       requestId: resultRequestId,
       resultRef: resultReference,
+      ownerSessionId: senderId,
     },
   };
   const runtime = peerRuntime();

@@ -64,7 +64,8 @@ import {
   type FocusIntent,
 } from "./presentation.ts";
 import {
-  reserveSemanticResultRef,
+  publishScopedResult,
+  resolveScopedResult,
   parseSemanticResultRef,
   isResultBinding,
   resultRef,
@@ -667,18 +668,61 @@ export function resolveMessageFiles(
         `Result ref ${file} is ambiguous in the accepted evidence scope`,
         operation,
       );
-    if (acceptedResults.length === 1) return acceptedResults[0]!.result;
     if (!parseSemanticResultRef(file))
       fail(
         "invalid_request",
         `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
         operation,
       );
-    const refs = canonicalRefsForSemanticResult(
-      ctx.sessionManager.getBranch(),
+    const requesterSessionId = ctx.sessionManager.getSessionId();
+    const branch = ctx.sessionManager.getBranch();
+    const refs = verifiedBranchResultMappings(
+      branch,
+      file,
+      requesterSessionId,
+      operation,
+    );
+    const branchMappings = canonicalRefsForSemanticResult(
+      branch,
       file,
       operation,
     );
+    if (branchMappings.size > 1)
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} resolves to conflicting canonical results`,
+        operation,
+      );
+    for (const accepted of acceptedResults)
+      refs.add(accepted.result.canonicalRef);
+    const published = resolveScopedResult(file);
+    if (published === "invalid")
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} has an invalid publication`,
+        operation,
+      );
+    if (published && published !== "reserved") {
+      const rootSessionId =
+        process.env.PI_HERDSMAN_ROOT_SESSION_ID || requesterSessionId;
+      if (published.rootSessionId === rootSessionId || acceptedResults.length)
+        refs.add(published.canonicalRef);
+    }
+    if (
+      refs.size &&
+      [...branchMappings].some((canonicalRef) => !refs.has(canonicalRef))
+    )
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} resolves to conflicting canonical results`,
+        operation,
+      );
+    if (acceptedResults.length > 1)
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} is ambiguous in the accepted evidence scope`,
+        operation,
+      );
     if (!refs.size)
       fail(
         "target_not_found",
@@ -1700,11 +1744,51 @@ function importedResultBinding(entry: unknown): ResultBinding | undefined {
     customType?: unknown;
     data?: unknown;
   };
+  const data = record.data as Record<string, unknown> | undefined;
   return record.type === "custom" &&
     record.customType === RESULT_REF_ENTRY &&
-    isResultBinding(record.data)
-    ? record.data
+    !!data &&
+    isResultBinding({ ref: data.ref, canonicalRef: data.canonicalRef })
+    ? { ref: data!.ref as string, canonicalRef: data!.canonicalRef as string }
     : undefined;
+}
+
+export function verifiedBranchResultMappings(
+  entries: readonly unknown[],
+  ref: string,
+  requesterSessionId: string,
+  operation: string,
+): Set<string> {
+  const semantic = parseSemanticResultRef(ref);
+  const refs = new Set<string>();
+  if (!semantic || !validId(requesterSessionId)) return refs;
+  for (const entry of entries) {
+    const details = agentResultDetails(entry);
+    if (
+      details?.agentLabel === semantic.agent &&
+      details.resultIndex === semantic.index &&
+      details.ownerSessionId === requesterSessionId
+    )
+      refs.add(canonicalResultRef(details, operation));
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as {
+      type?: unknown;
+      customType?: unknown;
+      data?: unknown;
+    };
+    const data = record.data as Record<string, unknown> | undefined;
+    if (
+      record.type === "custom" &&
+      record.customType === RESULT_REF_ENTRY &&
+      typeof data?.ref === "string" &&
+      typeof data.canonicalRef === "string" &&
+      isResultBinding({ ref: data.ref, canonicalRef: data.canonicalRef }) &&
+      data.ref === ref &&
+      data.requesterSessionId === requesterSessionId
+    )
+      refs.add(data.canonicalRef);
+  }
+  return refs;
 }
 
 export function canonicalRefsForSemanticResult(
@@ -1765,10 +1849,30 @@ export function importResultBindings(
         `Result ref ${binding.ref} conflicts with the current branch`,
         operation,
       );
-    if (!existing.size) pending.set(binding.ref, binding.canonicalRef);
+    const requesterSessionId = ctx.sessionManager.getSessionId();
+    if (!validId(requesterSessionId))
+      fail(
+        "internal_failure",
+        "Requester session identity is invalid",
+        operation,
+      );
+    const authorized = verifiedBranchResultMappings(
+      ctx.sessionManager.getBranch(),
+      binding.ref,
+      requesterSessionId,
+      operation,
+    );
+    if (!authorized.size) pending.set(binding.ref, binding.canonicalRef);
   }
+  const requesterSessionId = ctx.sessionManager.getSessionId();
+  if (!validId(requesterSessionId))
+    fail(
+      "internal_failure",
+      "Requester session identity is invalid",
+      operation,
+    );
   for (const [ref, canonicalRef] of pending)
-    pi.appendEntry(RESULT_REF_ENTRY, { ref, canonicalRef });
+    pi.appendEntry(RESULT_REF_ENTRY, { ref, canonicalRef, requesterSessionId });
 }
 
 export function hasDeliveredAsk(
@@ -2860,6 +2964,7 @@ export type Runtime = {
   cwd: string;
   runId: string;
   ownerSessionId: string;
+  rootSessionId?: string;
   mailboxPath: string;
   piSessionId?: string;
   piSessionFile?: string;
@@ -2885,6 +2990,7 @@ function runtimeIdentityMatches(
     runtime.ownerSessionId === state.ownerSessionId &&
     runtime.workspaceId === agent.workspace_id &&
     runtime.paneId === agent.pane_id &&
+    runtime.rootSessionId === state.rootSessionId &&
     runtime.piSessionId === state.piSessionId &&
     sameSessionPath(runtime.piSessionFile, state.piSessionFile) &&
     sameCwd(runtime.cwd, agent.cwd)
@@ -3005,6 +3111,7 @@ export function validateIdentity(
     ["workspaceId", state.workspaceId, runtime.workspaceId],
     ["agentLabel", state.agentLabel, runtime.label],
     ["paneId", state.paneId, runtime.paneId],
+    ["rootSessionId", state.rootSessionId, runtime.rootSessionId],
   ].filter(([, expected, actual]) => expected !== actual);
   if (!sameCwd(state.cwd, runtime.cwd))
     differences.push(["cwd", state.cwd, runtime.cwd]);
@@ -3555,6 +3662,7 @@ export function listedAgentRecord(
 
 export type AgentControllerOptions = {
   scope: ControllerScope | undefined;
+  managedAgentRootSessionId?(ctx: ExtensionContext): string;
   /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
   rootDelegationPolicy?(): RootDelegationPolicy;
   /** Stable authority/profile generation captured across assignment preflight. */
@@ -3731,6 +3839,7 @@ export function createAgentController(
     left.workspaceId === right.workspaceId &&
     left.agentLabel === right.agentLabel &&
     left.paneId === right.paneId &&
+    left.rootSessionId === right.rootSessionId &&
     left.piSessionId === right.piSessionId &&
     sameSessionPath(left.piSessionFile, right.piSessionFile) &&
     sameCwd(left.cwd, right.cwd);
@@ -3760,6 +3869,7 @@ export function createAgentController(
       agentLabel: runtime.label,
       paneId: runtime.paneId,
       piSessionId: runtime.piSessionId ?? "",
+      rootSessionId: runtime.rootSessionId,
       piSessionFile: runtime.piSessionFile,
       cwd: runtime.cwd,
       updatedAt: 0,
@@ -4220,6 +4330,7 @@ export function createAgentController(
         cwd: agent.cwd,
         runId: state.runId,
         ownerSessionId: state.ownerSessionId,
+        rootSessionId: state.rootSessionId,
         mailboxPath: agentMailboxPath(agent.workspace_id, agent.label),
         piSessionId: state.piSessionId,
         piSessionFile: state.piSessionFile,
@@ -4238,6 +4349,7 @@ export function createAgentController(
       cwd: agent.cwd,
       runId: state.runId,
       ownerSessionId: state.ownerSessionId,
+      rootSessionId: state.rootSessionId,
       mailboxPath: agentMailboxPath(agent.workspace_id, agent.label),
       piSessionId: state.piSessionId,
       piSessionFile: state.piSessionFile,
@@ -4506,6 +4618,7 @@ export function createAgentController(
           workspaceId: runtime.workspaceId,
           agentLabel: runtime.label,
           paneId: runtime.paneId,
+          rootSessionId: runtime.rootSessionId,
           piSessionId: runtime.piSessionId ?? "",
           piSessionFile: runtime.piSessionFile,
           cwd: runtime.cwd,
@@ -4591,6 +4704,7 @@ export function createAgentController(
           workspaceId: runtime.workspaceId,
           agentLabel: runtime.label,
           paneId: runtime.paneId,
+          rootSessionId: runtime.rootSessionId,
           piSessionId: runtime.piSessionId ?? "",
           piSessionFile: runtime.piSessionFile,
           cwd: runtime.cwd,
@@ -4647,6 +4761,7 @@ export function createAgentController(
                   workspaceId: runtime.workspaceId,
                   agentLabel: runtime.label,
                   paneId: runtime.paneId,
+                  rootSessionId: runtime.rootSessionId,
                   piSessionId: runtime.piSessionId ?? "",
                   piSessionFile: runtime.piSessionFile,
                   cwd: runtime.cwd,
@@ -4682,34 +4797,7 @@ export function createAgentController(
     context: ExtensionContext,
     files: readonly string[] | undefined,
     operation: string,
-  ) =>
-    (files ?? []).map((file) => {
-      if (!file.startsWith("result:") || !file.includes("#")) return file;
-      if (!parseSemanticResultRef(file))
-        fail(
-          "invalid_request",
-          `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
-          operation,
-        );
-      const refs = canonicalRefsForSemanticResult(
-        context.sessionManager.getBranch(),
-        file,
-        operation,
-      );
-      if (!refs.size)
-        fail(
-          "target_not_found",
-          `Result ref ${file} is not available on the current branch`,
-          operation,
-        );
-      if (refs.size !== 1)
-        fail(
-          "target_ambiguous",
-          `Result ref ${file} resolves to conflicting canonical results`,
-          operation,
-        );
-      return { ref: file, canonicalRef: refs.values().next().value! };
-    });
+  ) => resolveMessageFiles(context, files, operation);
   const controlAction = async (
     context: ExtensionContext,
     params: Extract<
@@ -4748,6 +4836,7 @@ export function createAgentController(
               workspaceId: runtime.workspaceId,
               agentLabel: runtime.label,
               paneId: runtime.paneId,
+              rootSessionId: runtime.rootSessionId,
               piSessionId: runtime.piSessionId!,
               piSessionFile: runtime.piSessionFile,
               cwd: runtime.cwd,
@@ -4844,6 +4933,7 @@ export function createAgentController(
           workspaceId: runtime.workspaceId,
           agentLabel: runtime.label,
           paneId: runtime.paneId,
+          rootSessionId: runtime.rootSessionId,
           piSessionId: runtime.piSessionId!,
           piSessionFile: runtime.piSessionFile,
           cwd: runtime.cwd,
@@ -5873,6 +5963,7 @@ export function createAgentController(
           cwd: state.cwd,
           runId: state.runId,
           ownerSessionId: state.ownerSessionId,
+          rootSessionId: state.rootSessionId,
           mailboxPath: path,
           piSessionId: state.piSessionId,
           piSessionFile: state.piSessionFile,
@@ -6034,13 +6125,16 @@ export function createAgentController(
         customType?: unknown;
         data?: unknown;
       };
+      const data = record.data as Record<string, unknown> | undefined;
       if (
         record.type !== "custom" ||
         record.customType !== "pi-herdsman-result-ref" ||
-        !isResultBinding(record.data)
+        !isResultBinding(
+          data && { ref: data.ref, canonicalRef: data.canonicalRef },
+        )
       )
         continue;
-      const semantic = parseSemanticResultRef(record.data.ref);
+      const semantic = parseSemanticResultRef(data!.ref as string);
       if (semantic?.agent === label) max = Math.max(max, semantic.index);
     }
     return max + 1;
@@ -6377,6 +6471,7 @@ export function createAgentController(
     resultDeliveryInFlight.add(key);
     try {
       const expected = resultIdentity(runtime, result.requestId);
+      const persistedState = readAgentState(runtime.mailboxPath);
       const identityMismatch =
         runtimes.get(runtime.label) !== runtime ||
         result.runId !== runtime.runId ||
@@ -6384,6 +6479,8 @@ export function createAgentController(
         result.workspaceId !== runtime.workspaceId ||
         result.agentLabel !== runtime.label ||
         result.paneId !== runtime.paneId ||
+        result.rootSessionId !== runtime.rootSessionId ||
+        result.rootSessionId !== persistedState?.rootSessionId ||
         result.requestId !==
           (runtime.activeRequestId ?? runtime.completedRequestId);
       if (identityMismatch) return;
@@ -6434,9 +6531,13 @@ export function createAgentController(
           ? resultDeliverySemanticRefs.get(evidenceKey)
           : undefined;
         if (completion.resultRef && !semanticResult) {
-          semanticResult = reserveSemanticResultRef(
+          if (!result.rootSessionId)
+            throw new Error("Completed result has no verified ownership scope");
+          semanticResult = publishScopedResult(
             result.agentLabel,
             nextResultIndex(entries, result.agentLabel),
+            completion.resultRef,
+            result.rootSessionId,
           );
           resultDeliverySemanticRefs.set(evidenceKey, semanticResult);
         }
@@ -7458,6 +7559,12 @@ export function createAgentController(
           agentDefinitionDelegationEnabled(effectiveDefinition);
         const runId = assignment!.runId;
         const owner = assignment!.ownerSessionId;
+        const verifiedRootSessionId =
+          scope.kind === "managed-agent"
+            ? options.managedAgentRootSessionId?.(ctx)
+            : ctx.sessionManager.getSessionId();
+        if (!verifiedRootSessionId?.trim())
+          throw new Error("Verified ownership root session is unavailable");
         const forwardingSession =
           scope.kind === "managed-agent"
             ? (process.env.PI_SUBAGENT_PARENT_SESSION ?? owner)
@@ -7695,6 +7802,7 @@ export function createAgentController(
             `PI_HERDSMAN_MAILBOX=${mailbox}`,
             `PI_HERDSMAN_RUN_ID=${runId}`,
             `PI_HERDSMAN_OWNER_SESSION_ID=${owner}`,
+            `PI_HERDSMAN_ROOT_SESSION_ID=${verifiedRootSessionId}`,
             `PI_HERDSMAN_OWNER_DISPLAY=${ownerDisplay}`,
             `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
             `PI_HERDSMAN_LABEL=${label}`,
@@ -7865,6 +7973,7 @@ export function createAgentController(
             cwd: started.cwd,
             runId: state.runId,
             ownerSessionId: owner,
+            rootSessionId: state.rootSessionId,
             mailboxPath: mailbox,
             piSessionId: state.piSessionId,
             piSessionFile: state.piSessionFile,
@@ -8395,17 +8504,25 @@ export function createAgentController(
         ) => {
           try {
             const scope = await options.projectEvidence?.(ctx);
-            if (!scope) throw new Error();
-            const { evidencePageContent, readEvidencePage } =
-              await import("./managed-agent-runtime.ts");
+            const {
+              evidencePageContent,
+              readEvidencePage,
+              authorizedScopedResult,
+            } = await import("./managed-agent-runtime.ts");
+            const accepted = scope?.assignment.requiredEvidence ?? [];
+            const scoped = authorizedScopedResult(
+              params.ref,
+              ctx.sessionManager.getSessionId(),
+              accepted,
+              ctx.sessionManager.getBranch(),
+              ctx.sessionManager.getSessionId(),
+            );
             let page;
-            await scope.revalidate(() => {
-              page = readEvidencePage(
-                scope.assignment.requiredEvidence,
-                params.ref,
-                params,
-              );
-            });
+            const read = () => {
+              page = readEvidencePage(accepted, params.ref, params, scoped);
+            };
+            if (scope) await scope.revalidate(read);
+            else read();
             if (!page) throw new Error();
             return {
               content: [{ type: "text", text: evidencePageContent(page) }],

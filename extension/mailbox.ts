@@ -35,6 +35,7 @@ export interface ManagedAgentState {
   agentLabel: string;
   paneId: string;
   piSessionId: string;
+  rootSessionId?: string;
   piSessionFile?: string;
   agentDefinition?: string;
   cwd: string;
@@ -120,6 +121,7 @@ export interface ResultRecord {
   workspaceId: string;
   agentLabel: string;
   paneId: string;
+  rootSessionId?: string;
   status: "completed" | "failed";
   text?: string;
   error?: {
@@ -406,6 +408,7 @@ function validate(
           "agentLabel",
           "paneId",
           "piSessionId",
+          "rootSessionId",
           "piSessionFile",
           "agentDefinition",
           "cwd",
@@ -464,6 +467,7 @@ function validate(
               "workspaceId",
               "agentLabel",
               "paneId",
+              "rootSessionId",
               "status",
               "text",
               "error",
@@ -528,6 +532,13 @@ function validate(
   };
   if (kind === "state") {
     finite("updatedAt");
+    if (
+      v.rootSessionId !== undefined &&
+      (typeof v.rootSessionId !== "string" ||
+        !v.rootSessionId.trim() ||
+        v.rootSessionId.length > 512)
+    )
+      throw new Error("Invalid mailbox root session identity");
     if (
       v.lastActivityAt !== undefined &&
       (typeof v.lastActivityAt !== "number" ||
@@ -761,6 +772,13 @@ function validate(
       throw new Error("Invalid ask result bindings");
     finite("createdAt");
   } else {
+    if (
+      v.rootSessionId !== undefined &&
+      (typeof v.rootSessionId !== "string" ||
+        !v.rootSessionId.trim() ||
+        v.rootSessionId.length > 512)
+    )
+      throw new Error("Invalid mailbox root session identity");
     if (v.status !== "completed" && v.status !== "failed")
       throw new Error("Invalid result status");
     finite("completedAt");
