@@ -1245,6 +1245,7 @@ test("managed-agent delegation always splits in its current pane for every lead 
     process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
     process.env.PI_HERDSMAN_RUN_ID = parent.runId;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = parent.rootSessionId!;
     process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
     process.env.PI_HERDSMAN_LABEL = parent.agentLabel;
     process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
@@ -1736,7 +1737,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     {
       type: "custom",
       customType: "pi-herdsman-result-ref",
-      data: { ref: resultSemanticRef, canonicalRef: resultCanonicalRef },
+      data: {
+        ref: resultSemanticRef,
+        canonicalRef: resultCanonicalRef,
+        requesterSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      },
     },
   ];
   const context = fakeAgentContext(contextEntries);
@@ -8836,6 +8841,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     process.env.PI_HERDSMAN_MAILBOX = agentMailboxPath(WORKSPACE, label);
     process.env.PI_HERDSMAN_RUN_ID = AGENT_ID;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
     process.env.PI_HERDSMAN_OWNER_DISPLAY = `${definition}:${label}`;
     process.env.PI_HERDSMAN_LABEL = label;
     process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
@@ -11199,6 +11205,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
   process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
   process.env.PI_HERDSMAN_RUN_ID = parent.runId;
   process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+  process.env.PI_HERDSMAN_ROOT_SESSION_ID = parent.rootSessionId!;
   process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_LABEL = parentLabel;
   process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;

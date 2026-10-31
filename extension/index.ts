@@ -139,6 +139,8 @@ import {
   managedAgentRequiredEvidence,
   evidencePageContent,
   readEvidencePage,
+  managedAgentIdentity,
+  authorizedScopedResult,
   registerManagedAgentRuntime,
   runtimeIdentityState,
   sameManagedAgentIdentity,
@@ -2679,10 +2681,19 @@ function registerExtensionImpl(
       try {
         const accepted = managedAgentRequiredEvidence(ctx);
         if (!accepted) throw new Error();
+        const state = managedAgentIdentity(ctx);
+        const scoped = authorizedScopedResult(
+          params.ref,
+          state.rootSessionId ?? "",
+          accepted.effectiveEvidence,
+          ctx.sessionManager.getBranch(),
+          ctx.sessionManager.getSessionId(),
+        );
         const page = readEvidencePage(
           accepted.effectiveEvidence,
           params.ref,
           params,
+          scoped,
         );
         return {
           content: [{ type: "text", text: evidencePageContent(page) }],

@@ -18,6 +18,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireProcessLock } from "./lock.ts";
 
 const RESULT_PREFIX = "result:";
 const RESULT_ID =
@@ -547,6 +548,169 @@ export function reserveSemanticResultRef(
       }
       throw error;
     }
+  }
+}
+
+export interface PublishedResult {
+  version: 1;
+  canonicalRef: string;
+  rootSessionId: string;
+}
+
+/** Publishes an immutable ownership mapping in the semantic reservation slot. */
+export function publishScopedResult(
+  agentLabel: string,
+  minimumIndex: number,
+  canonicalRef: string,
+  rootSessionId: string,
+): Readonly<{ ref: string; index: number }> {
+  if (
+    !parseSemanticResultRef(`result:${agentLabel}#${minimumIndex}`) ||
+    !isCanonicalResultRef(canonicalRef) ||
+    typeof rootSessionId !== "string" ||
+    !rootSessionId.trim() ||
+    rootSessionId.length > 512
+  )
+    throw new Error("Invalid scoped result identity");
+  const artifact = resolveResultRef(canonicalRef);
+  if (!artifact) throw new Error("Invalid scoped result artifact");
+  const stat = lstatSync(artifact);
+  if (!stat.isFile() || stat.isSymbolicLink())
+    throw new Error("Invalid scoped result artifact");
+  const dataRoot = herdsmanDataRoot();
+  const reservationRoot = join(dataRoot, "result-ref-reservations");
+  const directory = join(reservationRoot, agentLabel);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    // Persist each newly created directory entry before publishing beneath it.
+    const dataParentFd = openSync(dirname(dataRoot), "r");
+    try {
+      fsyncSync(dataParentFd);
+    } finally {
+      closeSync(dataParentFd);
+    }
+    const dataRootFd = openSync(dataRoot, "r");
+    try {
+      fsyncSync(dataRootFd);
+    } finally {
+      closeSync(dataRootFd);
+    }
+    const reservationRootFd = openSync(reservationRoot, "r");
+    try {
+      fsyncSync(reservationRootFd);
+    } finally {
+      closeSync(reservationRootFd);
+    }
+  }
+  const lease = acquireProcessLock(
+    join(dataRoot, "locks", "scoped-result-publication"),
+    { name: "scoped result publication" },
+  );
+  try {
+    let index = minimumIndex;
+    for (const name of readdirSync(directory)) {
+      if (!/^[1-9][0-9]*$/.test(name)) continue;
+      const reserved = Number(name);
+      if (Number.isSafeInteger(reserved)) index = Math.max(index, reserved + 1);
+      const path = join(directory, name);
+      let record: unknown;
+      try {
+        record = JSON.parse(readFileSync(path, "utf8"));
+      } catch {
+        continue;
+      }
+      if (record && typeof record === "object" && !Array.isArray(record)) {
+        const metadata = record as Record<string, unknown>;
+        if (
+          Object.keys(metadata).length === 3 &&
+          metadata.version === 1 &&
+          isCanonicalResultRef(metadata.canonicalRef) &&
+          typeof metadata.rootSessionId === "string" &&
+          metadata.rootSessionId.trim() &&
+          metadata.canonicalRef === canonicalRef
+        ) {
+          if (metadata.rootSessionId !== rootSessionId)
+            throw new Error("Conflicting scoped result ownership");
+          return {
+            ref: `result:${agentLabel}#${Number(name)}`,
+            index: Number(name),
+          };
+        }
+      }
+    }
+    for (;;) {
+      if (!Number.isSafeInteger(index))
+        throw new Error("Semantic result index exhausted");
+      const path = join(directory, String(index));
+      try {
+        writeFileSync(
+          path,
+          `${JSON.stringify({ version: 1, canonicalRef, rootSessionId })}\n`,
+          { encoding: "utf8", flag: "wx", mode: 0o600, flush: true },
+        );
+        if (process.platform !== "win32") {
+          const fd = openSync(directory, "r");
+          try {
+            fsyncSync(fd);
+          } finally {
+            closeSync(fd);
+          }
+        }
+        return { ref: `result:${agentLabel}#${index}`, index };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        index++;
+      }
+    }
+  } finally {
+    lease.release();
+  }
+}
+
+export function resolveScopedResult(
+  ref: string,
+): PublishedResult | "reserved" | "invalid" | undefined {
+  const semantic = parseSemanticResultRef(ref);
+  if (!semantic) return undefined;
+  const path = join(
+    herdsmanDataRoot(),
+    "result-ref-reservations",
+    semantic.agent,
+    String(semantic.index),
+  );
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? undefined
+      : "invalid";
+  }
+  try {
+    if (!stat.isFile() || stat.isSymbolicLink()) return "invalid";
+    const contents = readFileSync(path, "utf8");
+    if (contents === "reserved\n") return "reserved";
+    const value: unknown = JSON.parse(contents);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return "invalid";
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).length !== 3 ||
+      record.version !== 1 ||
+      !isCanonicalResultRef(record.canonicalRef) ||
+      typeof record.rootSessionId !== "string" ||
+      !record.rootSessionId.trim() ||
+      record.rootSessionId.length > 512
+    )
+      return "invalid";
+    const artifact = resolveResultRef(record.canonicalRef);
+    if (!artifact) return "invalid";
+    const artifactStat = lstatSync(artifact);
+    if (!artifactStat.isFile() || artifactStat.isSymbolicLink())
+      return "invalid";
+    return record as PublishedResult;
+  } catch {
+    return "invalid";
   }
 }
 

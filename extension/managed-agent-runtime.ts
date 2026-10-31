@@ -92,6 +92,8 @@ import {
 import {
   importResultBindings,
   resolveMessageFiles,
+  canonicalRefsForSemanticResult,
+  verifiedBranchResultMappings,
 } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
 import { readConfig, readEffectiveConfig } from "./config.ts";
@@ -110,6 +112,7 @@ import {
   persistRequiredEvidenceSnapshot,
   upgradeAndVerifyRequiredEvidence,
   verifySemanticEvidenceReservation,
+  resolveScopedResult,
 } from "./storage.ts";
 import {
   agentDefinitionEnabled,
@@ -166,11 +169,52 @@ export function evidencePageContent(page: EvidencePage): string {
   return `${page.content}\n[More evidence: call read_evidence with offset=${page.nextOffset}, byteOffset=${page.nextByteOffset ?? 0}]`;
 }
 
+export function authorizedScopedResult(
+  ref: string,
+  rootSessionId: string | undefined,
+  accepted: readonly RequiredEvidence[],
+  branch: readonly unknown[],
+  requesterSessionId: string,
+): ResultBinding | undefined {
+  if (!parseSemanticResultRef(ref)) return undefined;
+  const branchMappings = verifiedBranchResultMappings(
+    branch,
+    ref,
+    requesterSessionId,
+    "read_evidence",
+  );
+  const acceptedMappings = new Set<string>();
+  for (const item of accepted) {
+    if (isRequiredEvidence(item) && "result" in item && item.result.ref === ref)
+      acceptedMappings.add(item.result.canonicalRef);
+  }
+  const mappings = new Set([...branchMappings, ...acceptedMappings]);
+  const published = resolveScopedResult(ref);
+  if (published === "invalid")
+    throw new Error("Invalid scoped result publication");
+  if (published && published !== "reserved") {
+    mappings.add(published.canonicalRef);
+  }
+  if (mappings.size !== 1) return undefined;
+  const canonicalRef = mappings.values().next().value;
+  if (typeof canonicalRef !== "string") return undefined;
+  const explicitlyAccepted = acceptedMappings.has(canonicalRef);
+  const verifiedBranch = branchMappings.has(canonicalRef);
+  const owned =
+    !!rootSessionId &&
+    !!published &&
+    published !== "reserved" &&
+    published.rootSessionId === rootSessionId;
+  if (!explicitlyAccepted && !owned && !verifiedBranch) return undefined;
+  return { ref, canonicalRef };
+}
+
 /** Reads only the caller-provided accepted set; this helper does not authorize that set. */
 export function readEvidencePage(
   authorizedEvidence: readonly RequiredEvidence[],
   ref: string,
   options: EvidencePageOptions = {},
+  authorizedResult?: ResultBinding,
 ): EvidencePage {
   const offset = options.offset ?? 1;
   const limit = options.limit ?? READ_EVIDENCE_MAX_LINES;
@@ -190,16 +234,20 @@ export function readEvidencePage(
     const matches = authorizedEvidence.filter(
       (item) => isRequiredEvidence(item) && semanticEvidenceRef(item) === ref,
     );
-    if (matches.length !== 1) throw new Error();
-    const evidence = matches[0]!;
-    if (!("result" in evidence))
+    if (matches.length > 1) throw new Error();
+    const evidence = matches[0];
+    if (!evidence && (!authorizedResult || authorizedResult.ref !== ref))
+      throw new Error();
+    if (evidence && !("result" in evidence))
       verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
     let content: string;
-    if ("result" in evidence) {
-      const path = resolveResultRef(evidence.result.canonicalRef);
+    if (!evidence || "result" in evidence) {
+      const binding =
+        evidence && "result" in evidence ? evidence.result : authorizedResult!;
+      const path = resolveResultRef(binding.canonicalRef);
       if (!path) throw new Error();
       // Reuse the accepted-binding file validation before reading its artifact.
-      validateMessageFiles([evidence.result], process.cwd(), "read_evidence");
+      validateMessageFiles([binding], process.cwd(), "read_evidence");
       content = new TextDecoder("utf-8", { fatal: true }).decode(
         readFileSync(path),
       );
@@ -561,6 +609,9 @@ export function managedAgentEnvironmentIdentity(
     ownerSessionId: e.PI_HERDSMAN_OWNER_SESSION_ID,
     workspaceId: e.PI_HERDSMAN_WORKSPACE_ID,
     agentLabel: e.PI_HERDSMAN_LABEL,
+    ...(e.PI_HERDSMAN_ROOT_SESSION_ID?.trim()
+      ? { rootSessionId: e.PI_HERDSMAN_ROOT_SESSION_ID.trim() }
+      : {}),
     paneId: e.HERDR_PANE_ID,
     piSessionId: ctx.sessionManager.getSessionId(),
     piSessionFile: ctx.sessionManager.getSessionFile(),
@@ -581,6 +632,7 @@ export function sameManagedAgentIdentity(
     left.agentLabel === right.agentLabel &&
     left.paneId === right.paneId &&
     left.piSessionId === right.piSessionId &&
+    left.rootSessionId === right.rootSessionId &&
     sameSessionPath(left.piSessionFile, right.piSessionFile) &&
     sameCwd(left.cwd, right.cwd)
   );
@@ -616,7 +668,11 @@ export function sameManagedAgentDurableState(
 export function runtimeIdentityState(
   runtime: Runtime,
   build: RuntimeBuild,
+  validatedState: ManagedAgentState,
 ): ManagedAgentState {
+  const rootSessionId = validatedState.rootSessionId;
+  if (!rootSessionId?.trim())
+    throw new Error("Managed-agent state has no verified ownership scope");
   return {
     version: 5,
     build,
@@ -626,6 +682,7 @@ export function runtimeIdentityState(
     agentLabel: runtime.label,
     paneId: runtime.paneId,
     piSessionId: runtime.piSessionId ?? "",
+    rootSessionId,
     piSessionFile: runtime.piSessionFile,
     cwd: runtime.cwd,
     updatedAt: 0,
@@ -659,6 +716,9 @@ export function validateManagedAgentIdentity(input: {
     state.agentLabel !== env.PI_HERDSMAN_LABEL ||
     state.paneId !== env.HERDR_PANE_ID ||
     state.ownerSessionId !== env.PI_HERDSMAN_OWNER_SESSION_ID ||
+    (state.rootSessionId !== undefined &&
+      (!env.PI_HERDSMAN_ROOT_SESSION_ID?.trim() ||
+        state.rootSessionId !== env.PI_HERDSMAN_ROOT_SESSION_ID.trim())) ||
     state.piSessionId !== input.sessionId ||
     !input.sameSessionPath(state.piSessionFile, input.sessionFile) ||
     resolve(state.cwd) !== resolve(input.cwd) ||
@@ -675,7 +735,7 @@ export function validateManagedAgentIdentity(input: {
   return state;
 }
 
-function managedAgentIdentity(ctx: ExtensionContext): ManagedAgentState {
+export function managedAgentIdentity(ctx: ExtensionContext): ManagedAgentState {
   const env = process.env;
   const mailbox = env.PI_HERDSMAN_MAILBOX;
   let state: ManagedAgentState | undefined;
@@ -2314,6 +2374,7 @@ export function registerManagedAgentSettlementHandlers(
       workspaceId: state.workspaceId,
       agentLabel: state.agentLabel,
       paneId: state.paneId,
+      rootSessionId: state.rootSessionId,
       status: completed ? "completed" : "failed",
       ...(completed
         ? {
@@ -2555,6 +2616,8 @@ export function registerManagedAgentRuntime(
   const controller = delegationEnabled
     ? createAgentController(pi, {
         ...options.controllerOptions,
+        managedAgentRootSessionId: (ctx) =>
+          managedAgentControllerIdentity(ctx).rootSessionId,
         scope: {
           kind: "managed-agent",
           allowedAgentDefinitions: new Set(allowedAgentDefinitions),

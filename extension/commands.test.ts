@@ -18533,6 +18533,7 @@ for (const acceptedChild of [true, false]) {
       parent.agentLabel,
     )!.runId;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = parent.rootSessionId!;
     process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
     process.env.PI_HERDSMAN_LABEL = parent.agentLabel;
     process.env.PI_HERDSMAN_WORKSPACE_ID = parent.workspaceId;
