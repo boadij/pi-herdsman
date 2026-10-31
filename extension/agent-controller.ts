@@ -3752,6 +3752,7 @@ export function createAgentController(
 ) {
   let ready = false;
   let active = true;
+  let recoveryComplete = false;
   let sessionAbortController: AbortController | undefined;
   let healthTimer: ReturnType<typeof setTimeout> | undefined;
   let healthGeneration = 0;
@@ -5918,6 +5919,7 @@ export function createAgentController(
     context: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void> => {
+    recoveryComplete = false;
     if (signal.aborted) return;
     for (const label of [...runtimes.keys()]) invalidateRuntime(label);
     let snapshot: ManagedAgentSnapshotCollection;
@@ -5931,6 +5933,7 @@ export function createAgentController(
       return;
     }
     const owner = context.sessionManager.getSessionId();
+    let incomplete = snapshot.stateIssues.length > 0;
     const entries = context.sessionManager.getEntries();
     for (const { path, state } of snapshot.mailboxes.filter(
       ({ state }) => state.ownerSessionId === owner,
@@ -6014,11 +6017,13 @@ export function createAgentController(
         if (signal.aborted) return;
       } catch (error) {
         if (signal.aborted) return;
+        incomplete = true;
         invalidateRuntime(state.agentLabel);
         options.appendError(context, "pi_herdsman_recovery_error", error);
       }
     }
     if (signal.aborted) return;
+    recoveryComplete = !incomplete;
     options.onChanged();
   };
   const resultStatus = (
@@ -9829,6 +9834,21 @@ export function createAgentController(
     pendingStartEntries: () => [...pendingStarts.values()],
     hasPendingStart: (label: string) => pendingStarts.has(label),
     hasPendingStarts: () => pendingStarts.size > 0,
+    canFinalizeOwnedHerd(context: ExtensionContext, ownerSessionId: string) {
+      if (!recoveryComplete || pendingStarts.size) return false;
+      try {
+        const inventory = scanAgentStates();
+        return (
+          inventory.issues.length === 0 &&
+          !inventory.states.some(
+            ({ state }) => state.ownerSessionId === ownerSessionId,
+          )
+        );
+      } catch (error) {
+        options.appendError(context, "pi_herdsman_recovery_error", error);
+        return false;
+      }
+    },
     clearPendingStart(label: string, expected: PendingStart): boolean {
       if (pendingStarts.get(label) !== expected) return false;
       return pendingStarts.delete(label);
@@ -9897,6 +9917,7 @@ export function createAgentController(
       sessionAbortController?.abort();
     },
     beginSession() {
+      recoveryComplete = false;
       sessionAbortController = new AbortController();
       return sessionAbortController.signal;
     },
@@ -9907,6 +9928,7 @@ export function createAgentController(
       return sessionAbortController?.signal;
     },
     clearSession() {
+      recoveryComplete = false;
       sessionAbortController = undefined;
     },
     sessionActive() {
@@ -9923,6 +9945,7 @@ export function createAgentController(
     },
     shutdown() {
       active = false;
+      recoveryComplete = false;
       for (const watcher of resultWatchers.values()) watcher();
       for (const watcher of askWatchers.values()) watcher();
       resultWatchers.clear();
