@@ -4120,7 +4120,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     (entry: any) =>
       entry.customType === "pi-herdsman-herd-run" &&
       entry.data?.phase === "report_pending" &&
-      entry.data?.reportId === reportId,
+      entry.data?.runReportId === reportId,
   ) as any[];
   assert.equal(pending.length, 1, "a retry reuses the durable pending intent");
   assert.ok(Number.isFinite(pending[0].data.createdAt));
@@ -4128,6 +4128,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     message: pending[0].data.message,
     createdAt: pending[0].data.createdAt,
   };
+  const recoveryReportId = pending[0].data.reportId;
 
   first.finishIfIdle(context);
   await t.waitFor(() => assert.ok(publications >= 3));
@@ -4135,7 +4136,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
     (entry: any) =>
       entry.customType === "pi-herdsman-herd-run" &&
       entry.data?.phase === "report_pending" &&
-      entry.data?.reportId === reportId,
+      entry.data?.runReportId === reportId,
   ) as any[];
   assert.equal(repeatedPending.length, 1);
   assert.deepEqual(
@@ -4155,7 +4156,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
       pi.entries.some(
         (entry: any) =>
           entry.data?.phase === "report_sent" &&
-          entry.data?.reportId === reportId,
+          entry.data?.reportId === recoveryReportId,
       ),
     ),
   );
@@ -4165,7 +4166,7 @@ test("failed idle-report publication keeps one recoverable pending intent", asyn
       (entry: any) =>
         entry.customType === "pi-herdsman-herd-run" &&
         entry.data?.phase === "report_sent" &&
-        entry.data?.reportId === reportId,
+        entry.data?.reportId === recoveryReportId,
     ).length,
     1,
   );
@@ -5154,6 +5155,102 @@ test("restored verified Lead settlement waits for children and hands off once", 
         entry.data?.phase === "finished" && entry.data?.reportId === reportId,
     ).length,
     1,
+  );
+});
+
+test("legacy herd-ID recovery failure receipt does not suppress later successful handoff", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.isIdle = () => true;
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  const herdId = randomUUID();
+  const startedAt = 1_700_000_000_000;
+  pi.entries.push(
+    ...([
+      { phase: "started", reportId: herdId },
+      {
+        phase: "report_pending",
+        reportId: herdId,
+        message: "Earlier recovery failure",
+        kind: "execution_failure",
+        createdAt: startedAt,
+        target: "project",
+      },
+      { phase: "report_sent", reportId: herdId },
+      {
+        phase: "lead_settled",
+        reportId: herdId,
+        responseEntryId: "new-response",
+      },
+    ].map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: { ...data, sessionId: LEAD_SESSION_ID, startedAt },
+    })) as any),
+    {
+      type: "message",
+      id: "new-response",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "New verified summary" }],
+      },
+    } as any,
+  );
+  let childActive = true;
+  const messages: string[] = [];
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(messages, []);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "finished"),
+    false,
+  );
+
+  childActive = false;
+  const finalRestore = createRuntime();
+  finalRestore.restoreSession(pi.entries, LEAD_SESSION_ID);
+  finalRestore.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(messages, ["Herd run settled.\n\nNew verified summary"]);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === herdId &&
+        entry.data?.kind !== "execution_failure",
+    ).length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" && entry.data?.reportId === herdId,
+    ).length,
+    2,
   );
 });
 
@@ -9025,16 +9122,27 @@ test("restored herd waits for direct durable cleanup before finishing", async (t
       herdEntries().filter((entry) => entry.data?.phase === "finished").length,
       0,
     );
+    const pending = herdEntries().find(
+      (entry) => entry.data?.phase === "report_pending",
+    );
+    assert.ok(pending, "unverified recovery creates a durable failure intent");
+    const reportId = (pending as any).data.reportId;
+    assert.equal((pending as any).data.kind, "execution_failure");
+
     resetAgentMailbox(startup.mailbox);
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: false }, context);
-    await t.waitFor(() =>
-      assert.equal(
-        herdEntries().filter((entry) => entry.data?.phase === "finished")
-          .length,
-        1,
-        "herd run did not finish after direct durable cleanup",
-      ),
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "finished").length,
+      0,
+      "an undelivered failure report keeps the herd open after direct durable cleanup",
+    );
+    assert.deepEqual(
+      herdEntries()
+        .filter((entry) => entry.data?.phase === "report_pending")
+        .map((entry) => (entry as any).data.reportId),
+      [reportId],
+      "cleanup retries the existing intent rather than replacing its ID",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
