@@ -3900,9 +3900,31 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     kind: "execution_failure" as const,
   };
   writeProjectMessage(failure, runtime);
+  const semanticRecords = [];
+  for (const kind of [
+    "supervisor_message",
+    "direct_response",
+    "herd_settlement",
+    "execution_cancelled",
+  ] as const) {
+    const semantic = { ...record, id: id(), kind };
+    semanticRecords.push(semantic);
+    writeProjectMessage(semantic, runtime);
+    assert.deepEqual(
+      readProjectMessage(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+        semantic.id,
+      ),
+      semantic,
+    );
+  }
   assert.deepEqual(
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [record, failure],
+    [...semanticRecords, record]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .concat(failure),
   );
   assert.deepEqual(
     listProjectMessages(runtime, "other-repo", assignment.branch),

@@ -17,6 +17,7 @@ import type {
   PeerRuntime,
 } from "../supervision.ts";
 import {
+  projectMessageEnvelope,
   leadSupervisorState as resolveLeadSupervisorState,
   COORDINATION_INBOX_SCAN_LIMIT,
   listPendingRetirements,
@@ -1227,9 +1228,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             assignment,
             params.message,
             files,
+            "message_supervisor",
             undefined,
-            undefined,
-            undefined,
+            "supervisor_message",
             signal,
           );
         } catch (error) {
@@ -2714,13 +2715,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
-            content: `Project ${message.branch} from lead ${message.fromSessionId}:\n\n${message.text}`,
+            content:
+              projectMessageEnvelope(
+                message.kind,
+                message.branch,
+                message.fromSessionId,
+              ) + message.text,
             display: true,
             details: {
               id: message.id,
               repoKey: message.repoKey,
               branch: message.branch,
               fromSessionId: message.fromSessionId,
+              kind: message.kind,
             },
           },
           backlog && !actionableFailure

@@ -27,6 +27,7 @@ import type {
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
 import { matchesToolPattern } from "./agent-definitions.ts";
+import { projectMessageEnvelope, projectMessageLabel } from "./supervision.ts";
 import {
   chmodSync,
   closeSync,
@@ -3854,6 +3855,7 @@ export function renderCoordinationMessage(
       toRole?: "chief" | "manager" | "lead";
       fromDisplayName?: string;
       toDisplayName?: string;
+      kind?: import("./supervision.ts").ProjectMessageKind;
     };
   },
   options: { expanded?: boolean; outputPad?: number },
@@ -3912,10 +3914,10 @@ export function renderCoordinationMessage(
         break;
       case "project_message":
         heading = d?.branch
-          ? `Assignment update · ${d.branch}`
-          : "Assignment update";
+          ? `${projectMessageLabel(d.kind)} · ${d.branch}`
+          : projectMessageLabel(d?.kind);
         if (d?.branch && d?.fromSessionId)
-          prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
+          prefix = projectMessageEnvelope(d.kind, d.branch, d.fromSessionId);
         break;
     }
   }

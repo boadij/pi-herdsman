@@ -7634,10 +7634,7 @@ test("project messages have semantic compact and expanded presentation", () => {
     presentationTheme,
   );
   const compactText = renderedText(compact);
-  assert.match(
-    compactText,
-    /Assignment update · feat\/project-message-presentation/,
-  );
+  assert.match(compactText, /Lead update · feat\/project-message-presentation/);
   assert.match(compactText, /Review handoff/);
   assert.match(compactText, /…/);
   assert.doesNotMatch(
@@ -7660,7 +7657,7 @@ test("project messages have semantic compact and expanded presentation", () => {
   );
   assert.match(
     expandedText,
-    /Assignment update · feat\/project-message-presentation/,
+    /Lead update · feat\/project-message-presentation/,
   );
   assert.match(expandedText, /branch: feat\/project-message-presentation/);
   assert.match(expandedText, /session: lead-session/);
@@ -7685,6 +7682,22 @@ test("project messages have semantic compact and expanded presentation", () => {
     ),
   );
   assert.match(mismatched, /from lead someone-else/);
+
+  const semantic = renderedText(
+    renderCoordinationMessage(
+      "project_message",
+      {
+        content:
+          "Lead response for assignment feat/project-message-presentation from lead lead-session:\n\nDone.",
+        details: { ...details, kind: "direct_response" },
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(semantic, /Lead response · feat\/project-message-presentation/);
+  assert.match(semantic, /Done\./);
+  assert.doesNotMatch(semantic, /for assignment/);
 });
 
 test("expanded coordination messages show complete Markdown and useful provenance only", () => {
