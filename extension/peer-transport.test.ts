@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { herdsmanDataRoot } from "./storage.ts";
 import {
   listRemotePeerOutbounds,
+  readRemotePeerOutbound,
   parsePeerSshTarget,
   peerRecoveryRequest,
   persistRemotePeerOutbound,
@@ -71,11 +81,55 @@ test("remote peer outbox survives until acknowledged delivery", () => {
     listRemotePeerOutbounds().find((item) => item.id === id),
     outbound,
   );
+  assert.deepEqual(readRemotePeerOutbound(id), outbound);
+  assert.equal(readRemotePeerOutbound("not-a-uuid"), undefined);
+
+  const directory = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "peers-v2",
+    "remote-outbound",
+  );
+  const symlinkId = randomUUID();
+  const oversizedId = randomUUID();
+  const recordPath = join(directory, `${id}.json`);
+  const symlinkPath = join(directory, `${symlinkId}.json`);
+  const oversizedPath = join(directory, `${oversizedId}.json`);
+  symlinkSync(recordPath, symlinkPath);
+  writeFileSync(oversizedPath, " ".repeat(12 * 1024 * 1024 + 1));
+  try {
+    assert.equal(readRemotePeerOutbound(symlinkId), undefined);
+    assert.equal(readRemotePeerOutbound(oversizedId), undefined);
+  } finally {
+    unlinkSync(symlinkPath);
+    unlinkSync(oversizedPath);
+  }
+
   removeRemotePeerOutbound(id);
+  assert.equal(readRemotePeerOutbound(id), undefined);
   assert.equal(
     listRemotePeerOutbounds().some((item) => item.id === id),
     false,
   );
+});
+
+test("targeted outbound read does not initialize its directory", () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "herdsman-peer-outbound-read-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(readRemotePeerOutbound(randomUUID()), undefined);
+    assert.equal(
+      existsSync(
+        join(agentDir, "pi-herdsman", "runtime", "peers-v2", "remote-outbound"),
+      ),
+      false,
+    );
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("queued transfer retries only after definitive absence and exact-session generation proof", () => {
