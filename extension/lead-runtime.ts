@@ -466,8 +466,7 @@ type LeadHerdRunHost = {
   isManagedLead(): boolean;
   pi: ExtensionAPI;
   entryName: string;
-  hasPendingStarts(): boolean;
-  listAgentStates(): ReturnType<LeadController["listAgentStates"]>;
+  canFinalizeOwnedHerd(ctx: ExtensionContext, ownerSessionId: string): boolean;
   currentProjectAssignment(
     ctx: ExtensionContext,
   ): Promise<ProjectAssignment | undefined>;
@@ -478,7 +477,11 @@ type LeadHerdRunHost = {
     files?: readonly string[],
     operation?: string,
     reportId?: string,
-    kind?: ProjectMessage["kind"],
+    kind?:
+      | ProjectMessage["kind"]
+      | "herd_settlement"
+      | "execution_cancelled"
+      | "direct_response",
     signal?: AbortSignal,
   ): Promise<ProjectMessage | undefined>;
   publishChiefFailure(
@@ -2815,8 +2818,8 @@ export function registerLeadRuntime(
       sessionKind?.kind === "managed" &&
       sessionKind.sessionId ===
         leadRuntime.leadContext?.sessionManager.getSessionId(),
-    hasPendingStarts: () => controller.hasPendingStarts(),
-    listAgentStates: () => controller.listAgentStates(),
+    canFinalizeOwnedHerd: (ctx, ownerSessionId) =>
+      controller.canFinalizeOwnedHerd(ctx, ownerSessionId),
     currentProjectAssignment: (ctx: ExtensionContext) =>
       currentProjectAssignment(ctx),
     publishProjectMessage: (
@@ -4500,8 +4503,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     checkoutPath: string;
     branch: string;
     managerCheckoutPath: string;
-    managerHead: string;
-    leadHead: string;
+    baselineSha?: string;
     summary: GitChangeSummary;
   };
   const gitSummaries = new Map<string, CachedGitSummary>();
@@ -4580,7 +4582,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     contextSignal?.addEventListener("abort", abortFromContext, { once: true });
     const overallTimeout = setTimeout(() => abort.abort(), 15_000);
     overallTimeout.unref?.();
-    const previous = gitSummaries;
     const run = async (): Promise<void> => {
       const next = new Map<string, CachedGitSummary>();
       const current = () =>
@@ -4620,13 +4621,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           if (current()) gitSummaries.clear();
           return;
         }
-        const managerHead = (
-          await git(managerCheckoutPath, ["rev-parse", "--verify", "HEAD"])
-        ).trim();
-        if (!/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
-          if (current()) gitSummaries.clear();
-          return;
-        }
+        let managerHead: string | undefined;
         for (const item of entries) {
           if (!current()) return;
           if (item.kind !== "work") continue;
@@ -4663,30 +4658,65 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               headerEnd++;
             }
             const leadHead = headers.get("branch.oid");
+            const branchHead = headers.get("branch.head");
             if (
-              headers.get("branch.head") !== work.branch ||
+              !branchHead ||
               !leadHead ||
               !/^[0-9a-f]{40,64}$/iu.test(leadHead)
+            )
+              continue;
+            const checkedOutBranch =
+              branchHead === "(detached)" ? "detached" : branchHead;
+            if (
+              checkedOutBranch === "(unknown)" ||
+              !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch)
             )
               continue;
             const dirty = status
               .slice(headerEnd)
               .some((entry) => entry.length > 0);
-            const cached = previous.get(work.session);
             let additions: number | undefined;
             let deletions: number | undefined;
             let changedFiles: number | undefined;
-            if (
-              cached &&
-              cached.generation === expectedGeneration &&
-              sameDirectory(cached.checkoutPath, checkoutPath) &&
-              cached.branch === work.branch &&
-              sameDirectory(cached.managerCheckoutPath, managerCheckoutPath) &&
-              cached.managerHead === managerHead &&
-              cached.leadHead === leadHead
-            ) {
-              ({ additions, deletions, changedFiles } = cached.summary);
+            const baselineSha = work.gitBaselineSha;
+            let comparisonSha: string | undefined;
+            let approximate = false;
+            if (baselineSha !== undefined) {
+              if (/^[0-9a-f]{40,64}$/iu.test(baselineSha))
+                comparisonSha = baselineSha;
             } else {
+              try {
+                managerHead ??= (
+                  await git(managerCheckoutPath, [
+                    "rev-parse",
+                    "--verify",
+                    "HEAD",
+                  ])
+                ).trim();
+                if (/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
+                  const bases = (
+                    await git(checkoutPath, [
+                      "merge-base",
+                      "--all",
+                      managerHead,
+                      leadHead,
+                    ])
+                  )
+                    .trim()
+                    .split(/\s+/u);
+                  if (
+                    bases.length === 1 &&
+                    /^[0-9a-f]{40,64}$/iu.test(bases[0]!)
+                  ) {
+                    comparisonSha = bases[0];
+                    approximate = true;
+                  }
+                }
+              } catch {
+                // A valid status observation remains useful without a numeric fallback.
+              }
+            }
+            if (comparisonSha) {
               try {
                 const output = await git(checkoutPath, [
                   "--no-optional-locks",
@@ -4694,7 +4724,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   "--numstat",
                   "-z",
                   "--no-renames",
-                  `${managerHead}...${leadHead}`,
+                  comparisonSha,
                   "--",
                 ]);
                 const records = output.split("\0");
@@ -4742,9 +4772,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               checkoutPath,
               branch: work.branch,
               managerCheckoutPath,
-              managerHead,
-              leadHead,
-              summary: { dirty, additions, deletions, changedFiles },
+              baselineSha,
+              summary: {
+                dirty,
+                additions,
+                deletions,
+                changedFiles,
+                checkedOutBranch,
+                ...(comparisonSha && baselineSha === undefined
+                  ? { approximate }
+                  : {}),
+              },
             });
           } catch {
             /* Optional Git telemetry must not affect supervision. */
@@ -5766,6 +5804,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 !cached ||
                 cached.generation !== generation(ctx) ||
                 cached.branch !== work.branch ||
+                cached.baselineSha !== work.gitBaselineSha ||
                 !work.checkoutPath ||
                 cached.checkoutPath !== work.checkoutPath ||
                 cached.managerCheckoutPath !==
@@ -5842,7 +5881,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     ctx: ExtensionContext,
     message: string,
     reportId = herdReportId,
-    kind?: ProjectMessage["kind"],
+    kind?:
+      | ProjectMessage["kind"]
+      | "herd_settlement"
+      | "execution_cancelled"
+      | "direct_response",
     createdAt = Date.now(),
     target?: "project" | "chief",
   ): Promise<boolean> => {
@@ -5873,54 +5916,133 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   };
   let finishing: Promise<void> | undefined;
   let idleFinishing: Promise<void> | undefined;
-  const recoveryFailure = (entries: any[], sessionId: string) =>
-    entries.find((entry) => {
+  let requiredReportUnsent = false;
+  const isLegacySyntheticFailure = (data: any) =>
+    data?.phase === "report_pending" &&
+    data.kind === "execution_failure" &&
+    data.message ===
+      "Lead execution outcome was not preserved across restoration; work remains unresolved.";
+  const restoreExecutionEvidence = (entries: any[], sessionId: string) => {
+    if (!herdReportId) {
+      lastSettledRun = undefined;
+      return;
+    }
+    const intents = new Map<string, any>();
+    const receipts = new Set<string>();
+    let execution:
+      | { kind: "unknown" }
+      | { kind: "completed"; summary: string }
+      | { kind: "reported"; reportId: string } = { kind: "unknown" };
+    for (const entry of entries) {
       const data = entry?.data;
-      return (
-        entry?.type === "custom" &&
-        entry.customType === host.entryName &&
-        data?.sessionId === sessionId &&
-        data?.phase === "report_pending" &&
-        data?.kind === "execution_failure" &&
-        (data.reportId === herdReportId || data.runReportId === herdReportId)
-      );
-    })?.data;
-  const createRecoveryFailure = (
-    sessionId: string,
-    startedAt: number,
-    message: string,
-    createdAt: number,
-    target: string,
-  ) => {
-    const reportId = randomUUID();
-    host.pi.appendEntry(host.entryName, {
-      phase: "report_pending",
-      sessionId,
-      startedAt,
-      reportId,
-      runReportId: herdReportId,
-      message,
-      kind: "execution_failure",
-      createdAt,
-      target,
-    });
-    return reportId;
+      if (
+        entry?.type !== "custom" ||
+        entry.customType !== host.entryName ||
+        data?.sessionId !== sessionId
+      )
+        continue;
+      if (
+        data.phase === "report_pending" &&
+        typeof data.reportId === "string"
+      ) {
+        if (isLegacySyntheticFailure(data)) continue;
+        intents.set(data.reportId, data);
+      } else if (
+        data.phase === "report_sent" &&
+        typeof data.reportId === "string"
+      ) {
+        receipts.add(data.reportId);
+      }
+      if (data.reportId !== herdReportId && data.runReportId !== herdReportId)
+        continue;
+      if (
+        data.phase === "lead_started" ||
+        data.phase === "lead_start_unpersisted"
+      ) {
+        execution = { kind: "unknown" };
+      } else if (data.phase === "lead_settled") {
+        const response = entries.find(
+          (item) =>
+            item?.type === "message" &&
+            item.id === data.responseEntryId &&
+            item.message?.role === "assistant" &&
+            Array.isArray(item.message.content) &&
+            item.message.content.every((part: any) => {
+              if (part?.type === "text") return typeof part.text === "string";
+              if (part?.type === "thinking")
+                return typeof part.thinking === "string";
+              if (part?.type === "image")
+                return (
+                  typeof part.data === "string" &&
+                  typeof part.mimeType === "string"
+                );
+              if (part?.type === "toolCall")
+                return (
+                  typeof part.id === "string" &&
+                  typeof part.name === "string" &&
+                  part.arguments !== null &&
+                  typeof part.arguments === "object"
+                );
+              return false;
+            }),
+        );
+        execution =
+          data.reportId === herdReportId && response
+            ? {
+                kind: "completed",
+                summary: contentText(response.message.content, "").trim(),
+              }
+            : { kind: "unknown" };
+      } else if (
+        data.phase === "report_pending" &&
+        (data.runReportId === herdReportId || data.reportId === herdReportId) &&
+        (data.kind === "execution_failure" ||
+          data.kind === "execution_cancelled" ||
+          data.kind === undefined) &&
+        !isLegacySyntheticFailure(data)
+      ) {
+        execution = { kind: "reported", reportId: data.reportId };
+      }
+    }
+    const unsent = [...intents.entries()].some(
+      ([id, intent]) =>
+        !receipts.has(id) &&
+        (intent.runReportId === herdReportId ||
+          intent.reportId === herdReportId) &&
+        intent.kind !== "successful_handoff" &&
+        intent.kind !== "herd_settlement" &&
+        !isLegacySyntheticFailure(intent),
+    );
+    requiredReportUnsent = unsent;
+    if (execution.kind === "completed")
+      lastSettledRun = {
+        aborted: false,
+        outcome: "completed",
+        summary: execution.summary,
+      };
+    else if (
+      execution.kind === "reported" &&
+      receipts.has(execution.reportId) &&
+      !unsent
+    )
+      lastSettledRun = { aborted: false, outcome: "reported" };
+    else lastSettledRun = undefined;
   };
   const maybeFinish = (ctx: ExtensionContext): Promise<void> => {
     if (finishing) return finishing;
-    if (herdRunStartedAt === undefined || !leadSettled)
-      return Promise.resolve();
-    const sessionId = ctx.sessionManager.getSessionId();
     if (
-      host.hasPendingStarts() ||
-      host
-        .listAgentStates()
-        .some(
-          ({ state }: { state: ManagedAgentState }) =>
-            state.ownerSessionId === sessionId,
-        )
+      herdRunStartedAt === undefined ||
+      !leadSettled ||
+      !lastSettledRun ||
+      requiredReportUnsent ||
+      (lastSettledRun.outcome !== "completed" &&
+        lastSettledRun.outcome !== "reported" &&
+        lastSettledRun.outcome !== "error" &&
+        lastSettledRun.outcome !== "cancelled")
     )
       return Promise.resolve();
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!host.canFinalizeOwnedHerd(ctx, sessionId)) return Promise.resolve();
     const startedAt = herdRunStartedAt;
     const completedAt = Date.now();
     finishing = (async () => {
@@ -5934,42 +6056,32 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             : "Herd run settled without a verified Lead integration summary.";
           let reportMessage = message;
           let pending: any;
+          const entries = ctx.sessionManager.getEntries() as any[];
           const managed = host.isManagedLead();
           if (managed) {
-            const entries = ctx.sessionManager.getEntries() as any[];
-            pending = entries.find(
+            const existing = entries.find(
               (entry) =>
                 entry?.type === "custom" &&
                 entry.customType === host.entryName &&
                 entry.data?.sessionId === sessionId &&
                 entry.data?.phase === "report_pending" &&
+                !isLegacySyntheticFailure(entry.data) &&
                 ((entry.data?.reportId === herdReportId &&
                   (entry.data?.kind === "successful_handoff" ||
                     entry.data?.kind === "herd_settlement" ||
                     entry.data?.kind === undefined)) ||
                   (entry.data?.runReportId === herdReportId &&
-                    entry.data?.kind === "successful_handoff")),
+                    (entry.data?.kind === "successful_handoff" ||
+                      entry.data?.kind === "herd_settlement"))),
             )?.data;
+            pending = existing;
             reportMessage = pending?.message ?? message;
             if (!pending) {
-              const legacyFailureOccupiesHerdId = entries.some(
-                (entry) =>
-                  entry?.type === "custom" &&
-                  entry.customType === host.entryName &&
-                  entry.data?.sessionId === sessionId &&
-                  entry.data?.phase === "report_pending" &&
-                  entry.data?.reportId === herdReportId &&
-                  entry.data?.kind === "execution_failure",
-              );
               pending = {
-                reportId: legacyFailureOccupiesHerdId
-                  ? randomUUID()
-                  : herdReportId,
+                reportId: randomUUID(),
+                runReportId: herdReportId,
                 message: reportMessage,
                 target: "project",
-                ...(legacyFailureOccupiesHerdId
-                  ? { runReportId: herdReportId }
-                  : {}),
                 kind: "herd_settlement",
               };
               host.pi.appendEntry(host.entryName, {
@@ -5981,21 +6093,33 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               });
             }
           }
-          const assignment = managed
-            ? pending
-              ? pending.target === "project"
-                ? await host.currentProjectAssignment(ctx)
-                : undefined
-              : await host.currentProjectAssignment(ctx)
-            : undefined;
-          if (managed && !assignment) return;
-          const publicationKind = pending
-            ? pending.kind === "successful_handoff"
-              ? undefined
-              : pending.kind
-            : "herd_settlement";
+          const delivered =
+            pending &&
+            entries.some(
+              (entry) =>
+                entry?.type === "custom" &&
+                entry.customType === host.entryName &&
+                entry.data?.sessionId === sessionId &&
+                entry.data?.phase === "report_sent" &&
+                entry.data?.reportId === pending.reportId,
+            );
+          const assignment =
+            managed && !delivered
+              ? pending
+                ? pending.target === "project"
+                  ? await host.currentProjectAssignment(ctx)
+                  : undefined
+                : await host.currentProjectAssignment(ctx)
+              : undefined;
+          if (managed && !assignment && !delivered) return;
           if (assignment) {
+            const publicationKind = pending
+              ? pending.kind === "successful_handoff"
+                ? undefined
+                : pending.kind
+              : "herd_settlement";
             if (
+              !delivered &&
               !(await host.publishProjectMessage(
                 ctx,
                 assignment,
@@ -6007,15 +6131,19 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               ))
             )
               return;
-            host.pi.appendEntry(host.entryName, {
-              phase: "report_sent",
-              sessionId,
-              startedAt,
-              reportId: pending?.reportId ?? herdReportId,
-              ...(publicationKind !== undefined
-                ? { kind: publicationKind }
-                : {}),
-            });
+            if (!delivered)
+              host.pi.appendEntry(host.entryName, {
+                phase: "report_sent",
+                sessionId,
+                startedAt,
+                reportId: pending?.reportId ?? herdReportId,
+                ...(pending?.runReportId
+                  ? { runReportId: pending.runReportId }
+                  : {}),
+                ...(publicationKind !== undefined
+                  ? { kind: publicationKind }
+                  : {}),
+              });
           }
         } else if (outcome) {
           const entries = ctx.sessionManager.getEntries() as any[];
@@ -6025,7 +6153,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               entry.customType === host.entryName &&
               entry.data?.sessionId === sessionId &&
               entry.data?.phase === "report_pending" &&
-              entry.data?.runReportId === herdReportId,
+              entry.data?.runReportId === herdReportId &&
+              !isLegacySyntheticFailure(entry.data),
           )?.data;
           if (pending) {
             const sent = entries.some(
@@ -6058,52 +6187,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               });
             }
           }
-        } else if (!outcome) {
-          const pending = recoveryFailure(
-            ctx.sessionManager.getEntries() as any[],
-            sessionId,
-          );
-          const message =
-            pending?.message ??
-            "Lead execution outcome was not preserved across restoration; work remains unresolved.";
-          const reportCreatedAt =
-            typeof pending?.createdAt === "number" &&
-            Number.isFinite(pending.createdAt)
-              ? pending.createdAt
-              : Date.now();
-          const target = pending
-            ? pending.target
-            : host.isManagedLead()
-              ? "project"
-              : "chief";
-          const reportId =
-            pending?.reportId ??
-            createRecoveryFailure(
-              sessionId,
-              startedAt,
-              message,
-              reportCreatedAt,
-              target,
-            );
-          if (
-            !(await publishProjectHandoff(
-              ctx,
-              message,
-              reportId,
-              "execution_failure",
-              reportCreatedAt,
-              target,
-            ))
-          )
-            return;
-          host.pi.appendEntry(host.entryName, {
-            phase: "report_sent",
-            sessionId,
-            startedAt,
-            reportId,
-            runReportId: herdReportId,
-            kind: "execution_failure",
-          });
         }
         host.pi.appendEntry(host.entryName, {
           phase: "finished",
@@ -6153,7 +6236,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       {
         startedAt: number;
         message: string;
-        kind?: ProjectMessage["kind"];
+        kind?:
+          | ProjectMessage["kind"]
+          | "herd_settlement"
+          | "execution_cancelled"
+          | "direct_response";
         createdAt: number;
         runReportId?: string;
         target?: "project" | "chief";
@@ -6163,6 +6250,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       if (entry?.type !== "custom" || entry.customType !== host.entryName)
         continue;
       const data = entry.data;
+      if (isLegacySyntheticFailure(data)) continue;
       if (
         data?.sessionId !== ctx.sessionManager.getSessionId() ||
         typeof data.reportId !== "string"
@@ -6345,6 +6433,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
               kind: "execution_failure",
             });
+          if (published && herdOwnsHandoff)
+            lastSettledRun = { aborted: false, outcome: "reported" };
         } catch (error) {
           host.appendDurableError(
             host.pi,
@@ -6354,6 +6444,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           );
         }
       } else if (aborted && turnStartedAt !== undefined) {
+        if (herdOwnsHandoff)
+          lastSettledRun = { aborted: true, outcome: "cancelled" };
         const reportCreatedAt = Date.now();
         const message =
           "Lead execution was cancelled before a completed response.";
@@ -6378,7 +6470,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               reportCreatedAt,
               "project",
             )
-          )
+          ) {
             host.pi.appendEntry(host.entryName, {
               phase: "report_sent",
               sessionId: ctx.sessionManager.getSessionId(),
@@ -6387,6 +6479,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
               ...(herdOwnsHandoff ? { runReportId: herdReportId } : {}),
               kind: "execution_cancelled",
             });
+            if (herdOwnsHandoff)
+              lastSettledRun = { aborted: true, outcome: "reported" };
+          }
         } catch (error) {
           host.appendDurableError(
             host.pi,
@@ -6489,285 +6584,18 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           reportId: herdReportId,
         });
       }
-      const records = (entries as any[])
-        .map((entry, index) => ({
-          entry,
-          index,
-          data: entry?.data,
-        }))
-        .filter(
-          ({ entry, data }) =>
-            entry?.type === "custom" &&
-            entry.customType === host.entryName &&
-            data?.sessionId === sessionId &&
-            !!herdReportId &&
-            (data.reportId === herdReportId ||
-              data.runReportId === herdReportId),
-        );
-      let latestExecution:
-        | {
-            index: number;
-            outcome: "completed" | "unverified";
-            summary?: string;
-            reportId?: string;
-          }
-        | undefined;
-      let latestReceipt = -1;
-      const sentReports = new Set<string>();
-      for (const { index, data } of records) {
-        if (
-          data.phase === "lead_started" ||
-          data.phase === "lead_start_unpersisted"
-        )
-          latestExecution = { index, outcome: "unverified" };
-        else if (data.phase === "lead_settled") {
-          const response =
-            typeof data.responseEntryId === "string"
-              ? (entries as any[]).find(
-                  (item) =>
-                    item?.type === "message" &&
-                    item.id === data.responseEntryId &&
-                    item.message?.role === "assistant" &&
-                    Array.isArray(item.message.content) &&
-                    item.message.content.every((part: any) => {
-                      if (!part || typeof part !== "object") return false;
-                      if (part.type === "text")
-                        return typeof part.text === "string";
-                      if (part.type === "thinking")
-                        return typeof part.thinking === "string";
-                      if (part.type === "image")
-                        return (
-                          typeof part.data === "string" &&
-                          typeof part.mimeType === "string"
-                        );
-                      if (part.type === "toolCall")
-                        return (
-                          typeof part.id === "string" &&
-                          typeof part.name === "string" &&
-                          part.arguments !== null &&
-                          typeof part.arguments === "object"
-                        );
-                      return false;
-                    }),
-                )
-              : undefined;
-          if (data.reportId === herdReportId && response) {
-            latestExecution = {
-              index,
-              outcome: "completed",
-              summary: contentText(response.message.content, "").trim(),
-            };
-          } else latestExecution = { index, outcome: "unverified" };
-        } else if (
-          data.phase === "report_pending" &&
-          data.reportId !== herdReportId &&
-          data.kind !== "successful_handoff" &&
-          data.kind !== "herd_settlement"
-        ) {
-          latestExecution = {
-            index,
-            outcome: "unverified",
-            reportId: data.reportId,
-          };
-        } else if (data.phase === "report_sent") {
-          latestReceipt = index;
-          if (typeof data.reportId === "string") sentReports.add(data.reportId);
-        }
-      }
-      const hasReportIntent = records.some(
-        ({ data }) => data.phase === "report_sent",
-      );
-      const hasUnsentHerdIntent = (entries as any[]).some((entry) => {
-        const data = entry?.data;
-        return (
-          entry?.type === "custom" &&
-          entry.customType === host.entryName &&
-          data?.sessionId === sessionId &&
-          data?.phase === "report_pending" &&
-          !!herdReportId &&
-          (data.reportId === herdReportId ||
-            data.runReportId === herdReportId) &&
-          !(entries as any[]).some(
-            (sent) =>
-              sent?.type === "custom" &&
-              sent.customType === host.entryName &&
-              sent.data?.sessionId === sessionId &&
-              sent.data?.phase === "report_sent" &&
-              sent.data?.reportId === data.reportId,
-          )
-        );
-      });
-      lastSettledRun =
-        latestExecution?.outcome === "completed"
-          ? {
-              aborted: false,
-              outcome: "completed",
-              summary: latestExecution.summary,
-            }
-          : latestExecution?.outcome === "unverified"
-            ? latestExecution.reportId &&
-              sentReports.has(latestExecution.reportId)
-              ? { aborted: false, outcome: "reported" }
-              : undefined
-            : hasReportIntent &&
-                !hasUnsentHerdIntent &&
-                latestReceipt >= (latestExecution?.index ?? -1)
-              ? { aborted: false, outcome: "reported" }
-              : undefined;
-      leadSettled = herdRunStartedAt === undefined;
+      restoreExecutionEvidence(entries as any[], sessionId);
     },
     finishIfIdle: (ctx: ExtensionContext) => {
-      if (!ctx.isIdle()) return;
-      if (idleFinishing) return;
+      if (!ctx.isIdle() || idleFinishing) return;
       idleFinishing = (async () => {
         await restorePendingReports(ctx, ctx.sessionManager.getEntries());
-        const currentEntries = ctx.sessionManager.getEntries() as any[];
-        if (!lastSettledRun && herdReportId) {
-          let latestExecution = -1;
-          let latestExecutionReportId: string | undefined;
-          const sentReports = new Set<string>();
-          currentEntries.forEach((entry, index) => {
-            const data = entry?.data;
-            if (
-              entry?.type !== "custom" ||
-              entry.customType !== host.entryName ||
-              data?.sessionId !== ctx.sessionManager.getSessionId() ||
-              (data.reportId !== herdReportId &&
-                data.runReportId !== herdReportId)
-            )
-              return;
-            if (
-              data.phase === "lead_started" ||
-              data.phase === "lead_start_unpersisted" ||
-              data.phase === "lead_settled"
-            ) {
-              latestExecution = index;
-              latestExecutionReportId = undefined;
-            }
-            if (
-              data.phase === "report_pending" &&
-              data.reportId !== herdReportId &&
-              data.kind !== "successful_handoff" &&
-              data.kind !== "herd_settlement"
-            ) {
-              latestExecution = index;
-              latestExecutionReportId = data.reportId;
-            }
-            if (
-              data.phase === "report_sent" &&
-              typeof data.reportId === "string"
-            )
-              sentReports.add(data.reportId);
-          });
-          if (
-            (latestExecutionReportId &&
-              sentReports.has(latestExecutionReportId)) ||
-            (latestExecution < 0 && sentReports.size > 0)
-          )
-            lastSettledRun = { aborted: false, outcome: "reported" };
-        }
-        const sentSuccessfulHerdHandoff = currentEntries.some((entry) => {
-          const data = entry?.data;
-          return (
-            entry?.type === "custom" &&
-            entry.customType === host.entryName &&
-            data?.sessionId === ctx.sessionManager.getSessionId() &&
-            data?.phase === "report_sent" &&
-            typeof data?.reportId === "string" &&
-            currentEntries.some(
-              (pending) =>
-                pending?.type === "custom" &&
-                pending.customType === host.entryName &&
-                pending.data?.sessionId === ctx.sessionManager.getSessionId() &&
-                pending.data?.phase === "report_pending" &&
-                pending.data?.reportId === data.reportId &&
-                ((pending.data?.reportId === herdReportId &&
-                  (pending.data?.kind === "successful_handoff" ||
-                    pending.data?.kind === "herd_settlement" ||
-                    pending.data?.kind === undefined)) ||
-                  (pending.data?.runReportId === herdReportId &&
-                    pending.data?.kind === "successful_handoff")),
-            )
-          );
-        });
-        if (
-          lastSettledRun?.outcome === "completed" &&
-          sentSuccessfulHerdHandoff
-        )
-          lastSettledRun = { aborted: false, outcome: "reported" };
-        const hasUnsentHerdIntent = currentEntries.some((entry) => {
-          const data = entry?.data;
-          return (
-            entry?.type === "custom" &&
-            entry.customType === host.entryName &&
-            data?.sessionId === ctx.sessionManager.getSessionId() &&
-            data?.phase === "report_pending" &&
-            !!herdReportId &&
-            (data.reportId === herdReportId ||
-              data.runReportId === herdReportId) &&
-            !currentEntries.some(
-              (sent) =>
-                sent?.type === "custom" &&
-                sent.customType === host.entryName &&
-                sent.data?.sessionId === ctx.sessionManager.getSessionId() &&
-                sent.data?.phase === "report_sent" &&
-                sent.data?.reportId === data.reportId,
-            )
-          );
-        });
-        if (hasUnsentHerdIntent) return;
-        if (herdRunStartedAt !== undefined) {
-          leadSettled = true;
-          if (!lastSettledRun) {
-            const entries = ctx.sessionManager.getEntries() as any[];
-            const pending = recoveryFailure(
-              entries,
-              ctx.sessionManager.getSessionId(),
-            );
-            const message =
-              pending?.message ??
-              "Lead execution outcome was not preserved across restoration; work remains unresolved.";
-            const reportCreatedAt =
-              typeof pending?.createdAt === "number" &&
-              Number.isFinite(pending.createdAt)
-                ? pending.createdAt
-                : Date.now();
-            const target = pending
-              ? pending.target
-              : host.isManagedLead()
-                ? "project"
-                : "chief";
-            const reportId =
-              pending?.reportId ??
-              createRecoveryFailure(
-                ctx.sessionManager.getSessionId(),
-                herdRunStartedAt,
-                message,
-                reportCreatedAt,
-                target,
-              );
-            const published = await publishProjectHandoff(
-              ctx,
-              message,
-              reportId,
-              "execution_failure",
-              reportCreatedAt,
-              target,
-            );
-            if (published)
-              host.pi.appendEntry(host.entryName, {
-                phase: "report_sent",
-                sessionId: ctx.sessionManager.getSessionId(),
-                startedAt: herdRunStartedAt,
-                reportId,
-                runReportId: herdReportId,
-                kind: "execution_failure",
-              });
-            if (published)
-              lastSettledRun = { aborted: false, outcome: "reported" };
-          }
-          await maybeFinish(ctx);
-        }
+        restoreExecutionEvidence(
+          ctx.sessionManager.getEntries() as any[],
+          ctx.sessionManager.getSessionId(),
+        );
+        if (herdRunStartedAt !== undefined) leadSettled = true;
+        await maybeFinish(ctx);
       })()
         .catch((error) =>
           host.appendDurableError(

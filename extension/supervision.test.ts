@@ -2912,6 +2912,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   );
   const withEvidence = {
     ...assignment,
+    gitBaselineSha: "a".repeat(64),
     requiredEvidence: [
       {
         id: id(),
@@ -2982,6 +2983,8 @@ test("project assignments are scoped by repository and branch, strict, and remov
     { checkoutPath: `${tmpdir()}${sep}invalid\0checkout` },
     { piSessionFile: 42 },
     { piSessionFile: "" },
+    { gitBaselineSha: "not-a-commit" },
+    { gitBaselineSha: "A".repeat(40) },
     {
       requiredEvidence: [
         {
@@ -3046,6 +3049,11 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.equal(
     projectAssignmentBytes(largerAssignment),
     Buffer.byteLength(`${JSON.stringify(largerAssignment)}\n`, "utf8"),
+  );
+  assert.equal(
+    projectAssignmentBytes({ ...assignment, gitBaselineSha: "f".repeat(64) }) -
+      projectAssignmentBytes(assignment),
+    Buffer.byteLength(`,"gitBaselineSha":"${"f".repeat(64)}"`),
   );
   writeProjectAssignment(runtime, largerAssignment);
   assert.deepEqual(
@@ -3635,6 +3643,7 @@ test("project work derives active, paused, or conflict from runtime placement", 
     repoKey: "repo",
     branch: "feat/work",
     text: "  implement\nwork  ",
+    gitBaselineSha: "b".repeat(40),
   };
   const worktree = { branch: assignment.branch, open_workspace_id: "child" };
   const lead = {
@@ -3827,6 +3836,10 @@ test("project work derives active, paused, or conflict from runtime placement", 
   });
   assert.equal(withVerifiedPlacement[0]!.status, "paused");
   assert.equal(withVerifiedPlacement[0]!.checkoutPath, verifiedCheckout);
+  assert.equal(
+    withVerifiedPlacement[0]!.gitBaselineSha,
+    assignment.gitBaselineSha,
+  );
   assert.equal(Object.hasOwn(switched[0]!, "checkoutPath"), false);
 
   const ineligibleWithPlacement = projectWorkSnapshot({
@@ -3854,6 +3867,10 @@ test("project work derives active, paused, or conflict from runtime placement", 
   assert.equal(ineligibleWithPlacement[0]!.status, "unknown");
   assert.equal(
     Object.hasOwn(ineligibleWithPlacement[0]!, "checkoutPath"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(ineligibleWithPlacement[0]!, "gitBaselineSha"),
     false,
   );
 

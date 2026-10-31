@@ -2838,6 +2838,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               repoKey: manager.repoKey,
               branch,
               text: candidate,
+              gitBaselineSha: "f".repeat(64),
               ...(resultBindings.length
                 ? { resultBindings: [...resultBindings] }
                 : {}),
@@ -3016,6 +3017,55 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr checkout is not the verified linked project worktree",
           );
+        try {
+          const commit = async (
+            directory: string,
+          ): Promise<string | undefined> => {
+            const result = await pi.exec(
+              "git",
+              ["rev-parse", "--verify", "HEAD^{commit}"],
+              { cwd: directory, signal, timeout: 10_000 },
+            );
+            const sha = String(result.stdout ?? "").trim();
+            return result.code === 0 &&
+              !result.killed &&
+              !result.stderr?.trim() &&
+              /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(sha)
+              ? sha
+              : undefined;
+          };
+          const worktreeHead = await commit(cwd!);
+          let baseline = worktreeHead;
+          if (worktreeHead && matchingWorktrees.length === 1) {
+            try {
+              const managerHead = await commit(localScope.checkoutPath);
+              if (managerHead) {
+                const result = await pi.exec(
+                  "git",
+                  ["merge-base", "--all", managerHead, worktreeHead],
+                  { cwd: cwd!, signal, timeout: 10_000 },
+                );
+                const bases = String(result.stdout ?? "")
+                  .trim()
+                  .split(/\s+/u);
+                if (
+                  result.code === 0 &&
+                  !result.killed &&
+                  !result.stderr?.trim() &&
+                  bases.length === 1 &&
+                  /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
+                )
+                  baseline = bases[0];
+              }
+            } catch {
+              // Keep the verified worktree HEAD when merge-base probing fails.
+            }
+          }
+          if (baseline)
+            assignment = { ...assignment, gitBaselineSha: baseline };
+        } catch {
+          // Baseline telemetry is optional; checkout verification remains authoritative.
+        }
         assignment = { ...assignment, checkoutPath: realpathSync.native(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))

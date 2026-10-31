@@ -14500,6 +14500,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   writeFileSync(join(managerCheckout, "file.txt"), "base\n");
   runGit(["add", ".gitignore", "file.txt"], managerCheckout);
   runGit(["commit", "-m", "base"], managerCheckout);
+  const baselineSha = runGit(["rev-parse", "HEAD"], managerCheckout);
   runGit(
     ["worktree", "add", "-b", "feat/assigned", assignedCheckout],
     managerCheckout,
@@ -14527,6 +14528,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         session: assignedLeadId,
         status: "active" as const,
         checkoutPath: assignedCheckout,
+        gitBaselineSha: baselineSha,
       },
     ],
     managerCheckoutPath: managerCheckout,
@@ -14832,9 +14834,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     ),
   );
   assert.ok(
-    gitCalls.some(
+    !gitCalls.some(
       (call) => call.cwd === managerCheckout && call.args.includes("--verify"),
     ),
+    "pinned baselines do not require resolving the moving Manager HEAD",
   );
   assert.ok(
     gitCalls.some(
@@ -14859,9 +14862,9 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
       (call) =>
         call.cwd === assignedCheckout &&
         call.args.includes("--numstat") &&
-        call.args.includes(`${managerHead}...${assignedHead}`),
+        call.args.includes(baselineSha),
     ),
-    "diff must use immutable, diverged Manager and Lead SHAs",
+    "diff must compare the pinned assignment baseline to worktree contents",
   );
   for (const call of gitCalls.filter(
     (call) => call.args.includes("status") || call.args.includes("diff"),
@@ -14876,6 +14879,23 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "ignored-only worktree is clean",
   );
 
+  currentSnapshot.work[0].gitBaselineSha = undefined;
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /~\+1 -0/,
+    "legacy assignments use a visibly approximate merge-base fallback",
+  );
+  assert.equal(
+    currentSnapshot.work[0].gitBaselineSha,
+    undefined,
+    "sampling never persists an inferred legacy baseline",
+  );
+  currentSnapshot.work[0].gitBaselineSha = baselineSha;
+
   runGit(["switch", "--orphan", "feat/unrelated"], assignedCheckout);
   writeFileSync(
     join(assignedCheckout, "unrelated-root.txt"),
@@ -14885,7 +14905,6 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runGit(["commit", "-m", "unrelated root"], assignedCheckout);
   const unrelatedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   writeFileSync(join(assignedCheckout, "untracked-unrelated.txt"), "dirty\n");
-  currentSnapshot.work[0].branch = "feat/unrelated";
   assignedHead = unrelatedHead;
   const unrelatedDiff = spawnSync(
     "git",
@@ -14912,29 +14931,27 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.ok(
     gitCalls.some(
       (call) =>
-        call.cwd === assignedCheckout &&
-        call.args.includes(`${managerHead}...${unrelatedHead}`),
+        call.cwd === assignedCheckout && call.args.includes(baselineSha),
     ),
-    "sampler must attempt the real three-dot diff for unrelated history",
+    "sampler compares unrelated switched-branch contents to the pinned baseline",
   );
   const unrelatedRow = widget
     .render(120)
-    .find((line: string) => line.includes("feat/unrelated"))!;
+    .find((line: string) => line.includes("feat/assigned"))!;
   assert.match(
     unrelatedRow,
-    /\*/,
-    "verified dirty state survives a no-common-ancestor diff failure",
+    /↪ feat\/unrelated.*\*/,
+    "verified branch and dirty state survive branch switching",
   );
   assert.doesNotMatch(
     unrelatedRow,
-    /(?:\+\d+ -\d+|\d+f|±0)/,
-    "failed actual three-dot diff cannot claim numeric statistics",
+    /\+1 -0/,
+    "pinned baseline diff works even when branch history is unrelated",
   );
   assert.match(unrelatedRow, /active/);
   assert.doesNotMatch(unrelatedRow, /unknown|stale/);
   rmSync(join(assignedCheckout, "untracked-unrelated.txt"));
   runGit(["switch", "feat/assigned"], assignedCheckout);
-  currentSnapshot.work[0].branch = "feat/assigned";
   assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
   sampleRefresh = true;
@@ -14967,9 +14984,31 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(
     gitCalls.filter((call) => call.args.includes("diff")).length,
-    firstDiffCount,
+    firstDiffCount + 1,
+    "a fresh scheduled sample recomputes diff even when HEAD is unchanged",
   );
   assert.match(widget.render(120).join("\n"), /\+1 -0\*/);
+
+  writeFileSync(join(assignedCheckout, "file.txt"), "base\nchanged\nlocal\n");
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /\+2 -0\*/,
+    "unstaged tracked edits are measured against the pinned baseline",
+  );
+  runGit(["add", "file.txt"], assignedCheckout);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /\+2 -0\*/,
+    "staging does not double-count tracked changes",
+  );
 
   const sampledCheckout = currentSnapshot.work[0].checkoutPath;
   currentSnapshot.work[0].checkoutPath = `${sampledCheckout}/.`;
@@ -15008,10 +15047,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     .filter((call) => call.cwd === assignedCheckout);
   assert.ok(rejectedCalls.some((call) => call.args.includes("status")));
   assert.ok(
-    !rejectedCalls.some((call) => call.args.includes("diff")),
-    "wrong branch must not receive statistics",
+    rejectedCalls.some((call) => call.args.includes("diff")),
+    "a switched branch remains eligible after physical checkout verification",
   );
-  assert.doesNotMatch(widget.render(120).join("\n"), /\+1 -0\*/);
+  assert.match(widget.render(120).join("\n"), /↪ unexpected/);
   wrongStatusBranch = false;
 
   detachedStatusHead = true;
@@ -15025,13 +15064,13 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     .filter((call) => call.cwd === assignedCheckout);
   assert.ok(detachedCalls.some((call) => call.args.includes("status")));
   assert.ok(
-    !detachedCalls.some((call) => call.args.includes("diff")),
-    "detached HEAD status cannot be attributed to the assigned branch",
+    detachedCalls.some((call) => call.args.includes("diff")),
+    "verified detached HEAD remains eligible for numeric telemetry",
   );
   let attributedRow = widget
     .render(120)
     .find((line: string) => line.includes("feat/assigned"))!;
-  assert.doesNotMatch(attributedRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+  assert.match(attributedRow, /↪ detached/);
   detachedStatusHead = false;
 
   diffMode = "fail";

@@ -2341,6 +2341,7 @@ export type ProjectAssignment = Readonly<{
   resultBindings?: ResultBinding[];
   requiredEvidence?: RequiredEvidence[];
   currentEvidenceIds?: string[];
+  gitBaselineSha?: string;
 }>;
 
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
@@ -2375,6 +2376,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     "resultBindings",
     "requiredEvidence",
     "currentEvidenceIds",
+    "gitBaselineSha",
   ];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
@@ -2388,6 +2390,9 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.gitBaselineSha === undefined ||
+      (typeof r.gitBaselineSha === "string" &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(r.gitBaselineSha))) &&
     (r.checkoutPath === undefined ||
       (typeof r.checkoutPath === "string" &&
         isAbsolute(r.checkoutPath) &&
@@ -3678,6 +3683,7 @@ export type ProjectWorkSnapshot = Readonly<{
   task?: string;
   issue?: string;
   checkoutPath?: string;
+  gitBaselineSha?: string;
 }>;
 export function projectTaskSummary(text: string): string | undefined {
   const task = text
@@ -3769,7 +3775,12 @@ export function projectWorkSnapshot(options: {
       ...(placement?.status === "matched" &&
       typeof placement.path === "string" &&
       (status === "active" || status === "paused")
-        ? { checkoutPath: placement.path }
+        ? {
+            checkoutPath: placement.path,
+            ...(assignment.gitBaselineSha
+              ? { gitBaselineSha: assignment.gitBaselineSha }
+              : {}),
+          }
         : {}),
       ...(runtimeState ? { runtimeState } : {}),
       ...(task ? { task } : {}),
