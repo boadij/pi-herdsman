@@ -448,9 +448,6 @@ esac
   executable(
     join(bin, "node"),
     `#!/bin/sh
-case "\${2:-}" in
-  *process.versions.node*) exit 0 ;;
-esac
 exec "$REAL_NODE" "$@"
 `,
   );
