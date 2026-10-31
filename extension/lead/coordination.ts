@@ -30,6 +30,7 @@ import {
   readProjectMessage,
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
+  findProjectAssignmentBySession,
   withProjectAssignmentAuthority,
   readPeerLeadRecord,
   samePeerLeadGeneration,

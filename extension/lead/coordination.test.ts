@@ -1,9 +1,94 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { test } from "node:test";
-import { fakeContext } from "../support.ts";
+import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
 import { supervisionRuntime } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
+
+test("scoped peer presence writes its worktree group", async () => {
+  const sessionId = randomUUID();
+  const repoKey = "a".repeat(64);
+  const records: any[] = [];
+  let provenanceStarted!: () => void;
+  const groupedRecordWritten = new Promise<void>((resolve) => {
+    provenanceStarted = resolve;
+  });
+  const context = fakeContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: { version: 1, sessionId, kind: "ordinary" },
+    },
+  ]) as any;
+  context.sessionManager.getSessionId = () => sessionId;
+  const root = join(testTmpRoot, randomUUID());
+  const runtime = createLeadCoordinationRuntime(
+    new Proxy(
+      {
+        pi: { getSessionName: () => undefined },
+        leadRuntime: { chiefMode: "inactive", roleSuspended: false },
+        processRole: "lead",
+        controllerScope: { kind: "root" },
+        HERDSMAN_BUILD,
+        activeRole: () => "lead",
+        supervisionRuntime: () => ({ assignments: join(root, "assignments") }),
+        peerRuntime: () => ({}),
+        peerLeadLockPath: () => "peer-lock",
+        acquireProcessLock: () => ({ claim: {}, release: () => undefined }),
+        currentWorktreeScope: async () => ({
+          repoKey,
+          primaryWorkspaceId: "primary-workspace",
+        }),
+        writePeerLeadRecord: (_runtime: unknown, record: unknown) =>
+          records.push(record),
+        readPeerLeadRecord: () => records.at(-1),
+        samePeerLeadGeneration: () => true,
+        samePeerLeadRecord: () => true,
+        workspacePresentationProvenance: async () => {
+          provenanceStarted();
+          return new Map();
+        },
+        basename: (path: string) => path,
+      },
+      {
+        get(target, key: string) {
+          return key in target
+            ? target[key as keyof typeof target]
+            : () => undefined;
+        },
+      },
+    ) as any,
+  );
+
+  const env = {
+    HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+    HERDR_TAB_ID: process.env.HERDR_TAB_ID,
+    HERDR_WORKSPACE_ID: process.env.HERDR_WORKSPACE_ID,
+    HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  };
+  process.env.HERDR_PANE_ID = "pane";
+  process.env.HERDR_TAB_ID = "tab";
+  process.env.HERDR_WORKSPACE_ID = "workspace";
+  process.env.HERDR_SOCKET_PATH = "socket";
+  try {
+    await runtime.schedulePeerPresence(context);
+    await groupedRecordWritten;
+    assert.ok(
+      records.some(
+        (record) =>
+          record.group?.repoKey === repoKey &&
+          record.group.primaryWorkspaceId === "primary-workspace",
+      ),
+    );
+  } finally {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    runtime.removePeerPresence();
+  }
+});
 
 test("empty project-message drain skips assignment listing", async () => {
   let assignmentLists = 0;
