@@ -4503,8 +4503,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     checkoutPath: string;
     branch: string;
     managerCheckoutPath: string;
-    managerHead: string;
-    leadHead: string;
+    baselineSha?: string;
     summary: GitChangeSummary;
   };
   const gitSummaries = new Map<string, CachedGitSummary>();
@@ -4583,7 +4582,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     contextSignal?.addEventListener("abort", abortFromContext, { once: true });
     const overallTimeout = setTimeout(() => abort.abort(), 15_000);
     overallTimeout.unref?.();
-    const previous = gitSummaries;
     const run = async (): Promise<void> => {
       const next = new Map<string, CachedGitSummary>();
       const current = () =>
@@ -4623,13 +4621,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           if (current()) gitSummaries.clear();
           return;
         }
-        const managerHead = (
-          await git(managerCheckoutPath, ["rev-parse", "--verify", "HEAD"])
-        ).trim();
-        if (!/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
-          if (current()) gitSummaries.clear();
-          return;
-        }
+        let managerHead: string | undefined;
         for (const item of entries) {
           if (!current()) return;
           if (item.kind !== "work") continue;
@@ -4666,30 +4658,65 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               headerEnd++;
             }
             const leadHead = headers.get("branch.oid");
+            const branchHead = headers.get("branch.head");
             if (
-              headers.get("branch.head") !== work.branch ||
+              !branchHead ||
               !leadHead ||
               !/^[0-9a-f]{40,64}$/iu.test(leadHead)
+            )
+              continue;
+            const checkedOutBranch =
+              branchHead === "(detached)" ? "detached" : branchHead;
+            if (
+              checkedOutBranch === "(unknown)" ||
+              !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch)
             )
               continue;
             const dirty = status
               .slice(headerEnd)
               .some((entry) => entry.length > 0);
-            const cached = previous.get(work.session);
             let additions: number | undefined;
             let deletions: number | undefined;
             let changedFiles: number | undefined;
-            if (
-              cached &&
-              cached.generation === expectedGeneration &&
-              sameDirectory(cached.checkoutPath, checkoutPath) &&
-              cached.branch === work.branch &&
-              sameDirectory(cached.managerCheckoutPath, managerCheckoutPath) &&
-              cached.managerHead === managerHead &&
-              cached.leadHead === leadHead
-            ) {
-              ({ additions, deletions, changedFiles } = cached.summary);
+            const baselineSha = work.gitBaselineSha;
+            let comparisonSha: string | undefined;
+            let approximate = false;
+            if (baselineSha !== undefined) {
+              if (/^[0-9a-f]{40,64}$/iu.test(baselineSha))
+                comparisonSha = baselineSha;
             } else {
+              try {
+                managerHead ??= (
+                  await git(managerCheckoutPath, [
+                    "rev-parse",
+                    "--verify",
+                    "HEAD",
+                  ])
+                ).trim();
+                if (/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
+                  const bases = (
+                    await git(checkoutPath, [
+                      "merge-base",
+                      "--all",
+                      managerHead,
+                      leadHead,
+                    ])
+                  )
+                    .trim()
+                    .split(/\s+/u);
+                  if (
+                    bases.length === 1 &&
+                    /^[0-9a-f]{40,64}$/iu.test(bases[0]!)
+                  ) {
+                    comparisonSha = bases[0];
+                    approximate = true;
+                  }
+                }
+              } catch {
+                // A valid status observation remains useful without a numeric fallback.
+              }
+            }
+            if (comparisonSha) {
               try {
                 const output = await git(checkoutPath, [
                   "--no-optional-locks",
@@ -4697,7 +4724,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   "--numstat",
                   "-z",
                   "--no-renames",
-                  `${managerHead}...${leadHead}`,
+                  comparisonSha,
                   "--",
                 ]);
                 const records = output.split("\0");
@@ -4745,9 +4772,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               checkoutPath,
               branch: work.branch,
               managerCheckoutPath,
-              managerHead,
-              leadHead,
-              summary: { dirty, additions, deletions, changedFiles },
+              baselineSha,
+              summary: {
+                dirty,
+                additions,
+                deletions,
+                changedFiles,
+                checkedOutBranch,
+                ...(comparisonSha && baselineSha === undefined
+                  ? { approximate }
+                  : {}),
+              },
             });
           } catch {
             /* Optional Git telemetry must not affect supervision. */
@@ -5769,6 +5804,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 !cached ||
                 cached.generation !== generation(ctx) ||
                 cached.branch !== work.branch ||
+                cached.baselineSha !== work.gitBaselineSha ||
                 !work.checkoutPath ||
                 cached.checkoutPath !== work.checkoutPath ||
                 cached.managerCheckoutPath !==
