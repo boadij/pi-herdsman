@@ -6893,6 +6893,15 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   const switchedRow = switchedWidget.render(120)[1]!;
   assert.match(switchedRow, /feat\/git ↪ fix\/recovery/);
   assert.match(switchedRow, /~\+12 -3\*/);
+  const compactSwitchedWidget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    () => ({ dirty: false, checkedOutBranch: "fix/recovery" }),
+  );
+  assert.match(compactSwitchedWidget.render(47)[1]!, /↪ fix\/recovery/);
   const switchedBranchX = visibleWidth(
     switchedRow.slice(0, switchedRow.indexOf("fix/recovery")),
   );

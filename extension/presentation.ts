@@ -1291,7 +1291,10 @@ function renderSupervisionRows(
             visibleWidth(item.work.branch) +
             (showBranchMarker ? visibleWidth(" ↪") : 0) +
             kept.reduce(
-              (sum, option) => sum + visibleWidth(option.value) + 2,
+              (sum, option) =>
+                sum +
+                visibleWidth(option.value) +
+                (option.kind === "checked-out-branch" ? 0 : 2),
               0,
             ) <=
           width;
@@ -1314,7 +1317,7 @@ function renderSupervisionRows(
           (total, option) => total + visibleWidth(option.value) + 2,
           0,
         );
-        const branchSwitch = showBranchMarker
+        const branchSwitchText = showBranchMarker
           ? ` ↪${kept.some((option) => option.kind === "checked-out-branch") ? ` ${git!.checkedOutBranch}` : ""}`
           : "";
         const outputTelemetry = [
@@ -1338,7 +1341,7 @@ function renderSupervisionRows(
           width -
           visibleWidth(prefix) -
           visibleWidth(suffix) -
-          visibleWidth(branchSwitch) -
+          visibleWidth(branchSwitchText) -
           telemetryWidth;
         const displayedBranch = safeLine(item.work.branch, branchWidth);
         const branchText = themed(options.theme, "muted", displayedBranch);
@@ -1356,7 +1359,7 @@ function renderSupervisionRows(
           status === "fresh" && item.work.status === "active" && lead;
         return {
           text: safeLine(
-            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, "muted", suffix)}${outputTelemetry.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && outputTelemetry[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
+            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitchText ? themed(options.theme, "muted", branchSwitchText) : ""}${themed(options.theme, "muted", suffix)}${outputTelemetry.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && outputTelemetry[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
             width,
           ),
           ...(canFocusLead && (!truncatedBranch || clickRegion)
