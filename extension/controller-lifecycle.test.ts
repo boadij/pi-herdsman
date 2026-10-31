@@ -3481,11 +3481,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     refreshStarted = resolve;
   });
   scopePlans.push({ gate: refreshGate, started: refreshStarted });
-  context.isIdle = () => true;
-  const refreshing = pi.events.get("agent_settled")![0](
-    { aborted: false },
-    context,
-  );
+  const refreshing = rpcRunningStatus();
   await refreshStartedPromise;
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
