@@ -32,8 +32,13 @@ A single explicit evidence channel keeps handoffs inspectable and lets ordinary 
 
 ## Consequences
 
-When the recipient's work or decision depends on relevant artifacts, senders
-must pass them explicitly through `files`.
+Use `files` to explicitly hand off selected artifacts across ownership roots
+or when a recipient otherwise needs an artifact that is not available through
+its verified scope. Published Agent results are automatically readable through
+`read_evidence` by the verified root controller and Agents in that exact
+ownership tree; repeating those references in `files` is unnecessary. This
+access does not transfer ownership: a cross-root recipient must receive the
+specific result through an explicit `files` handoff.
 
 Result references remain valid evidence selectors within that channel.
 

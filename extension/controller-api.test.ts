@@ -27,9 +27,12 @@ import { OperationError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-definitions.ts";
 import {
   readRequiredEvidenceSnapshot,
+  herdsmanDataRoot,
   requiredEvidenceDirectory,
   resultPath,
   resultRef,
+  publishScopedResult,
+  persistPeerResultArtifact,
 } from "./storage.ts";
 import {
   acquireProcessLock,
@@ -11270,6 +11273,7 @@ test("historical continuation re-parenting preserves every valid ownership path"
       process.env.PI_HERDSMAN_MAILBOX = mailbox;
       process.env.PI_HERDSMAN_RUN_ID = AGENT_ID;
       process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
+      process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
       process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
       process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
       process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify([
@@ -13639,6 +13643,68 @@ test("read_evidence revalidates project authority at execution and denies stale 
     },
   );
   assert.equal(revalidated, 2);
+});
+
+test("root read_evidence reads same-root published results without project assignment", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const pi = fakePi();
+  const canonicalRef = resultRef(randomUUID());
+  const semantic = `result:root-reader-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "root diagnosis\n");
+  publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+  const controller = createAgentController(
+    pi.pi as never,
+    {
+      scope: { kind: "root" },
+      build: HERDSMAN_BUILD,
+      extensionPath: "test",
+      isContextRetired: () => false,
+      snapshotDependencies: {
+        runtimeForLabel: () => undefined,
+        readLeadSessionIds: () => [],
+        staleAfterMs: 60_000,
+      },
+      persistedTranscriptReady: () => false,
+      workspaceId: () => WORKSPACE,
+      sendResultMessage: () => undefined,
+      sendAskMessage: () => undefined,
+      sessionRetired: () => false,
+      appendError: () => undefined,
+      onChanged: () => undefined,
+      onWorkChanged: () => undefined,
+      reportWatcherError: () => undefined,
+    } as any,
+  );
+  controller.registerTools();
+  const tool = pi.tools.find((candidate) => candidate.name === "read_evidence");
+  assert.ok(tool);
+  try {
+    const response = await tool.execute(
+      "read-root-result",
+      { ref: semantic },
+      undefined,
+      undefined,
+      fakeContext() as any,
+    );
+    assert.equal(response.content[0].text, "root diagnosis\n");
+    await assert.rejects(
+      tool.execute(
+        "foreign-root-result",
+        { ref: "result:unrelated#1" },
+        undefined,
+        undefined,
+        fakeContext() as any,
+      ),
+      /Evidence reference unavailable or invalid/,
+    );
+  } finally {
+    rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(artifact, { force: true });
+  }
 });
 
 test("managed restricted tool policies add required tools without unrelated tools", async () => {

@@ -264,9 +264,20 @@ export const {
   agentMailboxPath,
   writeAsk,
   writeRequest: writeRequestRecord,
-  writeResult,
+  writeResult: writeResultRecord,
   writeAgentState,
 } = await import("./mailbox.ts");
+
+/** Test settlements copy the ownership scope from the persisted generation state. */
+export function writeResult(path: string, result: ResultRecord): void {
+  const state = readAgentState(path);
+  writeResultRecord(path, {
+    ...result,
+    ...(result.rootSessionId === undefined && state?.rootSessionId
+      ? { rootSessionId: state.rootSessionId }
+      : {}),
+  });
+}
 
 export function writeRequest(path: string, request: RequestRecord): void {
   writeRequestRecord(path, {
@@ -1064,6 +1075,7 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_MAILBOX",
     "PI_HERDSMAN_RUN_ID",
     "PI_HERDSMAN_OWNER_SESSION_ID",
+    "PI_HERDSMAN_ROOT_SESSION_ID",
     "PI_HERDSMAN_OWNER_DISPLAY",
     "PI_HERDSMAN_LABEL",
     "PI_HERDSMAN_WORKSPACE_ID",
@@ -1098,6 +1110,7 @@ export function setAgentEnvironment(
   process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   process.env.PI_HERDSMAN_OWNER_SESSION_ID =
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
   process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
@@ -1133,6 +1146,7 @@ export function managedState(
     agentLabel: label,
     paneId: identity.paneId,
     piSessionId: identity.piSessionId,
+    rootSessionId: LEAD_SESSION_ID,
     piSessionFile: identity.piSessionFile,
     cwd: "/tmp",
     ...(activeRequestId ? { activeRequestId } : {}),
@@ -1817,6 +1831,7 @@ export function delegatedLifecycleExecutor(
           runId,
           ownerSessionId,
           workspaceId,
+          rootSessionId: paneEnvironment.PI_HERDSMAN_ROOT_SESSION_ID,
           agentLabel: label,
           paneId,
           piSessionId: childSessionIds[createdChildren++],
@@ -3010,6 +3025,7 @@ export function startupExecutor(
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,
+        rootSessionId: paneEnvironment.PI_HERDSMAN_ROOT_SESSION_ID,
         agentLabel: label,
         paneId: activePaneId,
         piSessionId: startupSessionIdentity,

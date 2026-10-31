@@ -23,6 +23,8 @@ import {
   resultPath,
   resultRef,
   reserveSemanticResultRef,
+  publishScopedResult,
+  resolveScopedResult,
   reserveSemanticEvidenceRef,
   semanticEvidenceRef,
   upgradeRequiredEvidence,
@@ -125,6 +127,71 @@ test("semantic result refs are uniquely reserved across independent allocations"
     assert.equal(reserveSemanticResultRef(label, 2).index, 18);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("scoped result publication is idempotent, collision-safe, and fails closed", () => {
+  const label = `scoped-${randomUUID().slice(0, 8)}`;
+  const directory = join(herdsmanDataRoot(), "result-ref-reservations", label);
+  const canonical = resultRef(randomUUID());
+  persistPeerResultArtifact(canonical, "published result\n");
+  try {
+    const first = publishScopedResult(label, 1, canonical, "root-session-a");
+    assert.deepEqual(first, { ref: `result:${label}#1`, index: 1 });
+    assert.deepEqual(
+      publishScopedResult(label, 1, canonical, "root-session-a"),
+      first,
+    );
+    assert.deepEqual(resolveScopedResult(first.ref), {
+      version: 1,
+      canonicalRef: canonical,
+      rootSessionId: "root-session-a",
+    });
+    assert.throws(
+      () => publishScopedResult(label, 1, canonical, "root-session-b"),
+      /Conflicting scoped result ownership/,
+    );
+    writeFileSync(join(directory, "2"), "{corrupt\n");
+    assert.equal(resolveScopedResult(`result:${label}#2`), "invalid");
+    const another = resultRef(randomUUID());
+    persistPeerResultArtifact(another, "another result\n");
+    const next = publishScopedResult(label, 2, another, "root-session-a");
+    assert.equal(next.index, 3);
+    assert.equal(resolveScopedResult(`result:${label}#2`), "invalid");
+    rmSync(resultPath(another.slice("result:".length)), { force: true });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(resultPath(canonical.slice("result:".length)), { force: true });
+  }
+});
+
+test("interrupted completion delivery retry reuses its published semantic reference", () => {
+  const label = `retry-${randomUUID().slice(0, 8)}`;
+  const canonical = resultRef(randomUUID());
+  const directory = join(herdsmanDataRoot(), "result-ref-reservations", label);
+  persistPeerResultArtifact(canonical, "retryable completion\n");
+  try {
+    // Publication succeeded; owner notification was interrupted before acknowledgement.
+    const interruptedDelivery = publishScopedResult(
+      label,
+      1,
+      canonical,
+      "root-session-a",
+    );
+    const retriedDelivery = publishScopedResult(
+      label,
+      1,
+      canonical,
+      "root-session-a",
+    );
+    assert.deepEqual(retriedDelivery, interruptedDelivery);
+    assert.equal(
+      resolveScopedResult(retriedDelivery.ref)?.canonicalRef,
+      canonical,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(resultPath(canonical.slice("result:".length)), { force: true });
   }
 });
 
