@@ -3969,9 +3969,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           manager.workspaceId,
           ctx.signal,
         ));
+      const inventory =
+        suppliedInventory ??
+        (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
       const snapshot = await loadSupervisionSnapshot(
         ctx,
-        suppliedInventory,
+        inventory,
         suppliedAgents,
         true,
         true,
@@ -4021,7 +4024,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             const agent = await host.remoteChiefAgent(
               ctx,
               descriptor,
-              suppliedInventory?.agents,
+              inventory.agents,
             );
             if (typeof agent?.cwd !== "string" || !agent.cwd)
               return unverified(

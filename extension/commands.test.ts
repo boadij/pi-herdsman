@@ -14320,6 +14320,13 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
   const calls = new Map<string, number>();
   const repositoryChecks = new Map<string, number>();
   let fleetSnapshots = 0;
+  let agentListCalls = 0;
+  const fleetInventories: any[][] = [];
+  const identityInventories: any[][] = [];
+  const listAgents = async () => {
+    agentListCalls++;
+    return { agents: [] };
+  };
   let abort: AbortController | undefined;
   const runtime = createLeadSupervisionRuntime({
     activeRole: () => "manager",
@@ -14330,7 +14337,9 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     worktreeGroupScope: async () => ({ workspaceIds: ["manager"] }),
     herdrSessionSnapshot: async () => {
       fleetSnapshots++;
-      return { agents: [], workspaces: [] };
+      const agents: any[] = [];
+      fleetInventories.push(agents);
+      return { agents, workspaces: [] };
     },
     managedAgentSnapshots: async () => ({ agents: [] }),
     workspacePresentationProvenance: async () => ({}),
@@ -14348,7 +14357,12 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
       { id: "other" },
       { id: "changed" },
     ],
-    remoteChiefAgent: async (_ctx: unknown, descriptor: any) => {
+    remoteChiefAgent: async (
+      _ctx: unknown,
+      descriptor: any,
+      knownAgents?: any[],
+    ) => {
+      identityInventories.push(knownAgents ?? (await listAgents()).agents);
       if (abort) {
         abort.abort(new Error("verification cancelled"));
         throw abort.signal.reason;
@@ -14403,6 +14417,21 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     fleetSnapshots,
     2,
     "one initial and one shared final fleet observation",
+  );
+  assert.equal(
+    agentListCalls,
+    0,
+    "candidate checks reuse the initial and final inventories",
+  );
+  assert.ok(
+    identityInventories
+      .slice(0, leads.length)
+      .every((agents) => agents === fleetInventories[0]),
+  );
+  assert.ok(
+    identityInventories
+      .slice(leads.length)
+      .every((agents) => agents === fleetInventories[1]),
   );
   const unverified: any[] = [];
   calls.clear();
