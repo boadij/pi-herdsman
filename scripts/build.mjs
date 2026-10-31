@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { nodeTarget } from "./node-target.mjs";
 import { cpSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +20,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node22",
+  target: nodeTarget.buildTarget,
   sourcemap: true,
   external: [
     "@earendil-works/pi-ai",

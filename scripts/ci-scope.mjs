@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { nodeTarget } from "./node-target.mjs";
 
 function classify(paths) {
   let format = false;
@@ -403,3 +404,5 @@ const paths = readFileSync(0, "utf8").split("\0").filter(Boolean);
 for (const [name, value] of Object.entries(classify(paths))) {
   console.log(`${name}=${value}`);
 }
+
+console.log(`node_version=${nodeTarget.version}`);

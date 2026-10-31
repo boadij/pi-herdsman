@@ -118,6 +118,14 @@ npm run check
 `npm run check` remains the bounded full check, including platform-appropriate
 process-tree cleanup when the test runner times out or leaks descendants.
 
+## Node compatibility target
+
+`package.json` `engines.node` defines the minimum supported Node.js version.
+Compatibility CI jobs and esbuild derive their targets from it; `@types/node`
+must use the same major version. The Unix and Windows installers check the
+published package requirement. Release/Preview tooling and the Docker image
+may deliberately use newer Node versions.
+
 ## Dependency availability
 
 A fresh worktree may not contain `node_modules`.
