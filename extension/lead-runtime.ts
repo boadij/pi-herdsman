@@ -5823,7 +5823,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           ctx,
           report.message,
           reportId,
-          report.kind,
+          report.kind === "successful_handoff" ? undefined : report.kind,
           report.createdAt,
           report.target,
         )

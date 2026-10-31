@@ -4991,6 +4991,7 @@ test("managed Lead herd preserves success before authority verification and repl
   context.isIdle = () => true;
   let authorityLookups = 0;
   let publications = 0;
+  const publishedKinds: unknown[] = [];
   const createRuntime = (restored: boolean) =>
     createLeadHerdRunRuntime({
       pi: pi.pi as never,
@@ -5005,8 +5006,17 @@ test("managed Lead herd preserves success before authority verification and repl
         if (!restored) throw new Error("assignment temporarily unavailable");
         return { project: "assigned" } as any;
       },
-      publishProjectMessage: async (_ctx, _assignment, message) => {
+      publishProjectMessage: async (
+        _ctx,
+        _assignment,
+        message,
+        _attachments,
+        _source,
+        _reportId,
+        kind,
+      ) => {
         publications++;
+        publishedKinds.push(kind);
         assert.equal(message, "Herd run settled.\n\nOriginal herd summary");
         return true as any;
       },
@@ -5043,6 +5053,7 @@ test("managed Lead herd preserves success before authority verification and repl
     intent?.data?.message,
     "Herd run settled.\n\nOriginal herd summary",
   );
+  assert.equal(intent?.data?.kind, "successful_handoff");
   assert.equal(
     publications,
     0,
@@ -5055,6 +5066,7 @@ test("managed Lead herd preserves success before authority verification and repl
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(authorityLookups, 2);
   assert.equal(publications, 1);
+  assert.deepEqual(publishedKinds, [undefined]);
   assert.equal(
     pi.entries.filter(
       (entry: any) =>
