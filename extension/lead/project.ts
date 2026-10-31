@@ -42,7 +42,7 @@ import {
   acceptedCloseProof,
   claimDelegationLock,
 } from "../agent-controller.ts";
-import type { HerdrRecord } from "../herdr.ts";
+import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
 import {
   rememberCoordinatorTarget,
@@ -65,7 +65,11 @@ import { isAbsolute, join, resolve } from "node:path";
 
 export type LeadProjectHost = {
   activeRole(): SessionRole;
-  leadRuntime: { roleSuspended: boolean };
+  HERDSMAN_EXTENSION_PATH: string;
+  leadRuntime: {
+    roleSuspended: boolean;
+    managerLease: ManagerLease | undefined;
+  };
   resolveMessageFiles: typeof import("../agent-controller.ts").resolveMessageFiles;
   onProjectAssignmentAuthorityWaitOccupied?(): void;
   readConfig: typeof import("../config.ts").readConfig;
@@ -93,6 +97,20 @@ export type LeadProjectHost = {
   readProjectAssignment: typeof import("../supervision.ts").readProjectAssignment;
   retireProjectAssignment: typeof import("../supervision.ts").retireProjectAssignment;
   removeProjectMessagesForAssignment: typeof import("../supervision.ts").removeProjectMessagesForAssignment;
+  writeChiefMessage: typeof import("../supervision.ts").writeChiefMessage;
+  currentChiefAuthority(
+    ctx: ExtensionContext,
+    failOnVerificationError?: boolean,
+  ): Promise<import("../supervision.ts").ChiefDescriptor | undefined>;
+  directReports: ReturnType<
+    typeof import("../lead-runtime.ts").createLeadSupervisionRuntime
+  >["directReports"];
+  loadSupervisionSnapshot: ReturnType<
+    typeof import("../lead-runtime.ts").createLeadSupervisionRuntime
+  >["loadSnapshot"];
+  prepareCoordinationInput: ReturnType<
+    typeof import("./coordination.ts").createLeadCoordinationRuntime
+  >["prepareCoordinationInput"];
   appendDurableError(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
@@ -104,8 +122,27 @@ export type LeadProjectHost = {
   ): Promise<ProjectAssignment | undefined>;
   writeProjectAssignment: typeof import("../supervision.ts").writeProjectAssignment;
   liveLead(ctx: ExtensionContext, sessionId: string): Promise<HerdrRecord[]>;
+  liveAgent(
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ): Promise<HerdrRecord[]>;
   runHerdr: typeof import("../herdr.ts").runHerdr;
   listProjectAssignments: typeof import("../supervision.ts").listProjectAssignments;
+  messageLimits(
+    ctx: ExtensionContext,
+  ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
+  prepareMessageInput: typeof import("../core.ts").prepareMessageInput;
+  projectAssignmentBytes: typeof import("../supervision.ts").projectAssignmentBytes;
+  delay: typeof import("node:timers/promises").setTimeout;
+  startHerdrAgentInPane: typeof import("../herdr.ts").startHerdrAgentInPane;
+  sessionIdentity: typeof import("../herdr.ts").sessionIdentity;
+  captureStartupDiagnostic: typeof import("../herdr.ts").captureStartupDiagnostic;
+  truncateModelText: typeof import("../presentation.ts").truncateModelText;
+  inspectHerdrAgent: typeof import("../herdr.ts").inspectHerdrAgent;
+  readPersistedTranscript: typeof import("../agent-controller.ts").readPersistedTranscript;
+  stopHerdrAgentPreservingPane: typeof import("../herdr.ts").stopHerdrAgentPreservingPane;
+  expectedSession(id: string, path?: string): ExpectedSession;
   herdrSessionSnapshot: typeof import("../herdr.ts").herdrSessionSnapshot;
   herdrSessionId: typeof import("../herdr.ts").herdrSessionId;
   isPiAgent(agent: HerdrRecord): boolean;
@@ -136,6 +173,18 @@ export type LeadProjectHost = {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<void>;
+  stopProjectLead(
+    sessionId: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+    assignment?: ProjectAssignment,
+    lead?: {
+      workspaceId: string;
+      paneId: string;
+      tabId: string;
+      instanceId: string;
+    },
+  ): Promise<unknown>;
   withProjectWorkLock<T>(key: string, operation: () => Promise<T>): Promise<T>;
   leadCoordinationTools: readonly string[];
   pi: ExtensionAPI;
