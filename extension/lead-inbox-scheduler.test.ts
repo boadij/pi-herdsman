@@ -17,7 +17,7 @@ const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 
-test("scheduled peer inbox drain requires valid peer presence", async (t) => {
+test("scheduled peer inbox drains without valid presence", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   process.env.HERDR_SOCKET_PATH = "/unused-scheduler-test-socket";
@@ -55,13 +55,76 @@ test("scheduled peer inbox drain requires valid peer presence", async (t) => {
         await flush();
         t.mock.timers.tick(500);
         await flush();
-        assert.equal(peerDrains, valid ? 2 : 0);
+        assert.equal(peerDrains, 2);
       } finally {
         runtime.beginShutdown();
         runtime.shutdown();
       }
     }
   } finally {
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
+
+test("peer send boundary rejects unavailable local presence", async () => {
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/unused-peer-send-test-socket";
+  const context = fakeContext();
+  const peerInboxRuntime = {};
+  const sent: unknown[] = [];
+  let peerOptions: any;
+  const runtime = createLeadInboxRuntime({
+    leadRuntime: {
+      chiefMode: "inactive",
+      roleSuspended: false,
+      sessionGeneration: 0,
+      chiefModeGeneration: 0,
+    },
+    leadInstanceId: () => "lead-instance",
+    activeRole: () => "manager",
+    controllerScope: { kind: "root" },
+    supervisionRuntime: () => ({}),
+    peerRuntime: () => peerInboxRuntime,
+    pi: { sendMessage: (message: unknown) => sent.push(message) },
+    coordinationHealthy: () => true,
+    managerDiagnostic: () => {},
+    managerDiagnosticEvents: new Set(),
+    listChiefMessagePaths: () => [],
+    drainCoordinationInbox: async (options: any) => {
+      if (options.runtime === peerInboxRuntime) peerOptions = options;
+      return 0;
+    },
+    authorizePeerRecord: async () => true,
+    livePeerLead: async () => ({ piSessionId: "recipient", role: "manager" }),
+    peerContext: async () => ({ role: "manager" }),
+    currentPeerPresenceValid: async () => false,
+    drainProjectMessages: async () => 0,
+  } as any);
+
+  try {
+    runtime.beginSession();
+    runtime.start(context as any);
+    await flush();
+    assert.ok(peerOptions, "peer inbox options were passed to the drain");
+    await assert.rejects(
+      peerOptions.sendMessage(
+        "queued peer",
+        { triggerTurn: false },
+        {
+          id: "queued-peer",
+          kind: "peer_message",
+          fromSessionId: "sender",
+          toSessionId: "recipient",
+          peerSource: { role: "manager" },
+        },
+      ),
+      /Peer presence is unavailable before delivery/,
+    );
+    assert.deepEqual(sent, []);
+  } finally {
+    runtime.beginShutdown();
+    runtime.shutdown();
     if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
     else process.env.HERDR_SOCKET_PATH = previousSocket;
   }
