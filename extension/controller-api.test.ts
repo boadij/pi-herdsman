@@ -2557,6 +2557,16 @@ for (const reachable of [true, false]) {
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
         const managerA = readManagerDescriptor(runtime, WORKSPACE)!;
+        for (let index = 0; index < 3; index++) {
+          const emptyBranch = `smoke/empty-${index}`;
+          writeProjectAssignment(runtime, {
+            version: 2,
+            id: randomUUID(),
+            repoKey: realpathSync(tmpdir()),
+            branch: emptyBranch,
+            text: "empty project inbox",
+          });
+        }
         const liveRecord = {
           version: 2 as const,
           id: randomUUID(),
@@ -2591,6 +2601,21 @@ for (const reachable of [true, false]) {
           piSessionFile: leadSessionFile,
           text: "project assignment",
         });
+        const wrongAssignmentBranch = "smoke/wrong-assignment";
+        const wrongAssignment = {
+          version: 2 as const,
+          id: randomUUID(),
+          repoKey: realpathSync(tmpdir()),
+          branch: wrongAssignmentBranch,
+          text: "different assigned Lead",
+        };
+        writeProjectAssignment(runtime, wrongAssignment);
+        const wrongAssignmentRecord = {
+          ...liveRecord,
+          id: randomUUID(),
+          branch: wrongAssignmentBranch,
+        };
+        writeProjectMessage(wrongAssignmentRecord, runtime);
         writeProjectMessage(liveRecord, runtime);
         const projectDeliveries = (id: string) =>
           managerHistory.filter(
@@ -2605,6 +2630,16 @@ for (const reachable of [true, false]) {
           String(projectDeliveries(liveRecord.id)[0]?.content).includes(
             liveRecord.text,
           ),
+        );
+        assert.equal(projectDeliveries(wrongAssignmentRecord.id).length, 0);
+        assert.deepEqual(
+          listProjectMessages(
+            runtime,
+            realpathSync(tmpdir()),
+            wrongAssignmentBranch,
+          ),
+          [wrongAssignmentRecord],
+          "the advisory filename probe does not grant assignment authority",
         );
         const liveSend = pi.sentMessageCalls.find(
           ({ message }: any) => (message as any)?.details?.id === liveRecord.id,

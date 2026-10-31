@@ -22,6 +22,7 @@ import {
   listPendingRetirements,
   removePendingRetirement,
   removeProjectMessagesForAssignment,
+  mightHaveProjectMessages,
   listProjectAssignments,
   removeChiefMessage,
   readProjectAssignment,
@@ -2624,14 +2625,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !ctx.isIdle()
     )
       return 0;
+    const lease = leadRuntime.managerLease;
+    if (!lease) return 0;
     const runtime = supervisionRuntime();
+    if (!mightHaveProjectMessages(runtime, lease.descriptor.repoKey)) return 0;
     const manager = await currentManager(ctx);
-    if (
-      !manager ||
-      !leadRuntime.managerLease ||
-      !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
-    )
-      return 0;
+    if (!manager || !sameManagerDescriptor(manager, lease.descriptor)) return 0;
     const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
       ctx.sessionManager
         .getEntries()
