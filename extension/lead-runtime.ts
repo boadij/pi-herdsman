@@ -7585,6 +7585,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     : !canMessagePeer(source, recipientContext))
                 )
                   throw new Error("Peer eligibility changed before delivery");
+                if (!(await currentPeerPresenceValid(ctx)))
+                  throw new Error(
+                    "Peer presence is unavailable before delivery",
+                  );
                 const peerBindings = resolvePeerResultBindings(
                   ctx,
                   resultBindings ?? [],
@@ -7809,12 +7813,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       }
       if (initial) {
         const chief = await drainCoordinationInbox(inboxOptions(false));
-        const peerPresent = currentPeerPresenceValid(ctx);
+        const peerPresent = await currentPeerPresenceValid(ctx);
         managerDiagnostic("inbox_peer_presence", {
           reason: peerPresent ? "pass" : "missing",
         });
-        if (!peerPresent)
-          return complete(chief + (await drainProjectMessages(ctx)));
         const peer = await drainCoordinationInbox(
           inboxOptions(false, true, peerInboxRuntime),
         );
@@ -7823,12 +7825,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       const active =
         leadRuntime.chiefMode === "active" || activeRole() === "manager";
       const chief = await drainCoordinationInbox(inboxOptions(active, active));
-      const peerPresent = currentPeerPresenceValid(ctx);
+      const peerPresent = await currentPeerPresenceValid(ctx);
       managerDiagnostic("inbox_peer_presence", {
         reason: peerPresent ? "pass" : "missing",
       });
-      if (!peerPresent)
-        return complete(chief + (await drainProjectMessages(ctx)));
       const peer = await drainCoordinationInbox(
         inboxOptions(active, active, peerInboxRuntime),
       );
