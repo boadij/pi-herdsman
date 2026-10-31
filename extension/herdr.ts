@@ -591,13 +591,13 @@ export async function localRepositoryScope(
   ctx: ExtensionContext,
   workspaceId: string,
   signal?: AbortSignal,
+  knownTopology?: HerdrRecord,
 ) {
-  const listed = await runHerdr(
-    pi,
-    ctx,
-    ["worktree", "list", "--cwd", ctx.cwd],
-    { signal },
-  );
+  const listed =
+    knownTopology ??
+    (await runHerdr(pi, ctx, ["worktree", "list", "--cwd", ctx.cwd], {
+      signal,
+    }));
   const workspace = (
     await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
   )?.workspace;
@@ -673,6 +673,13 @@ export async function worktreeGroupScope(
     ["worktree", "list", "--workspace", workspaceId],
     { signal, timeout },
   );
+  return worktreeGroupScopeFromTopology(workspaceId, listed);
+}
+
+export function worktreeGroupScopeFromTopology(
+  workspaceId: string,
+  listed: HerdrRecord,
+): WorktreeGroupScope {
   const source = listed?.source;
   const worktrees = listed?.worktrees;
   if (

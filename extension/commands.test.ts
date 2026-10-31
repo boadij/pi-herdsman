@@ -14303,16 +14303,23 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
   mkdirSync(join(repo, ".git"), { recursive: true });
   mkdirSync(join(other, ".git"), { recursive: true });
   const manager = { repoKey: join(repo, ".git"), workspaceId: "manager" };
-  const leads = ["same", "ordinary", "other", "missing", "changed"].map(
-    (id) => ({
-      lead: id,
-      workspaceId: id,
-      paneId: id,
-      tabId: id,
-    }),
-  );
+  const leads = [
+    "same",
+    "healthy-three",
+    "healthy-four",
+    "ordinary",
+    "other",
+    "missing",
+    "changed",
+  ].map((id) => ({
+    lead: id,
+    workspaceId: id,
+    paneId: id,
+    tabId: id,
+  }));
   const calls = new Map<string, number>();
   const repositoryChecks = new Map<string, number>();
+  let fleetSnapshots = 0;
   let abort: AbortController | undefined;
   const runtime = createLeadSupervisionRuntime({
     activeRole: () => "manager",
@@ -14321,7 +14328,10 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     sameManagerDescriptor: (left: any, right: any) =>
       left.workspaceId === right.workspaceId,
     worktreeGroupScope: async () => ({ workspaceIds: ["manager"] }),
-    herdrSessionSnapshot: async () => ({ agents: [], workspaces: [] }),
+    herdrSessionSnapshot: async () => {
+      fleetSnapshots++;
+      return { agents: [], workspaces: [] };
+    },
     managedAgentSnapshots: async () => ({ agents: [] }),
     workspacePresentationProvenance: async () => ({}),
     projectSupervision: () => ({ leads }),
@@ -14331,7 +14341,13 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     ],
     currentChief: () => undefined,
     supervisionRuntime: () => ({}),
-    listProjectAssignments: () => [{ id: "same" }, { id: "other" }],
+    listProjectAssignments: () => [
+      { id: "same" },
+      { id: "healthy-three" },
+      { id: "healthy-four" },
+      { id: "other" },
+      { id: "changed" },
+    ],
     remoteChiefAgent: async (_ctx: unknown, descriptor: any) => {
       if (abort) {
         abort.abort(new Error("verification cancelled"));
@@ -14377,9 +14393,19 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
   const reports = await runtime.directReports(fakeContext() as any);
   assert.deepEqual(
     reports.map((lead: any) => [lead.lead, lead.relationship]),
-    [["same", "assigned"]],
+    [
+      ["same", "assigned"],
+      ["healthy-three", "assigned"],
+      ["healthy-four", "assigned"],
+    ],
+  );
+  assert.equal(
+    fleetSnapshots,
+    2,
+    "one initial and one shared final fleet observation",
   );
   const unverified: any[] = [];
+  calls.clear();
   await runtime.directReports(
     fakeContext() as any,
     undefined,
@@ -14392,6 +14418,11 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
       lead: "other",
       status: "conflict",
       issue: "Assigned Lead repository does not match the project",
+    },
+    {
+      lead: "changed",
+      status: "unknown",
+      issue: "Assigned Lead identity changed during verification",
     },
   ]);
   calls.clear();

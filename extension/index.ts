@@ -573,6 +573,7 @@ export async function workspacePresentationProvenance(
   workspaceCwds: ReadonlyMap<string, string>,
   signal?: AbortSignal,
   snapshotWorkspaces?: readonly HerdrRecord[],
+  knownTopology?: HerdrRecord,
 ): Promise<ReadonlyMap<string, WorkspaceProvenance>> {
   const workspaces = new Map<string, HerdrRecord>();
   if (snapshotWorkspaces) {
@@ -623,6 +624,14 @@ export async function workspacePresentationProvenance(
   const topologyByRepo = new Map<string, HerdrRecord>();
   for (const [key, source] of sources) {
     if (signal?.aborted) break;
+    if (
+      knownTopology?.source?.repo_key === source.repoKey &&
+      knownTopology?.source?.repo_root === source.repoRoot &&
+      Array.isArray(knownTopology.worktrees)
+    ) {
+      topologyByRepo.set(key, knownTopology);
+      continue;
+    }
     try {
       const topology = await runHerdr(
         pi,
