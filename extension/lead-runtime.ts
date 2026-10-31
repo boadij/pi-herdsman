@@ -1310,7 +1310,7 @@ export function createLeadAgentEventRuntime(host: {
     },
     agentStart(ctx: ExtensionContext): void {
       host.consumeChiefStartPreflight(ctx);
-      if (host.isActiveLead()) host.herdRun.agentStarted();
+      if (host.isActiveLead()) host.herdRun.agentStarted(ctx);
     },
     async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
       host.leadInboxRuntime.agentSettled();
@@ -5790,11 +5790,44 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     begin,
     maybeFinish,
     hasActiveTurn: () => leadAgentStartedAt !== undefined,
-    agentStarted: () => {
+    agentStarted: (ctx?: ExtensionContext) => {
       leadAgentStartedAt = Date.now();
       leadReportId = randomUUID();
       observation = {};
       leadSettled = false;
+      if (herdRunStartedAt !== undefined && ctx) {
+        try {
+          host.pi.appendEntry(host.entryName, {
+            phase: "lead_started",
+            sessionId: ctx.sessionManager.getSessionId(),
+            reportId: herdReportId,
+          });
+        } catch (error) {
+          lastSettledRun = { aborted: false, outcome: "unverified" };
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+          try {
+            host.pi.appendEntry(host.entryName, {
+              phase: "lead_start_unpersisted",
+              sessionId: ctx.sessionManager.getSessionId(),
+              reportId: leadReportId,
+              runReportId: herdReportId,
+            });
+          } catch (markerError) {
+            // If both journal writes fail, reload has no durable invalidation evidence.
+            host.appendDurableError(
+              host.pi,
+              ctx,
+              "pi_herdsman_state_error",
+              markerError,
+            );
+          }
+        }
+      }
     },
     turnEnd: (event: any) => {
       if (!observation || event?.message?.role !== "assistant") return;
@@ -5820,6 +5853,23 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       const summary = successful ? current.responseText : undefined;
       if (herdOwnsHandoff)
         lastSettledRun = { aborted, outcome: current?.outcome, summary };
+      if (herdOwnsHandoff && successful) {
+        try {
+          host.pi.appendEntry(host.entryName, {
+            phase: "lead_settled",
+            sessionId: ctx.sessionManager.getSessionId(),
+            reportId: herdReportId,
+            responseEntryId: current.responseEntryId,
+          });
+        } catch (error) {
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        }
+      }
       leadSettled = true;
       if (!successful && !aborted && turnStartedAt !== undefined) {
         const reportCreatedAt = Date.now();
@@ -5998,15 +6048,91 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           reportId: herdReportId,
         });
       }
-      const hasReportIntent = (entries as any[]).some(
-        (entry) =>
-          entry?.type === "custom" &&
-          entry.customType === host.entryName &&
-          entry.data?.sessionId === sessionId &&
-          !!herdReportId &&
-          (entry.data?.reportId === herdReportId ||
-            entry.data?.runReportId === herdReportId) &&
-          entry.data?.phase === "report_sent",
+      const records = (entries as any[])
+        .map((entry, index) => ({
+          entry,
+          index,
+          data: entry?.data,
+        }))
+        .filter(
+          ({ entry, data }) =>
+            entry?.type === "custom" &&
+            entry.customType === host.entryName &&
+            data?.sessionId === sessionId &&
+            !!herdReportId &&
+            (data.reportId === herdReportId ||
+              data.runReportId === herdReportId),
+        );
+      let latestExecution:
+        | {
+            index: number;
+            outcome: "completed" | "unverified";
+            summary?: string;
+            reportId?: string;
+          }
+        | undefined;
+      let latestReceipt = -1;
+      const sentReports = new Set<string>();
+      for (const { index, data } of records) {
+        if (
+          data.phase === "lead_started" ||
+          data.phase === "lead_start_unpersisted"
+        )
+          latestExecution = { index, outcome: "unverified" };
+        else if (data.phase === "lead_settled") {
+          const response =
+            typeof data.responseEntryId === "string"
+              ? (entries as any[]).find(
+                  (item) =>
+                    item?.type === "message" &&
+                    item.id === data.responseEntryId &&
+                    item.message?.role === "assistant" &&
+                    Array.isArray(item.message.content) &&
+                    item.message.content.every((part: any) => {
+                      if (!part || typeof part !== "object") return false;
+                      if (part.type === "text")
+                        return typeof part.text === "string";
+                      if (part.type === "thinking")
+                        return typeof part.thinking === "string";
+                      if (part.type === "image")
+                        return (
+                          typeof part.data === "string" &&
+                          typeof part.mimeType === "string"
+                        );
+                      if (part.type === "toolCall")
+                        return (
+                          typeof part.id === "string" &&
+                          typeof part.name === "string" &&
+                          part.arguments !== null &&
+                          typeof part.arguments === "object"
+                        );
+                      return false;
+                    }),
+                )
+              : undefined;
+          if (data.reportId === herdReportId && response) {
+            latestExecution = {
+              index,
+              outcome: "completed",
+              summary: contentText(response.message.content, "").trim(),
+            };
+          } else latestExecution = { index, outcome: "unverified" };
+        } else if (
+          data.phase === "report_pending" &&
+          data.reportId !== herdReportId
+        ) {
+          latestExecution = {
+            index,
+            outcome: "unverified",
+            reportId: data.reportId,
+          };
+        } else if (data.phase === "report_sent") {
+          latestReceipt = index;
+          if (typeof data.reportId === "string") sentReports.add(data.reportId);
+        }
+      }
+      const hasReportIntent = records.some(
+        ({ data }) => data.phase === "report_sent",
       );
       const hasUnsentHerdIntent = (entries as any[]).some((entry) => {
         const data = entry?.data;
@@ -6029,9 +6155,22 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         );
       });
       lastSettledRun =
-        hasReportIntent && !hasUnsentHerdIntent
-          ? { aborted: false, outcome: "reported" }
-          : undefined;
+        latestExecution?.outcome === "completed"
+          ? {
+              aborted: false,
+              outcome: "completed",
+              summary: latestExecution.summary,
+            }
+          : latestExecution?.outcome === "unverified"
+            ? latestExecution.reportId &&
+              sentReports.has(latestExecution.reportId)
+              ? { aborted: false, outcome: "reported" }
+              : undefined
+            : hasReportIntent &&
+                !hasUnsentHerdIntent &&
+                latestReceipt >= (latestExecution?.index ?? -1)
+              ? { aborted: false, outcome: "reported" }
+              : undefined;
       leadSettled = herdRunStartedAt === undefined;
     },
     finishIfIdle: (ctx: ExtensionContext) => {
@@ -6040,6 +6179,61 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       idleFinishing = (async () => {
         await restorePendingReports(ctx, ctx.sessionManager.getEntries());
         const currentEntries = ctx.sessionManager.getEntries() as any[];
+        if (!lastSettledRun && herdReportId) {
+          let latestExecution = -1;
+          let latestExecutionReportId: string | undefined;
+          const sentReports = new Set<string>();
+          currentEntries.forEach((entry, index) => {
+            const data = entry?.data;
+            if (
+              entry?.type !== "custom" ||
+              entry.customType !== host.entryName ||
+              data?.sessionId !== ctx.sessionManager.getSessionId() ||
+              (data.reportId !== herdReportId &&
+                data.runReportId !== herdReportId)
+            )
+              return;
+            if (
+              data.phase === "lead_started" ||
+              data.phase === "lead_start_unpersisted" ||
+              data.phase === "lead_settled"
+            ) {
+              latestExecution = index;
+              latestExecutionReportId = undefined;
+            }
+            if (
+              data.phase === "report_pending" &&
+              data.reportId !== herdReportId
+            ) {
+              latestExecution = index;
+              latestExecutionReportId = data.reportId;
+            }
+            if (
+              data.phase === "report_sent" &&
+              typeof data.reportId === "string"
+            )
+              sentReports.add(data.reportId);
+          });
+          if (
+            (latestExecutionReportId &&
+              sentReports.has(latestExecutionReportId)) ||
+            (latestExecution < 0 && sentReports.size > 0)
+          )
+            lastSettledRun = { aborted: false, outcome: "reported" };
+        }
+        if (
+          lastSettledRun?.outcome === "completed" &&
+          herdReportId &&
+          currentEntries.some(
+            (entry) =>
+              entry?.type === "custom" &&
+              entry.customType === host.entryName &&
+              entry.data?.sessionId === ctx.sessionManager.getSessionId() &&
+              entry.data?.phase === "report_sent" &&
+              entry.data?.reportId === herdReportId,
+          )
+        )
+          lastSettledRun = { aborted: false, outcome: "reported" };
         const hasUnsentHerdIntent = currentEntries.some((entry) => {
           const data = entry?.data;
           return (
@@ -6061,19 +6255,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           );
         });
         if (hasUnsentHerdIntent) return;
-        if (
-          herdReportId &&
-          currentEntries.some(
-            (entry) =>
-              entry?.type === "custom" &&
-              entry.customType === host.entryName &&
-              entry.data?.sessionId === ctx.sessionManager.getSessionId() &&
-              entry.data?.phase === "report_sent" &&
-              (entry.data?.reportId === herdReportId ||
-                entry.data?.runReportId === herdReportId),
-          )
-        )
-          lastSettledRun = { aborted: false, outcome: "reported" };
         if (herdRunStartedAt !== undefined) {
           leadSettled = true;
           if (!lastSettledRun) {
