@@ -175,7 +175,7 @@ type LeadTransitionHost = {
   >;
   processRole: string;
   paneId(): string | undefined;
-  getSessionName(): string;
+  getSessionName(): string | undefined;
   identity: { paneId?: string; tabId?: string; workspaceId?: string };
   statSync: typeof statSync;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
@@ -232,7 +232,6 @@ type LeadTransitionHost = {
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
   requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
   build: RuntimeBuild;
-  currentManager: LeadRoleTransitionRuntime["currentManager"];
   setLeadInstanceId(value: string): void;
   setCoordinationHealthy(value: boolean): void;
   markLeadCoordinationUnhealthy(ctx: ExtensionContext): void;
@@ -256,6 +255,42 @@ type LeadTransitionHost = {
 };
 
 type LeadRoleTransitionHost = LeadTransitionHost & {
+  activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
+  advanceChiefInboxGeneration(): void;
+  advancePeerPresenceGeneration(): void;
+  clearChiefInboxTimer(): void;
+  clearChiefStartPreflight(): void;
+  clearNormalUI(): void;
+  clearSupervisionUI(): void;
+  commitSupervisoryProfile(profile: SupervisoryProfile | undefined): void;
+  controllerScope: ControllerScope;
+  coordinationHealthy(): boolean;
+  executionTools?(): string[];
+  focusExistingChief(ctx: ExtensionContext): void;
+  getLeadTools(): string[] | undefined;
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  leadInstanceId(): string;
+  normalizeBaseTools(tools: readonly string[]): string[];
+  normalizeLeadTools(tools: readonly string[]): string[];
+  persistRole(role: SessionRole): void;
+  publishLeadRole(
+    ctx: ExtensionContext,
+    mode: "inactive" | "active" | "suspended",
+    generation: number,
+  ): Promise<void>;
+  readManagerDescriptor: typeof import("./supervision.ts").readManagerDescriptor;
+  reconcileRoleTools(): void;
+  removePeerPresence(): void;
+  scanAgentStates: typeof import("./mailbox.ts").scanAgentStates;
+  schedulePeerPresence(ctx: ExtensionContext): Promise<void>;
+  sessionLeadRoleState: typeof import("./supervision.ts").sessionLeadRoleState;
+  setLeadTools(tools: string[] | undefined): void;
+  startChiefInbox(ctx: ExtensionContext): void;
+  startNormalUI(ctx: ExtensionContext): void;
+  startSupervisionUI(ctx: ExtensionContext): void;
+  supervisorTools: readonly string[];
+  waitForPeerPresence(): Promise<void>;
+  activateChief(...args: ChiefActivationArgs): Promise<string>;
   invalidateManagerRemovalRequests?(ctx: ExtensionContext): void;
   captureInheritedTools?(): void;
   inheritedProjection?():
@@ -284,6 +319,45 @@ type LeadRoleTransitionHost = LeadTransitionHost & {
   ): SupervisoryProfile;
 };
 
+type LeadChiefStateHost = Pick<
+  LeadTransitionHost,
+  | "setLeadInstanceId"
+  | "setCoordinationHealthy"
+  | "markLeadCoordinationUnhealthy"
+  | "appendDurableError"
+  | "pi"
+  | "persistCoordinatorState"
+  | "persistLeadCoordination"
+>;
+
+type ChiefActivationArgs =
+  | [ctx: ExtensionContext, resumed: true]
+  | [ctx: ExtensionCommandContext, resumed?: false];
+
+type LeadRuntimeHost = Omit<
+  LeadTransitionHost,
+  | "isQuarantinedSession"
+  | "executionTools"
+  | "restoreLeadExecution"
+  | "activationGuard"
+  | "setLeadInstanceId"
+  | "setCoordinationHealthy"
+  | "pi"
+  | "persistCoordinatorState"
+  | "persistLeadCoordination"
+  | "assertCurrentLeadCoordination"
+  | "currentChiefAuthority"
+> & {
+  readManagerDescriptor: typeof import("./supervision.ts").readManagerDescriptor;
+  scanAgentStates: typeof import("./mailbox.ts").scanAgentStates;
+  sessionLeadRoleState: typeof import("./supervision.ts").sessionLeadRoleState;
+  supervisorTools: readonly string[];
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  activation: {
+    activateChief(...args: ChiefActivationArgs): Promise<string>;
+  };
+};
+
 type SupervisoryProfile = {
   role: "manager" | "chief";
   definition: AgentDefinition;
@@ -306,7 +380,7 @@ type LeadRuntimeOptions = {
     "scope" | "build" | "onWorkChanged" | "onWorktreeRemoved"
   >;
   identityHost: LeadIdentityHost;
-  roleTransitionHost: LeadTransitionHost;
+  roleTransitionHost: LeadRuntimeHost;
   coordinationHost: LeadCoordinationBaseHost;
   projectHost: Omit<
     LeadProjectHost,
@@ -907,7 +981,7 @@ export function createLeadSessionStartRuntime(host: {
     mode: "inactive" | "active" | "suspended",
     generation: number,
   ): void;
-  activateChief(ctx: ExtensionContext, resumed: boolean): Promise<void>;
+  activateChief(ctx: ExtensionContext, resumed: true): Promise<string>;
   restoreLeadExecution(
     ctx: ExtensionContext,
     signal?: AbortSignal,
@@ -2152,6 +2226,10 @@ export function registerLeadRuntime(
     if (!coordinationRuntime.coordinationHealthy())
       throw new Error("Lead coordination state is unavailable");
   };
+  const roleTransitionControllerScope: Extract<
+    ControllerScope,
+    { kind: "root" }
+  > = { kind: "root" };
   const roleTransitionServices = {
     ...roleHost,
     prepareSupervisoryProfile,
@@ -2160,7 +2238,7 @@ export function registerLeadRuntime(
     supervisoryTools,
     fallbackSupervisoryProfile,
     retireProjectAssignment,
-    controllerScope: { kind: "root" },
+    controllerScope: roleTransitionControllerScope,
     activationGuard,
     advancePeerPresenceGeneration: () =>
       coordinationRuntime.advancePresenceGeneration(),
@@ -8162,7 +8240,7 @@ export function enterSuspendedRole(
 
 export function restoreLeadChiefState(
   ctx: ExtensionContext,
-  host: LeadTransitionHost,
+  host: LeadChiefStateHost,
 ): boolean {
   host.setLeadInstanceId(randomUUID());
   host.setCoordinationHealthy(true);
@@ -9221,9 +9299,9 @@ export function createLeadRoleTransitions(
     return finish();
   };
   const activateChief = async (
-    ctx: ExtensionCommandContext,
-    resumed = false,
+    ...args: ChiefActivationArgs
   ): Promise<string> => {
+    const [ctx, resumed] = args;
     if (host.processRole !== "lead")
       throw new Error("Only a lead can activate chief");
     if (!resumed && state.chiefMode === "active" && host.isCurrentChief(ctx)) {

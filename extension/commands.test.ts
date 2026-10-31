@@ -13349,6 +13349,7 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
   context.sessionManager.getSessionId = () => sessionId;
   context.mode = "rpc";
   context.ui.notify = () => undefined;
+  const commandWaitForIdle = context.waitForIdle;
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
@@ -13361,7 +13362,10 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
       },
     ];
     context.sessionManager.getBranch = () => chiefBranch;
+    delete context.waitForIdle;
     await pi.events.get("session_tree")![0](undefined, context);
+    assert.equal("waitForIdle" in context, false);
+    context.waitForIdle = commandWaitForIdle;
     assert.deepEqual(pi.pi.getActiveTools(), [
       "list_staff",
       "inspect_staff",
