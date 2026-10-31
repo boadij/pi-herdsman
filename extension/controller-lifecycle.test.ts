@@ -5301,6 +5301,116 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   );
 });
 
+test("cancelled Lead report stays separate from later successful herd handoff", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  let childActive = true;
+  const messages: string[] = [];
+  const createRuntime = () =>
+    createLeadHerdRunRuntime({
+      pi: pi.pi as never,
+      activeRole: () => "lead",
+      isVerifiedActiveLead: () => true,
+      isManagedLead: () => true,
+      entryName: "pi-herdsman-herd-run",
+      hasPendingStarts: () => false,
+      listAgentStates: () =>
+        childActive ? [{ state: { ownerSessionId: LEAD_SESSION_ID } }] : [],
+      currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+      publishProjectMessage: async (_ctx, _assignment, message) => {
+        messages.push(message);
+        return true as any;
+      },
+      publishChiefFailure: async () => false,
+      requestStatusRefresh: () => {},
+      queueLeadPresentation: () => {},
+      appendDurableError: () => {},
+    });
+
+  const first = createRuntime();
+  first.agentStarted();
+  first.begin(context);
+  await first.agentSettled(context, true);
+  const cancellation = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.message ===
+        "Lead execution was cancelled before a completed response.",
+  ) as any;
+  assert.ok(cancellation);
+  assert.ok(cancellation.data.runReportId);
+  assert.deepEqual(messages, [cancellation.data.message]);
+
+  // Keep the open herd across turns: the cancellation and success must share
+  // the same run linkage for the regression to exercise the collision.
+  const resumed = first;
+  resumed.agentStarted(context);
+  resumed.begin(context);
+  resumed.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Verified later summary" },
+    messageEntryId: "cancel-then-success-response",
+  });
+  pi.entries.push({
+    type: "message",
+    id: "cancel-then-success-response",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Verified later summary" }],
+    },
+  } as any);
+  resumed.beforeSettle({ outcome: "completed" });
+  await resumed.agentSettled(context, false);
+
+  childActive = false;
+  const restored = createRuntime();
+  restored.restoreSession(pi.entries, LEAD_SESSION_ID);
+  restored.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(messages, [
+    cancellation.data.message,
+    "Herd run settled.\n\nVerified later summary",
+  ]);
+  assert.ok(pi.entries.includes(cancellation), "cancellation remains durable");
+  const successful = pi.entries.find(
+    (entry: any) =>
+      entry.data?.phase === "report_pending" &&
+      entry.data?.kind === "successful_handoff",
+  ) as any;
+  assert.ok(successful, "success intent has an explicit durable discriminator");
+  const herdReportId = cancellation.data.runReportId;
+  assert.equal(
+    successful.data.runReportId ?? successful.data.reportId,
+    herdReportId,
+  );
+  assert.equal(
+    herdReportId,
+    pi.entries.find((entry: any) => entry.data?.phase === "started")?.data
+      ?.reportId,
+  );
+  assert.notEqual(successful.data.reportId, cancellation.data.reportId);
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === successful.data.reportId,
+    ).length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter(
+      (entry: any) =>
+        entry.data?.phase === "report_sent" &&
+        entry.data?.reportId === cancellation.data.reportId,
+    ).length,
+    1,
+  );
+});
+
 test("failed Lead-start marker does not restore an older settlement", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();

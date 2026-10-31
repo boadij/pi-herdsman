@@ -5574,9 +5574,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 entry.customType === host.entryName &&
                 entry.data?.sessionId === sessionId &&
                 entry.data?.phase === "report_pending" &&
-                (entry.data?.reportId === herdReportId ||
-                  entry.data?.runReportId === herdReportId) &&
-                entry.data?.kind !== "execution_failure",
+                ((entry.data?.reportId === herdReportId &&
+                  entry.data?.kind !== "execution_failure") ||
+                  (entry.data?.runReportId === herdReportId &&
+                    entry.data?.kind === "successful_handoff")),
             )?.data;
             reportMessage = pending?.message ?? message;
             if (!pending) {
@@ -5598,6 +5599,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 ...(legacyFailureOccupiesHerdId
                   ? { runReportId: herdReportId }
                   : {}),
+                kind: "successful_handoff",
               };
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
@@ -6168,7 +6170,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           } else latestExecution = { index, outcome: "unverified" };
         } else if (
           data.phase === "report_pending" &&
-          data.reportId !== herdReportId
+          data.reportId !== herdReportId &&
+          data.kind !== "successful_handoff"
         ) {
           latestExecution = {
             index,
@@ -6252,7 +6255,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             }
             if (
               data.phase === "report_pending" &&
-              data.reportId !== herdReportId
+              data.reportId !== herdReportId &&
+              data.kind !== "successful_handoff"
             ) {
               latestExecution = index;
               latestExecutionReportId = data.reportId;
@@ -6285,9 +6289,10 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 pending.data?.sessionId === ctx.sessionManager.getSessionId() &&
                 pending.data?.phase === "report_pending" &&
                 pending.data?.reportId === data.reportId &&
-                (pending.data?.reportId === herdReportId ||
-                  pending.data?.runReportId === herdReportId) &&
-                pending.data?.kind !== "execution_failure",
+                ((pending.data?.reportId === herdReportId &&
+                  pending.data?.kind !== "execution_failure") ||
+                  (pending.data?.runReportId === herdReportId &&
+                    pending.data?.kind === "successful_handoff")),
             )
           );
         });
