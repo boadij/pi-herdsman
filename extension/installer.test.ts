@@ -565,8 +565,11 @@ test(
         encoding: "utf8",
       });
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /requires Node >=99\\.0\\.0/u);
-      assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^(?:pi |curl |herdr )/mu);
+      assert.match(result.stderr, /requires Node >=99\.0\.0/u);
+      assert.doesNotMatch(
+        readFileSync(setup.log, "utf8"),
+        /^(?:pi |curl |herdr )/mu,
+      );
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
