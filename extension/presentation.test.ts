@@ -6926,6 +6926,10 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   assert.deepEqual(switchedFocused, [
     { kind: "session", sessionId: "git-lead" },
   ]);
+  assert.match(
+    switchedWidget.render(47)[1]!,
+    /↪ fix\/recovery · active  ~\+12 -3\*/,
+  );
   assert.ok(
     Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>
       switchedWidget.render(width).every((line) => visibleWidth(line) <= width),
