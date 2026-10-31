@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG NODE_IMAGE=node:26.13.0-trixie-slim
-ARG MISE_VERSION=2026.10.24
+ARG MISE_VERSION=2026.10.25
 
 FROM ${NODE_IMAGE} AS package
 
