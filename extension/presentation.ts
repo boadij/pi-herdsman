@@ -1063,6 +1063,8 @@ export type GitChangeSummary = Readonly<{
   additions?: number;
   deletions?: number;
   changedFiles?: number;
+  checkedOutBranch?: string;
+  approximate?: boolean;
 }>;
 
 type SupervisionRow = {
@@ -1263,32 +1265,64 @@ function renderSupervisionRows(
                 ? `${git.changedFiles}f`
                 : "±0"
             : "";
+        const displayedDiff = diff && git?.approximate ? `~${diff}` : diff;
+        const changedBranch =
+          git?.checkedOutBranch !== undefined &&
+          git.checkedOutBranch !== item.work.branch;
         const optionsToFit = [
-          ...(elapsed ? [{ value: elapsed, kind: "elapsed" }] : []),
-          ...(diff ? [{ value: diff, kind: "stats" }] : []),
-          ...(git?.dirty ? [{ value: "*", kind: "dirty" }] : []),
           ...(context ? [{ value: context, kind: "context" }] : []),
+          ...(git?.dirty ? [{ value: "*", kind: "dirty" }] : []),
+          ...(displayedDiff ? [{ value: displayedDiff, kind: "stats" }] : []),
+          ...(changedBranch
+            ? [
+                {
+                  value: `↪ ${git.checkedOutBranch}`,
+                  kind: "checked-out-branch",
+                },
+              ]
+            : []),
+          ...(elapsed ? [{ value: elapsed, kind: "elapsed" }] : []),
         ];
         const fixedWidth = visibleWidth(prefix) + visibleWidth(suffix);
         const kept = [...optionsToFit];
+        let showBranchMarker = changedBranch;
         const rowFits = () =>
           fixedWidth +
             visibleWidth(item.work.branch) +
+            (showBranchMarker ? visibleWidth(" ↪") : 0) +
             kept.reduce(
               (sum, option) => sum + visibleWidth(option.value) + 2,
               0,
             ) <=
           width;
-        for (const kind of ["elapsed", "stats", "dirty", "context"])
+        for (const kind of [
+          "elapsed",
+          "checked-out-branch",
+          "stats",
+          "dirty",
+          "context",
+        ])
           if (!rowFits()) {
             const at = kept.findIndex((option) => option.kind === kind);
             if (at >= 0) kept.splice(at, 1);
           }
-        const telemetry = kept.map((option) => option.value);
-        const telemetryWidth = telemetry.reduce(
-          (total, value) => total + visibleWidth(value) + 2,
+        if (!rowFits()) showBranchMarker = false;
+        const displayedTelemetry = kept.filter(
+          (option) => option.kind !== "checked-out-branch",
+        );
+        const telemetryWidth = displayedTelemetry.reduce(
+          (total, option) => total + visibleWidth(option.value) + 2,
           0,
         );
+        const branchSwitch = showBranchMarker
+          ? ` ↪${kept.some((option) => option.kind === "checked-out-branch") ? ` ${git!.checkedOutBranch}` : ""}`
+          : "";
+        const outputTelemetry = [
+          ...displayedTelemetry.filter((option) => option.kind === "elapsed"),
+          ...displayedTelemetry.filter((option) => option.kind === "stats"),
+          ...displayedTelemetry.filter((option) => option.kind === "dirty"),
+          ...displayedTelemetry.filter((option) => option.kind === "context"),
+        ];
         const markerColor =
           lead?.compatibility === "incompatible"
             ? "warning"
@@ -1301,7 +1335,11 @@ function renderSupervisionRows(
                   : "muted";
         const markerText = themed(options.theme, markerColor, marker);
         const branchWidth =
-          width - visibleWidth(prefix) - visibleWidth(suffix) - telemetryWidth;
+          width -
+          visibleWidth(prefix) -
+          visibleWidth(suffix) -
+          visibleWidth(branchSwitch) -
+          telemetryWidth;
         const displayedBranch = safeLine(item.work.branch, branchWidth);
         const branchText = themed(options.theme, "muted", displayedBranch);
         const truncatedBranch = displayedBranch !== item.work.branch;
@@ -1318,7 +1356,7 @@ function renderSupervisionRows(
           status === "fresh" && item.work.status === "active" && lead;
         return {
           text: safeLine(
-            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${kept.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && kept[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
+            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, "muted", suffix)}${outputTelemetry.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && outputTelemetry[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
             width,
           ),
           ...(canFocusLead && (!truncatedBranch || clickRegion)

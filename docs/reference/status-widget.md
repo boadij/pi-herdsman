@@ -100,17 +100,29 @@ revalidated for control actions.
 
 ### Manager Git indicators
 
-Eligible Manager work rows can show committed textual additions and deletions
-since the branch's merge base with the Manager's current `HEAD`, separately
-from working-tree state. `*` means the assigned checkout has staged, unstaged,
-unmerged, or non-ignored untracked changes. Thus `±0*` means no committed file
-differences but a dirty checkout; `±0` means a successful comparison found no
-committed differences and the checkout is clean. A changed-file count such as
-`2f` is used when files changed without textual line counts, such as
-binary-only changes.
+Eligible Manager work rows can show net tracked textual additions and
+deletions from a stable assignment baseline to the current worktree contents.
+The comparison includes committed, staged, and unstaged tracked changes without
+double-counting them; untracked files do not contribute numeric totals. `*`
+means the assigned checkout is dirty, including untracked changes. Thus `±0*`
+means the verified comparison found no net tracked differences but the checkout
+is dirty; `±0` means it found no net tracked differences and the checkout is
+clean. A changed-file count such as `2f` is used when files changed without
+textual line counts, such as binary-only changes. These are net worktree
+contents, not cumulative effort or proof of merge readiness; merging upstream
+changes into a Lead checkout can contribute to its net diff.
+
+The stored baseline remains fixed when the Manager's `main` advances. Existing
+assignments without a stored baseline use a dynamically inferred merge-base
+approximation, marked with `~` before numeric statistics. That fallback is not
+persisted. If a Lead switches branches in its assigned worktree, `↪` followed
+by the checked-out branch distinguishes that mutable Git branch from the
+original assignment branch shown as the row's clickable handle. Branch-switch
+metadata and Git suffixes are not clickable; the assignment handle continues to
+target the same exact managed Lead.
 
 No Git suffix means the optional observation is unavailable or has not yet
-been sampled; it does not mean the checkout is clean. Sampling is approximate,
+been sampled; it does not mean the checkout is clean. Sampling is best-effort,
 with a minimum interval of about 30 seconds between attempts. Under width
 pressure, optional Git details may be omitted. The branch remains the
 navigation target; its suffix is not clickable. Git indicators are advisory

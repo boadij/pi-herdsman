@@ -6873,6 +6873,66 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   });
   assert.deepEqual(focused, [{ kind: "session", sessionId: "git-lead" }]);
 
+  const switchedSummary = {
+    dirty: true,
+    additions: 12,
+    deletions: 3,
+    changedFiles: 2,
+    checkedOutBranch: "fix/recovery",
+    approximate: true,
+  };
+  const switchedFocused: unknown[] = [];
+  const switchedWidget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => switchedFocused.push(intent),
+    () => switchedSummary,
+  );
+  const switchedRow = switchedWidget.render(120)[1]!;
+  assert.match(switchedRow, /feat\/git ↪ fix\/recovery/);
+  assert.match(switchedRow, /~\+12 -3\*/);
+  const switchedBranchX = visibleWidth(
+    switchedRow.slice(0, switchedRow.indexOf("fix/recovery")),
+  );
+  switchedWidget.handleMouse({
+    type: "click",
+    button: "left",
+    width: 120,
+    x: switchedBranchX,
+    y: 1,
+  });
+  assert.deepEqual(switchedFocused, []);
+  const assignedBranchX = visibleWidth(
+    switchedRow.slice(0, switchedRow.indexOf("feat/git")),
+  );
+  switchedWidget.handleMouse({
+    type: "click",
+    button: "left",
+    width: 120,
+    x: assignedBranchX,
+    y: 1,
+  });
+  assert.deepEqual(switchedFocused, [
+    { kind: "session", sessionId: "git-lead" },
+  ]);
+  assert.ok(
+    Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>
+      switchedWidget.render(width).every((line) => visibleWidth(line) <= width),
+    ),
+  );
+  const compactSwitchedRows = Array.from(
+    { length: 120 },
+    (_, index) => switchedWidget.render(index + 1)[1]!,
+  );
+  assert.ok(
+    compactSwitchedRows.some(
+      (line) => line.includes("↪") && !line.includes("fix/recovery"),
+    ),
+    "narrow rows retain a bare branch-switch marker after dropping its label",
+  );
+
   const chiefWidget = createSupervisionWidget(
     () => [lead({ lead: "git-lead", branch: "feat/git" })],
     () => "fresh",
@@ -6883,6 +6943,15 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   );
   const chief = chiefWidget.render(100);
   assert.doesNotMatch(chief.join("\n"), /\+12 -3|\*/);
+  const switchedChief = createSupervisionWidget(
+    () => [lead({ lead: "git-lead", branch: "feat/git" })],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    () => switchedSummary,
+  ).render(120);
+  assert.doesNotMatch(switchedChief.join("\n"), /fix\/recovery|~\+12 -3|↪|\*/);
   const ordinary = renderSupervisionLeads(snapshot, 100, { role: "manager" });
   assert.doesNotMatch(ordinary.join("\n"), /\+12 -3|\*/);
 });

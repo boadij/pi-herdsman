@@ -1,12 +1,193 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
 
 const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
+const { writeProjectAssignment } = await import("../supervision.ts");
+
+const lifecycleStop = "stop after assignment publication";
+const testSha = (letter: string) => letter.repeat(40);
+
+function baselineLifecycle(options: {
+  reused?: boolean;
+  resume?: boolean;
+  managerHead?: string;
+  worktreeHead?: string;
+  mergeBases?: string[];
+  savedBaseline?: string;
+}) {
+  const repoKey = realFs.realpathSync(process.cwd());
+  const managerCheckout = repoKey;
+  const worktreePath = join(tmpdir(), `project-${randomUUID()}`);
+  mkdirSync(worktreePath);
+  const workspaceId = `workspace-${randomUUID()}`;
+  const assignments = join(tmpdir(), `assignments-${randomUUID()}`);
+  const assignmentRoot = join(assignments, "root");
+  mkdirSync(assignmentRoot, { recursive: true });
+  const branch = "feature/baseline";
+  const manager = {
+    repoKey,
+    workspaceId: WORKSPACE,
+    socket: "/test-socket",
+    group: null,
+    leaseId: randomUUID(),
+    piSessionId: randomUUID(),
+  };
+  const gitCalls: { args: string[]; cwd?: string }[] = [];
+  let published: any;
+  const current = options.resume
+    ? {
+        version: 2 as const,
+        id: randomUUID(),
+        repoKey,
+        branch,
+        text: "existing task",
+        checkoutPath: realFs.realpathSync(worktreePath),
+        gitBaselineSha: options.savedBaseline,
+      }
+    : undefined;
+  const topology = {
+    source: {
+      repo_key: repoKey,
+      repo_name: "project",
+      source_workspace_id: WORKSPACE,
+      source_checkout_path: managerCheckout,
+    },
+    worktrees:
+      options.reused || options.resume
+        ? [{ path: worktreePath, branch, is_linked_worktree: true }]
+        : [],
+  };
+  const runtime = createLeadProjectRuntime({
+    pi: {
+      exec: async (command: string, args: string[], execOptions: any) => {
+        if (command === "herdr") {
+          const result =
+            args[0] === "worktree" && args[1] === "list"
+              ? topology
+              : args[0] === "workspace" && args[1] === "get"
+                ? { workspace: { workspace_id: WORKSPACE } }
+                : {};
+          return {
+            stdout: JSON.stringify({ id: AGENT_ID, result }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        gitCalls.push({ args, cwd: execOptions?.cwd });
+        let stdout = "";
+        if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
+          stdout = managerCheckout;
+        else if (args[0] === "rev-parse" && args.includes("--git-dir"))
+          stdout = repoKey;
+        else if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
+          stdout = repoKey;
+        else if (args[0] === "symbolic-ref") stdout = `${branch}\n`;
+        else if (args[0] === "rev-parse" && args.includes("HEAD^{commit}"))
+          stdout = `${execOptions?.cwd === managerCheckout ? options.managerHead : options.worktreeHead}\n`;
+        else if (args[0] === "merge-base")
+          stdout = `${(options.mergeBases ?? []).join("\n")}\n`;
+        return { stdout, stderr: "", code: 0 };
+      },
+    } as any,
+    leadRuntime: { managerLease: { descriptor: manager } } as any,
+    managerLease: () => ({ descriptor: manager }),
+    currentManager: async () => manager,
+    sameManagerDescriptor: (a: any, b: any) =>
+      a.piSessionId === b.piSessionId && a.leaseId === b.leaseId,
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: WORKSPACE,
+      worktrees: topology.worktrees,
+    }),
+    supervisionRuntime: () => ({ root: assignmentRoot, assignments }),
+    readProjectAssignment: () => current,
+    listProjectAssignments: () => (current ? [current] : []),
+    reconcileProjectAssignments: async () => {},
+    runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list") return topology;
+      if (args[0] === "workspace" && args[1] === "get")
+        return { workspace: { workspace_id: WORKSPACE } };
+      if (args[0] === "worktree" && args[1] === "create")
+        return {
+          workspace: { workspace_id: workspaceId },
+          root_pane: { pane_id: "pane" },
+          tab: { tab_id: "tab" },
+          worktree: { path: worktreePath, branch },
+        };
+      if (args[0] === "worktree" && args[1] === "open")
+        return {
+          workspace: { workspace_id: workspaceId },
+          root_pane: { pane_id: "pane" },
+          tab: { tab_id: "tab" },
+          worktree: { path: worktreePath, branch },
+        };
+      throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
+    },
+    herdrSessionSnapshot: async () => {
+      throw new Error(lifecycleStop);
+    },
+    liveAgent: async () => [],
+    messageLimits: async () => ({
+      inline: { bytes: 1000 },
+      mailbox: { bytes: 1000 },
+    }),
+    prepareMessageInput: (text: string) => ({ text, resultBindings: [] }),
+    resolveMessageFiles: () => [],
+    persistRequiredEvidenceSnapshot: () => ({
+      id: "brief",
+      name: "project-brief.md",
+      sourceAssignmentId: "assignment",
+      path: "/brief",
+      sha256: "a".repeat(64),
+    }),
+    persistRequiredTextFiles: () => [],
+    withProjectWorkLock: (_key: string, operation: () => unknown) =>
+      operation(),
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => unknown,
+    ) => operation(),
+    writeProjectAssignment: (_runtime: unknown, assignment: any) => {
+      published = assignment;
+    },
+    appendDurableError: () => {},
+  } as any);
+  if (current)
+    writeProjectAssignment(
+      { root: assignmentRoot, assignments } as any,
+      current,
+    );
+  const ctx = fakeContext() as any;
+  ctx.cwd = managerCheckout;
+  return {
+    branch,
+    manager,
+    managerCheckout,
+    worktreePath,
+    workspaceId,
+    gitCalls,
+    get published() {
+      return published;
+    },
+    runtime,
+    ctx,
+    activate: (signal = new AbortController().signal) =>
+      runtime.activateProjectLead(
+        options.resume
+          ? { action: "resume", branch }
+          : { action: "delegate", task: "work", branch },
+        ctx,
+        signal,
+      ),
+  };
+}
 
 test("Manager required-evidence removal is exact, assignment-scoped, and fail-closed", async () => {
   const manager = {
@@ -310,6 +491,75 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   );
   assert.deepEqual(calls[0]?.options, { signal });
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
+});
+
+test("new delegate worktree pins its verified HEAD without probing merge-base", async () => {
+  const worktreeHead = testSha("a");
+  const fixture = baselineLifecycle({ worktreeHead });
+  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
+  assert.equal(fixture.published?.gitBaselineSha, worktreeHead);
+  assert.equal(
+    fixture.published?.checkoutPath,
+    realFs.realpathSync(fixture.worktreePath),
+  );
+  assert.equal(
+    fixture.gitCalls.some(({ args }) => args[0] === "merge-base"),
+    false,
+  );
+  assert.ok(
+    fixture.gitCalls.some(
+      ({ args, cwd }) =>
+        args.includes("HEAD^{commit}") && cwd === fixture.worktreePath,
+    ),
+  );
+});
+
+test("reused matching worktree pins its unique manager/worktree merge-base", async () => {
+  const managerHead = testSha("b");
+  const worktreeHead = testSha("c");
+  const mergeBase = testSha("d");
+  const fixture = baselineLifecycle({
+    reused: true,
+    managerHead,
+    worktreeHead,
+    mergeBases: [mergeBase],
+  });
+  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
+  assert.deepEqual(
+    fixture.gitCalls.find(({ args }) => args[0] === "merge-base"),
+    {
+      args: ["merge-base", "--all", managerHead, worktreeHead],
+      cwd: fixture.worktreePath,
+    },
+  );
+  assert.equal(fixture.published?.gitBaselineSha, mergeBase);
+  assert.deepEqual(
+    fixture.gitCalls.find(({ args }) => args[0] === "merge-base"),
+    {
+      args: ["merge-base", "--all", managerHead, worktreeHead],
+      cwd: fixture.worktreePath,
+    },
+  );
+});
+
+test("resume preserves its stored baseline and skips capture probes when Manager HEAD differs", async () => {
+  const storedBaseline = testSha("e");
+  const fixture = baselineLifecycle({
+    resume: true,
+    savedBaseline: storedBaseline,
+    managerHead: testSha("f"),
+    worktreeHead: testSha("a"),
+  });
+  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
+  assert.equal(fixture.published, undefined);
+  assert.equal(
+    fixture.gitCalls.some(({ args }) => args[0] === "merge-base"),
+    false,
+  );
+  assert.equal(
+    fixture.gitCalls.some(({ args }) => args.includes("HEAD^{commit}")),
+    false,
+  );
 });
 
 test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {
