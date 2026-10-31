@@ -17,6 +17,56 @@ const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 
+test("scheduled peer inbox drain requires valid peer presence", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/unused-scheduler-test-socket";
+
+  try {
+    for (const valid of [false, true]) {
+      let peerDrains = 0;
+      const peerRuntime = {};
+      const context = fakeContext();
+      const runtime = createLeadInboxRuntime({
+        leadRuntime: {
+          chiefMode: "inactive",
+          sessionGeneration: 0,
+          chiefModeGeneration: 0,
+        },
+        activeRole: () => "lead",
+        controllerScope: { kind: "root" },
+        supervisionRuntime: () => ({}),
+        peerRuntime: () => peerRuntime,
+        pi: {},
+        managerDiagnostic: () => {},
+        managerDiagnosticEvents: new Set(),
+        listChiefMessagePaths: () => [],
+        drainCoordinationInbox: async (options: { runtime: unknown }) => {
+          if (options.runtime === peerRuntime) peerDrains++;
+          return 0;
+        },
+        currentPeerPresenceValid: async () => valid,
+        drainProjectMessages: async () => 0,
+      } as any);
+
+      try {
+        runtime.beginSession();
+        runtime.start(context as any);
+        await flush();
+        t.mock.timers.tick(500);
+        await flush();
+        assert.equal(peerDrains, valid ? 2 : 0);
+      } finally {
+        runtime.beginShutdown();
+        runtime.shutdown();
+      }
+    }
+  } finally {
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
+
 test("ordinary Lead peer reconciliation starts automatically", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const previousSocket = process.env.HERDR_SOCKET_PATH;
