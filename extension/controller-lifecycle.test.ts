@@ -1737,7 +1737,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     {
       type: "custom",
       customType: "pi-herdsman-result-ref",
-      data: { ref: resultSemanticRef, canonicalRef: resultCanonicalRef },
+      data: {
+        ref: resultSemanticRef,
+        canonicalRef: resultCanonicalRef,
+        requesterSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      },
     },
   ];
   const context = fakeAgentContext(contextEntries);

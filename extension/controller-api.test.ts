@@ -7705,6 +7705,15 @@ test("semantic result refs attach persisted output and preserve canonical file r
   realFs.writeFileSync(resultFile, resultText, "utf8");
   const entries: unknown[] = [
     {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: {
+        ref: "result:implementation#1",
+        canonicalRef: canonical,
+        requesterSessionId: LEAD_SESSION_ID,
+      },
+    },
+    {
       customType: "pi-herdsman-agent-result",
       details: {
         agentLabel: "implementation",
@@ -7712,6 +7721,7 @@ test("semantic result refs attach persisted output and preserve canonical file r
         requestId,
         resultRef: canonical,
         status: "completed",
+        ownerSessionId: LEAD_SESSION_ID,
       },
     },
   ];
@@ -11976,6 +11986,7 @@ test("registered lead exposes only explicit live controls", async () => {
       requestId: oversizedRequestId,
       resultRef: resultRef(oversizedRequestId),
       status: "completed",
+      ownerSessionId: LEAD_SESSION_ID,
     },
   });
   const requestsBeforeOversizedSteer = realFs

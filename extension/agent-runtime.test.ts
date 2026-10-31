@@ -101,6 +101,7 @@ const {
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
   resolveMessageFiles,
+  importResultBindings,
   statusBreadcrumb,
   visibleAgentSnapshots,
   validateIdentity,
@@ -1889,7 +1890,11 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
     const resultEntry = {
       type: "custom",
       customType: "pi-herdsman-result-ref",
-      data: { ref: semanticRef, canonicalRef },
+      data: {
+        ref: semanticRef,
+        canonicalRef,
+        requesterSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      },
     };
     const branch: unknown[] = [
       resultEntry,
@@ -4471,6 +4476,92 @@ test("copied branch result bindings do not authorize foreign-root reads", () => 
   }
 });
 
+test("files reject copied foreign-session results and accept same-root publications", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const foreignSessionId = randomUUID();
+  const semantic = `result:files-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(canonicalRef, "private result\n");
+  const copied = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: { ref: semantic, canonicalRef, requesterSessionId: LEAD_SESSION_ID },
+  };
+  const context = fakeAgentContext([copied]);
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => foreignSessionId,
+  };
+  const previousRoot = process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+  try {
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = foreignSessionId;
+    publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
+    assert.throws(() => resolveMessageFiles(context, [semantic], "files"));
+    context.sessionManager = {
+      ...context.sessionManager,
+      getSessionId: () => LEAD_SESSION_ID,
+    };
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
+    assert.deepEqual(resolveMessageFiles(context, [semantic], "files"), [
+      { ref: semantic, canonicalRef },
+    ]);
+  } finally {
+    if (previousRoot === undefined)
+      delete process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+    else process.env.PI_HERDSMAN_ROOT_SESSION_ID = previousRoot;
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("files reject copied mappings that conflict with same-root publications", () => {
+  const branchCanonicalRef = resultRef(randomUUID());
+  const publishedCanonicalRef = resultRef(randomUUID());
+  const semantic = `result:files-conflict-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const branchArtifact = persistPeerResultArtifact(
+    branchCanonicalRef,
+    "copied result\n",
+  );
+  const publishedArtifact = persistPeerResultArtifact(
+    publishedCanonicalRef,
+    "published result\n",
+  );
+  const copied = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: {
+      ref: semantic,
+      canonicalRef: branchCanonicalRef,
+      requesterSessionId: randomUUID(),
+    },
+  };
+  const context = fakeAgentContext([copied]);
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => LEAD_SESSION_ID,
+  };
+  const previousRoot = process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+  try {
+    process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
+    publishScopedResult(label, 1, publishedCanonicalRef, LEAD_SESSION_ID);
+    assert.throws(() => resolveMessageFiles(context, [semantic], "files"));
+  } finally {
+    if (previousRoot === undefined)
+      delete process.env.PI_HERDSMAN_ROOT_SESSION_ID;
+    else process.env.PI_HERDSMAN_ROOT_SESSION_ID = previousRoot;
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(branchArtifact, { force: true });
+    realFs.rmSync(publishedArtifact, { force: true });
+  }
+});
+
 test("direct completion result access requires matching owner provenance", () => {
   const requestId = randomUUID();
   const canonicalRef = resultRef(requestId);
@@ -4691,7 +4782,17 @@ test("fresh foreign-root recipient reads an accepted result after producer clean
     `producer-${randomUUID().slice(0, 8)}`,
   );
   const recipientMailbox = setAgentEnvironment("fresh-result-recipient");
-  const recipient = fakePi();
+  const foreignRoot = randomUUID();
+  const copiedBinding = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: {
+      ref: semantic,
+      canonicalRef,
+      requesterSessionId: LEAD_SESSION_ID,
+    },
+  };
+  const recipient = fakePi({ entries: [copiedBinding] });
   registerExtension!(recipient.pi as never);
   const context = fakeAgentContext(recipient.entries);
   try {
@@ -4724,7 +4825,6 @@ test("fresh foreign-root recipient reads an accepted result after producer clean
     resetAgentMailbox(producerMailbox);
     assert.equal(readAgentState(producerMailbox), undefined);
 
-    const foreignRoot = randomUUID();
     process.env.PI_HERDSMAN_ROOT_SESSION_ID = foreignRoot;
     writeAgentState(recipientMailbox, {
       ...managedState("fresh-result-recipient"),
@@ -4737,6 +4837,23 @@ test("fresh foreign-root recipient reads an accepted result after producer clean
       name: "verified transferred result",
       result: { ref: semantic, canonicalRef },
     } as const;
+    importResultBindings(
+      recipient.pi as never,
+      context,
+      [{ ref: semantic, canonicalRef }],
+      "files",
+    );
+    assert.equal(
+      recipient.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-result-ref" &&
+          entry.data?.ref === semantic &&
+          entry.data?.requesterSessionId ===
+            context.sessionManager.getSessionId(),
+      ),
+      true,
+      "accepted transfer must add requester-scoped authorization despite copied metadata",
+    );
     const assignment: RequestRecord = {
       version: 5,
       runId: state.runId,

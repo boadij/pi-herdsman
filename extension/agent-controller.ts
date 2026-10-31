@@ -65,6 +65,7 @@ import {
 } from "./presentation.ts";
 import {
   publishScopedResult,
+  resolveScopedResult,
   parseSemanticResultRef,
   isResultBinding,
   resultRef,
@@ -667,18 +668,61 @@ export function resolveMessageFiles(
         `Result ref ${file} is ambiguous in the accepted evidence scope`,
         operation,
       );
-    if (acceptedResults.length === 1) return acceptedResults[0]!.result;
     if (!parseSemanticResultRef(file))
       fail(
         "invalid_request",
         `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
         operation,
       );
-    const refs = canonicalRefsForSemanticResult(
-      ctx.sessionManager.getBranch(),
+    const requesterSessionId = ctx.sessionManager.getSessionId();
+    const branch = ctx.sessionManager.getBranch();
+    const refs = verifiedBranchResultMappings(
+      branch,
+      file,
+      requesterSessionId,
+      operation,
+    );
+    const branchMappings = canonicalRefsForSemanticResult(
+      branch,
       file,
       operation,
     );
+    if (branchMappings.size > 1)
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} resolves to conflicting canonical results`,
+        operation,
+      );
+    for (const accepted of acceptedResults)
+      refs.add(accepted.result.canonicalRef);
+    const published = resolveScopedResult(file);
+    if (published === "invalid")
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} has an invalid publication`,
+        operation,
+      );
+    if (published && published !== "reserved") {
+      const rootSessionId =
+        process.env.PI_HERDSMAN_ROOT_SESSION_ID || requesterSessionId;
+      if (published.rootSessionId === rootSessionId || acceptedResults.length)
+        refs.add(published.canonicalRef);
+    }
+    if (
+      refs.size &&
+      [...branchMappings].some((canonicalRef) => !refs.has(canonicalRef))
+    )
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} resolves to conflicting canonical results`,
+        operation,
+      );
+    if (acceptedResults.length > 1)
+      fail(
+        "target_ambiguous",
+        `Result ref ${file} is ambiguous in the accepted evidence scope`,
+        operation,
+      );
     if (!refs.size)
       fail(
         "target_not_found",
@@ -1805,7 +1849,20 @@ export function importResultBindings(
         `Result ref ${binding.ref} conflicts with the current branch`,
         operation,
       );
-    if (!existing.size) pending.set(binding.ref, binding.canonicalRef);
+    const requesterSessionId = ctx.sessionManager.getSessionId();
+    if (!validId(requesterSessionId))
+      fail(
+        "internal_failure",
+        "Requester session identity is invalid",
+        operation,
+      );
+    const authorized = verifiedBranchResultMappings(
+      ctx.sessionManager.getBranch(),
+      binding.ref,
+      requesterSessionId,
+      operation,
+    );
+    if (!authorized.size) pending.set(binding.ref, binding.canonicalRef);
   }
   const requesterSessionId = ctx.sessionManager.getSessionId();
   if (!validId(requesterSessionId))
@@ -4740,34 +4797,7 @@ export function createAgentController(
     context: ExtensionContext,
     files: readonly string[] | undefined,
     operation: string,
-  ) =>
-    (files ?? []).map((file) => {
-      if (!file.startsWith("result:") || !file.includes("#")) return file;
-      if (!parseSemanticResultRef(file))
-        fail(
-          "invalid_request",
-          `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
-          operation,
-        );
-      const refs = canonicalRefsForSemanticResult(
-        context.sessionManager.getBranch(),
-        file,
-        operation,
-      );
-      if (!refs.size)
-        fail(
-          "target_not_found",
-          `Result ref ${file} is not available on the current branch`,
-          operation,
-        );
-      if (refs.size !== 1)
-        fail(
-          "target_ambiguous",
-          `Result ref ${file} resolves to conflicting canonical results`,
-          operation,
-        );
-      return { ref: file, canonicalRef: refs.values().next().value! };
-    });
+  ) => resolveMessageFiles(context, files, operation);
   const controlAction = async (
     context: ExtensionContext,
     params: Extract<
