@@ -66,6 +66,7 @@ import {
   sameObservedSessionPath,
   resolveAssignmentCheckout,
   verifiedHerdrAgent,
+  worktreeGroupScopeFromTopology,
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import { readConfig } from "./config.ts";
@@ -570,6 +571,8 @@ type LeadSupervisionHost = {
     alreadyLocked?: boolean,
     onlyBranch?: string,
     retryLockContention?: boolean,
+    expectedAssignmentId?: string,
+    knownScope?: WorktreeGroupScope,
   ): Promise<void>;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
@@ -598,6 +601,7 @@ type LeadSupervisionHost = {
     workspaceCwds: ReadonlyMap<string, string>,
     signal?: AbortSignal,
     workspaces?: readonly HerdrRecord[],
+    topology?: HerdrRecord,
   ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
   worktreeGroupScope: typeof import("./herdr.ts").worktreeGroupScope;
 };
@@ -3624,9 +3628,11 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
       ChiefDescriptor,
       "piSessionId" | "piSessionFile" | "paneId" | "tabId" | "workspaceId"
     >,
+    knownAgents?: HerdrRecord[],
   ): Promise<HerdrRecord | undefined> =>
     verifiedHerdrAgent(descriptor, {
-      listAgents: async () => (await host.listAgents(ctx)).agents,
+      listAgents: async () =>
+        knownAgents ?? (await host.listAgents(ctx)).agents,
       getAgent: async (paneId) => (await host.getAgent(ctx, paneId))?.agent,
       expectedSession: host.expectedSession,
       isPiAgent: host.isPiAgent,
@@ -3665,6 +3671,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     suppliedAgents?: ManagedAgentSnapshotCollection,
     includeAll = false,
     classifyBuilds = false,
+    knownTopology?: HerdrRecord,
   ) => {
     if (host.activeRole() === "chief" && !includeAll) {
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
@@ -3686,27 +3693,34 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     if (host.activeRole() === "manager" && !includeAll) {
       const manager = await host.currentManager(ctx);
       if (!manager) throw new Error("Manager lease is no longer active");
-      const group = await host.worktreeGroupScope(
+      const topology = await host.runHerdr(
         host.pi,
         ctx,
+        ["worktree", "list", "--workspace", manager.workspaceId],
+        { signal: ctx.signal },
+      );
+      const group = worktreeGroupScopeFromTopology(
         manager.workspaceId,
-        ctx.signal,
+        topology,
       );
       if (group.repoKey !== manager.repoKey)
         throw new Error("Manager workspace is not the assigned project");
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
       const unverified: UnverifiedAssignedLead[] = [];
-      const [leads, topology] = await Promise.all([
-        directReports(ctx, suppliedInventory, suppliedAgents, incompatible, {
+      const inventory =
+        suppliedInventory ??
+        (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
+      const leads = await directReports(
+        ctx,
+        inventory,
+        suppliedAgents,
+        incompatible,
+        {
           unverified,
-        }),
-        host.runHerdr(
-          host.pi,
-          ctx,
-          ["worktree", "list", "--workspace", group.primaryWorkspaceId],
-          { signal: ctx.signal },
-        ),
-      ]);
+          group,
+          topology,
+        },
+      );
       if (
         topology?.source?.repo_key !== group.repoKey ||
         topology?.source?.source_workspace_id !== group.primaryWorkspaceId ||
@@ -3719,6 +3733,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           group.repoKey,
           manager.workspaceId,
           topology.source.source_checkout_path,
+          false,
+          undefined,
+          false,
+          undefined,
+          group,
         );
       const assignments = host.listProjectAssignments(
         host.supervisionRuntime(),
@@ -3881,6 +3900,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       workspaceCwds,
       ctx.signal,
       inventory.workspaces,
+      knownTopology,
     );
     const diagnostics = live.some(
       (agent: any) =>
@@ -3929,6 +3949,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     options?: {
       exactSession?: string;
       unverified?: UnverifiedAssignedLead[];
+      group?: import("./herdr.ts").WorktreeGroupScope;
+      topology?: HerdrRecord;
     },
   ) => {
     if (host.activeRole() === "manager" && !host.state.roleSuspended) {
@@ -3939,18 +3961,24 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         !host.sameManagerDescriptor(manager, host.state.managerLease.descriptor)
       )
         throw new Error("Manager lease is no longer active");
-      const scope = await host.worktreeGroupScope(
-        host.pi,
-        ctx,
-        manager.workspaceId,
-        ctx.signal,
-      );
+      const scope =
+        options?.group ??
+        (await host.worktreeGroupScope(
+          host.pi,
+          ctx,
+          manager.workspaceId,
+          ctx.signal,
+        ));
+      const inventory =
+        suppliedInventory ??
+        (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
       const snapshot = await loadSupervisionSnapshot(
         ctx,
-        suppliedInventory,
+        inventory,
         suppliedAgents,
         true,
         true,
+        options?.topology,
       );
       for (const report of snapshot.incompatible ?? [])
         if (
@@ -3974,7 +4002,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const candidates = options?.exactSession
         ? snapshot.leads.filter((lead) => lead.lead === options.exactSession)
         : snapshot.leads;
-      const leads = await Promise.all(
+      const initial = await Promise.all(
         candidates.map(async (lead) => {
           const unverified = (
             status: UnverifiedAssignedLead["status"],
@@ -3984,6 +4012,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               options?.unverified?.push({ lead: lead.lead, status, issue });
             return undefined;
           };
+          let verificationStage: "identity" | "repository" = "identity";
           try {
             const descriptor = {
               piSessionId: lead.lead,
@@ -3992,38 +4021,84 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               tabId: lead.tabId,
               workspaceId: lead.workspaceId,
             };
-            const agent = await host.remoteChiefAgent(ctx, descriptor);
+            const agent = await host.remoteChiefAgent(
+              ctx,
+              descriptor,
+              inventory.agents,
+            );
             if (typeof agent?.cwd !== "string" || !agent.cwd)
               return unverified(
                 "unknown",
                 "Assigned Lead identity could not be verified",
               );
+            verificationStage = "repository";
             const repository = await localRepositoryScope(
               host.pi,
               { ...ctx, cwd: agent.cwd },
               lead.workspaceId,
               ctx.signal,
+              options?.topology,
             );
             if (repository.repoKey !== manager.repoKey)
               return unverified(
                 "conflict",
                 "Assigned Lead repository does not match the project",
               );
-            const current = await host.remoteChiefAgent(ctx, descriptor);
-            if (!current || current.cwd !== agent.cwd)
-              return unverified(
-                "unknown",
-                "Assigned Lead identity changed during verification",
-              );
-            return lead;
+            return { lead, cwd: agent.cwd };
           } catch (error) {
             if (ctx.signal?.aborted) throw ctx.signal.reason;
             if (error instanceof Error && error.name === "AbortError")
               throw error;
             return unverified(
               "unknown",
-              "Assigned Lead verification unavailable",
+              verificationStage === "identity"
+                ? "Assigned Lead identity verification unavailable"
+                : "Assigned Lead repository verification unavailable",
             );
+          }
+        }),
+      );
+      const pending = initial.filter((item) => item !== undefined) as {
+        lead: (typeof candidates)[number];
+        cwd: string;
+      }[];
+      const finalAgents = pending.length
+        ? (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal)).agents
+        : [];
+      const leads = await Promise.all(
+        pending.map(async ({ lead, cwd }) => {
+          try {
+            const current = await host.remoteChiefAgent(
+              ctx,
+              {
+                piSessionId: lead.lead,
+                piSessionFile: lead.piSessionFile,
+                paneId: lead.paneId,
+                tabId: lead.tabId,
+                workspaceId: lead.workspaceId,
+              },
+              finalAgents,
+            );
+            return current?.cwd === cwd
+              ? lead
+              : (sessions.has(lead.lead) &&
+                  options?.unverified?.push({
+                    lead: lead.lead,
+                    status: "unknown",
+                    issue: "Assigned Lead identity changed during verification",
+                  }),
+                undefined);
+          } catch (error) {
+            if (ctx.signal?.aborted) throw ctx.signal.reason;
+            if (error instanceof Error && error.name === "AbortError")
+              throw error;
+            if (sessions.has(lead.lead))
+              options?.unverified?.push({
+                lead: lead.lead,
+                status: "unknown",
+                issue: "Assigned Lead final identity unavailable",
+              });
+            return undefined;
           }
         }),
       );
@@ -8197,14 +8272,13 @@ export function createLeadRoleTransitions(
     repoKey: string,
     primaryWorkspaceId: string,
     sourceCheckoutPath: string,
+    knownScope?: WorktreeGroupScope,
   ) => {
     if (!isAbsolute(sourceCheckoutPath)) return undefined;
     try {
-      const scope = await host.worktreeGroupScope(
-        ctx,
-        primaryWorkspaceId,
-        ctx.signal,
-      );
+      const scope =
+        knownScope ??
+        (await host.worktreeGroupScope(ctx, primaryWorkspaceId, ctx.signal));
       if (scope.repoKey !== repoKey) return undefined;
       const rootResult = await host.pi.exec(
         "git",
@@ -8247,6 +8321,7 @@ export function createLeadRoleTransitions(
     onlyBranch?: string,
     retryLockContention = false,
     expectedAssignmentId?: string,
+    knownScope?: WorktreeGroupScope,
   ): Promise<void> => {
     const manager = await currentManager(ctx);
     if (
@@ -8264,6 +8339,7 @@ export function createLeadRoleTransitions(
       repoKey,
       primaryWorkspaceId,
       sourceCheckoutPath,
+      knownScope,
     );
     if (!initialInventory) return;
     const knownSessionCheckoutPath = (

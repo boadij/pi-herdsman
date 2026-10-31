@@ -3991,21 +3991,8 @@ async function runManagerStartupScenario(
       removalCommands.push(args);
       return respond({});
     }
-    if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
-      return respond({
-        workspace: {
-          workspace_id: args[2],
-          worktree: {
-            repo_key: repoKey,
-            is_linked_worktree: args[2] === childWorkspace,
-            checkout_path: args[2] === childWorkspace ? childPath : gitCwd,
-          },
-        },
-      });
-    if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
-      worktreeListCalls++;
-      if (args.includes("--workspace")) projectTopologyListCalls++;
-      if (args.includes("--cwd") && args.includes(childPath)) {
+    if (command === "herdr" && args[0] === "workspace" && args[1] === "get") {
+      if (args[2] === childWorkspace) {
         assignedLeadRepositoryScopeCalls++;
         if (
           failNextAssignedLeadRepositoryScope ||
@@ -4013,9 +4000,24 @@ async function runManagerStartupScenario(
         ) {
           failNextAssignedLeadRepositoryScope = false;
           failAssignedLeadRepositoryScopeAt = undefined;
-          return respond({ source: {}, worktrees: [] });
+          return respond({ workspace: {} });
         }
       }
+      return respond({
+        workspace: {
+          workspace_id: args[2],
+          worktree: {
+            repo_key: repoKey,
+            repo_root: gitCwd,
+            is_linked_worktree: args[2] === childWorkspace,
+            checkout_path: args[2] === childWorkspace ? childPath : gitCwd,
+          },
+        },
+      });
+    }
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+      worktreeListCalls++;
+      if (args.includes("--workspace")) projectTopologyListCalls++;
       return respond({
         source:
           mode === "invalid-topology" &&
@@ -4024,12 +4026,14 @@ async function runManagerStartupScenario(
                 source_workspace_id: "wrong-workspace",
                 repo_key: "wrong-repository",
                 repo_name: "project",
+                repo_root: gitCwd,
                 source_checkout_path: gitCwd,
               }
             : {
                 source_workspace_id: WORKSPACE,
                 repo_key: repoKey,
                 repo_name: "project",
+                repo_root: gitCwd,
                 source_checkout_path: gitCwd,
               },
         worktrees: [
@@ -5458,8 +5462,8 @@ async function runManagerStartupScenario(
         );
         assert.equal(
           projectTopologyListCalls,
-          topologyBeforeList + 4,
-          "one Manager snapshot performs its existing scope and topology reads",
+          topologyBeforeList + 1,
+          "one Manager snapshot shares its project topology",
         );
 
         failNextAssignedLeadRepositoryScope = true;
@@ -5499,7 +5503,7 @@ async function runManagerStartupScenario(
           assignedLeadRepositoryScopeCalls,
           repositoryBeforeRecovery + 1,
         );
-        assert.equal(projectTopologyListCalls, topologyBeforeRecovery + 4);
+        assert.equal(projectTopologyListCalls, topologyBeforeRecovery + 1);
 
         const repositoryBeforeMessage = assignedLeadRepositoryScopeCalls;
         await pi.tools

@@ -23,6 +23,7 @@ import {
   listAllHerdrAgents,
   herdrSessionSnapshot,
   worktreeGroupScope,
+  worktreeGroupScopeFromTopology,
   localRepositoryScope,
   watchHerdrLifecycle,
   leadMetadataArgs,
@@ -6468,6 +6469,20 @@ test("worktree group scope derives project before linked worktrees exist", async
     ...primary,
     workspaceIds: ["root", "linked"],
   });
+  assert.deepEqual(
+    worktreeGroupScopeFromTopology("linked", {
+      source: {
+        repo_key: "repo-key",
+        repo_name: "project",
+        source_workspace_id: "root",
+      },
+      worktrees: [
+        { open_workspace_id: "root" },
+        { open_workspace_id: "linked" },
+      ],
+    }),
+    linked,
+  );
   assert.notEqual(linked.primaryWorkspaceId, "linked"); // /manager requires the primary workspace.
   assert.deepEqual(calls, [
     ["worktree", "list", "--workspace", "root"],
@@ -6645,6 +6660,95 @@ test("local repository discovery ignores inherited topology but checks explicit 
     assert.equal(
       (await localRepositoryScope(pi, { cwd } as any, "w")).isPrimary,
       false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("supplied project topology skips only the redundant local worktree list", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-known-topology-"));
+  try {
+    const checkout = join(root, "checkout");
+    const common = join(checkout, ".git");
+    fs.mkdirSync(common, { recursive: true });
+    const otherCommon = join(root, "other", ".git");
+    fs.mkdirSync(otherCommon, { recursive: true });
+    let actualCommon = common;
+    let membership: any = {
+      repo_key: common,
+      checkout_path: checkout,
+      is_linked_worktree: false,
+    };
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (command: string, args: string[]) => {
+        calls.push([command, ...args]);
+        if (command === "git") {
+          return {
+            code: 0,
+            stdout:
+              args[2] === "--show-toplevel"
+                ? checkout
+                : args[2] === "--git-dir"
+                  ? actualCommon
+                  : actualCommon,
+            stderr: "",
+          };
+        }
+        const result =
+          args[0] === "workspace"
+            ? { workspace: { workspace_id: "w", worktree: membership } }
+            : {
+                source: { repo_key: common, repo_name: "repo" },
+                worktrees: [],
+              };
+        return {
+          code: 0,
+          stdout: JSON.stringify({ id: 1, result }),
+          stderr: "",
+        };
+      },
+    } as any;
+    const topology = {
+      source: { repo_key: common, repo_name: "repo" },
+      worktrees: [],
+    };
+    await localRepositoryScope(
+      pi,
+      { cwd: checkout } as any,
+      "w",
+      undefined,
+      topology,
+    );
+    assert.equal(
+      calls.some((call) => call.join(" ").includes("worktree list")),
+      false,
+    );
+    assert.equal(calls.filter((call) => call[1] === "workspace").length, 1);
+
+    actualCommon = otherCommon;
+    await assert.rejects(
+      localRepositoryScope(
+        pi,
+        { cwd: checkout } as any,
+        "w",
+        undefined,
+        topology,
+      ),
+      /repository does not match/,
+    );
+    actualCommon = common;
+    membership = { ...membership, checkout_path: join(root, "other") };
+    await assert.rejects(
+      localRepositoryScope(
+        pi,
+        { cwd: checkout } as any,
+        "w",
+        undefined,
+        topology,
+      ),
+      /association/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
