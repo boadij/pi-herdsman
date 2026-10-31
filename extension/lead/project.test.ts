@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
+import { sameDirectory } from "../herdr.ts";
 import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
 
 const { createLeadProjectRuntime, parseGitWorktreeInventory } =
@@ -499,8 +500,8 @@ test("new delegate worktree pins its verified HEAD without probing merge-base", 
   await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
   assert.equal(fixture.published?.gitBaselineSha, worktreeHead);
   assert.equal(
-    fixture.published?.checkoutPath,
-    realFs.realpathSync(fixture.worktreePath),
+    sameDirectory(fixture.published!.checkoutPath, fixture.worktreePath),
+    true,
   );
   assert.equal(
     fixture.gitCalls.some(({ args }) => args[0] === "merge-base"),
