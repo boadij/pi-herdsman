@@ -3656,6 +3656,7 @@ export type SupervisionSnapshot = {
   work?: ProjectWorkSnapshot[];
   openWorkspaces?: readonly OpenProjectWorkspace[];
   diagnostics?: string[];
+  managerCheckoutPath?: string;
 };
 export type OpenProjectWorkspace = Readonly<{
   workspaceId: string;
@@ -3676,6 +3677,7 @@ export type ProjectWorkSnapshot = Readonly<{
   runtimeState?: RuntimeState;
   task?: string;
   issue?: string;
+  checkoutPath?: string;
 }>;
 export function projectTaskSummary(text: string): string | undefined {
   const task = text
@@ -3701,6 +3703,7 @@ export function projectWorkSnapshot(options: {
     string,
     Readonly<{
       status: "matched" | "unknown" | "conflict";
+      path?: string;
       worktree?: Readonly<{
         branch?: string;
         open_workspace_id?: string | null;
@@ -3763,6 +3766,11 @@ export function projectWorkSnapshot(options: {
       branch: assignment.branch,
       session: assignment.id,
       status,
+      ...(placement?.status === "matched" &&
+      typeof placement.path === "string" &&
+      (status === "active" || status === "paused")
+        ? { checkoutPath: placement.path }
+        : {}),
       ...(runtimeState ? { runtimeState } : {}),
       ...(task ? { task } : {}),
       ...(issue ? { issue } : {}),

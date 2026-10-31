@@ -130,6 +130,7 @@ import {
   type FocusIntent,
   type BreadcrumbSegment,
   type StatusSnapshot,
+  type GitChangeSummary,
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
@@ -3804,6 +3805,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       );
       return {
         project: group.repoName,
+        ...(typeof topology.source.source_checkout_path === "string"
+          ? { managerCheckoutPath: topology.source.source_checkout_path }
+          : {}),
         work: host.projectWorkSnapshot({
           assignments,
           worktrees: topology.worktrees,
@@ -4413,6 +4417,27 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let renderWidget: (() => void) | undefined;
   let widgetFocusInFlight = false;
   let supervisionWidgetGeneration = 0;
+  type CachedGitSummary = {
+    generation: string;
+    checkoutPath: string;
+    branch: string;
+    managerCheckoutPath: string;
+    managerHead: string;
+    leadHead: string;
+    summary: GitChangeSummary;
+  };
+  const gitSummaries = new Map<string, CachedGitSummary>();
+  let gitSampling: Promise<void> | undefined;
+  let gitLastAttemptAt = 0;
+  let gitAbort: AbortController | undefined;
+  const GIT_SAMPLE_INTERVAL_MS = 30_000;
+  const cancelGitSampling = (resetRate = true): void => {
+    gitAbort?.abort();
+    gitAbort = undefined;
+    gitSampling = undefined;
+    gitSummaries.clear();
+    if (resetRate) gitLastAttemptAt = 0;
+  };
 
   const generation = (ctx?: ExtensionContext): string =>
     [
@@ -4431,10 +4456,240 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     !snapshotKnown(ctx) ? "unavailable" : stale ? "stale" : "fresh";
   const supervisionStatus = status;
   const reset = (): void => {
+    cancelGitSampling();
     snapshot = host.activeRole() === "chief" ? { managers: [] } : { leads: [] };
     known = false;
     generationId = undefined;
     stale = false;
+  };
+  const startGitSampling = (
+    ctx: ExtensionContext,
+    value: SupervisionSnapshot,
+    expectedGeneration: string,
+  ): void => {
+    if (
+      host.activeRole() !== "manager" ||
+      host.state.roleSuspended ||
+      ctx.mode !== "tui" ||
+      !ctx.hasUI ||
+      uiContext !== ctx ||
+      !snapshotKnown(ctx) ||
+      !value.managerCheckoutPath ||
+      !host.state.managerLease ||
+      gitSampling ||
+      Date.now() - gitLastAttemptAt < GIT_SAMPLE_INTERVAL_MS
+    )
+      return;
+    const managerCheckoutPath = value.managerCheckoutPath;
+    const entries = host
+      .managerSupervisionItems(value)
+      .slice(0, 6)
+      .filter(
+        (item) =>
+          item.kind === "work" &&
+          (item.work.status === "active" || item.work.status === "paused") &&
+          !!item.work.checkoutPath,
+      );
+    if (!entries.length) {
+      gitSummaries.clear();
+      return;
+    }
+    gitLastAttemptAt = Date.now();
+    const abort = new AbortController();
+    gitAbort = abort;
+    const contextSignal = ctx.signal;
+    const abortFromContext = () => abort.abort(contextSignal?.reason);
+    contextSignal?.addEventListener("abort", abortFromContext, { once: true });
+    const overallTimeout = setTimeout(() => abort.abort(), 15_000);
+    overallTimeout.unref?.();
+    const previous = gitSummaries;
+    const run = async (): Promise<void> => {
+      const next = new Map<string, CachedGitSummary>();
+      const current = () =>
+        !abort.signal.aborted &&
+        uiContext === ctx &&
+        generation(ctx) === expectedGeneration &&
+        host.activeRole() === "manager" &&
+        !host.state.roleSuspended;
+      const git = async (cwd: string, args: string[]): Promise<string> => {
+        if (!current()) throw new Error("Git sampling cancelled");
+        const result = await host.pi.exec("git", args, {
+          cwd,
+          signal: abort.signal,
+          timeout: 3_000,
+        });
+        if (!current() || result.code !== 0 || result.killed)
+          throw new Error("Git observation unavailable");
+        return String(result.stdout ?? "");
+      };
+      const identity = async (cwd: string, expectedCommon: string) => {
+        const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+        const commonValue = (
+          await git(cwd, ["rev-parse", "--git-common-dir"])
+        ).trim();
+        const common = resolve(cwd, commonValue);
+        return (
+          sameDirectory(root, cwd) && sameDirectory(common, expectedCommon)
+        );
+      };
+      try {
+        if (
+          !(await identity(
+            managerCheckoutPath,
+            host.state.managerLease!.descriptor.repoKey,
+          ))
+        ) {
+          if (current()) gitSummaries.clear();
+          return;
+        }
+        const managerHead = (
+          await git(managerCheckoutPath, ["rev-parse", "--verify", "HEAD"])
+        ).trim();
+        if (!/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
+          if (current()) gitSummaries.clear();
+          return;
+        }
+        for (const item of entries) {
+          if (!current()) return;
+          if (item.kind !== "work") continue;
+          const work = item.work;
+          const checkoutPath = work.checkoutPath!;
+          try {
+            if (
+              !(await identity(
+                checkoutPath,
+                host.state.managerLease!.descriptor.repoKey,
+              ))
+            )
+              continue;
+            const status = (
+              await git(checkoutPath, [
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=normal",
+              ])
+            ).split("\0");
+            let headerEnd = 0;
+            const headers = new Map<string, string>();
+            while (
+              headerEnd < status.length &&
+              status[headerEnd]?.startsWith("# ")
+            ) {
+              const match = /^# (branch\.(?:head|oid)) (.*)$/u.exec(
+                status[headerEnd]!,
+              );
+              if (match) headers.set(match[1]!, match[2]!);
+              headerEnd++;
+            }
+            const leadHead = headers.get("branch.oid");
+            if (
+              headers.get("branch.head") !== work.branch ||
+              !leadHead ||
+              !/^[0-9a-f]{40,64}$/iu.test(leadHead)
+            )
+              continue;
+            const dirty = status
+              .slice(headerEnd)
+              .some((entry) => entry.length > 0);
+            const cached = previous.get(work.session);
+            let additions: number | undefined;
+            let deletions: number | undefined;
+            let changedFiles: number | undefined;
+            if (
+              cached &&
+              cached.generation === expectedGeneration &&
+              sameDirectory(cached.checkoutPath, checkoutPath) &&
+              cached.branch === work.branch &&
+              sameDirectory(cached.managerCheckoutPath, managerCheckoutPath) &&
+              cached.managerHead === managerHead &&
+              cached.leadHead === leadHead
+            ) {
+              ({ additions, deletions, changedFiles } = cached.summary);
+            } else {
+              try {
+                const output = await git(checkoutPath, [
+                  "--no-optional-locks",
+                  "diff",
+                  "--numstat",
+                  "-z",
+                  "--no-renames",
+                  `${managerHead}...${leadHead}`,
+                  "--",
+                ]);
+                const records = output.split("\0");
+                let added = 0,
+                  deleted = 0,
+                  files = 0,
+                  valid = !output || output.endsWith("\0");
+                for (const record of records) {
+                  if (!record) continue;
+                  const fields = record.split("\t", 3);
+                  if (fields.length !== 3 || !fields[2]) {
+                    valid = false;
+                    break;
+                  }
+                  files++;
+                  if (fields[0] === "-" && fields[1] === "-") continue;
+                  if (
+                    !/^\d+$/u.test(fields[0]!) ||
+                    !/^\d+$/u.test(fields[1]!)
+                  ) {
+                    valid = false;
+                    break;
+                  }
+                  added += Number(fields[0]);
+                  deleted += Number(fields[1]);
+                  if (
+                    !Number.isSafeInteger(added) ||
+                    !Number.isSafeInteger(deleted)
+                  ) {
+                    valid = false;
+                    break;
+                  }
+                }
+                if (valid) {
+                  additions = added;
+                  deletions = deleted;
+                  changedFiles = files;
+                }
+              } catch {
+                // A valid status observation remains useful when the optional diff fails.
+              }
+            }
+            next.set(work.session, {
+              generation: expectedGeneration,
+              checkoutPath,
+              branch: work.branch,
+              managerCheckoutPath,
+              managerHead,
+              leadHead,
+              summary: { dirty, additions, deletions, changedFiles },
+            });
+          } catch {
+            /* Optional Git telemetry must not affect supervision. */
+          }
+        }
+        if (!current()) return;
+        gitSummaries.clear();
+        for (const [session, result] of next) gitSummaries.set(session, result);
+        renderWidget?.();
+      } catch {
+        if (current()) gitSummaries.clear();
+        /* Baseline failure suppresses this optional sample only. */
+      }
+    };
+    const sampling = run().finally(() => {
+      clearTimeout(overallTimeout);
+      contextSignal?.removeEventListener("abort", abortFromContext);
+      if (gitSampling === sampling) {
+        gitSampling = undefined;
+        if (gitAbort === abort) gitAbort = undefined;
+      }
+    });
+    gitSampling = sampling;
   };
   const refreshOnce = async (ctx: ExtensionContext): Promise<void> => {
     if (
@@ -4466,6 +4721,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       generationId = currentGeneration;
       stale = false;
       renderOverview?.();
+      startGitSampling(ctx, value, currentGeneration);
     } catch {
       if (current()) stale = snapshotKnown(ctx);
     }
@@ -5407,6 +5663,39 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   widgetFocusInFlight = false;
                 });
             },
+            (work) => {
+              const currentSnapshot = snapshot as SupervisionSnapshot;
+              if (
+                status(ctx) !== "fresh" ||
+                !currentSnapshot.managerCheckoutPath ||
+                !host
+                  .managerSupervisionItems(currentSnapshot)
+                  .slice(0, 6)
+                  .some(
+                    (item) =>
+                      item.kind === "work" &&
+                      (item.work.status === "active" ||
+                        item.work.status === "paused") &&
+                      item.work.session === work.session &&
+                      item.work.branch === work.branch &&
+                      item.work.checkoutPath &&
+                      item.work.checkoutPath === work.checkoutPath,
+                  )
+              )
+                return undefined;
+              const cached = gitSummaries.get(work.session);
+              if (
+                !cached ||
+                cached.generation !== generation(ctx) ||
+                cached.branch !== work.branch ||
+                !work.checkoutPath ||
+                cached.checkoutPath !== work.checkoutPath ||
+                cached.managerCheckoutPath !==
+                  currentSnapshot.managerCheckoutPath
+              )
+                return undefined;
+              return cached.summary;
+            },
           );
         });
       } catch {
@@ -5415,6 +5704,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       }
     },
     removeWidget: (ctx: ExtensionContext) => {
+      cancelGitSampling();
       supervisionWidgetGeneration++;
       widgetFocusInFlight = false;
       try {
@@ -5446,6 +5736,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (uiContext) void refresh(uiContext);
     },
     stopPeriodic: () => {
+      cancelGitSampling();
       pending = undefined;
       uiContext = undefined;
       renderOverview = undefined;

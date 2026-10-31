@@ -3809,6 +3809,54 @@ test("project work derives active, paused, or conflict from runtime placement", 
   assert.equal(switched[0]!.status, "active");
   assert.equal(switched[0]!.branch, assignment.branch);
 
+  const verifiedCheckout = join(tmpdir(), `checkout-${id()}`);
+  const withVerifiedPlacement = projectWorkSnapshot({
+    assignments: [assignment],
+    worktrees: [],
+    placements: new Map([
+      [
+        assignment.id,
+        {
+          status: "matched" as const,
+          path: verifiedCheckout,
+          worktree: { branch: assignment.branch },
+        },
+      ],
+    ]),
+    leads: [],
+  });
+  assert.equal(withVerifiedPlacement[0]!.status, "paused");
+  assert.equal(withVerifiedPlacement[0]!.checkoutPath, verifiedCheckout);
+  assert.equal(Object.hasOwn(switched[0]!, "checkoutPath"), false);
+
+  const ineligibleWithPlacement = projectWorkSnapshot({
+    assignments: [assignment],
+    worktrees: [],
+    placements: new Map([
+      [
+        assignment.id,
+        {
+          status: "matched" as const,
+          path: verifiedCheckout,
+          worktree: { branch: assignment.branch },
+        },
+      ],
+    ]),
+    leads: [],
+    unverified: [
+      {
+        lead: assignment.id,
+        status: "unknown" as const,
+        issue: "verification unavailable",
+      },
+    ],
+  });
+  assert.equal(ineligibleWithPlacement[0]!.status, "unknown");
+  assert.equal(
+    Object.hasOwn(ineligibleWithPlacement[0]!, "checkoutPath"),
+    false,
+  );
+
   const competing = { ...assignment, id: id(), branch: "feat/other" };
   for (const assignments of [
     [assignment, competing],
@@ -3837,6 +3885,7 @@ test("project work derives active, paused, or conflict from runtime placement", 
       snapshot.map(({ status }) => status),
       ["conflict", "conflict"],
     );
+    assert.ok(snapshot.every((work) => !Object.hasOwn(work, "checkoutPath")));
   }
 
   const bounded = projectWorkSnapshot({
