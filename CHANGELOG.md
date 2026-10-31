@@ -9,6 +9,15 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.36.3](https://github.com/boadij/pi-herdsman/compare/v0.36.2...v0.36.3) (2026-10-31)
+
+
+### Fixes
+
+* **agent:** make results accessible within verified ownership trees ([#710](https://github.com/boadij/pi-herdsman/issues/710)) ([fc4a94b](https://github.com/boadij/pi-herdsman/commit/fc4a94be82229e3e785e4be822d5382dcf3fe99a))
+* **manager:** preserve managed Lead authority across branch switches ([#708](https://github.com/boadij/pi-herdsman/issues/708)) ([b59d3ca](https://github.com/boadij/pi-herdsman/commit/b59d3ca16ad775b5e37438ba084bc1989466527a))
+* **supervision:** reuse verified Manager discovery across Leads ([#711](https://github.com/boadij/pi-herdsman/issues/711)) ([6d559bc](https://github.com/boadij/pi-herdsman/commit/6d559bc6f84162ec00a8ad8411433af9ac18a72f))
+
 ## [0.36.2](https://github.com/boadij/pi-herdsman/compare/v0.36.1...v0.36.2) (2026-10-30)
 
 
