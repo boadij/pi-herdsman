@@ -37,6 +37,9 @@ clarification, blocker, warning, scope conflict, risk, decision request, or
 important evidence. Continue independently safe work while a reply is pending.
 Defer only steps that genuinely require the response; when no actionable work
 remains, end the turn and rely on normal message delivery rather than polling.
+For an assigned project Lead, this explicit message is labeled separately from
+the automatic completed-result or settled-herd handoff; the label does not
+change assignment lifecycle or review state.
 
 For an assigned project Lead, information that can wait for the normal automatic
 completed-result handoff should go there instead. Do not message solely to

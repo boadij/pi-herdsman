@@ -1212,7 +1212,7 @@ export function managerHandoffDeliveredEntry(
         entry.details?.fromSessionId === sessionId &&
         entry.details?.id === messageId &&
         entry.content ===
-          `Project ${branch} from lead ${sessionId}:\n\n${text}`,
+          `Lead → Manager for assignment ${branch} from lead ${sessionId}:\n\n${text}`,
     ) ?? null
   );
 }
@@ -1643,7 +1643,7 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
       entry.details?.branch === branch &&
       entry.details?.fromSessionId === leadSessionId &&
       entry.content ===
-        `Project ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`,
+        `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`,
   );
   const readyMarkers = entries.flatMap((entry, index) =>
     entry.type === "message" &&
@@ -1690,7 +1690,7 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
 
 export function managerReadyEntryEvidence(contents, branch, leadSessionId) {
   const entries = sessionEntries(contents);
-  const receiptText = `Project ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`;
+  const receiptText = `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`;
   const receipts = [];
   const markers = [];
   entries.forEach((entry, index) => {
@@ -5002,7 +5002,7 @@ async function runManagerHandoffSmoke(ctx) {
             entry.details?.branch === row.branch &&
             entry.details?.fromSessionId === row.session &&
             entry.content ===
-              `Project ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
+              `Lead → Manager for assignment ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
         );
       const supervisorResult = supervisor.supervisorResultState;
       if (!managerHandoffAssignmentReady(ready, readyEntry, processProof)) {
@@ -9154,7 +9154,7 @@ async function runManagerRecoverySmoke(ctx) {
   ).find((entry) => entry.details?.id === retainedRecord.id);
   assert.equal(
     deliveredRecord.content,
-    `Project ${branch} from lead ${first.session}:\n\n${contextMarker}`,
+    `Lead → Manager for assignment ${branch} from lead ${first.session}:\n\n${contextMarker}`,
   );
   await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);

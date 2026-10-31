@@ -2990,10 +2990,44 @@ export type ProjectMessage = Readonly<{
   branch: string;
   fromSessionId: string;
   text: string;
-  kind?: "execution_failure";
+  kind?: ProjectMessageKind;
   resultBindings?: ResultBinding[];
   createdAt: number;
 }>;
+
+export type ProjectMessageKind =
+  | "supervisor_message"
+  | "direct_response"
+  | "herd_settlement"
+  | "execution_failure"
+  | "execution_cancelled";
+
+export function projectMessageLabel(kind?: ProjectMessageKind): string {
+  switch (kind) {
+    case "supervisor_message":
+      return "Lead → Manager";
+    case "direct_response":
+      return "Lead response";
+    case "herd_settlement":
+      return "Herd settled";
+    case "execution_failure":
+      return "Lead execution failed";
+    case "execution_cancelled":
+      return "Lead cancelled";
+    default:
+      return "Lead update";
+  }
+}
+
+export function projectMessageEnvelope(
+  kind: ProjectMessageKind | undefined,
+  branch: string,
+  sessionId: string,
+): string {
+  return kind === undefined
+    ? `Project ${branch} from lead ${sessionId}:\n\n`
+    : `${projectMessageLabel(kind)} for assignment ${branch} from lead ${sessionId}:\n\n`;
+}
 
 export type ProjectMessageHeader = Omit<
   ProjectMessage,
@@ -3053,7 +3087,14 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       : r.text === "" &&
         r.resultBindings === undefined &&
         validOverflowBodyRef(r.bodyRef)) &&
-    (r.kind === undefined || r.kind === "execution_failure") &&
+    (r.kind === undefined ||
+      [
+        "supervisor_message",
+        "direct_response",
+        "herd_settlement",
+        "execution_failure",
+        "execution_cancelled",
+      ].includes(r.kind as ProjectMessageKind)) &&
     (r.resultBindings === undefined ||
       (Array.isArray(r.resultBindings) &&
         r.resultBindings.every(isResultBinding))) &&
