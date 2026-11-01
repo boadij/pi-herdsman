@@ -20924,7 +20924,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
     "direct Herdr status polling must have a finite timeout",
   );
   const rendered = widget.render(160).join("\n");
-  assert.match(rendered, /● lead\s+●1/);
+  assert.match(rendered, /● lead\s+● 1/);
   assert.match(rendered, /sleep-smoke-a/);
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
   const promptEvent = {
@@ -21065,7 +21065,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   resolveInitial!({ stdout: envelope(), stderr: "", code: 0 });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
-  assert.match(widget.render(160).join("\n"), /● lead\s+\?1/);
+  assert.match(widget.render(160).join("\n"), /● lead\s+\? 1/);
 
   await t.waitFor(() => assert.ok(resolveReconciliation));
   const countBeforeReconciliation = listCount;
@@ -21079,7 +21079,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   });
   await starting;
   await t.waitFor(() => assert.ok(resolveAfterReconciliation));
-  assert.match(widget.render(160).join("\n"), /● lead\s+\?1/);
+  assert.match(widget.render(160).join("\n"), /● lead\s+\? 1/);
   resolveAfterReconciliation!({
     stdout: JSON.stringify({
       id: 1,
@@ -21091,7 +21091,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   await t.waitFor(() => {
     assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /● lead\s+×1/);
+    assert.match(rendered, /● lead\s+× 1/);
     assert.match(rendered, /fresh-widget-agent/);
   });
   await pi.events.get("session_shutdown")?.[0]();
@@ -21556,10 +21556,10 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       "fresh runtime refresh must occur after validation and before submit validation",
     );
     await t.waitFor(() =>
-      assert.match(widget!.render(160).join("\n"), /flexible.*●1/),
+      assert.match(widget!.render(160).join("\n"), /flexible.*● 1/),
     );
     const rendered = widget!.render(160).join("\n");
-    assert.match(rendered, /flexible.*●1/);
+    assert.match(rendered, /flexible.*● 1/);
     assert.match(rendered, /fresh-start-widget-agent/);
 
     live = false;
