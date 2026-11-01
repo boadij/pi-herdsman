@@ -20,6 +20,11 @@ import {
   isMissingDockerResource,
 } from "./peer-federation-cleanup.mjs";
 import {
+  assertDistinctImages,
+  projectRuntimeTrace,
+  safeCommandFailure,
+} from "./peer-federation-smoke-evidence.mjs";
+import {
   assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
   classifyCurrentSendEvidence,
@@ -42,8 +47,21 @@ const resources = {
   volumes: [],
   image: null,
   imageTag: null,
+  sideImages: {},
   containers: [],
 };
+const suppliedImages = [
+  process.env.PEER_SMOKE_IMAGE_A,
+  process.env.PEER_SMOKE_IMAGE_B,
+];
+if (suppliedImages.some(Boolean) && suppliedImages.some((image) => !image))
+  throw new Error(
+    "PEER_SMOKE_IMAGE_A and PEER_SMOKE_IMAGE_B must be supplied together",
+  );
+const explicitImagePair = suppliedImages.every(Boolean);
+const imageRefs = explicitImagePair
+  ? { a: suppliedImages[0], b: suppliedImages[1] }
+  : undefined;
 resources.diagnosticsEnabled = process.env.PEER_SMOKE_DIAGNOSTICS === "1";
 resources.evidence = {
   semanticRef: undefined,
@@ -68,7 +86,11 @@ const stage = (name, details = {}) => {
   console.log(`[peer-smoke-stage] ${JSON.stringify(resources.stages.at(-1))}`);
 };
 
-function command(bin, args, { allowFailure = false, input } = {}) {
+function command(
+  bin,
+  args,
+  { allowFailure = false, input, safeLabel, redactValues = [] } = {},
+) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     input,
@@ -76,7 +98,11 @@ function command(bin, args, { allowFailure = false, input } = {}) {
   });
   if (result.error || (!allowFailure && result.status !== 0))
     throw new Error(
-      `${bin} ${args.join(" ")} failed: ${result.error ?? result.stderr}`,
+      safeCommandFailure(
+        safeLabel ?? `${bin} command`,
+        result.error ?? result.stderr,
+        redactValues,
+      ),
     );
   return result.stdout.trim();
 }
@@ -177,24 +203,45 @@ try {
     console.log(`Removed and verified exact resources for ${resources.runId}`);
     process.exit(0);
   }
-  const imageTag = `${runId}:fixture`;
-  resources.imageTag = imageTag;
+  let imageTag;
+  if (!imageRefs) {
+    imageTag = `${runId}:fixture`;
+    resources.imageTag = imageTag;
+    save();
+    command("docker", [
+      "build",
+      "--label",
+      `pi-herdsman.run=${runId}`,
+      "--tag",
+      imageTag,
+      ".",
+    ]);
+  }
+  for (const side of ["a", "b"]) {
+    const ref = imageRefs?.[side] ?? imageTag;
+    const inspected = command(
+      "docker",
+      ["image", "inspect", "--format", "{{.Id}} {{json .RepoDigests}}", ref],
+      {
+        safeLabel: "docker image inspect",
+        redactValues: [ref],
+      },
+    );
+    const [id, digestJson] = inspected.split(/ (?=\[)/u, 2);
+    const digests = JSON.parse(digestJson)
+      .map((digest) => digest.slice(digest.lastIndexOf("@") + 1))
+      .filter((digest) => /^sha256:[0-9a-f]{64}$/u.test(digest));
+    resources.sideImages[side] = { role: side, imageId: id, digests };
+  }
+  assertDistinctImages(
+    {
+      a: resources.sideImages.a.imageId,
+      b: resources.sideImages.b.imageId,
+    },
+    explicitImagePair,
+  );
+  if (!explicitImagePair) resources.image = resources.sideImages.a.imageId;
   save();
-  command("docker", [
-    "build",
-    "--label",
-    `pi-herdsman.run=${runId}`,
-    "--tag",
-    imageTag,
-    ".",
-  ]);
-  resources.image = command("docker", [
-    "image",
-    "inspect",
-    "--format",
-    "{{.Id}}",
-    imageTag,
-  ]);
   save();
   resources.network = command("docker", [
     "network",
@@ -260,29 +307,36 @@ try {
       join(root, opposite, "id_ed25519.pub"),
       "utf8",
     ).trim();
-    const id = command("docker", [
-      "run",
-      "--detach",
-      "--init",
-      "--network",
-      resources.network,
-      "--label",
-      `pi-herdsman.run=${runId}`,
-      "--label",
-      `pi-herdsman.side=${side}`,
-      "--network-alias",
-      `peer-${side}`,
-      "--volume",
-      `${home}:/home/herdsman`,
-      "--volume",
-      `${ssh}:/var/lib/herdsman/ssh`,
-      "--env",
-      `SSH_AUTHORIZED_KEYS=${authorizedKey}`,
-      ...(resources.diagnosticsEnabled
-        ? ["--env", "PEER_FEDERATION_DIAGNOSTICS=1"]
-        : []),
-      imageTag,
-    ]);
+    const id = command(
+      "docker",
+      [
+        "run",
+        "--detach",
+        "--init",
+        "--network",
+        resources.network,
+        "--label",
+        `pi-herdsman.run=${runId}`,
+        "--label",
+        `pi-herdsman.side=${side}`,
+        "--network-alias",
+        `peer-${side}`,
+        "--volume",
+        `${home}:/home/herdsman`,
+        "--volume",
+        `${ssh}:/var/lib/herdsman/ssh`,
+        "--env",
+        `SSH_AUTHORIZED_KEYS=${authorizedKey}`,
+        ...(resources.diagnosticsEnabled
+          ? ["--env", "PEER_FEDERATION_DIAGNOSTICS=1"]
+          : []),
+        imageRefs?.[side] ?? imageTag,
+      ],
+      {
+        safeLabel: "docker run fixture container",
+        redactValues: [imageRefs?.[side] ?? imageTag],
+      },
+    );
     resources.containers.push(id);
     save();
     Object.assign(resources[side], {
@@ -378,6 +432,26 @@ try {
   // server and workspace data test-local rather than using its default config.
   const exec = (side, args, extra = []) =>
     command("docker", ["exec", ...extra, resources[side].container, ...args]);
+
+  for (const side of ["a", "b"]) {
+    const bundledProtocol = exec(side, [
+      "node",
+      "-e",
+      "const s=require('fs').readFileSync('/opt/pi-herdsman/dist/index.js','utf8'); if (!/COORDINATOR_MESSAGE_PROTOCOL\\s*=\\s*1/.test(s)) process.exit(1); console.log('COORDINATOR_MESSAGE_PROTOCOL=1')",
+    ]);
+    if (bundledProtocol.trim() !== "COORDINATOR_MESSAGE_PROTOCOL=1")
+      throw new Error(
+        `${side} image does not advertise messaging protocol 1 in its loaded extension bundle`,
+      );
+    resources.sideImages[side].protocol = bundledProtocol.trim();
+    stage("loaded-image-protocol-verified", {
+      side,
+      role: resources.sideImages[side].role,
+      imageId: resources.sideImages[side].imageId,
+      digests: resources.sideImages[side].digests,
+      protocol: resources.sideImages[side].protocol,
+    });
+  }
   const fixturePath = (side) => `/tmp/p${runId.slice(-8)}${side}`;
   const herdrEnv = (side) => [
     "-e",
@@ -774,6 +848,7 @@ try {
         `${resources[side].runtime.piAgentDir}/pi-herdsman/runtime/peer-federation-diagnostics.jsonl`,
       );
     }
+    diagnostics.runtimeTrace = projectRuntimeTrace(diagnostics.runtimeTrace);
     resources.peerDiagnostics = diagnostics;
     save();
     return diagnostics;
@@ -1970,8 +2045,44 @@ try {
           `find ${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-correspondences -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '`,
         ]).trim(),
       );
+      const diagnostics = capturePeerDiagnostics();
+      const failureEvidence = {
+        runId,
+        messageId: acceptance.id,
+        replyEvidence,
+        decisions: readBDecisionDiagnostics(),
+        runtimeTrace: diagnostics?.runtimeTrace,
+        recipientInbox: diagnostics?.recipientInbox,
+        correspondenceCount: Number.isFinite(correspondenceCount)
+          ? correspondenceCount
+          : 0,
+        pane: sanitizeStartupDiagnostics(
+          herdr("b", [
+            "pane",
+            "read",
+            resources.b.ordinaryLead.pane,
+            "--source",
+            "recent",
+            "--lines",
+            "80",
+          ]),
+        ),
+        sessionTail: sanitizeStartupDiagnostics(
+          exec(
+            "b",
+            ["tail", "-n", "32", resources.b.ordinaryLead.sessionPath],
+            ["--user", "herdsman"],
+          ),
+        ),
+      };
+      resources.preserveOnFailure = true;
+      resources.failureEvidence = failureEvidence;
+      save();
+      console.error(
+        `[peer-smoke-failure-evidence] ${JSON.stringify(failureEvidence).slice(0, 24000)}`,
+      );
       throw new Error(
-        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, modelTurnsBeforeBinding: replyEvidence.modelTurnsBeforeBinding, modelTurnsAfterBinding: replyEvidence.modelTurnsAfterBinding, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0, decisions: readBDecisionDiagnostics() })}`,
+        `B Lead reply wait timed out: ${JSON.stringify({ inboundMessages: replyEvidence.inboundLeadRequestCount, modelTurnsAfterInbound: replyEvidence.modelTurnsAfterInbound, modelTurnsBeforeBinding: replyEvidence.modelTurnsBeforeBinding, modelTurnsAfterBinding: replyEvidence.modelTurnsAfterBinding, artifactReads: replyEvidence.artifactReadCount, replyCalls: replyEvidence.replyCallCount, successfulReplies: replyEvidence.successfulReplyCount, bindingPresent: replyEvidence.bindingPresent, correspondences: Number.isFinite(correspondenceCount) ? correspondenceCount : 0, decisions: failureEvidence.decisions })}`,
       );
     }
     if (
@@ -3331,6 +3442,10 @@ try {
   if (process.env.PEER_SMOKE_KEEP === "1")
     console.log(`Retained exact resource manifest: ${manifestPath}`);
 } finally {
-  if (process.argv[2] !== "--cleanup" && process.env.PEER_SMOKE_KEEP !== "1")
+  if (
+    process.argv[2] !== "--cleanup" &&
+    process.env.PEER_SMOKE_KEEP !== "1" &&
+    !resources.preserveOnFailure
+  )
     cleanup();
 }

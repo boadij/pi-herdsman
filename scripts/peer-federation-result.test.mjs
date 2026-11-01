@@ -13,6 +13,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
+  assertDistinctImages,
+  projectRuntimeTrace,
+  safeCommandFailure,
+} from "./peer-federation-smoke-evidence.mjs";
+import {
   assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
   classifyCurrentSendEvidence,
@@ -24,6 +29,71 @@ import {
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+
+test("default federation image may be shared by both sides", () => {
+  assert.doesNotThrow(() =>
+    assertDistinctImages({ a: "sha256:same", b: "sha256:same" }, false),
+  );
+});
+
+test("explicit federation image pair requires distinct image IDs", () => {
+  assert.throws(
+    () => assertDistinctImages({ a: "sha256:same", b: "sha256:same" }, true),
+    /distinct image IDs/u,
+  );
+  assert.doesNotThrow(() =>
+    assertDistinctImages({ a: "sha256:a", b: "sha256:b" }, true),
+  );
+});
+
+test("failing Docker image operations redact supplied registry refs", () => {
+  const imageRef = "registry.private.example:5443/team/project:secret-tag";
+  for (const operation of [
+    "docker image inspect",
+    "docker run fixture container",
+  ]) {
+    const message = safeCommandFailure(
+      operation,
+      `denied: ${imageRef} was not found; ${imageRef}`,
+      [imageRef],
+    );
+    assert.match(message, new RegExp(`^${operation} failed`));
+    assert.doesNotMatch(message, /registry\.private\.example|secret-tag/u);
+    assert.ok(Buffer.byteLength(message, "utf8") <= 600);
+  }
+});
+
+test("runtime-trace evidence is allowlisted, redacted, and bounded", () => {
+  const trace = {
+    a: Array.from({ length: 30 }, (_, index) => ({
+      eventId: "password-secret-123",
+      event: "send_invoked",
+      outcome: "followUp",
+      reasonCode: "password-secret-123",
+      tool: "message_peer",
+      triggerTurn: true,
+      idle: false,
+      prompt: "private prompt",
+      path: "/Users/private/token-secret",
+      args: { token: "Bearer secret" },
+    })),
+    b: [
+      {
+        event: "tool_call",
+        outcome: "read",
+        tool: "read",
+        path: "/private/path",
+      },
+    ],
+  };
+  const projected = projectRuntimeTrace(trace);
+  const serialized = JSON.stringify(projected);
+  assert.ok(projected.a.length <= 16);
+  assert.ok(Buffer.byteLength(serialized, "utf8") <= 4096);
+  assert.doesNotMatch(serialized, /password-secret-123|peer-fixture-event/u);
+  assert.match(serialized, /message_peer/u);
+  assert.doesNotMatch(serialized, /private|secret|Bearer|prompt|args|path/u);
+});
 
 test("ordinary Lead send acceptance requires one fresh discovery, one send, and its exact receipt", () => {
   const diagnostics = {
