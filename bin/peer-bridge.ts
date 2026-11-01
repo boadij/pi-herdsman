@@ -461,6 +461,11 @@ if (action === "probe") {
       }) !== prior.digest
     )
       throw new Error("invalid pending peer message transfer");
+    if (
+      !Array.isArray(prior.transfer.attachments) ||
+      prior.transfer.attachments.length > 32
+    )
+      throw new Error("invalid peer transfer evidence");
     envelope = prior.transfer;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

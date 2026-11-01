@@ -231,6 +231,25 @@ test("bridge recovers after process death at both durable acceptance cut points"
       );
       assert.equal(acceptCrash.error, undefined, acceptCrash.stderr);
       assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
+      if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
+        const pending = JSON.parse(readFileSync(marker, "utf8"));
+        delete pending.transfer.attachments;
+        writeFileSync(marker, JSON.stringify(pending));
+        const malformed = spawnSync(
+          process.execPath,
+          ["--experimental-strip-types", "bin/peer-bridge.ts", "accept"],
+          {
+            cwd: process.cwd(),
+            env: process.env,
+            input: `${JSON.stringify(transfer)}\n`,
+            encoding: "utf8",
+          },
+        );
+        assert.notEqual(malformed.status, 0, malformed.stderr);
+        assert.match(malformed.stderr, /invalid peer transfer evidence/);
+        pending.transfer.attachments = attachments;
+        writeFileSync(marker, JSON.stringify(pending));
+      }
       if (cut === "pending-marker-durable")
         assert.throws(
           () =>
