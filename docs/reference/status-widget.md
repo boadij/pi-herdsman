@@ -63,8 +63,8 @@ a confidently identified mismatch.
 
 ```text
 ● manager · pi-herdsman
-├─ ● feat/example · active
-└─ ○ fix/other · paused
+├─ ● feat/example
+└─ ◫ fix/other
 ```
 
 When available, managed work rows can append the Lead's active herd-run elapsed
@@ -72,8 +72,8 @@ time and Pi's current context percentage:
 
 ```text
 ● manager · pi-herdsman
-├─ ● feat/foo · active  14m  61%
-└─ ○ fix/other · paused
+├─ ● feat/foo  14m  61%
+└─ ◫ fix/other
 ```
 
 Elapsed time is the same active herd-run interval shown by the ordinary Lead
@@ -84,14 +84,26 @@ the live Lead's runtime state. Chief rows receive matching theme styling but do
 not show these telemetry columns. A stale Manager snapshot suppresses elapsed
 telemetry while retaining other available metadata such as context percentage.
 
-Manager work status is `active`, `paused`, or `conflict`.
-An active row uses the live Lead's lifecycle marker when an executor is present;
-without a verified Lead it uses a muted `·`, not a claim of verified execution.
-Paused uses `○`; conflict uses warning-colored `!`. A blocked Lead uses its
-warning-colored `◐` lifecycle marker without an additional `!`. Independently
-verified build incompatibility is shown with `!` and `build mismatch`. For
-compatible work, the row suffix is project status, not the Lead's runtime
-state.
+Routine Manager work is symbol-only: active work uses the verified Lead's
+lifecycle marker, or muted `·` when no verified Lead is present; paused work
+uses muted `◫`, distinct from an idle/done Lead's `○`. Exceptional states keep
+their complete labels: blocked, unknown, and lost describe the verified Lead's
+runtime state; project unknown and conflict use `?` and warning-colored `!`;
+independently verified build incompatibility uses `!` and `build mismatch`.
+These concise labels are presentation only and do not change work status or
+focus eligibility. Ordinary supervised Lead rows retain `· Lead`, which
+identifies their relationship rather than repeating lifecycle state.
+
+Chief direct and nested Leads likewise use one marker before the identity;
+only blocked, unknown, lost, and incompatible-build rows add explanatory text.
+The ordinary Lead Agent widget retains a single animated/static lifecycle
+marker. It adds aligned text only for blocked, unknown, and lost Agents, while
+its ambient header summarizes nonzero working, blocked, transitioning,
+unknown, and lost categories as `● N  ◐ N  ◌ N  ? N  × N` (starting and settling share
+`◌`). If no Agent needs an attention label, the state-text column disappears;
+when attention is present, routine rows keep its blank alignment. Running
+menus and consequential confirmations continue to use full descriptive
+lifecycle labels and counts.
 Ordinary Leads supervised by the Manager are shown separately from project
 work, with a supervised label; they are not treated as managed work. A Manager
 can inspect an eligible direct report through the overview, independently of

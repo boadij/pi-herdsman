@@ -2068,7 +2068,7 @@ function registerExtensionImpl(
         name: "message_staff",
         label: "message staff",
         defaultActive: false,
-        exposure: "model-only",
+        exposure: "model-only" as const,
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         executionMode: "sequential",

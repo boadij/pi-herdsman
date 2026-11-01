@@ -1760,7 +1760,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     runHerdr,
     liveAgent,
     readLeadCoordinationState,
-    requireCompatibleBuild,
     scanAgentStates,
     writeChiefMessage,
     herdrSessionSnapshot,
@@ -1782,6 +1781,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     withProjectWorkLock,
     withProjectAssignmentLock,
   } = host;
+  const requireCompatibleBuild: LeadProjectHost["requireCompatibleBuild"] =
+    host.requireCompatibleBuild;
   const {
     activeRole,
     currentChiefAuthority,
@@ -1855,7 +1856,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     | { action: "remove"; branch: string }
     | { action: "merge"; branch: string; expected_head: string }
     | { action: "stop"; branch: string }
-    | { action: "inspect" | "transcript"; target?: string; branch?: string }
+    | { action: "inspect"; target?: string; branch?: string }
+    | { action: "transcript"; target?: string; branch?: string }
     | {
         action: "message";
         target?: string;

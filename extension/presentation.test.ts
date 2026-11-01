@@ -837,7 +837,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
     );
     const output = rows.join("\n");
     assert.equal(rows[1], "├─ ● working · 1 agent");
-    assert.equal(rows[2], "├─ ◐ attention · 1 agent");
+    assert.equal(rows[2], "├─ ◐ attention · blocked · 1 agent");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -877,7 +877,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >◐ selected");
+    assert.equal(selectedRows[1], "└─ >◐ selected · blocked");
   }
 
   {
@@ -1269,10 +1269,10 @@ test("status projection renders the complete stable tree with aligned columns", 
     );
     const rows = renderStatusRows(agents, { now: 0, frame: 0 });
     assert.equal(rows.length, 5);
-    assert.match(rows[0]!.text, /● working/);
-    assert.match(rows[1]!.text, /◐ blocked/);
-    assert.match(rows[2]!.text, /◌ settling/);
-    assert.match(rows[3]!.text, /\? unknown/);
+    assert.match(rows[0]!.text, /⠋ agent/);
+    assert.match(rows[1]!.text, /◐ agent.*blocked/);
+    assert.match(rows[2]!.text, /◌ agent/);
+    assert.match(rows[3]!.text, /\? agent.*unknown/);
     assert.match(rows[0]!.text, /short/);
     assert.doesNotMatch(rows[0]!.text, /a\/short/);
     assert.match(rows[0]!.text, /7%/);
@@ -1300,7 +1300,8 @@ test("status projection renders the complete stable tree with aligned columns", 
       assert.ok(first[0]!.text.startsWith(`└─ ${marker} agent`));
       assert.equal(first[0]!.text, second[0]!.text);
     }
-    assert.match(rows[4]!.text, /◌ starting/);
+    assert.match(rows[4]!.text, /⠋ agent/);
+    assert.equal(visibleWidth("◫"), 1);
     assert.notEqual(
       renderStatusRows(agents, { now: 0, frame: 1 })[0]!.text,
       rows[0]!.text,
@@ -1318,10 +1319,6 @@ test("status projection renders the complete stable tree with aligned columns", 
       assert.notEqual(index, -1);
       return visibleWidth(line.slice(0, index));
     };
-    assert.equal(
-      column(rows[0]!.text, "● working"),
-      column(rows[1]!.text, "◐ blocked"),
-    );
     assert.equal(column(rows[0]!.text, "short"), column(rows[1]!.text, "long"));
     assert.equal(
       column(rows[0]!.text, "high"),
@@ -1331,12 +1328,12 @@ test("status projection renders the complete stable tree with aligned columns", 
 
   {
     const expected = [
-      ["working", "success", "● working"],
-      ["blocked", "warning", "◐ blocked"],
-      ["settling", "accent", "◌ settling"],
-      ["starting", "accent", "◌ starting"],
-      ["unknown", "warning", "? unknown"],
-      ["lost", "error", "× lost"],
+      ["working", "success", ""],
+      ["blocked", "warning", "blocked"],
+      ["settling", "accent", ""],
+      ["starting", "accent", ""],
+      ["unknown", "warning", "unknown"],
+      ["lost", "error", "lost"],
     ] as const;
     const rows = buildStatusRows(
       expected.map(([state], index) => ({
@@ -1528,7 +1525,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
     };
     const wide = rendered(240);
     for (const tokens of [
-      ["● working", "◐ blocked", "◌ settling", "◌ starting", "? unknown"],
+      ["⠋", "◐", "◌", "⠋", "?"],
       ["5m 25s", "1m 0s", "41s", "2m 0s", "3m 0s"],
       ["gpt-5.6-luna", "gpt-5.6-luna", "short", "short", "long-model"],
       ["high", "medium", "medium", "low", "xhigh"],
@@ -1560,8 +1557,8 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       breadcrumb: [{ text: "lead" }],
     });
     assert.deepEqual(widget.render(160), [
-      "● lead  1 settling",
-      "└─ ◌ agent  settling  ◌ settling",
+      "● lead  ◌ 1",
+      "└─ ◌ agent  settling",
     ]);
     assert.equal((widget as any).timer, undefined);
     widget.setSnapshot({
@@ -1659,7 +1656,7 @@ test("status widget projects active herd duration without changing counts", (t) 
     breadcrumb: [{ text: "lead" }],
   });
   assert.match(widget.render(160)[0]!, /lead · \d+s/);
-  assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
+  assert.match(widget.render(160)[0]!, /● 1  ◐ 1/);
 });
 
 test("Status widget freezes stale elapsed values at the observation time", (t) => {
@@ -1743,7 +1740,7 @@ test("status widget styles herd duration separately and remains width-safe", (t)
   });
   widget.render(160);
   assert.ok(calls.some((call) => call.startsWith("accent: · ")));
-  assert.ok(calls.some((call) => call.startsWith("muted:  1 working")));
+  assert.ok(calls.some((call) => call.startsWith("warning:blocked")));
   for (let width = 1; width <= 160; width++)
     assert.ok(
       widget.render(width).every((line) => visibleWidth(line) <= width),
@@ -3557,7 +3554,7 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0], /1 settling/);
+    assert.match(widget.render(160)[0], /◌ 1/);
     widget.setSnapshot({
       agents: [{ label: "w", definition: "agent", state: "settling" }],
       stale: true,
@@ -3579,7 +3576,7 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       unavailable: false,
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /2 settling/);
+    assert.match(rendered, /◌ 2/);
     assert.match(rendered, /working/);
     assert.match(rendered, /settling-leaf/);
     assert.match(rendered, /settling-other/);
@@ -3593,11 +3590,8 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0]!, /2 settling · 1 starting/);
-    assert.match(
-      widget.render(160).join("\n"),
-      /⠋ agent\s+starting\s+◌ starting/,
-    );
+    assert.match(widget.render(160)[0]!, /◌ 3/);
+    assert.match(widget.render(160).join("\n"), /⠋ agent\s+starting/);
     assert.match(widget.render(160).join("\n"), /settling-[ab]/);
     assert.notEqual((widget as any).timer, undefined);
     for (let width = 1; width <= 40; width++)
@@ -3647,7 +3641,7 @@ test("Status widgets preserve parent families and settling counts", (t) => {
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0]!, /2 settling/);
+    assert.match(widget.render(160)[0]!, /◌ 2/);
     assert.match(widget.render(160).join("\n"), /settling-[ab]/);
   }
 });
@@ -3734,7 +3728,7 @@ test("Status widget renders complete execution metadata without changing ownersh
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
-  assert.match(widget.render(160)[0]!, /^● lead · managed  1 blocked$/);
+  assert.match(widget.render(160)[0]!, /^● lead · managed  ◐ 1$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
@@ -3925,8 +3919,8 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       ownTools: semanticTools,
     });
     const header = widget.render(54)[0]!;
-    assert.match(header, /1 working/);
-    assert.match(header, /\[read, bash, …\]/);
+    assert.match(header, /● 1/);
+    assert.match(header, /\[read, bash, list_agents, …\]/);
   }
 });
 
@@ -3988,7 +3982,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     });
     const rendered = widget.render(160).join("\n");
     assert.match(rendered, /● lead/);
-    assert.match(rendered, /one\s+◌ settling/);
+    assert.match(rendered, /one\s+gpt/);
     assert.match(rendered, /└─ ⠋ scout\s+scout:one/);
     assert.match(rendered, /gpt/);
     assert.match(rendered, /codex/);
@@ -4039,10 +4033,10 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     });
 
     assert.deepEqual(widget.render(160), [
-      "● lead → implementer  3 working",
-      "└─ ⠋ implementer  implementer:feature  ● working  0s  gpt-5.6-luna  low  3%  Parent task",
-      "   ├─ ⠋ scout        scout:child-1     ● working  0s  gpt-5.6-luna  low  1%  Child one",
-      "   └─ ⠋ scout        scout:child-2     ● working  0s  gpt-5.6-luna  low  1%  Child two",
+      "● lead → implementer  ● 3",
+      "└─ ⠋ implementer  implementer:feature  0s  gpt-5.6-luna  low  3%  Parent task",
+      "   ├─ ⠋ scout        scout:child-1     0s  gpt-5.6-luna  low  1%  Child one",
+      "   └─ ⠋ scout        scout:child-2     0s  gpt-5.6-luna  low  1%  Child two",
     ]);
   }
 });
@@ -4339,8 +4333,8 @@ test("widget uses logical labels in the shared row formatter", (t) => {
       unavailable: false,
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /task\s+● working/);
-    assert.match(rendered, /reviewerish:task\s+● working/);
+    assert.match(rendered, /reviewer:task/);
+    assert.match(rendered, /reviewerish:task/);
   }
 
   {
@@ -6266,7 +6260,7 @@ test("Status rows drop task text before protected columns at every width", (t) =
     });
     const line = widget.render(54)[1];
     assert.match(line, /44%/);
-    assert.doesNotMatch(line, /task/);
+    assert.match(line, /task/);
     assert.match(line, /0s/);
   }
 
@@ -6472,7 +6466,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
   const rows = renderSupervisionLeads(snapshot, 120);
   assert.equal(rows[0], "● chief · 1 manager");
   assert.equal(rows[1], "└─ ○ pi-herdsman · 1 compatible lead");
-  assert.equal(rows[2], "   └─ feat/session-usage-stats · ○ idle");
+  assert.equal(rows[2], "   └─ ○ feat/session-usage-stats");
   assert.doesNotMatch(
     rows.join("\n"),
     /\.git|0 agents|0 leads|manager-session|lead-12345678/,
@@ -6540,10 +6534,10 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
   };
   assert.deepEqual(renderSupervisionLeads(snapshot, 120).slice(1), [
     "├─ ● project-a · 2 compatible leads",
-    "│  ├─ child-a1 · ◉ done · 1 agent",
-    "│  └─ child-a2 · ● working",
+    "│  ├─ ◉ child-a1 · 1 agent",
+    "│  └─ ● child-a2",
     "├─ ● project-b · 1 compatible lead",
-    "│  └─ child-b1 · ○ done",
+    "│  └─ ○ child-b1",
     "└─ ○ unrelated-direct-lead",
   ]);
   const theme = {
@@ -6551,7 +6545,7 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
   };
   assert.ok(
     renderSupervisionLeads(snapshot, 120, { theme })[2]!.includes(
-      "<accent>◉</accent> <muted>done</muted>",
+      "<accent>◉</accent>",
     ),
   );
   assert.ok(
@@ -6604,13 +6598,13 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   };
   const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
   assert.equal(rows[0], "● manager · pi-herdsman");
-  assert.match(rows[1]!, /◐ feat\/active.* · active/);
+  assert.match(rows[1]!, /◐ feat\/active.* · blocked/);
   assert.doesNotMatch(rows[1]!, /!◐/);
-  assert.match(rows[2]!, /○ feat\/paused.* · paused/);
+  assert.match(rows[2]!, /◫ feat\/paused/);
   assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
   assert.match(
     renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
-    / · active$/,
+    / · blocked$/,
   );
   assert.equal(rows[4], "└─ ○ feat/manual · Lead");
   assert.equal(rows.filter((row) => row.startsWith("└─")).length, 1);
@@ -6642,7 +6636,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
     }).slice(1),
     [
       rows[1],
-      "├─ ○ feat/paused-" + "long".repeat(20) + " · paused",
+      "├─ ◫ feat/paused-" + "long".repeat(20),
       "└─ … 2 more · /manager",
     ],
   );
@@ -6715,15 +6709,12 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   ).find((width) => {
     const row = rowsAt(width)[1]!;
     return (
-      !row.includes("61%") &&
-      !row.includes("14m") &&
-      row.includes("feat/foo") &&
-      row.includes("active")
+      !row.includes("61%") && !row.includes("14m") && row.includes("feat/foo")
     );
   });
   assert.ok(compactWidth);
-  assert.match(rowsAt(contextOnlyWidth)[1]!, /feat\/foo.* · active.*61%/);
-  assert.match(rowsAt(compactWidth)[1]!, /feat\/foo.* · active/);
+  assert.match(rowsAt(contextOnlyWidth)[1]!, /feat\/foo.*61%/);
+  assert.match(rowsAt(compactWidth)[1]!, /feat\/foo/);
   for (let width = 1; width <= 100; width++)
     assert.ok(rowsAt(width).every((row) => visibleWidth(row) <= width));
 
@@ -6934,7 +6925,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   ]);
   assert.match(
     switchedWidget.render(47)[1]!,
-    /↪ fix\/recovery · active  ~\+12 -3\*/,
+    /feat\/git ↪ fix\/recovery  ~\+12 -3\*/,
   );
   assert.ok(
     Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>
@@ -7063,10 +7054,11 @@ test("incompatible Manager Leads retain standalone and active-work click targets
       stripVTControlCharacters(widget.render(120)[1]!),
       /build mismatch/,
     );
+    const renderedRow = stripVTControlCharacters(widget.render(120)[1]!);
     const result = widget.handleMouse({
       type: "click",
       button: "left",
-      x: 4,
+      x: renderedRow.indexOf("feat/older"),
       y: 1,
       width: 120,
     });
@@ -7367,7 +7359,7 @@ test("visible truncated Manager branch clicks target its exact Lead, not status"
 
   const width = 30;
   const row = stripVTControlCharacters(widget.render(width)[1]!);
-  assert.match(row, /feature\/653-.*… · active$/);
+  assert.match(row, /feature\/653-.*…/);
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width })
       ?.handled,
@@ -7504,9 +7496,9 @@ test("hidden and ineligible truncated Manager work targets remain inert", () => 
     (intent) => focused.push(intent),
   );
 
-  const width = 15;
+  const width = 5;
   const rows = widget.render(width);
-  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● … · active");
+  assert.doesNotMatch(stripVTControlCharacters(rows[1]!), /feature/u);
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width }),
     undefined,
@@ -7531,7 +7523,7 @@ test("width-16 status collision keeps only the visible branch segment clickable"
 
   const width = 16;
   const row = stripVTControlCharacters(widget.render(width)[1]!);
-  assert.equal(row, "└─ ● a… · active");
+  assert.equal(row, "└─ ● active");
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width })
       ?.handled,
@@ -7545,14 +7537,97 @@ test("width-16 status collision keeps only the visible branch segment clickable"
   assert.equal(focused.length, 1);
 });
 
+test("width-15 visible Manager branch is clickable but Git suffix is not", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [{ branch: "a", session: "assigned", status: "active" }],
+      leads: [lead({ lead: "assigned", branch: "a", runtimeState: "working" })],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+    () => ({ dirty: true, additions: 0, deletions: 0, changedFiles: 0 }),
+  );
+
+  const width = 15;
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  assert.match(row, /a.*±0\*/u);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf("±0"),
+      y: 1,
+      width,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf("a"),
+      y: 1,
+      width,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "assigned" }]);
+});
+
+test("Manager branch alone is clickable beside elapsed and context telemetry", () => {
+  const now = Date.now();
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [
+        { branch: "feat/foo", session: "exact-session", status: "active" },
+      ],
+      leads: [
+        lead({
+          lead: "exact-session",
+          branch: "feat/foo",
+          runtimeState: "working",
+          herdRunStartedAt: now - 14 * 60_000,
+          contextPercent: 61,
+        }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  const width = 100;
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  const click = (label: string) =>
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf(label),
+      y: 1,
+      width,
+    });
+
+  assert.match(row, /feat\/foo.*14m.*61%/);
+  assert.equal(click("feat/foo")?.handled, true);
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "exact-session" }]);
+  assert.equal(click("14m"), undefined);
+  assert.equal(click("61%"), undefined);
+  assert.equal(focused.length, 1);
+});
+
 test("Manager work status outranks live Lead markers except when active", () => {
   const theme = {
     fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
   };
   for (const [status, marker, color] of [
     ["active", "●", "success"],
-    ["paused", "○", "muted"],
-    ["unknown", "?", "muted"],
+    ["paused", "◫", "muted"],
+    ["unknown", "?", "warning"],
     ["conflict", "!", "warning"],
   ] as const) {
     const snapshot = {
@@ -7566,7 +7641,10 @@ test("Manager work status outranks live Lead markers except when active", () => 
     };
     assert.deepEqual(
       renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
-      ["● manager", `└─ >${marker} feat/example · ${status}`],
+      [
+        "● manager",
+        `└─ >${marker} feat/example${status === "conflict" || status === "unknown" ? ` · ${status}` : ""}`,
+      ],
     );
     const themedRow = renderSupervisionLeads(
       snapshot,
@@ -7586,7 +7664,7 @@ test("Manager work status outranks live Lead markers except when active", () => 
     120,
     { role: "manager" },
   )[1]!;
-  assert.match(unverified, /└─ · feat\/unverified · active/);
+  assert.match(unverified, /└─ · feat\/unverified$/);
   assert.doesNotMatch(unverified, /●/);
   const incompatible = renderSupervisionLeads(
     [lead({ compatibility: "incompatible" as const })],
@@ -7625,22 +7703,86 @@ test("Manager work status outranks live Lead markers except when active", () => 
     }),
     undefined,
   );
-  const fullBlockedRow = blockedWork.render(26)[1]!;
-  assert.ok(visibleWidth(fullBlockedRow) <= 26);
+  const fullBlockedRow = blockedWork.render(40)[1]!;
+  assert.ok(visibleWidth(fullBlockedRow) <= 40);
   assert.match(fullBlockedRow, /feat\/blocked/);
+  const fullBlockedText = stripVTControlCharacters(fullBlockedRow);
+  const blockedSuffixX = fullBlockedText.lastIndexOf("blocked");
+  assert.ok(blockedSuffixX >= 0);
   assert.equal(
     blockedWork.handleMouse({
       type: "click",
       button: "left",
-      x: 0,
+      x: blockedSuffixX,
       y: 1,
-      width: 26,
+      width: 40,
+    }),
+    undefined,
+  );
+  assert.equal(
+    blockedWork.handleMouse({
+      type: "click",
+      button: "left",
+      x: fullBlockedText.indexOf("feat/blocked"),
+      y: 1,
+      width: 40,
     })?.handled,
     true,
   );
   assert.deepEqual(focused, [
     { kind: "session", sessionId: "blocked-session" },
   ]);
+});
+
+test("Manager ambient work rows distinguish routine and attention states", () => {
+  for (const [workStatus, runtimeState, marker, detail] of [
+    ["active", "idle", "○", ""],
+    ["active", "working", "●", ""],
+    ["active", "blocked", "◐", "blocked"],
+    ["active", "unknown", "?", "unknown"],
+    ["active", "lost", "×", "lost"],
+    ["paused", undefined, "◫", ""],
+    ["unknown", undefined, "?", "unknown"],
+    ["conflict", undefined, "!", "conflict"],
+  ] as const) {
+    const snapshot = {
+      work: [
+        { branch: "feat/example", session: "assigned", status: workStatus },
+      ],
+      leads: runtimeState ? [lead({ lead: "assigned", runtimeState })] : [],
+    };
+    const row = renderSupervisionLeads(snapshot, 120, { role: "manager" })[1]!;
+    assert.ok(row.includes(`${marker} feat/example`), row);
+    assert.equal(row.includes(" · "), !!detail);
+    if (detail) assert.ok(row.endsWith(` · ${detail}`), row);
+  }
+});
+
+test("ambient Agent headers compact counts and routine rows keep one state marker", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      { label: "working-a", definition: "agent", state: "working" },
+      { label: "working-b", definition: "agent", state: "working" },
+      { label: "blocked", definition: "agent", state: "blocked" },
+      { label: "settling", definition: "agent", state: "settling" },
+      { label: "starting", definition: "agent", state: "starting" },
+      { label: "unknown", definition: "agent", state: "unknown" },
+    ],
+    stale: false,
+    unavailable: false,
+  });
+  const rows = widget.render(160);
+  assert.match(rows[0]!, /● 2  ◐ 1  ◌ 2  \? 1/);
+  const workingRow = rows.find((row) => row.includes("working-a"))!;
+  assert.match(workingRow, /⠋ agent  working-a/);
+  assert.doesNotMatch(workingRow, /● working/);
+  assert.match(
+    rows.find((row) => row.includes("unknown"))!,
+    /\? agent.*unknown/,
+  );
+  assert.equal(visibleWidth("◫"), 1);
 });
 
 test("coordination messages render compact semantic headings and strip only known envelopes", () => {
@@ -8059,14 +8201,14 @@ test("Manager mixed tree has one final connector and independent Leads share the
   };
   assert.deepEqual(renderSupervisionLeads(snapshot, 120, { role: "manager" }), [
     "● manager · pi-herdsman",
-    "├─ ○ worktree/lead-management-smoke-ping · paused",
+    "├─ ◫ worktree/lead-management-smoke-ping",
     "└─ ◉ test/manager-lifecycle-smoke · Lead",
   ]);
   assert.deepEqual(
     renderSupervisionLeads(snapshot, 120, { role: "manager", ordinaryCap: 1 }),
     [
       "● manager · pi-herdsman",
-      "├─ ○ worktree/lead-management-smoke-ping · paused",
+      "├─ ◫ worktree/lead-management-smoke-ping",
       "└─ … 1 more · /manager",
     ],
   );

@@ -1132,12 +1132,12 @@ function allChiefMessagePaths(
   // bounded. Malformed UUID-named files are best-effort cleanup candidates
   // and may be deferred behind a full valid delivery batch.
   return paths
-    .flatMap((path) => {
+    .map((path): { path: string; record: StoredChiefMessage | undefined } => {
       try {
         const record = readStoredChiefMessage(path);
-        return [{ path, record }];
+        return { path, record };
       } catch {
-        return [{ path, record: undefined }];
+        return { path, record: undefined };
       }
     })
     .sort((a, b) => {
