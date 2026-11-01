@@ -428,7 +428,7 @@ the default affects a future ordinary session without changing the current
 session.
 
 Navigate to Project manager and Chief mode from the menus. Confirm their
-Start, Overview, and Leave actions use the existing `/manager` and `/chief`
+Start, Overview, Refresh profile, and Leave actions use the existing `/manager` and `/chief`
 role behavior.
 
 ### `/herdsman definitions`
@@ -450,7 +450,8 @@ All five reserved role definitions remain non-Agent. The Lead, Manager, and
 Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
 and Details, but no Enabled action. Runtime-profile definitions reject
 launch-only fields such as model, thinking, extensions, skills, and context
-inheritance. Repeating `/manager` or `/chief` refreshes its active profile.
+inheritance. `/manager refresh` or `/chief refresh` refreshes the active profile
+after the current turn becomes idle.
 
 Structured `list_agents` should still retain exact deterministic metadata.
 

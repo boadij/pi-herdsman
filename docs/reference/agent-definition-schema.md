@@ -123,7 +123,8 @@ than widening the selected policy. Manager overlays can be trusted-project or
 global; Chief accepts global overlays only because Chief is workspace-neutral.
 A project-local `chief` definition is rejected with guidance to configure it
 globally instead. Manager and Chief profiles resolve when activated or restored,
-and repeating `/manager` or `/chief` refreshes the active profile. Invalid
+and `/manager refresh` or `/chief refresh` refreshes the active profile after
+the current turn becomes idle. Invalid
 configuration blocks explicit activation; an invalid profile during verified
 role restoration retains authority but restricts tools to mandatory role tools
 and uses the runtime-owned role contract without configurable instructions.

@@ -22,9 +22,11 @@ Herdsman package version.
 /herdsman stop
 /lead [flexible|orchestrate]
 /manager
+/manager refresh
 /manager leave
 /manager remove <branch>
 /chief
+/chief refresh
 /chief leave
 ```
 
@@ -114,8 +116,8 @@ delegation targets. Manager/Chief profiles may nevertheless list ordinary
 Agent definitions in `agents` to authorize their own direct delegation.
 Runtime profiles support `Details` only;
 `managed-lead` supports `Model`, `Thinking`, and `Details`, but has no `Enabled`
-action. Repeating `/manager` or `/chief` refreshes the active profile after
-successful validation. Definition files are not watched while a profile is
+action. Use `/manager refresh` or `/chief refresh` to validate and apply the
+active role's definition. Definition files are not watched while a profile is
 active.
 
 The details view shows applicable effective metadata:
@@ -217,10 +219,10 @@ independent failures.
 
 Use ordinary `close_agent` for normal targeted model-driven control.
 
-`Project manager` offers `Start Manager mode` when inactive, or `Overview` and
-`Leave Manager mode` while active. `Advanced…` opens `Chief mode`, which offers
-the corresponding Chief start, overview, and leave actions. These menu actions
-use the same transitions as `/manager` and `/chief`; they do not add role
+`Project manager` offers `Start Manager mode` when inactive, or `Overview`,
+`Refresh profile`, and `Leave Manager mode` while active. `Advanced…` opens
+`Chief mode`, which offers the corresponding Chief actions. These menu actions
+use the same commands as `/manager` and `/chief`; they do not add role
 eligibility or authority rules.
 
 ## Project Manager and Chief
@@ -250,8 +252,10 @@ and is refused only when a Lead is waiting for this Manager's answer or the
 Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
-re-resolves the Manager definition, applies it after the current turn becomes
-idle, then opens the overview; a failed refresh keeps the previous profile.
+opens the overview without refreshing the profile or waiting for the current
+turn to become idle. `/manager refresh` revalidates and applies the active
+Manager definition after the current turn becomes idle; a failed refresh keeps
+the previous profile. Refresh requires active Manager mode.
 Manager definitions accept trusted project and global overlays; omitted fields
 inherit from lower-precedence definitions, including the bundled empty ordinary
 tool allowlist. Manager defaults to coordination-only tools. Custom Manager
@@ -347,9 +351,11 @@ configuration. See
 [Staff tools](staff.md#integrate_branch).
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
-While Chief, `/chief` refreshes its validated profile after the current turn
-becomes idle and then opens the overview; a failed refresh keeps the previous
-profile. Chief accepts global definition overrides only and defaults to staff
+While Chief, `/chief` opens the overview without refreshing the profile or
+waiting for the current turn to become idle. `/chief refresh` revalidates and
+applies the active Chief definition after the current turn becomes idle; a
+failed refresh keeps the previous profile. Refresh requires active Chief mode.
+Chief accepts global definition overrides only and defaults to staff
 coordination tools. `/chief leave` exits the mode.
 A Manager cannot activate Chief. Chief's staff roster contains active
 Managers and ordinary Leads without an active project Manager. Ordinary Leads
