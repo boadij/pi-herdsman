@@ -422,7 +422,8 @@ test("required evidence cleanup failures preserve publication and primary errors
         const isDirectoryFd = fd === directoryFd;
         if (isDirectoryFd) directoryFd = undefined;
         fs.closeSync(fd);
-        if (isDirectoryFd) throw new Error("directory close failed");
+        if (isDirectoryFd && process.platform !== "win32")
+          throw new Error("directory close failed");
       },
       constants: fs.constants,
       fstatSync: fs.fstatSync,
@@ -456,12 +457,14 @@ test("required evidence cleanup failures preserve publication and primary errors
       readRequiredEvidenceSnapshot(assignmentId, entry),
       "published\n",
     );
-    failDirectoryFsync = true;
-    assert.throws(
-      () => persist(assignmentId, "fsync.md", "body"),
-      /directory fsync failed/,
-    );
-    failDirectoryFsync = false;
+    if (process.platform !== "win32") {
+      failDirectoryFsync = true;
+      assert.throws(
+        () => persist(assignmentId, "fsync.md", "body"),
+        /directory fsync failed/,
+      );
+      failDirectoryFsync = false;
+    }
     primaryFailure = true;
     assert.throws(
       () => persist(assignmentId, "primary.md", "body"),
