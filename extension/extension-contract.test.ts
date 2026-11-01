@@ -4774,7 +4774,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     repoKey,
     branch,
     text: "managed prompt assigned fixture",
-    checkoutPath: "/tmp",
+    checkoutPath: resolve("/tmp"),
   });
   const pi = fakePi({
     exec: (_command, args) =>
