@@ -14,7 +14,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { mock, test } from "node:test";
+import { test } from "node:test";
 import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
 import {
@@ -412,7 +412,7 @@ test("required evidence cleanup failures preserve publication and primary errors
   let primaryFailure = false;
   let directoryFd: number | undefined;
   let failDirectoryFsync = false;
-  mock.module("node:fs", {
+  t.mock.module("node:fs", {
     namedExports: {
       chmodSync(path: fs.PathLike, mode: fs.Mode) {
         if (primaryFailure && String(path).includes("primary.md"))
