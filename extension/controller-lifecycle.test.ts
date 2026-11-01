@@ -2643,7 +2643,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.equal(fixture.requestObserved, false);
     assert.equal(beforeAck.details.agents[0].state, "settling");
     const renderedBeforeAck = fixture.widgetValue.render(160).join("\n");
-    assert.match(renderedBeforeAck, /flexible.*◌1/);
+    assert.match(renderedBeforeAck, /flexible.*◌ 1/);
     assert.doesNotMatch(renderedBeforeAck, /settling/);
     assert.match(renderedBeforeAck, /agent/);
 
@@ -2673,7 +2673,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     const settlingRefresh = await list();
     assert.equal(settlingRefresh.details.agents[0].state, "settling");
     const renderedAfterAck = fixture.widgetValue.render(160).join("\n");
-    assert.match(renderedAfterAck, /flexible.*◌1/);
+    assert.match(renderedAfterAck, /flexible.*◌ 1/);
     assert.doesNotMatch(renderedAfterAck, /settling/);
 
     fixture.markWorking(requestId);
@@ -2687,7 +2687,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     await t.waitFor(
       () => {
         const rendered = fixture.widgetValue.render(160).join("\n");
-        assert.match(rendered, /flexible.*●1/);
+        assert.match(rendered, /flexible.*● 1/);
         assert.doesNotMatch(rendered, /starting/);
       },
       { timeout: 3_000 },
@@ -2972,7 +2972,7 @@ test("staged fresh assignment ignores a mismatched completion before delivery", 
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     await t.waitFor(() =>
-      assert.match(fixture.widgetValue.render(160).join("\n"), /●1/),
+      assert.match(fixture.widgetValue.render(160).join("\n"), /● 1/),
     );
     assert.equal(
       fixture.pi.sent.some(
@@ -6594,7 +6594,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
       context,
     );
     assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
-    await t.waitFor(() => assert.match(widget.render(120).join("\n"), /●1/));
+    await t.waitFor(() => assert.match(widget.render(120).join("\n"), /● 1/));
     const startedAt = herdEntries().find(
       (entry) => entry.data?.phase === "started",
     )!.data.startedAt;
@@ -9083,7 +9083,7 @@ test("assigned project handoff remains pending when assignment resolution is loc
       context,
     );
     assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
-    await t.waitFor(() => assert.match(widget.render(120).join("\n"), /●1/));
+    await t.waitFor(() => assert.match(widget.render(120).join("\n"), /● 1/));
     resetAgentMailbox(startup.mailbox);
 
     const releaseResolutionLock = claimProcessLock(
