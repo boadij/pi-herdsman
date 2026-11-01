@@ -1411,9 +1411,8 @@ function renderSupervisionRows(
         const branchText = themed(options.theme, "muted", displayedBranch);
         const truncatedBranch = displayedBranch !== item.work.branch;
         const clickRegion =
-          (git || branchSwitch || suffix || truncatedBranch) &&
           visibleWidth(displayedBranch) >
-            (truncatedBranch ? visibleWidth("…") : 0)
+          (truncatedBranch ? visibleWidth("…") : 0)
             ? {
                 from: visibleWidth(prefix),
                 to: visibleWidth(prefix) + visibleWidth(displayedBranch),
@@ -1426,7 +1425,7 @@ function renderSupervisionRows(
             `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, detailColor, suffix)}${outputTelemetry.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && outputTelemetry[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
             width,
           ),
-          ...(canFocusLead && (!truncatedBranch || clickRegion)
+          ...(canFocusLead && clickRegion
             ? {
                 label: item.work.branch,
                 intent: { kind: "session" as const, sessionId: lead.lead },

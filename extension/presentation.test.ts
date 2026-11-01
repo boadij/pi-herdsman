@@ -7521,6 +7521,48 @@ test("width-15 visible Manager branch is clickable but Git suffix is not", () =>
   assert.deepEqual(focused, [{ kind: "session", sessionId: "assigned" }]);
 });
 
+test("Manager branch alone is clickable beside elapsed and context telemetry", () => {
+  const now = Date.now();
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [
+        { branch: "feat/foo", session: "exact-session", status: "active" },
+      ],
+      leads: [
+        lead({
+          lead: "exact-session",
+          branch: "feat/foo",
+          runtimeState: "working",
+          herdRunStartedAt: now - 14 * 60_000,
+          contextPercent: 61,
+        }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  const width = 100;
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  const click = (label: string) =>
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf(label),
+      y: 1,
+      width,
+    });
+
+  assert.match(row, /feat\/foo.*14m.*61%/);
+  assert.equal(click("feat/foo")?.handled, true);
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "exact-session" }]);
+  assert.equal(click("14m"), undefined);
+  assert.equal(click("61%"), undefined);
+  assert.equal(focused.length, 1);
+});
+
 test("Manager work status outranks live Lead markers except when active", () => {
   const theme = {
     fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
