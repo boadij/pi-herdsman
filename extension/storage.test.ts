@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import {
   mkdirSync,
   readdirSync,
@@ -12,7 +13,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import { mock, test } from "node:test";
 import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
 import {
@@ -400,6 +401,58 @@ test("required evidence snapshots are private, immutable, and integrity checked"
       /unsafe/,
     );
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("required evidence cleanup failures preserve publication and primary errors", async (t) => {
+  const assignmentId = randomUUID();
+  const directory = requiredEvidenceDirectory(assignmentId);
+  let primaryFailure = false;
+  mock.module("node:fs", {
+    exports: {
+      chmodSync(path: fs.PathLike, mode: fs.Mode) {
+        if (primaryFailure && String(path).includes("primary.md"))
+          throw new Error("primary failed");
+        return fs.chmodSync(path, mode);
+      },
+      closeSync: fs.closeSync,
+      constants: fs.constants,
+      fstatSync: fs.fstatSync,
+      fsyncSync: fs.fsyncSync,
+      mkdirSync: fs.mkdirSync,
+      openSync: fs.openSync,
+      readdirSync: fs.readdirSync,
+      readFileSync: fs.readFileSync,
+      renameSync: fs.renameSync,
+      lstatSync: fs.lstatSync,
+      unlinkSync() {
+        throw new Error("cleanup failed");
+      },
+      writeFileSync: fs.writeFileSync,
+    },
+  });
+  try {
+    const { persistRequiredEvidenceSnapshot: persist } = await import(
+      `./storage.ts?cleanup-${randomUUID()}`
+    );
+    const entry = persist(assignmentId, "published.md", "published\n");
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignmentId, entry),
+      "published\n",
+    );
+    primaryFailure = true;
+    assert.throws(
+      () => persist(assignmentId, "primary.md", "body"),
+      /primary failed/,
+    );
+    assert.equal(
+      readdirSync(directory).some((name) => name.includes("primary.md")),
+      true,
+      "published snapshot is retained despite the later primary error",
+    );
+  } finally {
+    t.mock.restoreAll();
     rmSync(directory, { recursive: true, force: true });
   }
 });
