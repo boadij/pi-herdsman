@@ -110,6 +110,51 @@ test("acquireProcessLock returns an exact claim", () => {
   }
 });
 
+test("publication cleanup failure does not hide a successful claim", (t) => {
+  const path = temporaryPath();
+  t.mock.method(fs, "unlinkSync", () => {
+    throw new Error("simulated publication cleanup failure");
+  });
+  syncBuiltinESMExports();
+  let lease: ReturnType<typeof acquireProcessLock> | undefined;
+  try {
+    lease = acquireProcessLock(path);
+    deepEqual(readLiveProcessLock(path), lease.claim);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    try {
+      lease?.release();
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  }
+});
+
+test("publication cleanup failure preserves the publication error", (t) => {
+  const path = temporaryPath();
+  const publicationError = new Error("simulated publication failure");
+  const originalRename = fs.renameSync;
+  t.mock.method(fs, "renameSync", (source: string, destination: string) => {
+    if (destination === path) throw publicationError;
+    return originalRename(source, destination);
+  });
+  t.mock.method(fs, "unlinkSync", () => {
+    throw new Error("simulated publication cleanup failure");
+  });
+  syncBuiltinESMExports();
+  try {
+    throws(
+      () => acquireProcessLock(path),
+      (error: unknown) => error === publicationError,
+    );
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(dirname(path), { recursive: true, force: true });
+  }
+});
+
 test("publication collision during release is reported as occupied", (t) => {
   const path = temporaryPath();
   const previousLease = acquireProcessLock(path);

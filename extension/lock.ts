@@ -221,17 +221,17 @@ function publishClaim(
     fs.chmodSync(temporaryOwner, 0o600);
     fs.renameSync(temporary, claimDir);
   } finally {
-    if (fd !== undefined) fs.closeSync(fd);
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
     try {
       fs.unlinkSync(temporaryOwner);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    } catch {}
     try {
       fs.rmdirSync(temporary);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    } catch {}
   }
 }
 
