@@ -9,11 +9,11 @@ import { isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
 import { readConfig } from "./config.ts";
+import { sameDirectory } from "./path-identity.ts";
 import {
   localRepositoryScope,
   prepareHerdrManagerPane,
   readPiSessionHeaderId,
-  sameDirectory,
   sameObservedSessionPath,
   startHerdrManagerInPane,
   HerdrStartFailure,
@@ -54,8 +54,8 @@ const MANAGER_STARTUP_TIMEOUT_MS = 90_000;
 const MANAGER_STARTUP_POLL_MS = 100;
 
 export type ChiefManagerStartResult =
-  | { status: "started" | "resumed"; target: string; repository: string }
-  | { status: "already_running"; target: string; repository: string }
+  | { status: "started" | "resumed"; repository: string }
+  | { status: "already_running"; repository: string }
   | { status: "resume_required"; repository: string }
   | { status: "cancelled"; repository: string }
   | {
@@ -169,7 +169,7 @@ export function createChiefProjectRuntime(
       });
       if (!git) return { status: "cancelled", repository: target };
       const scope = await verifyPrimaryCheckout(pi, git.checkoutPath, ctx);
-      if (scope.commonDir !== git.commonDir)
+      if (!sameDirectory(scope.commonDir, git.commonDir))
         throw new Error(
           "Selected repository identity changed during Git setup",
         );
@@ -181,7 +181,6 @@ export function createChiefProjectRuntime(
         if (await findActiveManager(ctx, scope))
           return {
             status: "already_running",
-            target: scope.checkoutPath,
             repository: scope.checkoutPath,
           };
         const recovery = readManagerRecoveryReference(
@@ -238,7 +237,7 @@ export function createChiefProjectRuntime(
             signal: ctx.signal,
             verifyAuthorization: async (actual) => {
               await host.assertChief(ctx);
-              verifyLaunchTarget(actual, pane, scope);
+              verifyLaunchTarget(actual, pane, managerScope.repoKey, scope);
             },
           });
         } catch (error) {
@@ -262,7 +261,6 @@ export function createChiefProjectRuntime(
         intentSessionId = undefined;
         return {
           status: "started",
-          target: scope.checkoutPath,
           repository: scope.checkoutPath,
         };
       } finally {
@@ -323,7 +321,6 @@ export function createChiefProjectRuntime(
         )
           return {
             status: "already_running",
-            target: scope.checkoutPath,
             repository: scope.checkoutPath,
           };
         throw new Error(
@@ -364,7 +361,7 @@ export function createChiefProjectRuntime(
             signal: ctx.signal,
             verifyAuthorization: async (actual) => {
               await host.assertChief(ctx);
-              verifyLaunchTarget(actual, pane, scope);
+              verifyLaunchTarget(actual, pane, managerScope.repoKey, scope);
             },
           });
         } catch (error) {
@@ -388,7 +385,6 @@ export function createChiefProjectRuntime(
         );
         return {
           status: "resumed",
-          target: scope.checkoutPath,
           repository: scope.checkoutPath,
         };
       } catch (error) {
@@ -412,8 +408,8 @@ export function createChiefProjectRuntime(
   ): Promise<ManagerDescriptor | undefined> {
     const managers = listManagerDescriptors(host.runtime(), true).filter(
       (descriptor) =>
-        descriptor.canonicalRepoKey === scope.commonDir ||
-        sameDirectory(descriptor.repoKey, scope.commonDir),
+        descriptor.canonicalRepoKey !== undefined &&
+        sameDirectory(descriptor.canonicalRepoKey, scope.commonDir),
     );
     if (managers.length > 1)
       throw new Error("Multiple active Managers match this repository");
@@ -427,7 +423,7 @@ export function createChiefProjectRuntime(
     }
     if (
       manager.canonicalRepoKey !== undefined &&
-      manager.canonicalRepoKey !== scope.commonDir
+      !sameDirectory(manager.canonicalRepoKey, scope.commonDir)
     )
       throw new Error(
         "Manager descriptor has a conflicting repository identity",
@@ -450,7 +446,7 @@ export function createChiefProjectRuntime(
     scope: VerifiedRepository,
   ): Promise<void> {
     if (
-      recovery.canonicalRepoKey !== scope.commonDir ||
+      !sameDirectory(recovery.canonicalRepoKey, scope.commonDir) ||
       !isAbsolute(recovery.piSessionFile)
     )
       throw new Error(
@@ -475,7 +471,7 @@ export function createChiefProjectRuntime(
       if (persisted?.role !== "manager")
         throw new Error("saved Pi session is not persisted as a Manager");
       const savedScope = await verifyPrimaryCheckout(pi, session.getCwd());
-      if (savedScope.commonDir !== scope.commonDir)
+      if (!sameDirectory(savedScope.commonDir, scope.commonDir))
         throw new Error("saved Pi session belongs to a different repository");
     } catch (error) {
       throw new Error("Manager recovery reference is invalid or foreign", {
@@ -498,8 +494,8 @@ export function createChiefProjectRuntime(
       await host.assertChief(ctx);
       const descriptors = listManagerDescriptors(host.runtime(), true).filter(
         (descriptor) =>
-          descriptor.canonicalRepoKey === scope.commonDir ||
-          sameDirectory(descriptor.repoKey, scope.commonDir),
+          descriptor.canonicalRepoKey !== undefined &&
+          sameDirectory(descriptor.canonicalRepoKey, scope.commonDir),
       );
       if (descriptors.length > 1)
         throw new Error("Multiple active Managers match this repository");
@@ -510,7 +506,8 @@ export function createChiefProjectRuntime(
           descriptor.workspaceId !== pane.primaryWorkspaceId ||
           descriptor.paneId !== pane.paneId ||
           descriptor.tabId !== pane.tabId ||
-          descriptor.canonicalRepoKey !== scope.commonDir ||
+          !descriptor.canonicalRepoKey ||
+          !sameDirectory(descriptor.canonicalRepoKey, scope.commonDir) ||
           descriptor.repoKey !== scope.repoKey ||
           !descriptor.piSessionFile ||
           (expectedFile &&
@@ -590,7 +587,7 @@ export function createChiefProjectRuntime(
           scope.checkoutPath,
           ctx,
         );
-        if (finalScope.commonDir !== scope.commonDir)
+        if (!sameDirectory(finalScope.commonDir, scope.commonDir))
           throw new Error("Manager repository changed during startup");
         return descriptor;
       }
@@ -663,13 +660,14 @@ function verifySelectedScope(
 function verifyLaunchTarget(
   actual: HerdrManagerLaunchTarget,
   expected: HerdrManagerPaneSelection,
+  expectedRepoKey: string,
   scope: VerifiedRepository,
 ): void {
   if (
     actual.workspaceId !== expected.primaryWorkspaceId ||
     actual.paneId !== expected.paneId ||
     actual.tabId !== expected.tabId ||
-    !sameDirectory(actual.repoKey, scope.commonDir) ||
+    actual.repoKey !== expectedRepoKey ||
     !sameDirectory(actual.checkoutPath, scope.checkoutPath)
   )
     throw new Error("Chief Manager launch target changed");

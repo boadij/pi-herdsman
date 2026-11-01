@@ -7426,6 +7426,25 @@ test("Manager topology fails closed on duplicate or inconsistent primary associa
       false,
     );
 
+    const unavailableRelevant = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [
+        {
+          ...valid,
+          id: "unavailable-relevant",
+          checkoutPath: join(root, "missing-checkout"),
+        },
+      ],
+    });
+    await assert.rejects(
+      prepareHerdrManagerPane(unavailableRelevant.pi, { cwd: root } as any, {
+        repoKey,
+        checkoutPath,
+      }),
+      /Git identity is unavailable/,
+    );
+
     const aliasedRepoKey = `${repoKey}/.`;
     assert.equal(sameDirectory(aliasedRepoKey, repoKey), true);
     const aliasedAssociation = managerTopologyHarness({
@@ -7487,6 +7506,49 @@ test("Manager topology fails closed on duplicate or inconsistent primary associa
       }),
       /Herdr repository identity does not match canonical Git identity/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager startup ignores an unavailable checkout with a proven unrelated repository identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-topology-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  const unrelatedCheckout = join(root, "missing-unrelated-checkout");
+  const unrelatedRepoKey = join(root, "unrelated.git");
+  fs.mkdirSync(gitDir, { recursive: true });
+  fs.mkdirSync(unrelatedRepoKey);
+  const repoKey = realpathSync.native(gitDir);
+  const harness = managerTopologyHarness({
+    repoKey,
+    checkoutPath,
+    workspaces: [
+      {
+        id: "primary",
+        repoKey,
+        checkoutPath,
+        gitDir: repoKey,
+        commonDir: repoKey,
+        isLinked: false,
+      },
+      {
+        id: "unrelated",
+        repoKey: unrelatedRepoKey,
+        checkoutPath: unrelatedCheckout,
+        gitDir: unrelatedRepoKey,
+        commonDir: unrelatedRepoKey,
+        isLinked: false,
+      },
+    ],
+  });
+  try {
+    const selected = await prepareHerdrManagerPane(
+      harness.pi,
+      { cwd: root } as any,
+      { repoKey, checkoutPath },
+    );
+    assert.equal(selected.primaryWorkspaceId, "primary");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -7567,9 +7629,13 @@ function managerTopologyHarness(options: {
       if (command === "git") {
         const cwd = realpathSync.native(execOptions.cwd);
         const item =
-          [...workspaces.values()].find(
-            (workspace) => realpathSync.native(workspace.checkoutPath) === cwd,
-          ) ??
+          [...workspaces.values()].find((workspace) => {
+            try {
+              return realpathSync.native(workspace.checkoutPath) === cwd;
+            } catch {
+              return false;
+            }
+          }) ??
           (realpathSync.native(options.checkoutPath) === cwd
             ? {
                 checkoutPath: options.checkoutPath,

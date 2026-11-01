@@ -20,6 +20,18 @@ function gitExec() {
         cwd: options.cwd,
         encoding: "utf8",
       });
+      if (args[0] === "init" && result.status === 0) {
+        for (const [key, value] of [
+          ["user.name", "Test"],
+          ["user.email", "test@example.invalid"],
+        ]) {
+          const config = spawnSync("git", ["config", key, value], {
+            cwd: options.cwd,
+            encoding: "utf8",
+          });
+          assert.equal(config.status, 0, config.stderr);
+        }
+      }
       return {
         code: result.status ?? 1,
         killed: !!result.error,

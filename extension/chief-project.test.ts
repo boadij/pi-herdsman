@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import { createChiefProjectRuntime } from "./chief-project.ts";
 import type { RuntimeBuild } from "./compatibility.ts";
@@ -294,6 +295,8 @@ test("clone verifies the checkout and never launches a Manager", async () => {
 
 test("start reports success only after exact Manager readiness and preserves repo-key split", async () => {
   const f = fixture();
+  const expectedRepoKey = `${f.gitDir}${sep}.`;
+  f.managerScope.repoKey = expectedRepoKey;
   const ctx: any = f.context();
   let launchOptions: any;
   let observedIntent: any;
@@ -310,10 +313,12 @@ test("start reports success only after exact Manager readiness and preserves rep
       workspaceId: f.pane.primaryWorkspaceId,
       paneId: f.pane.paneId,
       tabId: f.pane.tabId,
-      repoKey: f.gitDir,
+      repoKey: expectedRepoKey,
       checkoutPath: f.checkoutPath,
     });
-    f.activateManager(options.runId);
+    f.activateManager(options.runId, f.sessionFile, {
+      repoKey: expectedRepoKey,
+    });
     return {
       herdrAgent: "manager-agent",
       workspaceId: f.pane.primaryWorkspaceId,
@@ -330,14 +335,15 @@ test("start reports success only after exact Manager readiness and preserves rep
     const result = await f
       .projectRuntime()
       .start(f.checkoutPath, undefined, ctx);
-    assert.equal(result.status, "started");
+    assert.equal(result.status, "started", JSON.stringify(result));
+    assert.equal("target" in result, false);
     assert.equal(launchOptions.runId, observedIntent.sessionId);
     assert.deepEqual(launchOptions.agentArgs, [
       "--session-id",
       observedIntent.sessionId,
     ]);
-    assert.equal(launchOptions.repoKey, f.gitDir);
-    assert.equal(observedIntent.repoKey, f.gitDir);
+    assert.equal(launchOptions.repoKey, expectedRepoKey);
+    assert.equal(observedIntent.repoKey, expectedRepoKey);
     assert.equal(observedIntent.checkoutPath, f.checkoutPath);
     assert.equal(observedIntent.workspaceId, f.pane.primaryWorkspaceId);
     assert.equal(observedIntent.paneId, f.pane.paneId);
@@ -345,7 +351,7 @@ test("start reports success only after exact Manager readiness and preserves rep
       f.leases[0]!.descriptor.canonicalRepoKey,
       realpathSync.native(f.gitDir),
     );
-    assert.equal(f.leases[0]!.descriptor.repoKey, f.gitDir);
+    assert.equal(f.leases[0]!.descriptor.repoKey, expectedRepoKey);
     assert.equal(
       listManagerDescriptors(f.runtime, true)[0]!.piSessionId,
       observedIntent.sessionId,
@@ -389,6 +395,23 @@ test("start reports resume_required for a verified stopped Manager", async () =>
       repository: realpathSync.native(f.checkoutPath),
     });
     assert.equal(launches, 0);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("start already_running result omits target", async () => {
+  const f = fixture();
+  f.activateManager(SESSION_ID);
+  try {
+    const result = await f
+      .projectRuntime()
+      .start(f.checkoutPath, undefined, f.context() as any);
+    assert.deepEqual(result, {
+      status: "already_running",
+      repository: realpathSync.native(f.checkoutPath),
+    });
+    assert.equal("target" in result, false);
   } finally {
     f.cleanup();
   }
@@ -451,10 +474,37 @@ test("resume restores the saved session file and rejects foreign sessions or ano
   try {
     const resumed = await f.projectRuntime().resume(f.checkoutPath, ctx);
     assert.equal(resumed.status, "resumed");
+    assert.equal("target" in resumed, false);
     assert.equal(launchOptions.runId, SESSION_ID);
     assert.deepEqual(launchOptions.agentArgs, ["--session", recoveryPath]);
     assert.equal(launchOptions.agentArgs.includes("--session-id"), false);
     f.leases.pop()!.release();
+
+    const foreignCheckout = join(f.root, "foreign-checkout");
+    execFileSync("git", ["init", foreignCheckout], { stdio: "ignore" });
+    const foreignGitSession = join(f.root, "foreign-git.jsonl");
+    f.createSession(SESSION_ID, foreignGitSession, foreignCheckout);
+    writeManagerRecoveryReference(f.runtime, {
+      version: 1,
+      canonicalRepoKey: realpathSync.native(f.gitDir),
+      piSessionId: SESSION_ID,
+      piSessionFile: foreignGitSession,
+    });
+    await assert.rejects(
+      f.projectRuntime().resume(f.checkoutPath, ctx),
+      /invalid or foreign/,
+    );
+
+    writeManagerRecoveryReference(f.runtime, {
+      version: 1,
+      canonicalRepoKey: join(f.root, "missing-canonical-repository"),
+      piSessionId: SESSION_ID,
+      piSessionFile: recoveryPath,
+    });
+    await assert.rejects(
+      f.projectRuntime().resume(f.checkoutPath, ctx),
+      /invalid or foreign/,
+    );
 
     const foreign = join(f.root, "foreign.jsonl");
     f.createSession(SESSION_ID, foreign, join(f.root, "elsewhere"));

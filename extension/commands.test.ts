@@ -5150,7 +5150,7 @@ function managerBootstrapLockPath(cwd: string): string {
   return join(
     herdsmanTempRoot(),
     "locks",
-    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync(cwd)).digest("hex")}`,
+    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync.native(cwd)).digest("hex")}`,
   );
 }
 
@@ -9916,6 +9916,16 @@ test("Lead publication holds the assignment lock before Manager session binding"
 
 test("Manager supervision keeps incompatible Leads observational", async () => {
   setLeadEnvironment();
+  const incompatibleRepoPath = realFs.mkdtempSync(
+    join(tmpdir(), "incompatible-manager-repository-"),
+  );
+  assert.equal(
+    spawnSync("git", ["init", "--quiet"], {
+      cwd: incompatibleRepoPath,
+      encoding: "utf8",
+    }).status,
+    0,
+  );
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `chief-managers-${randomUUID()}.sock`,
@@ -9958,8 +9968,8 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     paneId: incompatibleManager.pane_id,
     tabId: incompatibleManager.tab_id,
     workspaceId: incompatibleWorkspace,
-    repoKey: "/var",
-    canonicalRepoKey: "/var",
+    repoKey: incompatibleRepoPath,
+    canonicalRepoKey: incompatibleRepoPath,
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10141,7 +10151,10 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
             ? { worktree: { repo_key: "/tmp", is_linked_worktree: false } }
             : args[2] === incompatibleWorkspace
               ? {
-                  worktree: { repo_key: "/var", is_linked_worktree: false },
+                  worktree: {
+                    repo_key: incompatibleRepoPath,
+                    is_linked_worktree: false,
+                  },
                 }
               : args[2] === assignedWorkspace || args[2] === ordinaryWorkspace
                 ? { worktree: null }
@@ -10158,7 +10171,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
           repo_key:
             args.includes("--workspace") &&
             args[args.indexOf("--workspace") + 1] === incompatibleWorkspace
-              ? "/var"
+              ? incompatibleRepoPath
               : "/tmp",
           repo_name: "project",
         },
@@ -10718,6 +10731,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     }
   } finally {
     realFs.rmSync(assignedCheckoutPath, { recursive: true, force: true });
+    realFs.rmSync(incompatibleRepoPath, { recursive: true, force: true });
     nativeSessions.delete(ordinarySessionPath);
     realFs.rmSync(ordinarySessionPath, { force: true });
     incompatibleManagerLease.release();

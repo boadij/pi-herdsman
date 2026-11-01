@@ -43,7 +43,7 @@ import {
   sameRuntimeBuild,
   type RuntimeBuild,
 } from "./compatibility.ts";
-import { sameDirectory } from "./herdr.ts";
+import { sameDirectory } from "./path-identity.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.

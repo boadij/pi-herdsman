@@ -63,9 +63,9 @@ export function resolveLocalRepositoryPath(
   let path = value;
   if (value === "~") {
     path = homeDirectory;
-  } else if (/^~[\\/]/.test(value)) {
-    rejectTraversal(value.slice(2).replace(/[\\/]/g, sep), "Repository path");
-    path = join(homeDirectory, value.slice(2).replace(/[\\/]/g, sep));
+  } else if (sep === "\\" ? /^~[\\/]/.test(value) : value.startsWith("~/")) {
+    rejectTraversal(value.slice(2), "Repository path");
+    path = join(homeDirectory, value.slice(2));
   } else if (!isAbsolute(value)) {
     throw new Error("Repository path must be absolute or start with ~/.");
   }
@@ -370,7 +370,9 @@ function resolveClonePath(value: string, homeDirectory?: string): string {
 
 function rejectTraversal(value: string, label: string): void {
   const root = parse(value).root;
-  const segments = value.slice(root.length).split(sep);
+  const segments = value
+    .slice(root.length)
+    .split(sep === "\\" ? /[\\/]/ : /\//);
   if (segments.some((segment) => segment === "." || segment === ".."))
     throw new Error(`${label} cannot contain . or .. path segments`);
 }

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import test from "node:test";
 import {
   CloneDestinationExistsError,
@@ -26,7 +26,7 @@ test("repository sources parse local, HTTPS, SSH, and scp-style inputs", () => {
   const home = join(tmpdir(), "repository-home");
   assert.deepEqual(parseRepositorySource("/work/project", home), {
     kind: "local",
-    path: "/work/project",
+    path: resolve("/work/project"),
   });
   assert.deepEqual(parseRepositorySource("~/work/project", home), {
     kind: "local",
@@ -54,11 +54,17 @@ test("repository sources parse local, HTTPS, SSH, and scp-style inputs", () => {
 });
 
 test("source and destination paths reject relative inputs and traversal", () => {
+  const root = tmpdir();
+  const slashTraversal = `${root.replace(/\\/g, "/")}/../outside`;
+  const traversalPaths = [slashTraversal];
+  if (sep === "\\") traversalPaths.push(`${root}\\..\\outside`);
+
   for (const path of [
     "project",
     "~other/project",
     "~/work/../outside",
     "/work/./project",
+    ...traversalPaths,
   ]) {
     assert.throws(() => parseRepositorySource(path), /absolute|~|path/i);
   }
@@ -91,6 +97,20 @@ test("source and destination paths reject relative inputs and traversal", () => 
     );
   }
 });
+
+test(
+  "POSIX repository paths keep backslashes literal",
+  { skip: sep !== "/" },
+  () => {
+    const home = join(tmpdir(), "repository-home");
+    const absolute = join(tmpdir(), "name\\..\\file");
+    assert.equal(resolveLocalRepositoryPath(absolute), resolve(absolute));
+    assert.equal(
+      resolveLocalRepositoryPath("~/name\\..\\file", home),
+      join(home, "name\\..\\file"),
+    );
+  },
+);
 
 test("local paths canonicalize symlinked ancestors and missing suffixes", () => {
   const root = mkdtempSync(join(tmpdir(), "repository-local-path-"));
@@ -240,6 +260,14 @@ test("explicit destinations are validated and existing destinations collide", as
       }),
       /\. or \.\./,
     );
+    if (sep === "\\") {
+      await assert.rejects(
+        cloneRepository(pi as any, "git@github.com:owner/repo.git", projects, {
+          destination: `${root}\\chosen\\..\\outside`,
+        }),
+        /\. or \.\./,
+      );
+    }
     await assert.rejects(
       cloneRepository(pi as any, "git@github.com:owner/repo.git", projects, {
         destination: `${root}/bad:name/checkout`,

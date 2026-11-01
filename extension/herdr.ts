@@ -21,6 +21,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { fail, OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+import { sameDirectory } from "./path-identity.ts";
+
+export { sameDirectory } from "./path-identity.ts";
 
 const HERDR_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
@@ -534,26 +537,6 @@ export type WorktreeGroupScope = Readonly<{
   primaryWorkspaceId: string;
   workspaceIds: readonly string[];
 }>;
-
-export function sameDirectory(left: string, right: string): boolean {
-  try {
-    const leftPath = realpathSync.native(left);
-    const rightPath = realpathSync.native(right);
-    const leftStat = statSync(leftPath, { bigint: true });
-    const rightStat = statSync(rightPath, { bigint: true });
-    if (!leftStat.isDirectory() || !rightStat.isDirectory()) return false;
-    if (
-      leftStat.dev !== 0n &&
-      rightStat.dev !== 0n &&
-      leftStat.ino !== 0n &&
-      rightStat.ino !== 0n
-    )
-      return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
-    return leftPath === rightPath;
-  } catch {
-    return false;
-  }
-}
 
 /** Resolve an assignment only from its persisted physical checkout provenance. */
 export function resolveAssignmentCheckout<T extends HerdrRecord>(
@@ -2222,6 +2205,20 @@ async function managerPrimaryWorkspaceIds(
       typeof membership.is_linked_worktree !== "boolean"
     )
       error("manager topology", "Herdr workspace association is inconsistent");
+
+    if (!sameDirectory(membership.repo_key, repoKey)) {
+      try {
+        const associatedRepo = realpathSync.native(membership.repo_key);
+        if (!statSync(associatedRepo).isDirectory())
+          throw new Error("not a directory");
+      } catch {
+        error(
+          "manager topology",
+          "Herdr workspace association is unverifiable",
+        );
+      }
+      continue;
+    }
 
     let identity: GitCheckoutIdentity;
     try {
