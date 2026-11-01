@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import * as realFs from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { mock, test } from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -76,6 +76,7 @@ const {
   readProjectOverrides,
   updateConfig,
   updateProjectOverride,
+  resolveProjectsDirectory,
   validByteLimit,
 } = await import("./config.ts");
 const { herdsmanConfigPath, herdsmanDataRoot } = await import("./storage.ts");
@@ -96,7 +97,61 @@ test("missing config resolves to defaults without creating storage", () => {
   assert.equal(readConfig().defaultLeadExecution, "flexible");
   assert.equal(readConfig().autoActivateManager, false);
   assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, false);
+  assert.equal(readConfig().projectsDirectory, "~/Projects");
+  assert.equal(
+    resolveProjectsDirectory(readConfig().projectsDirectory),
+    join(homedir(), "Projects"),
+  );
+  assert.equal(resolveProjectsDirectory("~"), homedir());
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
+});
+
+test("projects directory accepts absolute and home-relative paths and resets without creating it", () => {
+  const parent = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-projects-"));
+  const missing = join(parent, "not-created");
+  try {
+    updateConfig("projectsDirectory", "~/Work/Projects");
+    assert.equal(readConfig().projectsDirectory, "~/Work/Projects");
+    assert.equal(
+      resolveProjectsDirectory(readConfig().projectsDirectory),
+      join(homedir(), "Work", "Projects"),
+    );
+    if (process.platform === "win32") {
+      updateConfig("projectsDirectory", "~\\Work\\Projects");
+      assert.equal(
+        resolveProjectsDirectory(readConfig().projectsDirectory),
+        join(homedir(), "Work", "Projects"),
+      );
+    } else {
+      assert.throws(
+        () => updateConfig("projectsDirectory", "~\\Work\\Projects"),
+        /projectsDirectory/,
+      );
+    }
+
+    updateConfig("projectsDirectory", missing);
+    assert.equal(readConfig().projectsDirectory, missing);
+    assert.equal(resolveProjectsDirectory(missing), missing);
+    assert.equal(realFs.existsSync(missing), false);
+    assert.deepEqual(JSON.parse(realFs.readFileSync(configPath!, "utf8")), {
+      projectsDirectory: missing,
+    });
+
+    for (const value of ["relative/path", "~someone/Projects", ""]) {
+      const before = realFs.readFileSync(configPath!, "utf8");
+      assert.throws(
+        () => updateConfig("projectsDirectory", value),
+        /projectsDirectory/,
+      );
+      assert.equal(realFs.readFileSync(configPath!, "utf8"), before);
+    }
+
+    updateConfig("projectsDirectory", undefined);
+    assert.equal(realFs.existsSync(configPath!), false);
+    assert.equal(readConfig().projectsDirectory, "~/Projects");
+  } finally {
+    realFs.rmSync(parent, { recursive: true, force: true });
+  }
 });
 
 test("worktree-removal preauthorization is repository-scoped and survives reload", () => {
@@ -446,6 +501,9 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
       '{"managerGitBootstrapWithoutConfirmation":1}',
       "managerGitBootstrapWithoutConfirmation",
     ],
+    ['{"projectsDirectory":"relative/path"}', "projectsDirectory"],
+    ['{"projectsDirectory":"~someone/Projects"}', "projectsDirectory"],
+    ['{"projectsDirectory":4}', "projectsDirectory"],
     ["{", "Invalid Pi Herdsman config JSON"],
     ["[]", "root must be an object"],
     ['{"typo":true}', "unknown field typo"],

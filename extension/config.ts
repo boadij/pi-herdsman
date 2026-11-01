@@ -11,7 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { lockSync } from "proper-lockfile";
 import { claimProcessLock } from "./lock.ts";
@@ -24,6 +25,7 @@ import {
 } from "./core.ts";
 
 const DEFAULT_BYTE_LIMIT = 128 * 1024;
+const DEFAULT_PROJECTS_DIRECTORY = "~/Projects";
 export const MIN_BYTE_LIMIT = 1024;
 export const MAX_BYTE_LIMIT = 1024 * 1024;
 
@@ -33,6 +35,7 @@ export type HerdsmanConfig = {
   contextRetirement: boolean;
   autoActivateManager: boolean;
   managerGitBootstrapWithoutConfirmation: boolean;
+  projectsDirectory: string;
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
   worktreeRemovalPreapprovedRepos: string[];
@@ -46,6 +49,7 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   contextRetirement: true,
   autoActivateManager: false,
   managerGitBootstrapWithoutConfirmation: false,
+  projectsDirectory: DEFAULT_PROJECTS_DIRECTORY,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
   worktreeRemovalPreapprovedRepos: [],
@@ -69,12 +73,36 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "contextRetirement",
   "autoActivateManager",
   "managerGitBootstrapWithoutConfirmation",
+  "projectsDirectory",
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
   "worktreeRemovalPreapprovedRepos",
   "managerMergeEnabled",
   "managerMergeOverrides",
 ]);
+
+function isValidProjectsDirectory(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value === value.trim() &&
+    (value === "~" ||
+      value.startsWith("~/") ||
+      (sep === "\\" && value.startsWith("~\\")) ||
+      isAbsolute(value))
+  );
+}
+
+export function resolveProjectsDirectory(
+  value: string = DEFAULT_PROJECTS_DIRECTORY,
+): string {
+  if (!isValidProjectsDirectory(value))
+    throw new Error("Projects directory must be absolute or start with ~/.");
+  if (value === "~") return homedir();
+  if (value.startsWith("~/") || (sep === "\\" && value.startsWith("~\\")))
+    return resolve(homedir(), value.slice(2));
+  return resolve(value);
+}
 
 function validRepoIdentity(value: unknown): value is string {
   return (
@@ -146,6 +174,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       );
     result.managerGitBootstrapWithoutConfirmation =
       record.managerGitBootstrapWithoutConfirmation;
+  }
+  if ("projectsDirectory" in record) {
+    if (!isValidProjectsDirectory(record.projectsDirectory))
+      throw new Error("Invalid Pi Herdsman config field projectsDirectory");
+    result.projectsDirectory = record.projectsDirectory;
   }
   if ("managerMergeEnabled" in record) {
     if (typeof record.managerMergeEnabled !== "boolean")
@@ -505,6 +538,8 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(
           "Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation",
         );
+      if (key === "projectsDirectory" && !isValidProjectsDirectory(value))
+        throw new Error("Invalid Pi Herdsman config field projectsDirectory");
       if (key === "managerMergeEnabled" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
       if (key === "managerMergeOverrides" && !validManagerMergeOverrides(value))
@@ -526,6 +561,7 @@ export function updateConfig<K extends ConfigKey>(
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
         key !== "managerGitBootstrapWithoutConfirmation" &&
+        key !== "projectsDirectory" &&
         key !== "managerMergeEnabled" &&
         key !== "managerMergeOverrides" &&
         key !== "worktreeRemovalPreapprovedRepos" &&

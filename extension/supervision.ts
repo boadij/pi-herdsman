@@ -24,6 +24,7 @@ import {
   ProcessLockOccupiedError,
   isProcessLockClaim,
   readLiveProcessLock,
+  readOptionalProcessLockStatus,
   readProcessLockStatus,
   type ProcessLockClaim,
 } from "./lock.ts";
@@ -42,6 +43,7 @@ import {
   sameRuntimeBuild,
   type RuntimeBuild,
 } from "./compatibility.ts";
+import { sameDirectory } from "./herdr.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
@@ -2077,6 +2079,8 @@ export type ManagerDescriptor = {
   tabId: string;
   workspaceId: string;
   repoKey: string;
+  /** Canonical Git common-directory path used for repository exclusion. */
+  canonicalRepoKey?: string;
   createdAt: number;
 };
 export type ManagerIdentity = Pick<
@@ -2087,16 +2091,35 @@ export type ManagerIdentity = Pick<
   | "tabId"
   | "workspaceId"
   | "repoKey"
-> & { build: RuntimeBuild; createdAt?: number };
+> & { canonicalRepoKey: string; build: RuntimeBuild; createdAt?: number };
 export type ManagerLease = {
   descriptor: ManagerDescriptor;
   runtime: SupervisionRuntime;
   release: () => void;
 };
+export type ManagerRecoveryReference = Readonly<{
+  version: 1;
+  canonicalRepoKey: string;
+  piSessionId: string;
+  piSessionFile: string;
+}>;
+export type ManagerStartIntent = Readonly<{
+  version: 1;
+  sessionId: string;
+  repoKey: string;
+  checkoutPath: string;
+  workspaceId: string;
+  paneId: string;
+  createdAt: number;
+}>;
 export type ManagerDescriptorStatus = Readonly<{
   descriptor: ManagerDescriptor;
   live: boolean;
 }>;
+
+const MANAGER_RECOVERY_REFERENCE_MAX_BYTES = 4096;
+const MANAGER_START_INTENT_MAX_BYTES = 4096;
+export const MANAGER_START_INTENT_TTL_MS = 10 * 60 * 1000;
 
 export function managerDescriptorPath(
   runtime: SupervisionRuntime,
@@ -2108,6 +2131,358 @@ export function managerDescriptorPath(
     runtime.managers,
     `${createHash("sha256").update(workspaceId).digest("hex")}.json`,
   );
+}
+
+function managerRepositoryLeasePath(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): string {
+  if (!validNativeIdentity(canonicalRepoKey))
+    throw new Error("Invalid Manager repository key");
+  return join(
+    runtime.managers,
+    `${createHash("sha256").update(canonicalRepoKey).digest("hex")}.repository.lock`,
+  );
+}
+
+/** Serializes Chief launch/resume decisions without holding the Manager lease. */
+export function claimManagerStartupLock(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): ReturnType<typeof acquireProcessLock> {
+  if (!isAbsolute(canonicalRepoKey))
+    throw new Error("Invalid Manager repository key");
+  mkdirSync(runtime.managers, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.managers, 0o700);
+  return acquireProcessLock(
+    join(
+      runtime.managers,
+      `${createHash("sha256").update(canonicalRepoKey).digest("hex")}.startup.lock`,
+    ),
+    { name: "Manager startup lock" },
+  );
+}
+
+export function managerRepositoryLeaseIsHeld(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): boolean {
+  return (
+    readOptionalProcessLockStatus(
+      managerRepositoryLeasePath(runtime, canonicalRepoKey),
+      "Manager repository lease",
+    )?.live ?? false
+  );
+}
+
+function managerRecoveryReferencePath(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): string {
+  if (!validNativeIdentity(canonicalRepoKey))
+    throw new Error("Invalid Manager repository key");
+  return join(
+    runtime.root,
+    "manager-recovery",
+    `${createHash("sha256").update(canonicalRepoKey).digest("hex")}.json`,
+  );
+}
+
+function validManagerRecoveryReference(
+  value: unknown,
+): value is ManagerRecoveryReference {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 4 &&
+    Object.hasOwn(record, "version") &&
+    Object.hasOwn(record, "canonicalRepoKey") &&
+    Object.hasOwn(record, "piSessionId") &&
+    Object.hasOwn(record, "piSessionFile") &&
+    record.version === 1 &&
+    validNativeIdentity(record.canonicalRepoKey) &&
+    validSession(record.piSessionId) &&
+    typeof record.piSessionFile === "string" &&
+    record.piSessionFile.length > 0
+  );
+}
+
+function readManagerRecoveryReferenceFile(
+  path: string,
+  canonicalRepoKey: string,
+): ManagerRecoveryReference | undefined {
+  try {
+    if (statSync(path).size > MANAGER_RECOVERY_REFERENCE_MAX_BYTES)
+      throw new Error("reference too large");
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      !validManagerRecoveryReference(value) ||
+      value.canonicalRepoKey !== canonicalRepoKey
+    )
+      throw new Error("invalid reference identity");
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Unable to read Manager recovery reference", {
+      cause: error,
+    });
+  }
+}
+
+function withManagerRecoveryReferenceLock<T>(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+  operation: (path: string) => T,
+): T {
+  const path = managerRecoveryReferencePath(runtime, canonicalRepoKey);
+  const directory = dirname(path);
+  mkdirSync(runtime.root, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.root, 0o700);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const lease = acquireProcessLock(`${path}.lock`, {
+    name: "Manager recovery reference lock",
+  });
+  try {
+    return operation(path);
+  } finally {
+    lease.release();
+  }
+}
+
+/** Durable exact-session metadata, not evidence of a live Manager lease. */
+export function readManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): ManagerRecoveryReference | undefined {
+  return withManagerRecoveryReferenceLock(runtime, canonicalRepoKey, (path) =>
+    readManagerRecoveryReferenceFile(path, canonicalRepoKey),
+  );
+}
+
+export function writeManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  reference: ManagerRecoveryReference,
+): string {
+  if (!validManagerRecoveryReference(reference))
+    throw new Error("Invalid Manager recovery reference");
+  const content = `${JSON.stringify(reference)}\n`;
+  if (Buffer.byteLength(content, "utf8") > MANAGER_RECOVERY_REFERENCE_MAX_BYTES)
+    throw new Error("Manager recovery reference is too large");
+  return withManagerRecoveryReferenceLock(
+    runtime,
+    reference.canonicalRepoKey,
+    (path) => publishRecord(path, content),
+  );
+}
+
+export function removeManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+  piSessionId: string,
+): boolean {
+  if (!validSession(piSessionId))
+    throw new Error("Invalid Manager recovery session ID");
+  return withManagerRecoveryReferenceLock(runtime, canonicalRepoKey, (path) => {
+    const current = readManagerRecoveryReferenceFile(path, canonicalRepoKey);
+    if (!current || current.piSessionId !== piSessionId) return false;
+    unlinkSync(path);
+    fsyncDirectory(dirname(path));
+    return true;
+  });
+}
+
+function managerStartIntentDirectory(runtime: SupervisionRuntime): string {
+  return join(runtime.root, "manager-start-intents");
+}
+
+function managerStartIntentPath(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+): string {
+  if (!validSession(sessionId))
+    throw new Error("Invalid Manager startup session ID");
+  return join(
+    managerStartIntentDirectory(runtime),
+    `${createHash("sha256").update(sessionId).digest("hex")}.json`,
+  );
+}
+
+function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 7 &&
+    record.version === 1 &&
+    validSession(record.sessionId) &&
+    validNativeIdentity(record.repoKey) &&
+    isAbsolute(String(record.checkoutPath ?? "")) &&
+    validNativeIdentity(record.workspaceId) &&
+    validNativeIdentity(record.paneId) &&
+    Number.isInteger(record.createdAt) &&
+    (record.createdAt as number) >= 0
+  );
+}
+
+function withManagerStartIntentLock<T>(
+  runtime: SupervisionRuntime,
+  operation: (directory: string) => T,
+): T {
+  const directory = managerStartIntentDirectory(runtime);
+  mkdirSync(runtime.root, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.root, 0o700);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const lock = acquireProcessLock(join(directory, "intents.lock"), {
+    name: "Manager startup intent lock",
+  });
+  try {
+    pruneExpiredManagerStartIntents(directory);
+    return operation(directory);
+  } finally {
+    lock.release();
+  }
+}
+
+function pruneExpiredManagerStartIntents(
+  directory: string,
+  now = Date.now(),
+): void {
+  for (const entry of readdirSync(directory)) {
+    if (!/^[0-9a-f]{64}\.json$/.test(entry)) continue;
+    const path = join(directory, entry);
+    try {
+      if (statSync(path).size > MANAGER_START_INTENT_MAX_BYTES) continue;
+      const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+      if (
+        validManagerStartIntent(value) &&
+        now - value.createdAt > MANAGER_START_INTENT_TTL_MS
+      ) {
+        unlinkSync(path);
+        fsyncDirectory(directory);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+    }
+  }
+}
+
+/** Persist a short-lived exact-session startup route, never Manager authority. */
+export function writeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  intent: ManagerStartIntent,
+): void {
+  if (!validManagerStartIntent(intent))
+    throw new Error("Invalid Manager startup intent");
+  const content = `${JSON.stringify(intent)}\n`;
+  if (Buffer.byteLength(content, "utf8") > MANAGER_START_INTENT_MAX_BYTES)
+    throw new Error("Manager startup intent is too large");
+  withManagerStartIntentLock(runtime, (directory) => {
+    const path = managerStartIntentPath(runtime, intent.sessionId);
+    if (statSync(path, { throwIfNoEntry: false }))
+      throw new Error("Manager startup intent already exists for this session");
+    publishRecord(path, content);
+  });
+}
+
+/** Check for an exact-session startup route without consuming the handoff. */
+export function hasManagerStartIntent(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+  now = Date.now(),
+): boolean {
+  return withManagerStartIntentLock(runtime, (directory) => {
+    const path = managerStartIntentPath(runtime, sessionId);
+    let value: unknown;
+    try {
+      if (statSync(path).size > MANAGER_START_INTENT_MAX_BYTES)
+        throw new Error("intent too large");
+      value = JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw new Error("Unable to read Manager startup intent", {
+        cause: error,
+      });
+    }
+    if (!validManagerStartIntent(value) || value.sessionId !== sessionId)
+      throw new Error("Manager startup intent identity is invalid");
+    if (
+      value.createdAt > now + 60_000 ||
+      now - value.createdAt > MANAGER_START_INTENT_TTL_MS
+    ) {
+      unlinkSync(path);
+      fsyncDirectory(directory);
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Consume only the exact, unexpired handoff written for this new session. */
+export function consumeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  expected: Pick<
+    ManagerStartIntent,
+    "sessionId" | "repoKey" | "checkoutPath" | "workspaceId" | "paneId"
+  >,
+  now = Date.now(),
+): ManagerStartIntent | undefined {
+  return withManagerStartIntentLock(runtime, (directory) => {
+    const path = managerStartIntentPath(runtime, expected.sessionId);
+    let value: unknown;
+    try {
+      if (statSync(path).size > MANAGER_START_INTENT_MAX_BYTES)
+        throw new Error("intent too large");
+      value = JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new Error("Unable to read Manager startup intent", {
+        cause: error,
+      });
+    }
+    if (
+      !validManagerStartIntent(value) ||
+      value.sessionId !== expected.sessionId
+    )
+      throw new Error("Manager startup intent identity is invalid");
+    if (
+      value.createdAt > now + 60_000 ||
+      now - value.createdAt > MANAGER_START_INTENT_TTL_MS
+    ) {
+      unlinkSync(path);
+      fsyncDirectory(directory);
+      return undefined;
+    }
+    if (
+      value.repoKey !== expected.repoKey ||
+      !sameDirectory(value.checkoutPath, expected.checkoutPath) ||
+      value.workspaceId !== expected.workspaceId ||
+      value.paneId !== expected.paneId
+    )
+      throw new Error(
+        "Manager startup intent does not match this Herdr session",
+      );
+    unlinkSync(path);
+    fsyncDirectory(directory);
+    return value;
+  });
+}
+
+export function removeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+): boolean {
+  return withManagerStartIntentLock(runtime, () => {
+    const path = managerStartIntentPath(runtime, sessionId);
+    try {
+      unlinkSync(path);
+      fsyncDirectory(dirname(path));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  });
 }
 
 function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
@@ -2126,7 +2501,11 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
   ];
   return (
     Object.keys(r).every(
-      (key) => keys.includes(key) || key === "piSessionFile" || key === "build",
+      (key) =>
+        keys.includes(key) ||
+        key === "piSessionFile" ||
+        key === "build" ||
+        key === "canonicalRepoKey",
     ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
@@ -2140,6 +2519,8 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
     validNativeIdentity(r.tabId) &&
     validNativeIdentity(r.workspaceId) &&
     validNativeIdentity(r.repoKey) &&
+    (r.canonicalRepoKey === undefined ||
+      validNativeIdentity(r.canonicalRepoKey)) &&
     Number.isInteger(r.createdAt) &&
     (r.createdAt as number) >= 0
   );
@@ -2161,6 +2542,7 @@ export function sameManagerDescriptor(
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
     actual.repoKey === expected.repoKey &&
+    actual.canonicalRepoKey === expected.canonicalRepoKey &&
     actual.createdAt === expected.createdAt
   );
 }
@@ -2277,6 +2659,7 @@ export function claimManagerLease(
     !validNativeIdentity(identity.tabId) ||
     !validNativeIdentity(identity.workspaceId) ||
     !validNativeIdentity(identity.repoKey) ||
+    !validNativeIdentity(identity.canonicalRepoKey) ||
     (identity.createdAt !== undefined &&
       (!Number.isInteger(identity.createdAt) || identity.createdAt < 0))
   )
@@ -2284,48 +2667,102 @@ export function claimManagerLease(
   mkdirSync(runtime.managers, { recursive: true, mode: 0o700 });
   chmodSync(runtime.managers, 0o700);
   const path = managerDescriptorPath(runtime, identity.workspaceId);
-  const lease = acquireProcessLock(`${path}.lock`, {
-    name: "Manager supervision lease",
-  });
-  const descriptor: ManagerDescriptor = {
-    version: 1,
-    build: identity.build,
-    leaseId: randomUUID(),
-    claim: lease.claim,
-    piSessionId: identity.piSessionId,
-    ...(identity.piSessionFile !== undefined
-      ? { piSessionFile: identity.piSessionFile }
-      : {}),
-    paneId: identity.paneId,
-    tabId: identity.tabId,
-    workspaceId: identity.workspaceId,
-    repoKey: identity.repoKey,
-    createdAt: identity.createdAt ?? Date.now(),
-  };
+  const repositoryLease = acquireProcessLock(
+    managerRepositoryLeasePath(runtime, identity.canonicalRepoKey),
+    { name: "Manager repository lease" },
+  );
+  let lease: ReturnType<typeof acquireProcessLock> | undefined;
+  let descriptor: ManagerDescriptor | undefined;
   try {
+    for (const existing of listManagerDescriptors(runtime)) {
+      if (existing.canonicalRepoKey !== undefined) continue;
+      if (
+        !isAbsolute(existing.repoKey) ||
+        !sameDirectory(existing.repoKey, existing.repoKey)
+      )
+        throw new Error("Unable to verify legacy Manager repository identity");
+      if (sameDirectory(existing.repoKey, identity.canonicalRepoKey))
+        throw new ProcessLockOccupiedError(
+          "Manager repository lease is held by a legacy descriptor",
+        );
+    }
+    lease = acquireProcessLock(`${path}.lock`, {
+      name: "Manager supervision lease",
+    });
+    descriptor = {
+      version: 1,
+      build: identity.build,
+      leaseId: randomUUID(),
+      claim: lease.claim,
+      piSessionId: identity.piSessionId,
+      ...(identity.piSessionFile !== undefined
+        ? { piSessionFile: identity.piSessionFile }
+        : {}),
+      paneId: identity.paneId,
+      tabId: identity.tabId,
+      workspaceId: identity.workspaceId,
+      repoKey: identity.repoKey,
+      canonicalRepoKey: identity.canonicalRepoKey,
+      createdAt: identity.createdAt ?? Date.now(),
+    };
     writeDescriptor(path, descriptor);
   } catch (error) {
-    lease.release();
+    const cleanupErrors: unknown[] = [];
+    if (lease) {
+      try {
+        lease.release();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length === 0) {
+      try {
+        repositoryLease.release();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0)
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "Unable to roll back Manager lease claim",
+        { cause: error },
+      );
     throw error;
   }
+  const workspaceLease = lease!;
+  const claimedDescriptor = descriptor!;
   let released = false;
+  let workspaceReleased = false;
+  let workspaceReleaseFailed = false;
   return {
-    descriptor,
+    descriptor: claimedDescriptor,
     runtime,
     release: () => {
       if (released) return;
-      released = true;
-      try {
-        const current = readManagerDescriptor(runtime, identity.workspaceId);
-        if (current && sameManagerDescriptor(current, descriptor)) {
-          unlinkSync(path);
-          fsyncDirectory(runtime.managers);
+      if (workspaceReleaseFailed)
+        throw new Error("Unable to release Manager repository lease safely");
+      if (!workspaceReleased) {
+        try {
+          const current = readManagerDescriptor(runtime, identity.workspaceId);
+          if (current && sameManagerDescriptor(current, claimedDescriptor)) {
+            unlinkSync(path);
+            fsyncDirectory(runtime.managers);
+          }
+        } catch {
+          /* A replaced or malformed descriptor is not ours to remove. */
         }
-      } catch {
-        /* A replaced or malformed descriptor is not ours to remove. */
-      } finally {
-        lease.release();
+        try {
+          workspaceLease.release();
+          workspaceReleased = true;
+        } catch (error) {
+          // Keep repository exclusion if workspace release could not be verified.
+          workspaceReleaseFailed = true;
+          throw error;
+        }
       }
+      repositoryLease.release();
+      released = true;
     },
   };
 }

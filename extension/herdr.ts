@@ -654,6 +654,7 @@ export async function localRepositoryScope(
     );
   return {
     repoKey: source.repo_key as string,
+    canonicalRepoKey: commonDir,
     repoName: source.repo_name as string,
     checkoutPath,
     isPrimary,
@@ -957,7 +958,12 @@ async function lockLifecycle(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<() => void> {
-  const id = workspace(ctx);
+  return lockLifecycleForWorkspace(workspace(ctx), signal);
+}
+async function lockLifecycleForWorkspace(
+  id: string,
+  signal?: AbortSignal,
+): Promise<() => void> {
   // ponytail: serialize physical lifecycle mutations per workspace.
   // Split only if lifecycle throughput becomes a measured problem.
   const path = join(
@@ -1848,69 +1854,57 @@ export async function startHerdrAgent(
   }
 }
 
-export async function startHerdrAgentInPane(
+type VerifiedPaneTarget = Readonly<{
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  cwd: string;
+  terminalId: string;
+}>;
+
+type ExistingPaneLaunchOptions = Pick<
+  StartHerdrOptions,
+  "label" | "runId" | "extensionPath" | "agentArgs" | "timeoutMs" | "signal"
+>;
+
+type PaneTargetVerifier = (deadline: number) => Promise<VerifiedPaneTarget>;
+
+async function launchPiInVerifiedPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  options: StartHerdrInPaneOptions,
+  options: ExistingPaneLaunchOptions,
+  lockWorkspaceId: string,
+  verifyTarget: PaneTargetVerifier,
+  verifyBeforeLaunch?: (deadline: number) => Promise<void>,
 ): Promise<StartedHerdrAgent> {
   const { totalTimeout, childTimeout } = startupTimeoutBudget(
     options.timeoutMs,
   );
   const deadline = Date.now() + totalTimeout;
-  const release = await lockLifecycle(ctx, options.signal);
+  const release = await lockLifecycleForWorkspace(
+    lockWorkspaceId,
+    options.signal,
+  );
   let attempt: StartedHerdrAgent | undefined;
   let retryAttempted = false;
   let stage = "topology";
   try {
-    const currentWorkspaceId = workspace(ctx);
-    const scope = await worktreeGroupScope(
-      pi,
-      ctx,
-      currentWorkspaceId,
-      options.signal,
-      startupCallTimeout(deadline),
-    );
-    if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
-      error(
-        "start",
-        `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-      );
-    if (!scope.workspaceIds.includes(options.workspaceId))
-      error(
-        "start",
-        `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-      );
-
-    const cwd = canonicalCwd(options.cwd);
-    const panes =
-      (
-        await runHerdr(
-          pi,
-          ctx,
-          ["pane", "list", "--workspace", options.workspaceId],
-          { signal: options.signal, timeout: startupCallTimeout(deadline) },
-        )
-      ).panes ?? [];
-    const pane = panes.find((item: any) => item.pane_id === options.paneId);
+    const target = await verifyTarget(deadline);
+    const cwd = canonicalCwd(target.cwd);
     if (
-      !pane ||
-      pane.workspace_id !== options.workspaceId ||
-      pane.tab_id !== options.tabId ||
-      !sameCwd(pane.cwd, cwd)
+      !target.workspaceId ||
+      !target.tabId ||
+      !target.paneId ||
+      !target.terminalId
     )
-      error("start", `pane ${options.paneId} topology changed before launch`);
-    if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
-      error(
-        "start",
-        `pane ${options.paneId} did not include terminal identity`,
-      );
+      error("start", "verified pane identity is incomplete");
 
     attempt = {
-      herdrAgent: alias(options.workspaceId, options.label, options.runId),
-      workspaceId: options.workspaceId,
-      tabId: options.tabId,
-      paneId: options.paneId,
-      terminalId: pane.terminal_id,
+      herdrAgent: alias(target.workspaceId, options.label, options.runId),
+      workspaceId: target.workspaceId,
+      tabId: target.tabId,
+      paneId: target.paneId,
+      terminalId: target.terminalId,
       cwd,
       createdTab: false,
       launchMayHaveStarted: false,
@@ -1921,7 +1915,7 @@ export async function startHerdrAgentInPane(
       await waitForShellMarker(
         pi,
         ctx,
-        options.paneId,
+        target.paneId,
         deadline,
         "start",
         options.signal,
@@ -1929,7 +1923,7 @@ export async function startHerdrAgentInPane(
       attempt.shellProcess = (await paneProcess(
         pi,
         ctx,
-        options.paneId,
+        target.paneId,
         options.signal,
         deadline,
         true,
@@ -1941,7 +1935,7 @@ export async function startHerdrAgentInPane(
           await captureStartupDiagnostic(
             pi,
             ctx,
-            options.paneId,
+            target.paneId,
             deadline,
             options.signal,
           ),
@@ -1950,14 +1944,15 @@ export async function startHerdrAgentInPane(
     }
 
     stage = "ownership_capture";
+    if (verifyBeforeLaunch) await verifyBeforeLaunch(deadline);
     const current = (
-      await runHerdr(pi, ctx, ["pane", "get", options.paneId], {
+      await runHerdr(pi, ctx, ["pane", "get", target.paneId], {
         signal: options.signal,
         timeout: startupCallTimeout(deadline),
       })
     ).pane;
     if (!matchesAttemptPane(current, attempt))
-      error("start", `pane ${options.paneId} identity changed before launch`);
+      error("start", `pane ${target.paneId} identity changed before launch`);
 
     stage = "agent_start";
     const retryDeadline = Math.min(
@@ -1980,7 +1975,7 @@ export async function startHerdrAgentInPane(
             "--kind",
             "pi",
             "--pane",
-            options.paneId,
+            target.paneId,
             "--timeout",
             String(Math.min(remaining, childTimeout)),
             "--",
@@ -2006,7 +2001,7 @@ export async function startHerdrAgentInPane(
         if (busy && Date.now() < retryDeadline) {
           retryAttempted = true;
           const observed = (
-            await runHerdr(pi, ctx, ["pane", "get", options.paneId], {
+            await runHerdr(pi, ctx, ["pane", "get", target.paneId], {
               signal: options.signal,
               timeout: startupCallTimeout(deadline),
             })
@@ -2014,7 +2009,7 @@ export async function startHerdrAgentInPane(
           if (!matchesAttemptPane(observed, attempt))
             error(
               "start",
-              `pane ${options.paneId} identity changed during startup retry`,
+              `pane ${target.paneId} identity changed during startup retry`,
             );
           const remainingRetry = retryDeadline - Date.now();
           if (remainingRetry > 0)
@@ -2031,7 +2026,7 @@ export async function startHerdrAgentInPane(
             await captureStartupDiagnostic(
               pi,
               ctx,
-              options.paneId,
+              target.paneId,
               deadline,
               options.signal,
             ),
@@ -2058,6 +2053,507 @@ export async function startHerdrAgentInPane(
   } finally {
     release();
   }
+}
+
+export async function startHerdrAgentInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  return launchPiInVerifiedPane(
+    pi,
+    ctx,
+    options,
+    workspace(ctx),
+    async (deadline) => {
+      const currentWorkspaceId = workspace(ctx);
+      const scope = await worktreeGroupScope(
+        pi,
+        ctx,
+        currentWorkspaceId,
+        options.signal,
+        startupCallTimeout(deadline),
+      );
+      if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
+        error(
+          "start",
+          `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+        );
+      if (!scope.workspaceIds.includes(options.workspaceId))
+        error(
+          "start",
+          `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+        );
+
+      const cwd = canonicalCwd(options.cwd);
+      const panes =
+        (
+          await runHerdr(
+            pi,
+            ctx,
+            ["pane", "list", "--workspace", options.workspaceId],
+            { signal: options.signal, timeout: startupCallTimeout(deadline) },
+          )
+        ).panes ?? [];
+      const pane = panes.find((item: any) => item.pane_id === options.paneId);
+      if (
+        !pane ||
+        pane.workspace_id !== options.workspaceId ||
+        pane.tab_id !== options.tabId ||
+        !sameCwd(pane.cwd, cwd)
+      )
+        error("start", `pane ${options.paneId} topology changed before launch`);
+      if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
+        error(
+          "start",
+          "pane " + options.paneId + " did not include terminal identity",
+        );
+
+      return {
+        workspaceId: options.workspaceId,
+        tabId: options.tabId,
+        paneId: options.paneId,
+        cwd,
+        terminalId: pane.terminal_id,
+      };
+    },
+  );
+}
+
+export type HerdrManagerLaunchTarget = Readonly<{
+  repoKey: string;
+  checkoutPath: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+}>;
+
+export type StartHerdrManagerInPaneOptions = ExistingPaneLaunchOptions & {
+  repoKey: string;
+  checkoutPath: string;
+  primaryWorkspaceId: string;
+  tabId: string;
+  paneId: string;
+  /**
+   * Reject unless the invoking session is an active, verified Chief authorized
+   * for this exact repository/workspace/pane target.
+   */
+  verifyAuthorization(target: HerdrManagerLaunchTarget): Promise<void>;
+};
+
+export type HerdrManagerPaneSelection = Readonly<{
+  repoKey: string;
+  checkoutPath: string;
+  primaryWorkspaceId: string;
+  tabId: string;
+  paneId: string;
+}>;
+
+type GitCheckoutIdentity = {
+  checkoutPath: string;
+  gitDir: string;
+  commonDir: string;
+};
+
+async function gitCheckoutIdentity(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<GitCheckoutIdentity> {
+  const gitPath = async (argument: string) => {
+    const result = await pi.exec(
+      "git",
+      ["rev-parse", "--path-format=absolute", argument],
+      { cwd, signal, timeout: 10_000 },
+    );
+    const value = String(result.stdout ?? "").trim();
+    if (
+      result.code !== 0 ||
+      result.killed ||
+      result.stderr?.trim() ||
+      !isAbsolute(value)
+    )
+      throw new Error("Git checkout identity is unavailable");
+    try {
+      return realpathSync.native(value);
+    } catch {
+      throw new Error("Git checkout identity is unavailable");
+    }
+  };
+  const [checkoutPath, gitDir, commonDir] = await Promise.all([
+    gitPath("--show-toplevel"),
+    gitPath("--git-dir"),
+    gitPath("--git-common-dir"),
+  ]);
+  return { checkoutPath, gitDir, commonDir };
+}
+
+async function managerPrimaryWorkspaceIds(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  repoKey: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const inventory = await herdrSessionSnapshot(pi, ctx, signal);
+  const workspaceIds = inventory.workspaces.map(
+    (item: any) => item?.workspace_id,
+  );
+  if (
+    workspaceIds.some((id) => typeof id !== "string" || !id) ||
+    new Set(workspaceIds).size !== workspaceIds.length
+  )
+    error("manager topology", "Herdr workspace inventory is inconsistent");
+
+  const primaryIds: string[] = [];
+  for (const workspaceId of workspaceIds as string[]) {
+    const workspace = (
+      await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
+    )?.workspace;
+    if (workspace?.workspace_id !== workspaceId)
+      error("manager topology", "Herdr workspace identity is inconsistent");
+    const membership = workspace.worktree;
+    if (membership == null) continue;
+    if (
+      typeof membership !== "object" ||
+      typeof membership.repo_key !== "string" ||
+      !isAbsolute(membership.repo_key) ||
+      typeof membership.checkout_path !== "string" ||
+      !isAbsolute(membership.checkout_path) ||
+      typeof membership.is_linked_worktree !== "boolean"
+    )
+      error("manager topology", "Herdr workspace association is inconsistent");
+
+    let identity: GitCheckoutIdentity;
+    try {
+      identity = await gitCheckoutIdentity(
+        pi,
+        membership.checkout_path,
+        signal,
+      );
+    } catch {
+      error("manager topology", "Herdr workspace Git identity is unavailable");
+    }
+    const isPrimary = sameDirectory(identity.gitDir, identity.commonDir);
+    if (
+      !sameDirectory(identity.checkoutPath, membership.checkout_path) ||
+      !sameDirectory(membership.repo_key, identity.commonDir) ||
+      membership.is_linked_worktree !== !isPrimary
+    )
+      error("manager topology", "Herdr workspace association is inconsistent");
+    if (identity.commonDir === repoKey && isPrimary)
+      primaryIds.push(workspaceId);
+  }
+  return primaryIds;
+}
+
+/** Selects the verified primary workspace and creates a new, dedicated Manager tab. */
+export async function prepareHerdrManagerPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: {
+    repoKey: string;
+    checkoutPath: string;
+    signal?: AbortSignal;
+  },
+): Promise<HerdrManagerPaneSelection> {
+  if (
+    !options ||
+    !isAbsolute(options.repoKey) ||
+    !isAbsolute(options.checkoutPath)
+  )
+    error("manager topology", "verified repository paths are required");
+
+  const checkout = canonicalCwd(options.checkoutPath);
+  const requested = await gitCheckoutIdentity(pi, checkout, options.signal);
+  if (
+    !sameDirectory(requested.checkoutPath, checkout) ||
+    !sameDirectory(requested.commonDir, options.repoKey) ||
+    !sameDirectory(requested.gitDir, requested.commonDir)
+  )
+    error(
+      "manager topology",
+      "selected checkout is not the verified primary repository",
+    );
+  const repoKey = requested.commonDir;
+  const checkoutPath = requested.checkoutPath;
+  const release = await lockLifecycleForWorkspace(repoKey, options.signal);
+  try {
+    let primaryIds = await managerPrimaryWorkspaceIds(
+      pi,
+      ctx,
+      repoKey,
+      options.signal,
+    );
+    let primaryWorkspaceId: string;
+    if (primaryIds.length > 1)
+      error("manager topology", "duplicate primary workspaces for repository");
+    if (primaryIds.length === 1) {
+      primaryWorkspaceId = primaryIds[0]!;
+    } else {
+      const created = await runHerdr(
+        pi,
+        ctx,
+        ["workspace", "create", "--cwd", checkoutPath, "--no-focus"],
+        { signal: options.signal },
+      );
+      const createdId = created?.workspace?.workspace_id;
+      if (typeof createdId !== "string" || !createdId)
+        error(
+          "manager topology",
+          "Herdr did not return the created workspace ID",
+        );
+      primaryWorkspaceId = createdId;
+    }
+    primaryIds = await managerPrimaryWorkspaceIds(
+      pi,
+      ctx,
+      repoKey,
+      options.signal,
+    );
+    if (primaryIds.length !== 1 || primaryIds[0] !== primaryWorkspaceId)
+      error("manager topology", "selected primary workspace is inconsistent");
+    const herdrTopology = await runHerdr(
+      pi,
+      ctx,
+      ["worktree", "list", "--cwd", checkoutPath],
+      { signal: options.signal },
+    );
+    if (
+      typeof herdrTopology?.source?.repo_key !== "string" ||
+      !sameDirectory(herdrTopology.source.repo_key, repoKey) ||
+      (herdrTopology.source.source_workspace_id != null &&
+        herdrTopology.source.source_workspace_id !== primaryWorkspaceId)
+    )
+      error(
+        "manager topology",
+        "Herdr repository identity does not match canonical Git identity",
+      );
+
+    const beforeTabs = await runHerdr(
+      pi,
+      ctx,
+      ["tab", "list", "--workspace", primaryWorkspaceId],
+      { signal: options.signal },
+    );
+    const beforePanes = await runHerdr(
+      pi,
+      ctx,
+      ["pane", "list", "--workspace", primaryWorkspaceId],
+      { signal: options.signal },
+    );
+    if (!Array.isArray(beforeTabs?.tabs) || !Array.isArray(beforePanes?.panes))
+      error("manager topology", "Herdr tab or pane inventory is unavailable");
+    const oldTabIds = beforeTabs.tabs.map((tab: any) => tab?.tab_id);
+    const oldPaneIds = beforePanes.panes.map((pane: any) => pane?.pane_id);
+    if (
+      oldTabIds.some((id: unknown) => typeof id !== "string" || !id) ||
+      oldPaneIds.some((id: unknown) => typeof id !== "string" || !id) ||
+      new Set(oldTabIds).size !== oldTabIds.length ||
+      new Set(oldPaneIds).size !== oldPaneIds.length
+    )
+      error("manager topology", "Herdr tab or pane inventory is inconsistent");
+
+    const created = await runHerdr(
+      pi,
+      ctx,
+      [
+        "tab",
+        "create",
+        "--workspace",
+        primaryWorkspaceId,
+        "--cwd",
+        checkoutPath,
+        "--label",
+        "Manager",
+        "--no-focus",
+      ],
+      { signal: options.signal },
+    );
+    const tabId = created?.tab?.tab_id;
+    const paneId = created?.root_pane?.pane_id;
+    const terminalId = created?.root_pane?.terminal_id;
+    if (
+      typeof tabId !== "string" ||
+      !tabId ||
+      typeof paneId !== "string" ||
+      !paneId ||
+      typeof terminalId !== "string" ||
+      !terminalId ||
+      (created.tab.workspace_id !== undefined &&
+        created.tab.workspace_id !== primaryWorkspaceId) ||
+      oldTabIds.includes(tabId) ||
+      oldPaneIds.includes(paneId)
+    )
+      error("manager topology", "Herdr did not create a dedicated Manager tab");
+
+    const [tabs, panes, agents] = await Promise.all([
+      runHerdr(pi, ctx, ["tab", "list", "--workspace", primaryWorkspaceId], {
+        signal: options.signal,
+      }),
+      runHerdr(pi, ctx, ["pane", "list", "--workspace", primaryWorkspaceId], {
+        signal: options.signal,
+      }),
+      runHerdr(pi, ctx, ["agent", "list"], { signal: options.signal }),
+    ]);
+    const listedTabs = tabs?.tabs;
+    const listedPanes = panes?.panes;
+    const listedAgents = agents?.agents;
+    if (
+      !Array.isArray(listedTabs) ||
+      !Array.isArray(listedPanes) ||
+      !Array.isArray(listedAgents)
+    )
+      error("manager topology", "Herdr Manager pane ownership is unavailable");
+    const tabMatches = listedTabs.filter((tab: any) => tab?.tab_id === tabId);
+    const paneMatches = listedPanes.filter(
+      (pane: any) => pane?.pane_id === paneId,
+    );
+    const pane = paneMatches[0];
+    if (
+      tabMatches.length !== 1 ||
+      (tabMatches[0]?.workspace_id !== undefined &&
+        tabMatches[0].workspace_id !== primaryWorkspaceId) ||
+      paneMatches.length !== 1 ||
+      !pane ||
+      pane.workspace_id !== primaryWorkspaceId ||
+      pane.tab_id !== tabId ||
+      !sameCwd(pane.cwd, checkoutPath) ||
+      pane.terminal_id !== terminalId ||
+      pane.agent != null ||
+      (pane.agent_status != null && pane.agent_status !== "unknown") ||
+      pane.agent_session != null ||
+      listedAgents.some((agent: any) => agent?.pane_id === paneId)
+    )
+      error(
+        "manager topology",
+        "Herdr Manager pane is occupied or inconsistent",
+      );
+
+    return {
+      repoKey,
+      checkoutPath,
+      primaryWorkspaceId,
+      tabId,
+      paneId,
+    };
+  } finally {
+    release();
+  }
+}
+
+async function verifyManagerLaunchRepository(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: HerdrManagerLaunchTarget,
+  signal: AbortSignal | undefined,
+  deadline: number,
+): Promise<void> {
+  const repositoryContext = { ...ctx, cwd: target.checkoutPath };
+  const local = await localRepositoryScope(
+    pi,
+    repositoryContext,
+    target.workspaceId,
+    signal,
+  );
+  if (
+    !local.isPrimary ||
+    !sameDirectory(local.repoKey, target.repoKey) ||
+    !sameDirectory(local.checkoutPath, target.checkoutPath)
+  )
+    error("start", "selected repository does not match the primary workspace");
+
+  const topology = await worktreeGroupScope(
+    pi,
+    repositoryContext,
+    target.workspaceId,
+    signal,
+    startupCallTimeout(deadline),
+  );
+  if (
+    topology.primaryWorkspaceId !== target.workspaceId ||
+    !sameDirectory(topology.repoKey, target.repoKey)
+  )
+    error("start", "selected Herdr primary workspace identity changed");
+}
+
+export async function startHerdrManagerInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrManagerInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  if (!options || typeof options.verifyAuthorization !== "function")
+    error("start", "Manager launch authorization verifier is required");
+  if (
+    !isAbsolute(options.repoKey) ||
+    !isAbsolute(options.checkoutPath) ||
+    !options.primaryWorkspaceId ||
+    !options.tabId ||
+    !options.paneId
+  )
+    error("start", "Manager launch target identity is incomplete");
+
+  const target: HerdrManagerLaunchTarget = Object.freeze({
+    repoKey: options.repoKey,
+    checkoutPath: canonicalCwd(options.checkoutPath),
+    workspaceId: options.primaryWorkspaceId,
+    tabId: options.tabId,
+    paneId: options.paneId,
+  });
+  const verifySelection = async (deadline: number): Promise<void> => {
+    await options.verifyAuthorization(target);
+    await verifyManagerLaunchRepository(
+      pi,
+      ctx,
+      target,
+      options.signal,
+      deadline,
+    );
+  };
+
+  return launchPiInVerifiedPane(
+    pi,
+    ctx,
+    options,
+    target.workspaceId,
+    async (deadline) => {
+      await verifySelection(deadline);
+      const panes =
+        (
+          await runHerdr(
+            pi,
+            ctx,
+            ["pane", "list", "--workspace", target.workspaceId],
+            { signal: options.signal, timeout: startupCallTimeout(deadline) },
+          )
+        ).panes ?? [];
+      const matches = panes.filter(
+        (pane: any) => pane.pane_id === target.paneId,
+      );
+      const pane = matches[0];
+      if (
+        matches.length !== 1 ||
+        !pane ||
+        pane.workspace_id !== target.workspaceId ||
+        pane.tab_id !== target.tabId ||
+        !sameCwd(pane.cwd, target.checkoutPath)
+      )
+        error("start", `pane ${target.paneId} topology changed before launch`);
+      if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
+        error(
+          "start",
+          "pane " + target.paneId + " did not include terminal identity",
+        );
+
+      return {
+        workspaceId: target.workspaceId,
+        tabId: target.tabId,
+        paneId: target.paneId,
+        cwd: target.checkoutPath,
+        terminalId: pane.terminal_id,
+      };
+    },
+    verifySelection,
+  );
 }
 
 function validateEnvironment(

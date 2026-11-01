@@ -24,6 +24,7 @@ import {
   COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
+  consumeManagerStartIntent,
   listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
   listChiefMessagePaths,
@@ -34,11 +35,14 @@ import {
   removeProjectMessage,
   removeChiefMessage,
   readChiefMessage,
+  readManagerDescriptor,
   listProjectMessageHeaders,
   readProjectMessage,
   writeChiefMessage,
+  writeManagerStartIntent,
   retireProjectAssignment,
   listPendingRetirements,
+  removeManagerStartIntent,
   supervisionRuntime,
   readLeadCoordinationState,
   writeLeadCoordinationState,
@@ -201,6 +205,9 @@ const REGISTERED_ROLE_TOOLS = [
     "delegate_work",
     "resume_work",
     "stop_lead",
+    "clone_repository",
+    "start_manager",
+    "resume_manager",
     "remove_worktree",
     "integrate_branch",
   ].map((name) => ({ name })),
@@ -463,6 +470,9 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
+      "clone_repository",
+      "start_manager",
+      "resume_manager",
       "delegate_work",
       "resume_work",
       "stop_lead",
@@ -560,7 +570,7 @@ test("extension loading does not call runtime action methods", () => {
   }
 });
 
-test("Chief activation exposes only semantic staff tools", async () => {
+test("Chief activation exposes semantic staff and project tools", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "semantic-chief-pane";
   process.env.HERDR_TAB_ID = "semantic-chief-tab";
@@ -595,6 +605,9 @@ test("Chief activation exposes only semantic staff tools", async () => {
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
+      "clone_repository",
+      "start_manager",
+      "resume_manager",
     ]);
     const tools = new Map(chief.tools.map((tool) => [tool.name, tool]));
     for (const [name, valid, invalid, required] of STAFF_TOOL_CASES) {
@@ -776,6 +789,8 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "message_peer",
     ].sort(),
   );
+  for (const name of ["clone_repository", "start_manager", "resume_manager"])
+    assert.equal(lead.pi.getActiveTools().includes(name), false, name);
   assert.equal(
     lead.tools.some((tool) =>
       ["agent", "chief", "peer", "staff"].includes(tool.name),
@@ -795,6 +810,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "read_staff_transcript",
       "read_evidence",
       "message_staff",
+      "clone_repository",
+      "start_manager",
+      "resume_manager",
       "delegate_work",
       "resume_work",
       "stop_lead",
@@ -809,10 +827,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   for (const tool of lead.tools) {
     assertPortableToolSchema(tool);
+    assert.equal(typeof tool.execute, "function");
     if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
-    assert.equal(typeof tool.renderCall, "function");
-    assert.equal(typeof tool.renderResult, "function");
   }
   assert.ok(
     lead.tools.find((tool) => tool.name === "list_agents")?.promptGuidelines
@@ -954,7 +971,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(levels, ["error", "error"]);
 });
 
-test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
+test("managed agents receive no peer tool and Chiefs expose project tools actively", async () => {
   const mailbox = setAgentEnvironment("peer-exclusion-agent");
   const managed = fakePi();
   registerExtension!(managed.pi as never);
@@ -964,6 +981,14 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   );
   assert.equal(
     managed.tools.some((tool) => tool.name === "integrate_branch"),
+    false,
+  );
+  assert.equal(
+    managed.tools.some((tool) =>
+      ["clone_repository", "start_manager", "resume_manager"].includes(
+        tool.name,
+      ),
+    ),
     false,
   );
   assert.equal(
@@ -1008,6 +1033,9 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
+      "clone_repository",
+      "start_manager",
+      "resume_manager",
     ]);
     assert.equal(
       chief.pi.getActiveTools().some((name) => name.startsWith("peer_")),
@@ -2265,6 +2293,9 @@ test("active chief describes authoritative remote ask projection", async () => {
     "inspect_staff",
     "read_staff_transcript",
     "message_staff",
+    "clone_repository",
+    "start_manager",
+    "resume_manager",
   ]);
   const snapshotsBeforePreparation = pi.calls.filter(isApiSnapshot).length;
   const beforeStart = await pi.events.get("before_agent_start")![0](
@@ -2947,7 +2978,15 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     );
     assert.deepEqual(
       pi.pi.getActiveTools(),
-      ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
+      [
+        "list_staff",
+        "inspect_staff",
+        "read_staff_transcript",
+        "message_staff",
+        "clone_repository",
+        "start_manager",
+        "resume_manager",
+      ],
       JSON.stringify(notices),
     );
     await command.handler("leave", context);
@@ -4036,6 +4075,9 @@ test("persisted Chief keeps verified authority and mandatory tools when definiti
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
+      "clone_repository",
+      "start_manager",
+      "resume_manager",
     ]);
     assert.equal(
       entries.some(
@@ -5654,6 +5696,7 @@ test("delegating agents do not receive Manager supervisor projections", async ()
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
     repoKey: "repo-key",
+    canonicalRepoKey: "repo-key",
   });
   writeProjectAssignment(runtime, {
     version: 2,
@@ -6002,6 +6045,247 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_TAB_ID;
   setLeadEnvironment();
+});
+
+test("root startup keeps Manager intent when the Herdr process pane differs from its environment", async () => {
+  setLeadEnvironment();
+  const socketPath = join(tmpdir(), `intent-identity-${randomUUID()}.sock`);
+  const workspaceId = "intent-workspace";
+  const paneId = "intended-pane";
+  const tabId = "intended-tab";
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  process.env.HERDR_WORKSPACE_ID = workspaceId;
+  process.env.HERDR_PANE_ID = paneId;
+  process.env.HERDR_TAB_ID = tabId;
+  const checkoutPath = realFs.realpathSync(process.cwd());
+  const repoKey = realFs.realpathSync(join(checkoutPath, ".git"));
+  const intent = {
+    version: 1 as const,
+    sessionId: LEAD_SESSION_ID,
+    repoKey,
+    checkoutPath,
+    workspaceId,
+    paneId,
+    createdAt: Date.now(),
+  };
+  const runtime = supervisionRuntime();
+  writeManagerStartIntent(runtime, intent);
+  const record = {
+    pane_id: "actual-other-pane",
+    tab_id: tabId,
+    workspace_id: workspaceId,
+    cwd: checkoutPath,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command === "git") {
+        const target = args.at(-1);
+        const path =
+          target === "--show-toplevel"
+            ? checkoutPath
+            : target === "--git-dir" || target === "--git-common-dir"
+              ? repoKey
+              : "";
+        return { stdout: `${path}\n`, stderr: "", code: 0 };
+      }
+      if (command !== "herdr") return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            repo_key: repoKey,
+            repo_name: "startup-intent-test",
+            source_checkout_path: checkoutPath,
+            source_workspace_id: workspaceId,
+          },
+          worktrees: [],
+        });
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: { workspace_id: workspaceId, worktree: null },
+        });
+      if (isAgentList(args)) return respond({ agents: [record] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: record });
+      return respond({});
+    },
+  });
+  const context = Object.assign(fakeContext(), { cwd: checkoutPath }) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const prompt = await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { sections: {}, contextFiles: [] } },
+      context,
+    );
+    assert.doesNotMatch(
+      prompt?.systemPrompt ?? "",
+      /verified Manager for this Pi session/,
+    );
+    assert.equal(readManagerDescriptor(runtime, workspaceId), undefined);
+    assert.deepEqual(
+      consumeManagerStartIntent(runtime, {
+        sessionId: intent.sessionId,
+        repoKey,
+        checkoutPath,
+        workspaceId,
+        paneId,
+      }),
+      intent,
+      "a failed process-identity check must leave the durable intent available",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeManagerStartIntent(runtime, intent.sessionId);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("root startup preserves Manager intent when repository validation rejects the workspace", async () => {
+  setLeadEnvironment();
+  const socketPath = join(tmpdir(), `intent-repository-${randomUUID()}.sock`);
+  const workspaceId = "intent-repository-workspace";
+  const paneId = "intent-repository-pane";
+  const tabId = "intent-repository-tab";
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  process.env.HERDR_WORKSPACE_ID = workspaceId;
+  process.env.HERDR_PANE_ID = paneId;
+  process.env.HERDR_TAB_ID = tabId;
+  const checkoutPath = realFs.realpathSync(process.cwd());
+  const fixtureRoot = realFs.mkdtempSync(
+    join(tmpdir(), "intent-repository-mismatch-"),
+  );
+  const repoKey = join(fixtureRoot, "git-common-dir");
+  const rejectedRepoKey = join(fixtureRoot, "herdr-repo-key");
+  realFs.mkdirSync(repoKey);
+  realFs.mkdirSync(rejectedRepoKey);
+  assert.notEqual(
+    realFs.realpathSync(repoKey),
+    realFs.realpathSync(rejectedRepoKey),
+  );
+  const intent = {
+    version: 1 as const,
+    sessionId: LEAD_SESSION_ID,
+    repoKey,
+    checkoutPath,
+    workspaceId,
+    paneId,
+    createdAt: Date.now(),
+  };
+  const runtime = supervisionRuntime();
+  writeManagerStartIntent(runtime, intent);
+  const processLookups: string[] = [];
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command === "git") {
+        const target = args.at(-1);
+        const path = target === "--show-toplevel" ? checkoutPath : repoKey;
+        return { stdout: `${path}\n`, stderr: "", code: 0 };
+      }
+      if (command !== "herdr") return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            repo_key: rejectedRepoKey,
+            repo_name: "mismatched-repository",
+            source_workspace_id: workspaceId,
+          },
+          worktrees: [],
+        });
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: { workspace_id: workspaceId, worktree: null },
+        });
+      if (args[0] === "agent" && ["list", "get"].includes(args[1] ?? ""))
+        processLookups.push(args.join(" "));
+      return respond({});
+    },
+  });
+  const context = Object.assign(fakeContext(), { cwd: checkoutPath }) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(processLookups, []);
+    assert.deepEqual(
+      consumeManagerStartIntent(runtime, {
+        sessionId: intent.sessionId,
+        repoKey,
+        checkoutPath,
+        workspaceId,
+        paneId,
+      }),
+      intent,
+      "repository identity rejection must leave the startup intent available",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeManagerStartIntent(runtime, intent.sessionId);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_WORKSPACE_ID;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    realFs.rmSync(fixtureRoot, { recursive: true, force: true });
+    setLeadEnvironment();
+  }
+});
+
+test("root callback skips repository and process identity lookups without a startup intent", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `intent-absent-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_WORKSPACE_ID = "intent-absent-workspace";
+  process.env.HERDR_PANE_ID = "intent-absent-pane";
+  process.env.HERDR_TAB_ID = "intent-absent-tab";
+  const identityLookups: string[] = [];
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse")
+        identityLookups.push("git rev-parse");
+      if (
+        command === "herdr" &&
+        ((args[0] === "worktree" &&
+          args[1] === "list" &&
+          args.includes("--cwd")) ||
+          (args[0] === "workspace" && args[1] === "get") ||
+          (args[0] === "agent" && ["list", "get"].includes(args[1] ?? "")))
+      )
+        identityLookups.push(args.join(" "));
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = Object.assign(fakeContext(), { cwd: process.cwd() }) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(identityLookups, []);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_WORKSPACE_ID;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
 });
 
 test("lead metadata reports preserve session event order", async () => {

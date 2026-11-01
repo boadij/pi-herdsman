@@ -44,6 +44,7 @@ import {
   readChiefMessage,
   readProjectAssignment,
   readManagerDescriptor,
+  readManagerRecoveryReference,
   peerLeadLockPath,
   peerRuntime,
   readPeerLeadRecord,
@@ -157,6 +158,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
       paneId: "manager-ui-pane",
       tabId: "manager-ui-tab",
       repoKey: assignment.repoKey,
+      canonicalRepoKey: assignment.repoKey,
       workspaceId: WORKSPACE,
     },
     runtimeStorage,
@@ -671,7 +673,20 @@ const chiefTools = [
   "inspect_staff",
   "read_staff_transcript",
   "message_staff",
+  "clone_repository",
+  "start_manager",
+  "resume_manager",
 ];
+
+function isGitBootstrapMutation(invocation: {
+  command: string;
+  args: string[];
+}) {
+  return (
+    invocation.command === "git" &&
+    ["init", "commit"].includes(invocation.args[0] ?? "")
+  );
+}
 
 const sessionLeadExecutionState = (
   entries: readonly unknown[],
@@ -2240,18 +2255,24 @@ test("Manager restoration does not claim a lease when identity changes during di
     build: "test",
     localRepositoryScope: async () => {
       identityCurrent = false;
-      return { isPrimary: true, repoKey: "repo" };
+      return {
+        isPrimary: true,
+        repoKey: resolve(tmpdir()),
+        canonicalRepoKey: resolve(tmpdir()),
+      };
     },
     claimManagerLease: (() => {
       claims++;
       throw new Error("unexpected claim");
     }) as any,
+    writeManagerRecoveryReference() {},
     coordinationHealthy: () => true,
     verifyManagerIdentity: async () => true,
     verifyCurrentIdentity: async () => identityCurrent,
     unresolvedManagerLease() {},
     activationGuard() {},
     persistLeadRole() {},
+    persistManagerRole() {},
     isCurrent: () => true,
   });
   assert.equal(claims, 0);
@@ -2273,7 +2294,7 @@ test("superseded Manager restoration releases its lease without replacing curren
   });
   const released = new Set<string>();
   let profileOwner: string | undefined;
-  const resolve = (
+  const resolveSession = (
     sessionId: string,
     verifyManagerIdentity: () => Promise<unknown>,
   ) => {
@@ -2293,18 +2314,21 @@ test("superseded Manager restoration releases its lease without replacing curren
         build: "test",
         localRepositoryScope: async () => ({
           isPrimary: true,
-          repoKey: "repo",
+          repoKey: resolve(tmpdir()),
+          canonicalRepoKey: resolve(tmpdir()),
         }),
         claimManagerLease: (() => ({
           descriptor: { piSessionId: sessionId },
           release: () => released.add(sessionId),
         })) as any,
+        writeManagerRecoveryReference() {},
         coordinationHealthy: () => true,
         verifyManagerIdentity,
         verifyCurrentIdentity: async () => true,
         unresolvedManagerLease() {},
         activationGuard() {},
         persistLeadRole() {},
+        persistManagerRole() {},
         isCurrent: () => generation === startGeneration,
       },
       true,
@@ -2315,13 +2339,13 @@ test("superseded Manager restoration releases its lease without replacing curren
     });
   };
 
-  const old = resolve("old-session", () => {
+  const old = resolveSession("old-session", () => {
     oldVerificationStarted();
     return oldVerification;
   });
   await oldVerificationReady;
   generation++;
-  const current = resolve("current-session", async () => true);
+  const current = resolveSession("current-session", async () => true);
   await current;
   const currentLease = state.managerLease;
   releaseOldVerification(true);
@@ -2544,6 +2568,7 @@ const writePeerLeadRecord = (runtime: any, record: any) =>
   });
 const {
   readConfig,
+  resolveProjectsDirectory,
   setWorktreeRemovalPreapproved,
   readEffectiveConfig,
   readProjectOverrides,
@@ -4166,6 +4191,11 @@ test("Manager leave retains its lease and role when persistence fails", async ()
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
+    const runtime = supervisionRuntime();
+    const managerDescriptor = readManagerDescriptor(runtime, WORKSPACE);
+    const canonicalRepoKey = managerDescriptor?.canonicalRepoKey;
+    assert.ok(canonicalRepoKey);
+    assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
     const leaseId = readManagerDescriptor(
       supervisionRuntime(),
       WORKSPACE,
@@ -4195,6 +4225,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         message.includes("injected pending removal invalidation failure"),
       ),
     );
+    assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
       leaseId,
@@ -4232,6 +4263,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
         "manager",
       );
+      assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
       assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     }
     await pi.commandOptions.get("manager").handler("leave", ctx);
@@ -4243,7 +4275,12 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "lead",
     );
+    assert.equal(
+      readManagerRecoveryReference(runtime, canonicalRepoKey),
+      undefined,
+    );
     await pi.commandOptions.get("manager").handler("", ctx);
+    assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
     const suspendedLease = readManagerDescriptor(
       supervisionRuntime(),
       WORKSPACE,
@@ -4264,6 +4301,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID),
       undefined,
     );
+    assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -4388,6 +4426,8 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     tmpdir(),
     `restored-manager-${randomUUID()}.sock`,
   );
+  const runtime = supervisionRuntime();
+  let canonicalRepoKey: string | undefined;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -4450,6 +4490,15 @@ test("restored Manager registers supervision tools and restores Manager tools", 
         entry.data.sessionId = sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+    const managerDescriptor = readManagerDescriptor(runtime, WORKSPACE);
+    canonicalRepoKey = managerDescriptor?.canonicalRepoKey;
+    assert.ok(canonicalRepoKey);
+    assert.deepEqual(readManagerRecoveryReference(runtime, canonicalRepoKey), {
+      version: 1,
+      canonicalRepoKey,
+      piSessionId: sessionId,
+      piSessionFile: context.sessionManager.getSessionFile(),
+    });
     assert.ok(pi.tools.some((tool) => tool.name === "delegate_work"));
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
@@ -4481,6 +4530,8 @@ test("restored Manager registers supervision tools and restores Manager tools", 
       );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    if (canonicalRepoKey)
+      assert.ok(readManagerRecoveryReference(runtime, canonicalRepoKey));
     updateConfig("autoActivateManager", undefined);
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
@@ -4765,9 +4816,10 @@ function managerBootstrapHarness(
     unexpectedHerdr?: boolean;
     failCommitOnce?: boolean;
     stageAfterInit?: string;
+    stageAfterFailedCommit?: string;
     paneCwd?: unknown;
     omitPaneCwd?: boolean;
-    assertLockDuringFinalScope?: boolean;
+    assertLockDuringFinalGitVerification?: boolean;
     onFinalHerdrVerification?: () => void;
     onCommittedWorktreeList?: () => void;
     workspaceWorktree?: unknown;
@@ -4878,6 +4930,13 @@ function managerBootstrapHarness(
         }
         if (args[0] === "commit" && failCommit) {
           failCommit = false;
+          if (options.stageAfterFailedCommit) {
+            const staged = runGit(
+              ["add", options.stageAfterFailedCommit],
+              execOptions?.cwd ?? cwd,
+            );
+            assert.equal(staged.status, 0, "Git command failed");
+          }
           gitRuns.push({
             args: [...args],
             cwd: execOptions?.cwd ?? cwd,
@@ -4891,6 +4950,16 @@ function managerBootstrapHarness(
         }
         const result = runGit(args, execOptions?.cwd ?? cwd);
         if (args[0] === "init") initCount++;
+        if (
+          args[0] === "mktree" &&
+          options.assertLockDuringFinalGitVerification
+        ) {
+          assert.equal(
+            readLiveProcessLock(managerBootstrapLockPath(cwd)).pid,
+            process.pid,
+          );
+          finalScopeLockVerified = true;
+        }
         if (args[0] === "init" && options.stageAfterInit) {
           const staged = runGit(
             ["add", options.stageAfterInit],
@@ -4940,17 +5009,6 @@ function managerBootstrapHarness(
         if (hasCommittedHead && ++committedWorktreeListResponses === 1)
           options.onFinalHerdrVerification?.();
         if (hasCommittedHead) options.onCommittedWorktreeList?.();
-        if (
-          hasCommittedHead &&
-          committedWorktreeListResponses === 1 &&
-          options.assertLockDuringFinalScope
-        ) {
-          assert.equal(
-            readLiveProcessLock(managerBootstrapLockPath(cwd)).pid,
-            process.pid,
-          );
-          finalScopeLockVerified = true;
-        }
         return hasCommittedHead
           ? respond({
               source: {
@@ -5214,7 +5272,7 @@ test("Manager explicit bootstrap cancellation and unexpected Herdr failure do no
       .get("manager")!
       .handler("", harness.context);
     assert.equal(
-      harness.invocations.some(({ command }) => command === "git"),
+      harness.invocations.some(isGitBootstrapMutation),
       false,
       scenario,
     );
@@ -5269,6 +5327,21 @@ test("Manager activation of an existing Git primary does not initialize Git", as
     readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
     "manager",
     harness.notices.join("\n"),
+  );
+  const managerDescriptor = readManagerDescriptor(
+    supervisionRuntime(),
+    WORKSPACE,
+  );
+  const canonicalRepoKey = managerDescriptor?.canonicalRepoKey;
+  assert.ok(canonicalRepoKey);
+  assert.deepEqual(
+    readManagerRecoveryReference(supervisionRuntime(), canonicalRepoKey),
+    {
+      version: 1,
+      canonicalRepoKey,
+      piSessionId: harness.context.sessionManager.getSessionId(),
+      piSessionFile: harness.context.sessionManager.getSessionFile(),
+    },
   );
 });
 
@@ -5400,10 +5473,7 @@ test("Manager bootstrap rejects a changed target and leaves no repository", asyn
   });
   await harness.pi.events.get("session_start")![0](undefined, harness.context);
   await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
-  assert.equal(
-    harness.invocations.some(({ command }) => command === "git"),
-    false,
-  );
+  assert.equal(harness.invocations.some(isGitBootstrapMutation), false);
   assert.equal(realFs.existsSync(join(cwd, ".git")), false);
   assert.ok(harness.notices.some((notice) => /workspace changed/.test(notice)));
 });
@@ -5438,7 +5508,7 @@ test("Manager bootstrap rejects changed Herdr pane and workspace evidence after 
       .handler("", harness.context);
     assert.equal(harness.confirmations, 1, changed);
     assert.equal(
-      harness.invocations.some(({ command }) => command === "git"),
+      harness.invocations.some(isGitBootstrapMutation),
       false,
       changed,
     );
@@ -5560,10 +5630,7 @@ test("explicit /manager bootstraps without UI only when confirmation is opted ou
     .get("manager")!
     .handler("", disabled.context);
   assert.equal(disabled.confirmations, 0);
-  assert.equal(
-    disabled.invocations.some(({ command }) => command === "git"),
-    false,
-  );
+  assert.equal(disabled.invocations.some(isGitBootstrapMutation), false);
   assert.equal(realFs.existsSync(join(disabledCwd, ".git")), false);
   assert.equal(
     readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
@@ -5719,7 +5786,7 @@ test("Manager bootstrap does not repeat init when root rediscovery fails", async
   assert.equal(realFs.existsSync(join(cwd, ".git")), true);
   assert.ok(
     harness.notices.some((notice) =>
-      /verify its working-tree root/.test(notice),
+      /existing Git metadata is invalid or conflicting/.test(notice),
     ),
   );
 });
@@ -5733,6 +5800,12 @@ test("Manager bootstrap releases its lock after Git failure and retries once", a
   await harness.pi.events.get("session_start")![0](undefined, harness.context);
   await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
   assert.equal(realFs.existsSync(join(cwd, ".git")), true);
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ).length,
+    1,
+  );
   assert.equal(
     realFs.existsSync(join(cwd, ".git", "herdsman-manager-bootstrap.lock")),
     false,
@@ -5748,6 +5821,12 @@ test("Manager bootstrap releases its lock after Git failure and retries once", a
   assert.equal(
     harness.git(["ls-tree", "-r", "--name-only", "HEAD"]).stdout,
     "",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "init",
+    ).length,
+    1,
   );
   assert.equal(
     realFs.readFileSync(join(cwd, "keep.txt"), "utf8"),
@@ -5766,6 +5845,41 @@ test("Manager bootstrap releases its lock after Git failure and retries once", a
   assert.equal(realFs.existsSync(lockPath), false);
 });
 
+test("Manager bootstrap retry refuses files staged after the failed initial commit", async (t) => {
+  const cwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-bootstrap-retry-staged-"),
+  );
+  realFs.writeFileSync(join(cwd, "staged.txt"), "keep staged content\n");
+  const harness = managerBootstrapHarness(cwd, {
+    failCommitOnce: true,
+    stageAfterFailedCommit: "staged.txt",
+  });
+  t.after(harness.cleanup);
+  await harness.pi.events.get("session_start")![0](undefined, harness.context);
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
+
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+
+  assert.equal(harness.git(["rev-parse", "--verify", "HEAD"]).status, 128);
+  assert.equal(
+    harness.git(["diff", "--cached", "--name-only"]).stdout.trim(),
+    "staged.txt",
+  );
+  assert.equal(
+    realFs.readFileSync(join(cwd, "staged.txt"), "utf8"),
+    "keep staged content\n",
+  );
+  assert.equal(
+    harness.invocations.filter(
+      ({ command, args }) => command === "git" && args[0] === "commit",
+    ).length,
+    1,
+  );
+  assert.ok(harness.notices.some((notice) => /index/.test(notice)));
+  assert.equal(realFs.existsSync(managerBootstrapLockPath(cwd)), false);
+});
+
 test("Manager bootstrap acquires its shared target lock before running Git", async (t) => {
   const cwd = realFs.mkdtempSync(
     join(tmpdir(), "manager-bootstrap-contended-"),
@@ -5780,7 +5894,7 @@ test("Manager bootstrap acquires its shared target lock before running Git", asy
   const start = harness.invocations.length;
   await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
   assert.equal(
-    harness.invocations.slice(start).some(({ command }) => command === "git"),
+    harness.invocations.slice(start).some(isGitBootstrapMutation),
     false,
     harness.notices.join("\n"),
   );
@@ -5831,12 +5945,12 @@ test("Manager bootstrap safely recovers a dead shared-lock owner on retry", asyn
   );
 });
 
-test("Manager bootstrap holds its lock through final Herdr repository verification", async (t) => {
+test("Manager bootstrap holds its lock through final Git repository verification", async (t) => {
   const cwd = realFs.mkdtempSync(
     join(tmpdir(), "manager-bootstrap-final-scope-"),
   );
   const harness = managerBootstrapHarness(cwd, {
-    assertLockDuringFinalScope: true,
+    assertLockDuringFinalGitVerification: true,
   });
   t.after(harness.cleanup);
   await harness.pi.events.get("session_start")![0](undefined, harness.context);
@@ -9845,6 +9959,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     tabId: incompatibleManager.tab_id,
     workspaceId: incompatibleWorkspace,
     repoKey: "/var",
+    canonicalRepoKey: "/var",
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10739,7 +10854,8 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   };
   let manager: ReturnType<typeof fakeChiefPi> | undefined;
   let lead: ReturnType<typeof fakeChiefPi> | undefined;
-  let competingLease: ReturnType<typeof claimManagerLease> | undefined;
+  let legacyManagerDescriptorPath: string | undefined;
+  let legacyManagerLock: ReturnType<typeof acquireProcessLock> | undefined;
   try {
     useManagerIdentity();
     manager = fakeRepositoryChiefPi({
@@ -11049,14 +11165,32 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     leadAgent.cwd = "/tmp";
 
     const competingSession = randomUUID();
-    competingLease = claimManagerLease({
-      build: HERDSMAN_BUILD,
-      piSessionId: competingSession,
-      paneId: "competing-manager-pane",
-      tabId: "competing-manager-tab",
-      workspaceId: `competing-${randomUUID()}`,
-      repoKey: "/tmp",
-    });
+    const legacyManagerWorkspace = `legacy-manager-${randomUUID()}`;
+    legacyManagerDescriptorPath = managerDescriptorPath(
+      supervisionRuntime(),
+      legacyManagerWorkspace,
+    );
+    // A pre-repository-lease Manager had only a workspace lock. Model that
+    // legacy descriptor directly instead of claiming a duplicate Manager.
+    legacyManagerLock = acquireProcessLock(
+      `${legacyManagerDescriptorPath}.lock`,
+      { name: "legacy Manager supervision lease" },
+    );
+    writeFileSync(
+      legacyManagerDescriptorPath,
+      JSON.stringify({
+        version: 1,
+        leaseId: randomUUID(),
+        claim: legacyManagerLock.claim,
+        piSessionId: competingSession,
+        paneId: "legacy-manager-pane",
+        tabId: "legacy-manager-tab",
+        workspaceId: legacyManagerWorkspace,
+        repoKey: "/tmp",
+        createdAt: Date.now(),
+      }),
+      { mode: 0o600 },
+    );
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
       role: "manager",
@@ -11170,7 +11304,9 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       removeProjectAssignment(supervisionRuntime(), "/tmp", assignedBranch);
     }
   } finally {
-    competingLease?.release();
+    legacyManagerLock?.release();
+    if (legacyManagerDescriptorPath)
+      rmSync(legacyManagerDescriptorPath, { force: true });
     if (lead) {
       useLeadIdentity();
       await lead.events.get("session_shutdown")?.[0]();
@@ -11344,6 +11480,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     tabId: managerTab,
     workspaceId: WORKSPACE,
     repoKey: "/tmp",
+    canonicalRepoKey: "/tmp",
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -11524,6 +11661,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     tabId: "dead-manager-tab",
     workspaceId: "root-workspace",
     repoKey: "repo-key",
+    canonicalRepoKey: "repo-key",
   });
   const managerDescriptor = managerDescriptorPath(
     supervisionRuntime(),
@@ -12922,6 +13060,7 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
     tabId: sender.tab_id,
     workspaceId: sender.workspace_id,
     repoKey: "/tmp",
+    canonicalRepoKey: "/tmp",
   });
   const managerRuntime = supervisionRuntime();
   const selectedDescriptorPath = managerDescriptorPath(
@@ -13082,12 +13221,7 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
 
   await pi.events.get("session_shutdown")![0]();
 
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -13366,12 +13500,7 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
     await pi.events.get("session_tree")![0](undefined, context);
     assert.equal("waitForIdle" in context, false);
     context.waitForIdle = commandWaitForIdle;
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "list_staff",
-      "inspect_staff",
-      "read_staff_transcript",
-      "message_staff",
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     assert.equal(readPeerLeadRecord(peerRuntime(), sessionId), undefined);
     assert.throws(() =>
       claimChiefLease({
@@ -15381,12 +15510,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
 
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
@@ -15897,12 +16021,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
@@ -16132,6 +16251,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   ]);
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
+    `Projects directory  ${resolveProjectsDirectory()}`,
     "Default Lead execution  flexible",
     "Manager auto-start  Global off · Effective off (global; untrusted project)",
     "Skip Manager Git setup confirmation  Global off",
@@ -16698,6 +16818,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     await command.handler("", context);
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
+      `Projects directory  ${resolveProjectsDirectory()}`,
       "Default Lead execution  flexible",
       "Manager auto-start  Global off · Effective off (global; untrusted project)",
       "Skip Manager Git setup confirmation  Global off",
@@ -19851,6 +19972,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     tabId: managerTabId,
     workspaceId: WORKSPACE,
     repoKey,
+    canonicalRepoKey: repoKey,
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
