@@ -7048,10 +7048,11 @@ test("incompatible Manager Leads retain standalone and active-work click targets
       stripVTControlCharacters(widget.render(120)[1]!),
       /build mismatch/,
     );
+    const renderedRow = stripVTControlCharacters(widget.render(120)[1]!);
     const result = widget.handleMouse({
       type: "click",
       button: "left",
-      x: 4,
+      x: renderedRow.indexOf("feat/older"),
       y: 1,
       width: 120,
     });
@@ -7606,11 +7607,24 @@ test("Manager work status outranks live Lead markers except when active", () => 
   const fullBlockedRow = blockedWork.render(40)[1]!;
   assert.ok(visibleWidth(fullBlockedRow) <= 40);
   assert.match(fullBlockedRow, /feat\/blocked/);
+  const fullBlockedText = stripVTControlCharacters(fullBlockedRow);
+  const blockedSuffixX = fullBlockedText.lastIndexOf("blocked");
+  assert.ok(blockedSuffixX >= 0);
   assert.equal(
     blockedWork.handleMouse({
       type: "click",
       button: "left",
-      x: 0,
+      x: blockedSuffixX,
+      y: 1,
+      width: 40,
+    }),
+    undefined,
+  );
+  assert.equal(
+    blockedWork.handleMouse({
+      type: "click",
+      button: "left",
+      x: fullBlockedText.indexOf("feat/blocked"),
       y: 1,
       width: 40,
     })?.handled,
