@@ -3707,7 +3707,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     };
-    let reports: any[];
+    let reports: any[] = [];
     let incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
       [];
     let discoveryWarning: string | undefined;
