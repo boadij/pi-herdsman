@@ -50,6 +50,7 @@ schema is:
   "contextRetirement": true,
   "autoActivateManager": false,
   "managerGitBootstrapWithoutConfirmation": false,
+  "projectsDirectory": "~/Projects",
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072,
   "worktreeRemovalPreapprovedRepos": ["/verified/repository"],
@@ -67,6 +68,7 @@ An absent file means these defaults:
 | `contextRetirement`                      |               true | boolean                                                                       |
 | `autoActivateManager`                    |              false | boolean                                                                       |
 | `managerGitBootstrapWithoutConfirmation` |              false | boolean; global-only, skips confirmation only for explicit Manager start      |
+| `projectsDirectory`                      |       `~/Projects` | absolute path, `~`, or `~/...` (`~\...` on Windows); default clone directory  |
 | `inlineAttachmentLimitBytes`             | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `mailboxPayloadLimitBytes`               | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `worktreeRemovalPreapprovedRepos`        |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
@@ -119,6 +121,13 @@ default. When enabled, it skips the confirmation for Git initialization only
 when Manager is started explicitly. Automatic startup and session restoration
 never initialize Git because of this preference. Existing files remain
 uncommitted and absent from new worktrees until separately committed.
+
+`projectsDirectory` is a global-only path setting. Its default is `~/Projects`,
+resolved against the user's home directory. Set it to an absolute path, `~`, or
+a home-relative `~/...` path (`~\...` on Windows); other relative paths are invalid. It controls
+where Chief remote clones default to, and changing it does not create the
+directory. The Settings menu's **Projects directory** item lets you change the
+path or reset it to the default.
 
 The Settings menu edits global defaults and, in the `Project overrides…` submenu,
 trusted-project values for these two preferences. Choose `Inherit global`, `On

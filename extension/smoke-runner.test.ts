@@ -139,6 +139,7 @@ import {
   cleanup,
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
+  assertKnownProjectAssignmentKeys,
 } from "../scripts/smoke.mjs";
 
 test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
@@ -5334,6 +5335,16 @@ test("chief-tree startup prompt creates one ordinary Lead branch for harness con
 
 test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
+});
+
+test("manager-recovery assignment-key validator accepts Git baseline and rejects unknown keys", () => {
+  assert.doesNotThrow(() =>
+    assertKnownProjectAssignmentKeys({ gitBaselineSha: "a".repeat(40) }),
+  );
+  assert.throws(
+    () => assertKnownProjectAssignmentKeys({ unexpected: true }),
+    /assignment contains an unknown key/,
+  );
 });
 
 test("active-stop preflights startup and verifies interactive stop cleanup", async () => {

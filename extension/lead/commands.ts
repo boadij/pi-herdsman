@@ -5,7 +5,11 @@ import type {
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { claimDelegationLock } from "../agent-controller.ts";
-import { effectiveMergePolicy, setManagerMergeOverride } from "../config.ts";
+import {
+  effectiveMergePolicy,
+  resolveProjectsDirectory,
+  setManagerMergeOverride,
+} from "../config.ts";
 import {
   discoverRoleDefinitions,
   isReservedRoleDefinition,
@@ -815,6 +819,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           "Settings",
           [
             {
+              value: "projects-directory",
+              label: "Projects directory",
+              description: resolveProjectsDirectory(config.projectsDirectory),
+              help: "Default destination for newly cloned repositories.",
+            },
+            {
               value: "default-lead-execution",
               label: "Default Lead execution",
               description: config.defaultLeadExecution,
@@ -859,7 +869,32 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!selected) return;
         selectedSetting = selected;
-        if (selected === "project-overrides") {
+        if (selected === "projects-directory") {
+          const action = await host.selectMenu(ctx, "Projects directory", [
+            { value: "change", label: "Change directory" },
+            { value: "reset", label: "Reset to default" },
+          ]);
+          if (action === "change") {
+            const directory = await host.input(
+              ctx,
+              "Projects directory (absolute path or ~/path)",
+            );
+            if (directory === undefined) continue;
+            try {
+              host.updateConfig("projectsDirectory", directory);
+              ctx.ui.notify(
+                `Projects directory: ${resolveProjectsDirectory(directory)}`,
+              );
+            } catch (error) {
+              ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+            }
+          } else if (action === "reset") {
+            host.updateConfig("projectsDirectory", undefined);
+            ctx.ui.notify(
+              `Projects directory: ${resolveProjectsDirectory(host.readConfig().projectsDirectory)}`,
+            );
+          }
+        } else if (selected === "project-overrides") {
           await this.openProjectOverridesMenu(ctx);
         } else if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);

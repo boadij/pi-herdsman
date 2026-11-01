@@ -255,6 +255,30 @@ export function readProcessLockStatus(
   } catch (error) {
     throw new Error(verifyMessage, { cause: error });
   }
+  return readProcessLockStatusForOwner(path, owner, verifyMessage);
+}
+
+/** Returns undefined only when the lock directory is absent. */
+export function readOptionalProcessLockStatus(
+  path: string,
+  name = "process lock",
+): { claim: ProcessLockClaim; live: boolean } | undefined {
+  const verifyMessage = `Unable to verify ${name}`;
+  let owner: string;
+  try {
+    ({ owner } = lockOwnerEntry(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(verifyMessage, { cause: error });
+  }
+  return readProcessLockStatusForOwner(path, owner, verifyMessage);
+}
+
+function readProcessLockStatusForOwner(
+  path: string,
+  owner: string,
+  verifyMessage: string,
+): { claim: ProcessLockClaim; live: boolean } {
   try {
     const record = readProcessLockOwner(path, owner);
     return { claim: publicClaim(record), live: processOwnerExists(record) };

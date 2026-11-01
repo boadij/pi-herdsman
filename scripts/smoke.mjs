@@ -81,6 +81,26 @@ const MANAGED_AGENT_IDENTITY_KEYS = [
   "PI_SUBAGENT_PARENT_SESSION",
   "PI_SUBAGENT_CHILD",
 ];
+const PROJECT_ASSIGNMENT_KEYS = [
+  "branch",
+  "checkoutPath",
+  "currentEvidenceIds",
+  "gitBaselineSha",
+  "id",
+  "piSessionFile",
+  "repoKey",
+  "requiredEvidence",
+  "resultBindings",
+  "text",
+  "version",
+];
+
+export function assertKnownProjectAssignmentKeys(record) {
+  assert.ok(
+    Object.keys(record).every((key) => PROJECT_ASSIGNMENT_KEYS.includes(key)),
+    "assignment contains an unknown key",
+  );
+}
 
 export function parseScenario(args) {
   if (args.length > 1) throw new Error(`unexpected smoke argument: ${args[1]}`);
@@ -8482,23 +8502,7 @@ async function runManagerRecoverySmoke(ctx) {
   markStage(ctx, "initial-assignment-validation");
   const initialAssignmentBytes = await assignmentBytes();
   const record = JSON.parse(initialAssignmentBytes);
-  assert.ok(
-    Object.keys(record).every((key) =>
-      [
-        "branch",
-        "checkoutPath",
-        "currentEvidenceIds",
-        "id",
-        "piSessionFile",
-        "repoKey",
-        "requiredEvidence",
-        "resultBindings",
-        "text",
-        "version",
-      ].includes(key),
-    ),
-    "assignment contains an unknown key",
-  );
+  assertKnownProjectAssignmentKeys(record);
   assert.equal(record.version, 2);
   assert.equal(record.id, first.session);
   assert.equal(record.branch, branch);

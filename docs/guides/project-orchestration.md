@@ -340,11 +340,26 @@ Leaving Manager mode preserves project assignments. Current Herdr topology is
 derived again when work is observed or resumed. A later Manager can continue
 the same repository and branch-based work.
 
-## Use Chief only for the next supervision layer
+## Chief project provisioning and supervision
 
-Chief is separate from project orchestration. It supervises Managers across
-the current Herdr runtime and directly supervises ordinary Leads only when they
-have no active project Manager. An active Manager supervises every eligible
+Chief can use `clone_repository` to clone an HTTPS or SSH Git repository, or
+`start_manager` with a local path or supported remote URL to select a project
+and start its Manager. Remote clones default to the configured
+`projectsDirectory` and a destination derived from the remote namespace and
+repository name; an existing destination is not overwritten or reused. A
+local non-Git directory follows the same confirmed Git bootstrap as explicit
+`/manager` activation, including the existing skip-confirmation setting.
+
+Use `resume_manager` with a local repository path to restore that project's
+saved Manager conversation. It launches Pi with the saved session file and
+verifies the exact session and Manager readiness; a stored recovery reference
+only helps locate that session and does not prove a live Manager. Resume does
+not automatically restart descendant Leads or Agents, and does not change
+project assignments.
+
+Chief supervises Managers across the current Herdr runtime and directly
+supervises ordinary Leads only when they have no active project Manager. An
+active Manager supervises every eligible
 Lead in its verified project worktree group, but controls project execution
 only for Leads named by exact current project assignments. Ordinary Leads
 remain independent while receiving the same verified direct-report inspection,

@@ -275,6 +275,7 @@ test(
       tabId: "manager-tab",
       workspaceId: WORKSPACE,
       repoKey: realpathSync(tmpdir()),
+      canonicalRepoKey: realpathSync(tmpdir()),
     });
     const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
     const descriptor = readFileSync(descriptorPath, "utf8");
@@ -491,76 +492,38 @@ test(
           false,
         );
       }
-      const secondId = randomUUID();
-      const second = claimManagerLease({
-        piSessionId: secondId,
-        paneId: "second-manager-pane",
-        tabId: "second-manager-tab",
-        workspaceId: "second-manager-workspace",
-        repoKey: realpathSync(tmpdir()),
-      });
-      agents.push({
-        agent_session: {
-          source: "herdr:pi",
-          agent: "pi",
-          kind: "id",
-          value: secondId,
-        },
-        pane_id: "second-manager-pane",
-        tab_id: "second-manager-tab",
-        workspace_id: "second-manager-workspace",
-      });
-      try {
-        writeLeadCoordinationState(runtime, {
-          version: 1,
-          role: "manager",
-          instanceId: randomUUID(),
-          piSessionId: secondId,
-          updatedAt: Date.now(),
-        });
-        const secondMessage = {
-          ...managerMessage,
-          id: randomUUID(),
-          fromSessionId: secondId,
-          leaseId: second.descriptor.leaseId,
-        };
-        const secondDescriptorPath = managerDescriptorPath(
-          runtime,
-          "second-manager-workspace",
-        );
-        const secondDescriptor = readFileSync(secondDescriptorPath, "utf8");
-        writeFileSync(secondDescriptorPath, "{");
-        const secondPath = writeChiefMessage(secondMessage, runtime);
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
-        assert.deepEqual(listChiefMessagePaths(runtime, leadId), [secondPath]);
-        assert.equal(
+      const descriptorBeforeCorruption = readFileSync(descriptorPath, "utf8");
+      const recoveryMessage = {
+        ...managerMessage,
+        id: randomUUID(),
+        text: "delivery waits for the active Manager descriptor to recover",
+      };
+      writeFileSync(descriptorPath, "{");
+      const recoveryPath = writeChiefMessage(recoveryMessage, runtime);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [recoveryPath]);
+      assert.equal(
+        pi.sentMessageCalls.some(
+          ({ message }: any) => message?.details?.id === recoveryMessage.id,
+        ),
+        false,
+      );
+      writeFileSync(descriptorPath, descriptorBeforeCorruption);
+      await waitForStage(t, "delivery after Manager descriptor recovery", () =>
+        assert.ok(
           pi.sentMessageCalls.some(
-            ({ message }: any) => message?.details?.id === secondMessage.id,
+            ({ message }: any) => message?.details?.id === recoveryMessage.id,
           ),
-          false,
-        );
-        writeFileSync(secondDescriptorPath, secondDescriptor);
-        await waitForStage(
-          t,
-          "delivery after Manager descriptor recovery",
-          () =>
-            assert.ok(
-              pi.sentMessageCalls.some(
-                ({ message }: any) => message?.details?.id === secondMessage.id,
-              ),
-            ),
-        );
-        assert.deepEqual(listChiefMessagePaths(runtime, leadId), [secondPath]);
-        const receipt = pi.sentMessageCalls.find(
-          ({ message }: any) => message?.details?.id === secondMessage.id,
-        )!.message as any;
-        pi.entries.push({ type: "custom", ...receipt });
-        await waitForStage(t, "recovered message acknowledgment", () =>
-          assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
-        );
-      } finally {
-        second.release();
-      }
+        ),
+      );
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [recoveryPath]);
+      const recoveredReceipt = pi.sentMessageCalls.find(
+        ({ message }: any) => message?.details?.id === recoveryMessage.id,
+      )!.message as any;
+      pi.entries.push({ type: "custom", ...recoveredReceipt });
+      await waitForStage(t, "recovered message acknowledgment", () =>
+        assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+      );
       const fallbackMessage = {
         ...managerMessage,
         id: randomUUID(),
@@ -682,24 +645,33 @@ test(
       removeProjectAssignment(runtime, realpathSync(tmpdir()), "smoke/routing");
       identityEntry.data = { version: 1, sessionId: leadId, kind: "ordinary" };
       const otherId = randomUUID();
-      const other = claimManagerLease({
-        piSessionId: otherId,
-        paneId: "other-manager-pane",
-        tabId: "other-manager-tab",
-        workspaceId: "other-manager-workspace",
-        repoKey: realpathSync(tmpdir()),
-      });
-      agents.push({
-        agent_session: {
-          source: "herdr:pi",
-          agent: "pi",
-          kind: "id",
-          value: otherId,
-        },
-        pane_id: "other-manager-pane",
-        tab_id: "other-manager-tab",
-        workspace_id: "other-manager-workspace",
-      });
+      const legacyWorkspace = `legacy-manager-${randomUUID()}`;
+      const legacyDescriptorPath = managerDescriptorPath(
+        runtime,
+        legacyWorkspace,
+      );
+      const legacyManagerLeaseId = randomUUID();
+      const legacyWorkspaceLock = acquireProcessLock(
+        `${legacyDescriptorPath}.lock`,
+        { name: "legacy Manager supervision lease" },
+      );
+      // Pre-repository-lease descriptors had only a workspace lock; preserve
+      // the ambiguity regression with that legacy topology, not a valid claim.
+      writeFileSync(
+        legacyDescriptorPath,
+        JSON.stringify({
+          version: 1,
+          leaseId: legacyManagerLeaseId,
+          claim: legacyWorkspaceLock.claim,
+          piSessionId: otherId,
+          paneId: "legacy-manager-pane",
+          tabId: "legacy-manager-tab",
+          workspaceId: legacyWorkspace,
+          repoKey: realpathSync(tmpdir()),
+          createdAt: Date.now(),
+        }),
+        { mode: 0o600 },
+      );
       writeLeadCoordinationState(runtime, {
         version: 1,
         role: "manager",
@@ -711,19 +683,23 @@ test(
         ...managerMessage,
         id: randomUUID(),
         fromSessionId: otherId,
-        leaseId: other.descriptor.leaseId,
+        leaseId: legacyManagerLeaseId,
         branch: undefined,
       };
-      const ordinaryPath = writeChiefMessage(ordinaryMessage, runtime);
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
-      assert.equal(
-        pi.sentMessageCalls.some(
-          ({ message }: any) => message?.details?.id === ordinaryMessage.id,
-        ),
-        false,
-      );
-      rmSync(ordinaryPath, { force: true });
-      other.release();
+      try {
+        const ordinaryPath = writeChiefMessage(ordinaryMessage, runtime);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        assert.equal(
+          pi.sentMessageCalls.some(
+            ({ message }: any) => message?.details?.id === ordinaryMessage.id,
+          ),
+          false,
+        );
+        rmSync(ordinaryPath, { force: true });
+      } finally {
+        legacyWorkspaceLock.release();
+        rmSync(legacyDescriptorPath, { force: true });
+      }
       identityEntry.data = managedIdentity;
       const unavailableProjectMessages = listProjectMessages(
         runtime,
@@ -797,6 +773,7 @@ test(
         tabId: "manager-tab",
         workspaceId: WORKSPACE,
         repoKey: realpathSync(tmpdir()),
+        canonicalRepoKey: realpathSync(tmpdir()),
       });
       const replacedText = "reject replaced Manager generation";
       writeChiefMessage(
@@ -1208,6 +1185,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
       tabId: "manager-tab",
       workspaceId: WORKSPACE,
       repoKey,
+      canonicalRepoKey: repoKey,
     });
     writeLeadCoordinationState(runtime, {
       version: 1,
@@ -1312,6 +1290,7 @@ test("message_supervisor tool cancellation prevents project publication while wa
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
     repoKey: "repo-key",
+    canonicalRepoKey: "repo-key",
   });
   writeLeadCoordinationState(runtime, {
     version: 1,
@@ -1458,6 +1437,7 @@ test("project Lead observes Manager availability across turnover without exposin
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
     repoKey,
+    canonicalRepoKey: repoKey,
   });
   let managerReleased = false;
   let replacement: ReturnType<typeof claimManagerLease> | undefined;
@@ -1662,6 +1642,7 @@ test("project Lead observes Manager availability across turnover without exposin
       tabId: "manager-replacement-tab",
       workspaceId: WORKSPACE,
       repoKey,
+      canonicalRepoKey: repoKey,
     });
     agents.push({
       agent_session: {

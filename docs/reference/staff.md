@@ -9,7 +9,33 @@ have the same direct-report observation and communication capabilities.
 Manager additionally has
 the branch-based project operations `delegate_work`, `resume_work`,
 `stop_lead`, `remove_worktree`, and `integrate_branch`. Chief has no
-project-operation tools.
+Manager project-execution tools, but can provision projects and manage Manager
+sessions with `clone_repository`, `start_manager`, and `resume_manager`.
+
+## Chief project tools
+
+These tools require an active Chief; tool visibility or an ordinary tool
+allowlist does not grant authority. Chief can select an absolute or `~/...`
+local repository path, or an HTTPS/SSH Git URL with `start_manager`. For a
+remote source, an optional `destination` overrides the configured
+`projectsDirectory`-based default. `clone_repository` accepts only a supported
+remote and clones without starting a Manager. A clone target uses the remote's
+namespace and repository under `projectsDirectory` by default. Cloning uses
+native Git and a validated unused destination; existing destinations are
+rejected rather than reused, renamed, or overwritten.
+
+For a local non-Git directory, `start_manager` uses the same Git bootstrap and
+confirmation policy as `/manager`; approval is requested in Chief before Git
+initialization. Existing repository contents are not committed by the
+bootstrap. Git operations are narrowly provided by these tools; they do not
+give Chief general filesystem or shell access.
+
+`resume_manager` accepts only a local repository path and restores its saved
+Manager conversation using the exact Pi session file. The recovery reference
+is a hint for locating a saved session, not evidence that a Manager is live or
+authorized. Readiness is verified against the restored session, repository,
+Herdr process identity, Manager role, and lease. Resuming does not restart
+descendant Leads or Agents or alter assignments.
 
 Managers select assigned Leads by the original assignment `branch`; ordinary
 supervised Leads and Chief's actionable direct reports use the stable `target`

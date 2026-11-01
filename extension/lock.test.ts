@@ -20,6 +20,7 @@ import {
   claimProcessLock,
   ProcessLockOccupiedError,
   readLiveProcessLock,
+  readOptionalProcessLockStatus,
   readProcessLockStatus,
 } from "./lock.ts";
 
@@ -483,6 +484,42 @@ test("readLiveProcessLock rejects a malformed owner", () => {
     throws(() => readLiveProcessLock(path), /Unable to verify/);
   } finally {
     rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("optional lock status distinguishes an absent directory from a later owner ENOENT", (t) => {
+  const path = temporaryPath();
+  try {
+    equal(readOptionalProcessLockStatus(path), undefined);
+    throws(() => readProcessLockStatus(path), /Unable to verify/);
+
+    acquireProcessLock(path);
+    const ownerPath = join(path, readdirSync(path)[0]!);
+    const originalRead = fs.readFileSync;
+    let removed = false;
+    t.mock.method(fs, "readFileSync", (file: string, encoding: "utf8") => {
+      if (file === ownerPath && !removed) {
+        removed = true;
+        unlinkSync(ownerPath);
+      }
+      return originalRead(file, encoding);
+    });
+    syncBuiltinESMExports();
+
+    throws(
+      () => readOptionalProcessLockStatus(path),
+      (error: unknown) => {
+        equal(error instanceof Error, true);
+        equal((error as Error).message, "Unable to verify process lock");
+        equal(((error as Error).cause as NodeJS.ErrnoException).code, "ENOENT");
+        return true;
+      },
+    );
+    equal(removed, true);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(dirname(path), { recursive: true, force: true });
   }
 });
 

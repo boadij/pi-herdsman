@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { claimDelegationLock } from "../agent-controller.ts";
-import { readConfig } from "../config.ts";
+import { readConfig, resolveProjectsDirectory } from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 
@@ -183,6 +183,76 @@ test("Project override menu edits Off then Inherit without changing global Manag
   );
 });
 
+test("Settings displays, changes, and resets the effective Projects directory", async () => {
+  const settingsMenus: { items: any[]; selected?: string }[] = [];
+  const directoryMenus: any[][] = [];
+  const updates: [string, unknown][] = [];
+  const inputs: string[] = [];
+  const notices: string[] = [];
+  const settingSelections = [
+    "projects-directory",
+    "projects-directory",
+    undefined,
+  ];
+  const directorySelections = ["change", "reset"];
+  const enteredDirectories = ["~/New Projects"];
+  let storedDirectory: string | undefined = "~/Existing Projects";
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({
+      ...readConfig(),
+      projectsDirectory: storedDirectory ?? readConfig().projectsDirectory,
+    }),
+    updateConfig: (key: string, value: unknown) => {
+      updates.push([key, value]);
+      storedDirectory = value as string | undefined;
+    },
+    input: async (_ctx: unknown, label: string) => {
+      inputs.push(label);
+      return enteredDirectories.shift();
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: any[],
+      selected?: string,
+    ) => {
+      if (title === "Settings") {
+        settingsMenus.push({ items, selected });
+        return settingSelections.shift();
+      }
+      directoryMenus.push(items);
+      return directorySelections.shift();
+    },
+  } as any);
+  await runtime.openSettingsMenu({
+    isProjectTrusted: () => false,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any);
+
+  const projectSetting = settingsMenus[0]?.items.find(
+    ({ value }) => value === "projects-directory",
+  );
+  assert.equal(projectSetting?.label, "Projects directory");
+  assert.equal(
+    projectSetting?.description,
+    resolveProjectsDirectory("~/Existing Projects"),
+  );
+  assert.match(projectSetting?.help, /newly cloned repositories/);
+  assert.deepEqual(
+    directoryMenus[0]?.map(({ label }) => label),
+    ["Change directory", "Reset to default"],
+  );
+  assert.equal(inputs[0], "Projects directory (absolute path or ~/path)");
+  assert.deepEqual(updates, [
+    ["projectsDirectory", "~/New Projects"],
+    ["projectsDirectory", undefined],
+  ]);
+  assert.deepEqual(notices, [
+    `Projects directory: ${resolveProjectsDirectory("~/New Projects")}`,
+    `Projects directory: ${resolveProjectsDirectory("~/Projects")}`,
+  ]);
+});
+
 test("Project Overrides exposes verified removal policy independently of project trust and storage", async () => {
   const menuCalls: { title: string; items: any[] }[] = [];
   const notices: string[] = [];
@@ -259,7 +329,9 @@ test("Settings isolates malformed project settings and untrusted projects inheri
   } as any;
   await runtime.openSettingsMenu(context);
   assert.match(
-    menus[0]?.options[1] ?? "",
+    menus[0]?.options.find((option) =>
+      option.startsWith("Manager auto-start"),
+    ) ?? "",
     /Global on · Project value unavailable/u,
   );
   assert.deepEqual(updates, [false], "global settings remain editable");
@@ -274,7 +346,9 @@ test("Settings isolates malformed project settings and untrusted projects inheri
   menus.length = 0;
   await runtime.openSettingsMenu(context);
   assert.match(
-    menus[0]?.options[1] ?? "",
+    menus[0]?.options.find((option) =>
+      option.startsWith("Manager auto-start"),
+    ) ?? "",
     /Effective on \(global; untrusted project\)/u,
   );
   assert.equal(reads, 2, "untrusted projects do not read project settings");

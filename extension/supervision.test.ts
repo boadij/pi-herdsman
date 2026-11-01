@@ -6,6 +6,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -29,7 +30,15 @@ const {
   chiefLeaseIsHeld,
   claimChiefLease,
   claimManagerLease,
+  managerRepositoryLeaseIsHeld,
   managerDescriptorPath,
+  readManagerRecoveryReference,
+  writeManagerRecoveryReference,
+  removeManagerRecoveryReference,
+  writeManagerStartIntent,
+  consumeManagerStartIntent,
+  removeManagerStartIntent,
+  MANAGER_START_INTENT_TTL_MS,
   readManagerDescriptor,
   readManagerDescriptorStatus,
   listManagerDescriptors,
@@ -104,6 +113,8 @@ import type {
   PeerLeadRecord,
   ProjectMessage,
   ChiefMessageRecord,
+  ManagerRecoveryReference,
+  ManagerStartIntent,
 } from "./supervision.ts";
 
 const socket = () =>
@@ -2768,7 +2779,7 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
   }
 });
 
-test("Manager leases are exclusive per root and fail closed on stale descriptor generations", () => {
+test("Manager leases exclude one repository across workspaces and preserve workspace descriptors", () => {
   const runtime = supervisionRuntime(socket());
   const identity = {
     build: BUILD,
@@ -2778,15 +2789,30 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
     tabId: "tab",
     workspaceId: "root",
     repoKey: "repo",
+    canonicalRepoKey: "repo",
   };
   const first = claimManagerLease(identity, runtime);
   const second = claimManagerLease(
-    { ...identity, workspaceId: "other" },
+    {
+      ...identity,
+      piSessionId: id(),
+      workspaceId: "other",
+      repoKey: "different-repo",
+      canonicalRepoKey: "different-repo",
+    },
     runtime,
   );
+  let rolledBack: ReturnType<typeof claimManagerLease> | undefined;
   try {
     assert.throws(() =>
-      claimManagerLease({ ...identity, piSessionId: id() }, runtime),
+      claimManagerLease(
+        {
+          ...identity,
+          piSessionId: id(),
+          workspaceId: "same-repo-other-workspace",
+        },
+        runtime,
+      ),
     );
     assert.deepEqual(
       new Set(
@@ -2796,6 +2822,63 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
     );
     assert.deepEqual(readManagerDescriptor(runtime, "root"), first.descriptor);
     assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
+
+    // A failed workspace claim must release its already-acquired repository lock.
+    assert.throws(() =>
+      claimManagerLease(
+        {
+          ...identity,
+          piSessionId: id(),
+          repoKey: "rollback-repo",
+          canonicalRepoKey: "rollback-repo",
+        },
+        runtime,
+      ),
+    );
+    rolledBack = claimManagerLease(
+      {
+        ...identity,
+        piSessionId: id(),
+        workspaceId: "rollback-workspace",
+        repoKey: "rollback-repo",
+        canonicalRepoKey: "rollback-repo",
+      },
+      runtime,
+    );
+
+    const failedDescriptorPath = managerDescriptorPath(
+      runtime,
+      "failed-descriptor-workspace",
+    );
+    mkdirSync(failedDescriptorPath);
+    try {
+      assert.throws(() =>
+        claimManagerLease(
+          {
+            ...identity,
+            piSessionId: id(),
+            workspaceId: "failed-descriptor-workspace",
+            repoKey: "failed-descriptor-repo",
+            canonicalRepoKey: "failed-descriptor-repo",
+          },
+          runtime,
+        ),
+      );
+    } finally {
+      rmSync(failedDescriptorPath, { recursive: true, force: true });
+    }
+    const afterWriteFailure = claimManagerLease(
+      {
+        ...identity,
+        piSessionId: id(),
+        workspaceId: "failed-descriptor-workspace",
+        repoKey: "failed-descriptor-repo",
+        canonicalRepoKey: "failed-descriptor-repo",
+      },
+      runtime,
+    );
+    afterWriteFailure.release();
+
     const path = join(
       runtime.managers,
       `${createHash("sha256").update("root").digest("hex")}.json`,
@@ -2837,9 +2920,176 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       }),
       false,
     );
+    first.release();
+    first.release();
+    const afterRelease = claimManagerLease(
+      {
+        ...identity,
+        piSessionId: id(),
+        workspaceId: "released-repo-workspace",
+      },
+      runtime,
+    );
+    afterRelease.release();
   } finally {
     first.release();
     second.release();
+    rolledBack?.release();
+  }
+});
+
+test("missing Manager repository lease is not held, but corrupt lock errors propagate", () => {
+  const runtime = supervisionRuntime(socket());
+  const canonicalRepoKey = join(tmpdir(), `manager-repository-${id()}`);
+  const leasePath = join(
+    runtime.managers,
+    `${createHash("sha256").update(canonicalRepoKey).digest("hex")}.repository.lock`,
+  );
+
+  try {
+    assert.equal(
+      managerRepositoryLeaseIsHeld(runtime, canonicalRepoKey),
+      false,
+    );
+    mkdirSync(leasePath, { recursive: true });
+    writeFileSync(join(leasePath, "corrupt-owner"), "{");
+    assert.throws(
+      () => managerRepositoryLeaseIsHeld(runtime, canonicalRepoKey),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /Unable to verify Manager repository lease/,
+        );
+        assert.ok(error.cause instanceof SyntaxError);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(leasePath, { recursive: true, force: true });
+  }
+});
+
+test("Manager lease and recovery identity use canonical paths for Herdr aliases", () => {
+  const runtime = supervisionRuntime(socket());
+  const directory = mkdtempSync(join(tmpdir(), "manager-canonical-key-"));
+  const clone = mkdtempSync(join(tmpdir(), "manager-distinct-clone-"));
+  const canonicalRepoKey = realpathSync.native(directory);
+  const cloneCanonicalRepoKey = realpathSync.native(clone);
+  const lease = claimManagerLease(
+    {
+      build: BUILD,
+      piSessionId: id(),
+      paneId: "pane-one",
+      tabId: "tab-one",
+      workspaceId: "workspace-one",
+      repoKey: `${directory}/.`,
+      canonicalRepoKey,
+    },
+    runtime,
+  );
+  try {
+    assert.equal(lease.descriptor.repoKey, `${directory}/.`);
+    assert.equal(lease.descriptor.canonicalRepoKey, canonicalRepoKey);
+    assert.throws(() =>
+      claimManagerLease(
+        {
+          build: BUILD,
+          piSessionId: id(),
+          paneId: "pane-two",
+          tabId: "tab-two",
+          workspaceId: "workspace-two",
+          repoKey: directory,
+          canonicalRepoKey,
+        },
+        runtime,
+      ),
+    );
+
+    const distinct = claimManagerLease(
+      {
+        build: BUILD,
+        piSessionId: id(),
+        paneId: "clone-pane",
+        tabId: "clone-tab",
+        workspaceId: "clone-workspace",
+        repoKey: cloneCanonicalRepoKey,
+        canonicalRepoKey: cloneCanonicalRepoKey,
+      },
+      runtime,
+    );
+    const first = writeManagerRecoveryReference(runtime, {
+      version: 1,
+      canonicalRepoKey,
+      piSessionId: id(),
+      piSessionFile: "/tmp/first-manager-session.jsonl",
+    });
+    const aliasPath = writeManagerRecoveryReference(runtime, {
+      version: 1,
+      canonicalRepoKey: realpathSync.native(`${directory}/.`),
+      piSessionId: id(),
+      piSessionFile: "/tmp/alias-manager-session.jsonl",
+    });
+    assert.equal(aliasPath, first);
+    assert.equal(
+      readManagerRecoveryReference(runtime, canonicalRepoKey)?.piSessionFile,
+      "/tmp/alias-manager-session.jsonl",
+    );
+    distinct.release();
+  } finally {
+    lease.release();
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(clone, { recursive: true, force: true });
+  }
+});
+
+test("legacy Manager descriptors are read without rewrite and exclude verified same repositories", () => {
+  const runtime = supervisionRuntime(socket());
+  const directory = mkdtempSync(join(tmpdir(), "manager-legacy-key-"));
+  const canonicalRepoKey = realpathSync.native(directory);
+  const legacyRepoKey = `${directory}/.`;
+  const legacy = claimManagerLease(
+    {
+      build: BUILD,
+      piSessionId: id(),
+      paneId: "legacy-pane",
+      tabId: "legacy-tab",
+      workspaceId: "legacy-workspace",
+      repoKey: legacyRepoKey,
+      // Simulate the old repoKey-keyed lease before deleting the new field.
+      canonicalRepoKey: legacyRepoKey,
+    },
+    runtime,
+  );
+  const path = managerDescriptorPath(runtime, "legacy-workspace");
+  try {
+    const descriptor = { ...legacy.descriptor } as Record<string, unknown>;
+    delete descriptor.canonicalRepoKey;
+    writeFileSync(path, JSON.stringify(descriptor));
+    const read = readManagerDescriptor(runtime, "legacy-workspace");
+    assert.equal(read?.canonicalRepoKey, undefined);
+    assert.throws(() =>
+      claimManagerLease(
+        {
+          build: BUILD,
+          piSessionId: id(),
+          paneId: "new-pane",
+          tabId: "new-tab",
+          workspaceId: "new-workspace",
+          repoKey: canonicalRepoKey,
+          canonicalRepoKey,
+        },
+        runtime,
+      ),
+    );
+    assert.equal(
+      Object.hasOwn(JSON.parse(readFileSync(path, "utf8")), "canonicalRepoKey"),
+      false,
+    );
+  } finally {
+    unlinkSync(path);
+    legacy.release();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -2855,6 +3105,7 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
       tabId: "tab",
       workspaceId,
       repoKey: "repo",
+      canonicalRepoKey: "repo",
     },
     runtime,
   );
@@ -2872,6 +3123,231 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
     lease.release();
   }
   assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
+});
+
+test("Manager recovery references persist independently of live leases", () => {
+  const runtime = supervisionRuntime(socket());
+  const reference: ManagerRecoveryReference = {
+    version: 1,
+    canonicalRepoKey: "recovery-repo",
+    piSessionId: id(),
+    piSessionFile: "/tmp/manager-session.jsonl",
+  };
+  const path = writeManagerRecoveryReference(runtime, reference);
+  assert.equal(
+    path,
+    join(
+      runtime.root,
+      "manager-recovery",
+      `${createHash("sha256").update(reference.canonicalRepoKey).digest("hex")}.json`,
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(JSON.parse(readFileSync(path, "utf8"))).sort(),
+    ["version", "canonicalRepoKey", "piSessionId", "piSessionFile"].sort(),
+  );
+  assertPosixMode(path, 0o600);
+  assertPosixMode(runtime.root, 0o700);
+  assertPosixMode(dirname(path), 0o700);
+  assert.deepEqual(
+    readManagerRecoveryReference(runtime, reference.canonicalRepoKey),
+    reference,
+  );
+
+  const lease = claimManagerLease(
+    {
+      build: BUILD,
+      piSessionId: reference.piSessionId,
+      piSessionFile: reference.piSessionFile,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "recovery-workspace",
+      repoKey: "recovery-repo",
+      canonicalRepoKey: reference.canonicalRepoKey,
+    },
+    runtime,
+  );
+  lease.release();
+  lease.release();
+  assert.equal(
+    readManagerDescriptorStatus(runtime, "recovery-workspace"),
+    undefined,
+  );
+  assert.deepEqual(
+    readManagerRecoveryReference(runtime, reference.canonicalRepoKey),
+    reference,
+  );
+});
+
+test("Manager recovery references reject malformed or contradictory data", () => {
+  const runtime = supervisionRuntime(socket());
+  const reference: ManagerRecoveryReference = {
+    version: 1,
+    canonicalRepoKey: "malformed-recovery-repo",
+    piSessionId: id(),
+    piSessionFile: "/tmp/manager-session.jsonl",
+  };
+  const path = writeManagerRecoveryReference(runtime, reference);
+  assert.equal(
+    readManagerRecoveryReference(runtime, "missing-repo"),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      writeManagerRecoveryReference(runtime, {
+        ...reference,
+        version: 2,
+      } as never),
+    /Invalid Manager recovery reference/,
+  );
+
+  for (const invalid of [
+    "{truncated",
+    JSON.stringify({ ...reference, version: 2 }),
+    JSON.stringify({ ...reference, canonicalRepoKey: "other-repo" }),
+    JSON.stringify({ ...reference, piSessionId: "" }),
+    JSON.stringify({ ...reference, piSessionFile: "" }),
+    JSON.stringify({
+      version: 1,
+      canonicalRepoKey: reference.canonicalRepoKey,
+      piSessionId: reference.piSessionId,
+    }),
+    JSON.stringify({ ...reference, unexpected: true }),
+  ]) {
+    writeFileSync(path, invalid, "utf8");
+    assert.throws(
+      () => readManagerRecoveryReference(runtime, reference.canonicalRepoKey),
+      /Unable to read Manager recovery reference/,
+    );
+  }
+});
+
+test("Manager recovery removal affects only the matching session and preserves replacements", () => {
+  const runtime = supervisionRuntime(socket());
+  const original: ManagerRecoveryReference = {
+    version: 1,
+    canonicalRepoKey: "matching-recovery-repo",
+    piSessionId: id(),
+    piSessionFile: "/tmp/original-manager-session.jsonl",
+  };
+  const replacement: ManagerRecoveryReference = {
+    ...original,
+    piSessionId: id(),
+    piSessionFile: "/tmp/replacement-manager-session.jsonl",
+  };
+  writeManagerRecoveryReference(runtime, original);
+  assert.equal(
+    removeManagerRecoveryReference(runtime, original.canonicalRepoKey, id()),
+    false,
+  );
+  assert.deepEqual(
+    readManagerRecoveryReference(runtime, original.canonicalRepoKey),
+    original,
+  );
+
+  writeManagerRecoveryReference(runtime, replacement);
+  assert.equal(
+    removeManagerRecoveryReference(
+      runtime,
+      original.canonicalRepoKey,
+      original.piSessionId,
+    ),
+    false,
+  );
+  assert.deepEqual(
+    readManagerRecoveryReference(runtime, original.canonicalRepoKey),
+    replacement,
+  );
+  assert.equal(
+    removeManagerRecoveryReference(
+      runtime,
+      replacement.canonicalRepoKey,
+      replacement.piSessionId,
+    ),
+    true,
+  );
+  assert.equal(
+    readManagerRecoveryReference(runtime, replacement.canonicalRepoKey),
+    undefined,
+  );
+});
+
+test("Manager startup intents are exact-session, one-shot, and expire", () => {
+  const runtime = supervisionRuntime(socket());
+  const intent: ManagerStartIntent = {
+    version: 1,
+    sessionId: id(),
+    repoKey: "/repo",
+    checkoutPath: realpathSync(tmpdir()),
+    workspaceId: "workspace",
+    paneId: "pane",
+    createdAt: Date.now(),
+  };
+  writeManagerStartIntent(runtime, intent);
+  const expected = {
+    sessionId: intent.sessionId,
+    repoKey: intent.repoKey,
+    checkoutPath: intent.checkoutPath,
+    workspaceId: intent.workspaceId,
+    paneId: intent.paneId,
+  };
+  assert.deepEqual(consumeManagerStartIntent(runtime, expected), intent);
+  assert.equal(consumeManagerStartIntent(runtime, expected), undefined);
+
+  const expired = {
+    ...intent,
+    sessionId: id(),
+    createdAt: Date.now() - MANAGER_START_INTENT_TTL_MS - 1,
+  };
+  writeManagerStartIntent(runtime, expired);
+  assert.equal(
+    consumeManagerStartIntent(
+      runtime,
+      {
+        ...expected,
+        sessionId: expired.sessionId,
+      },
+      Date.now(),
+    ),
+    undefined,
+  );
+  assert.equal(removeManagerStartIntent(runtime, expired.sessionId), false);
+});
+
+test("Manager startup intents reject contradictory Herdr identity", () => {
+  const runtime = supervisionRuntime(socket());
+  const intent: ManagerStartIntent = {
+    version: 1,
+    sessionId: id(),
+    repoKey: "/repo",
+    checkoutPath: realpathSync(tmpdir()),
+    workspaceId: "workspace",
+    paneId: "pane",
+    createdAt: Date.now(),
+  };
+  writeManagerStartIntent(runtime, intent);
+  assert.throws(
+    () =>
+      consumeManagerStartIntent(runtime, {
+        sessionId: intent.sessionId,
+        repoKey: intent.repoKey,
+        checkoutPath: intent.checkoutPath,
+        workspaceId: "other-workspace",
+        paneId: intent.paneId,
+      }),
+    /does not match this Herdr session/,
+  );
+  assert.deepEqual(
+    consumeManagerStartIntent(runtime, {
+      sessionId: intent.sessionId,
+      repoKey: intent.repoKey,
+      checkoutPath: intent.checkoutPath,
+      workspaceId: intent.workspaceId,
+      paneId: intent.paneId,
+    }),
+    intent,
+    "a contradictory identity must not consume the intent",
+  );
 });
 
 test("project assignments are scoped by repository and branch, strict, and removable", () => {

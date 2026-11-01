@@ -218,6 +218,101 @@ test("Lead startup requests status refresh after execution profile initializatio
   assert.equal(calls.filter((call) => call === "refresh").length, 1);
 });
 
+test("exact Chief startup intent selects Manager activation without overriding a persisted role", async () => {
+  const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
+  const ctx = fakeContext();
+  const signal = new AbortController().signal;
+  const activated: string[] = [];
+  let consumeCalls = 0;
+  let lease: object | undefined;
+  let persistedRole:
+    { role: "lead" | "manager"; leadTools: string[] } | undefined;
+  const host = {
+    diagnostic() {},
+    controller: {
+      abortSession() {},
+      clearPendingStarts() {},
+      beginSession: () => signal,
+      sessionStart() {},
+      async recoverRuntimes() {},
+      startHealthScanner() {},
+    },
+    leadInboxRuntime: { beginSession() {}, async cleanupManagedPeerInbox() {} },
+    leadStatusRuntime: {
+      prepareSession() {},
+      prime() {},
+      setSnapshot() {},
+      start() {},
+      requestRefresh() {},
+    },
+    isRoot: () => true,
+    isManagedAgent: () => false,
+    clearLeadExecution() {},
+    setLeadExecutionPending() {},
+    clearDefinitionRoster() {},
+    clearChiefStartPreflight() {},
+    roleTransitions: {
+      beginSessionRole: () => ({}),
+      reconcileRoleTools() {},
+      canRestoreChiefState: () => false,
+      shouldRestoreChief: () => false,
+      mayPublishLeadPresence: () => false,
+      canStartChiefInbox: () => false,
+      chiefModeInactive: () => true,
+      chiefModeActive: () => false,
+      activeManager: () => !!lease,
+      currentRoleGeneration: () => 0,
+      async resolveControllerRole(
+        _ctx: unknown,
+        role: string,
+        optional: boolean,
+      ) {
+        activated.push(`${role}:${optional}`);
+        if (role === "manager") lease = {};
+      },
+      async reconcileCurrentManagerAssignments() {},
+    },
+    consumeManagerStartIntent: () => {
+      consumeCalls++;
+      return true;
+    },
+    sessionLeadRoleState: () => persistedRole,
+    hasLeadExecutionState: () => false,
+    normalizeBaseTools: (tools: string[]) => tools,
+    activeTools: () => [],
+    setLeadTools() {},
+    autoActivateManager: () => false,
+    herdRun: { restoreSession() {}, finishIfIdle() {} },
+    setOwnTools() {},
+    queueLeadPresentation() {},
+    startSupervisionUI() {},
+    initialStatusBreadcrumb: () => [],
+    ownToolsSnapshot: () => ({}),
+    discoverSessionDefinitions: async () => ({
+      definitions: [],
+      roleDefinitions: [],
+      projectTrusted: true,
+    }),
+    prepareLeadExecution: async () => {},
+    publishLeadRole: async () => {},
+    visibleAgentCapabilities: async () => [],
+    setDefinitionRoster() {},
+    appendRoleError() {},
+    appendDefinitionError() {},
+  } as unknown as Parameters<typeof createLeadSessionStartRuntime>[0];
+
+  await createLeadSessionStartRuntime(host).sessionStart(ctx);
+  assert.equal(consumeCalls, 1);
+  assert.deepEqual(activated, ["manager:false"]);
+  assert.ok(lease);
+
+  persistedRole = { role: "lead", leadTools: [] };
+  lease = undefined;
+  await createLeadSessionStartRuntime(host).sessionStart(fakeContext());
+  assert.equal(consumeCalls, 1);
+  assert.deepEqual(activated, ["manager:false", "lead:false"]);
+});
+
 test("read_evidence is added only to assigned project Lead tools", async () => {
   const { createLeadToolState } = await import("./lead-runtime.ts");
   const tools = ["read", "bash", "read_evidence", "delegate_agent"];

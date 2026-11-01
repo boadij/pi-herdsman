@@ -40,6 +40,8 @@ import {
   rollbackHerdrStart,
   startHerdrAgent,
   startHerdrAgentInPane,
+  startHerdrManagerInPane,
+  prepareHerdrManagerPane,
   matchesExpectedSession,
   readPiSessionHeaderId,
   sameObservedSessionPath,
@@ -6615,6 +6617,10 @@ test("local repository discovery ignores inherited topology but checks explicit 
       (await localRepositoryScope(pi, { cwd } as any, "w")).isPrimary,
       true,
     );
+    assert.equal(
+      (await localRepositoryScope(pi, { cwd } as any, "w")).canonicalRepoKey,
+      realpathSync.native(common),
+    );
     assert.ok(
       calls.some(
         (call) => call.join(" ") === `herdr worktree list --cwd ${cwd}`,
@@ -6638,6 +6644,10 @@ test("local repository discovery ignores inherited topology but checks explicit 
       assert.equal(
         (await localRepositoryScope(pi, { cwd } as any, "w")).repoKey,
         variant.repoKey,
+      );
+      assert.equal(
+        (await localRepositoryScope(pi, { cwd } as any, "w")).canonicalRepoKey,
+        realpathSync.native(common),
       );
     }
     reportedRepo = linked;
@@ -6994,3 +7004,679 @@ test("existing-pane startup requires group membership and an exact pane", async 
     else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
   }
 });
+
+test("Manager pane launch verifies authorization and exact target identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-pane-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  const otherRepoKey = join(root, "other.git");
+  fs.mkdirSync(gitDir, { recursive: true });
+  fs.mkdirSync(otherRepoKey);
+  const repoKey = realpathSync.native(gitDir);
+
+  type Fault =
+    | "none"
+    | "repository"
+    | "repository-alias"
+    | "workspace"
+    | "pane"
+    | "tab"
+    | "cwd"
+    | "terminal"
+    | "shell";
+  const makePi = (fault: Fault, calls: string[][]) =>
+    ({
+      exec: async (command: string, args: string[], options: any) => {
+        calls.push([command, ...args]);
+        if (command === "git") {
+          const value = args[2] === "--show-toplevel" ? checkoutPath : repoKey;
+          return { code: 0, stdout: value, stderr: "" };
+        }
+        const key = args.slice(0, 2).join(" ");
+        const sourceRepo =
+          fault === "repository"
+            ? otherRepoKey
+            : fault === "repository-alias"
+              ? `${repoKey}/.`
+              : repoKey;
+        if (key === "worktree list") {
+          if (args.includes("--cwd"))
+            assert.equal(options.cwd, realpathSync.native(checkoutPath));
+          return response({
+            source: {
+              repo_key: sourceRepo,
+              repo_name: "checkout",
+              source_workspace_id: "manager-workspace",
+            },
+            worktrees: [],
+          });
+        }
+        if (key === "workspace get")
+          return response({
+            workspace: {
+              workspace_id:
+                fault === "workspace"
+                  ? "replacement-workspace"
+                  : "manager-workspace",
+              worktree: {
+                repo_key: repoKey,
+                checkout_path: checkoutPath,
+                is_linked_worktree: false,
+              },
+            },
+          });
+        if (key === "pane list")
+          return response({
+            panes: [
+              {
+                pane_id: fault === "pane" ? "replacement-pane" : "manager-pane",
+                workspace_id: "manager-workspace",
+                tab_id: fault === "tab" ? "replacement-tab" : "manager-tab",
+                terminal_id: "manager-terminal",
+                cwd: fault === "cwd" ? root : checkoutPath,
+              },
+            ],
+          });
+        if (key === "pane run" || key === "pane wait-output")
+          return response({});
+        if (key === "pane process-info")
+          return response({
+            process_info: {
+              pane_id: fault === "shell" ? "replacement-pane" : "manager-pane",
+              shell_pid: 33,
+              foreground_process_group_id: 33,
+              foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+            },
+          });
+        if (key === "pane get")
+          return response({
+            pane: {
+              pane_id: "manager-pane",
+              workspace_id: "manager-workspace",
+              tab_id: "manager-tab",
+              terminal_id:
+                fault === "terminal"
+                  ? "replacement-terminal"
+                  : "manager-terminal",
+              cwd: checkoutPath,
+            },
+          });
+        if (key === "agent start")
+          return response({
+            agent: {
+              name: "started-manager",
+              agent_session: { id: "session" },
+            },
+          });
+        throw new Error("unexpected command: " + args.join(" ") + options.cwd);
+      },
+    }) as any;
+
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const options = {
+    repoKey,
+    checkoutPath,
+    primaryWorkspaceId: "manager-workspace",
+    tabId: "manager-tab",
+    paneId: "manager-pane",
+    label: "manager",
+    runId: "manager-run",
+    verifyAuthorization: async (target: any) => {
+      assert.equal(Object.isFrozen(target), true);
+      assert.deepEqual(target, {
+        repoKey,
+        checkoutPath: realpathSync.native(checkoutPath),
+        workspaceId: "manager-workspace",
+        tabId: "manager-tab",
+        paneId: "manager-pane",
+      });
+    },
+  };
+
+  try {
+    const missingVerifierCalls: string[][] = [];
+    await assert.rejects(
+      startHerdrManagerInPane(
+        makePi("none", missingVerifierCalls),
+        { cwd: root } as any,
+        { ...options, verifyAuthorization: undefined } as any,
+      ),
+      /authorization verifier is required/,
+    );
+    assert.deepEqual(missingVerifierCalls, []);
+
+    const deniedCalls: string[][] = [];
+    await assert.rejects(
+      startHerdrManagerInPane(
+        makePi("none", deniedCalls),
+        { cwd: root } as any,
+        {
+          ...options,
+          verifyAuthorization: async () => {
+            throw new Error("Chief authority denied");
+          },
+        },
+      ),
+      /Chief authority denied/,
+    );
+    assert.deepEqual(deniedCalls, []);
+
+    for (const fault of [
+      "repository",
+      "workspace",
+      "pane",
+      "tab",
+      "cwd",
+      "terminal",
+      "shell",
+    ] as const) {
+      const calls: string[][] = [];
+      await assert.rejects(
+        startHerdrManagerInPane(
+          makePi(fault, calls),
+          { cwd: root } as any,
+          options,
+        ),
+        fault === "shell"
+          ? /process ownership is unavailable/
+          : fault === "terminal"
+            ? /identity changed before launch/
+            : /repository|workspace|topology changed/,
+      );
+      assert.equal(
+        calls.some(
+          (args) =>
+            args[0] === "herdr" && args[1] === "agent" && args[2] === "start",
+        ),
+        false,
+        fault + " mismatch must prevent launch",
+      );
+    }
+
+    const aliasCalls: string[][] = [];
+    const aliasStarted = await startHerdrManagerInPane(
+      makePi("repository-alias", aliasCalls),
+      { cwd: root } as any,
+      options,
+    );
+    assert.equal(aliasStarted.paneId, "manager-pane");
+    assert.ok(
+      aliasCalls.some((args) => args[1] === "agent" && args[2] === "start"),
+    );
+
+    const calls: string[][] = [];
+    let authorizationCalls = 0;
+    const started = await startHerdrManagerInPane(
+      makePi("none", calls),
+      { cwd: root } as any,
+      {
+        ...options,
+        verifyAuthorization: async (target: any) => {
+          authorizationCalls++;
+          await options.verifyAuthorization(target);
+        },
+      },
+    );
+    assert.equal(started.workspaceId, "manager-workspace");
+    assert.equal(started.paneId, "manager-pane");
+    assert.equal(started.terminalId, "manager-terminal");
+    assert.deepEqual(started.shellProcess, {
+      pane_id: "manager-pane",
+      shell_pid: 33,
+      foreground_process_group_id: 33,
+      foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+    });
+    assert.equal(authorizationCalls, 2);
+    const shellReadyIndex = calls.findIndex(
+      (args) => args[2] === "wait-output",
+    );
+    const processIdentityIndex = calls.findIndex(
+      (args) => args[2] === "process-info",
+    );
+    const exactPaneIndex = calls.findIndex(
+      (args) => args[2] === "get" && args[3] === "manager-pane",
+    );
+    const launchIndex = calls.findIndex(
+      (args) => args[1] === "agent" && args[2] === "start",
+    );
+    assert.ok(shellReadyIndex >= 0 && shellReadyIndex < processIdentityIndex);
+    assert.ok(
+      processIdentityIndex < exactPaneIndex && exactPaneIndex < launchIndex,
+    );
+    assert.ok(calls[launchIndex]?.includes("manager-pane"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager topology reuses the unique verified primary workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-topology-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  const linkedCheckout = join(root, "linked");
+  const linkedGitDir = join(linkedCheckout, ".git-worktree");
+  fs.mkdirSync(gitDir, { recursive: true });
+  fs.mkdirSync(linkedCheckout);
+  fs.mkdirSync(linkedGitDir);
+  const repoKey = realpathSync.native(gitDir);
+
+  const harness = managerTopologyHarness({
+    repoKey,
+    checkoutPath,
+    workspaces: [
+      {
+        id: "primary",
+        repoKey,
+        checkoutPath,
+        gitDir: repoKey,
+        commonDir: repoKey,
+        isLinked: false,
+      },
+      {
+        id: "linked",
+        repoKey,
+        checkoutPath: linkedCheckout,
+        gitDir: linkedGitDir,
+        commonDir: repoKey,
+        isLinked: true,
+      },
+    ],
+  });
+  try {
+    const selected = await prepareHerdrManagerPane(
+      harness.pi,
+      { cwd: root } as any,
+      { repoKey, checkoutPath },
+    );
+    assert.deepEqual(selected, {
+      repoKey: realpathSync.native(repoKey),
+      checkoutPath: realpathSync.native(checkoutPath),
+      primaryWorkspaceId: "primary",
+      tabId: "manager-tab",
+      paneId: "manager-pane",
+    });
+    assert.equal(
+      harness.calls.some(
+        (args) => args[1] === "workspace" && args[2] === "create",
+      ),
+      false,
+    );
+    assert.ok(
+      harness.calls.some(
+        (args) =>
+          args[1] === "worktree" &&
+          args[2] === "list" &&
+          args.includes("--cwd"),
+      ),
+    );
+    const tabCreate = harness.calls.find(
+      (args) => args[1] === "tab" && args[2] === "create",
+    )!;
+    assert.equal(tabCreate[tabCreate.indexOf("--workspace") + 1], "primary");
+    assert.equal(
+      tabCreate[tabCreate.indexOf("--cwd") + 1],
+      realpathSync.native(checkoutPath),
+    );
+    assert.ok(tabCreate.includes("--no-focus"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager topology creates a primary workspace when none is open", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-topology-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  fs.mkdirSync(gitDir, { recursive: true });
+  const repoKey = realpathSync.native(gitDir);
+  const harness = managerTopologyHarness({ repoKey, checkoutPath });
+  try {
+    const selected = await prepareHerdrManagerPane(
+      harness.pi,
+      { cwd: root } as any,
+      { repoKey, checkoutPath },
+    );
+    assert.equal(selected.primaryWorkspaceId, "created-workspace");
+    const create = harness.calls.find(
+      (args) => args[1] === "workspace" && args[2] === "create",
+    )!;
+    assert.deepEqual(create.slice(3), [
+      "--cwd",
+      realpathSync.native(checkoutPath),
+      "--no-focus",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager topology fails closed on duplicate or inconsistent primary associations", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-topology-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  const otherCheckout = join(root, "other");
+  const otherGitDir = join(otherCheckout, ".git");
+  fs.mkdirSync(gitDir, { recursive: true });
+  fs.mkdirSync(otherGitDir, { recursive: true });
+  const repoKey = realpathSync.native(gitDir);
+  const otherRepoKey = realpathSync.native(otherGitDir);
+  const valid = {
+    repoKey,
+    checkoutPath,
+    gitDir: repoKey,
+    commonDir: repoKey,
+    isLinked: false,
+  };
+  try {
+    const duplicate = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [
+        { ...valid, id: "primary-one" },
+        { ...valid, id: "primary-two" },
+      ],
+    });
+    await assert.rejects(
+      prepareHerdrManagerPane(duplicate.pi, { cwd: root } as any, {
+        repoKey,
+        checkoutPath,
+      }),
+      /duplicate primary workspaces/,
+    );
+    assert.equal(
+      duplicate.calls.some((args) => args[1] === "tab" && args[2] === "create"),
+      false,
+    );
+
+    const inconsistent = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [
+        {
+          id: "misreported",
+          repoKey,
+          checkoutPath: otherCheckout,
+          gitDir: otherRepoKey,
+          commonDir: otherRepoKey,
+          isLinked: false,
+        },
+      ],
+    });
+    await assert.rejects(
+      prepareHerdrManagerPane(inconsistent.pi, { cwd: root } as any, {
+        repoKey,
+        checkoutPath,
+      }),
+      /workspace association is inconsistent/,
+    );
+    assert.equal(
+      inconsistent.calls.some(
+        (args) => args[1] === "workspace" && args[2] === "create",
+      ),
+      false,
+    );
+    assert.equal(
+      inconsistent.calls.some(
+        (args) => args[1] === "tab" && args[2] === "create",
+      ),
+      false,
+    );
+
+    const aliasedRepoKey = `${repoKey}/.`;
+    assert.equal(sameDirectory(aliasedRepoKey, repoKey), true);
+    const aliasedAssociation = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [
+        {
+          id: "aliased",
+          repoKey: aliasedRepoKey,
+          checkoutPath,
+          gitDir: repoKey,
+          commonDir: repoKey,
+          isLinked: false,
+        },
+      ],
+    });
+    const aliasMembership = await prepareHerdrManagerPane(
+      aliasedAssociation.pi,
+      { cwd: root } as any,
+      { repoKey, checkoutPath },
+    );
+    assert.equal(aliasMembership.primaryWorkspaceId, "aliased");
+
+    const canonicalWorkspace = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [{ ...valid, id: "primary" }],
+      herdrRepoKey: aliasedRepoKey,
+    });
+    const aliasSource = await prepareHerdrManagerPane(
+      canonicalWorkspace.pi,
+      { cwd: root } as any,
+      { repoKey, checkoutPath },
+    );
+    assert.equal(aliasSource.primaryWorkspaceId, "primary");
+
+    const aliasedInput = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [{ ...valid, id: "primary" }],
+    });
+    const aliasedSelection = await prepareHerdrManagerPane(
+      aliasedInput.pi,
+      { cwd: root } as any,
+      { repoKey: aliasedRepoKey, checkoutPath },
+    );
+    assert.equal(aliasedSelection.repoKey, repoKey);
+
+    const unresolvedSource = managerTopologyHarness({
+      repoKey,
+      checkoutPath,
+      workspaces: [{ ...valid, id: "primary" }],
+      herdrRepoKey: join(root, "missing-repository"),
+    });
+    await assert.rejects(
+      prepareHerdrManagerPane(unresolvedSource.pi, { cwd: root } as any, {
+        repoKey,
+        checkoutPath,
+      }),
+      /Herdr repository identity does not match canonical Git identity/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager topology never takes over a previously occupied pane", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-manager-topology-"));
+  const checkoutPath = join(root, "checkout");
+  const gitDir = join(checkoutPath, ".git");
+  fs.mkdirSync(gitDir, { recursive: true });
+  const repoKey = realpathSync.native(gitDir);
+  const harness = managerTopologyHarness({
+    repoKey,
+    checkoutPath,
+    workspaces: [
+      {
+        id: "primary",
+        repoKey,
+        checkoutPath,
+        gitDir: repoKey,
+        commonDir: repoKey,
+        isLinked: false,
+      },
+    ],
+    occupiedPane: true,
+  });
+  try {
+    await assert.rejects(
+      prepareHerdrManagerPane(harness.pi, { cwd: root } as any, {
+        repoKey,
+        checkoutPath,
+      }),
+      /occupied or inconsistent/,
+    );
+    assert.equal(
+      harness.calls.some((args) => args[1] === "agent" && args[2] === "start"),
+      false,
+    );
+    assert.equal(
+      harness.calls.some((args) => args[1] === "pane" && args[2] === "split"),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+type ManagerTopologyWorkspace = {
+  id: string;
+  repoKey: string;
+  checkoutPath: string;
+  gitDir: string;
+  commonDir: string;
+  isLinked: boolean;
+};
+
+function managerTopologyHarness(options: {
+  repoKey: string;
+  checkoutPath: string;
+  workspaces?: ManagerTopologyWorkspace[];
+  occupiedPane?: boolean;
+  herdrRepoKey?: string;
+}) {
+  const calls: string[][] = [];
+  const workspaces = new Map(
+    (options.workspaces ?? []).map((workspace) => [workspace.id, workspace]),
+  );
+  let tabCreated = false;
+  let targetWorkspaceId = "";
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (command: string, args: string[], execOptions: any) => {
+      calls.push([command, ...args]);
+      if (command === "git") {
+        const cwd = realpathSync.native(execOptions.cwd);
+        const item =
+          [...workspaces.values()].find(
+            (workspace) => realpathSync.native(workspace.checkoutPath) === cwd,
+          ) ??
+          (realpathSync.native(options.checkoutPath) === cwd
+            ? {
+                checkoutPath: options.checkoutPath,
+                gitDir: options.repoKey,
+                commonDir: options.repoKey,
+              }
+            : undefined);
+        if (!item) throw new Error("unexpected Git cwd: " + cwd);
+        const value =
+          args[2] === "--show-toplevel"
+            ? item.checkoutPath
+            : args[2] === "--git-dir"
+              ? item.gitDir
+              : item.commonDir;
+        return { code: 0, stdout: value, stderr: "" };
+      }
+      const key = args.slice(0, 2).join(" ");
+      if (key === "api snapshot")
+        return response({
+          snapshot: {
+            panes: [],
+            agents: [],
+            workspaces: [...workspaces.keys()].map((workspace_id) => ({
+              workspace_id,
+            })),
+          },
+        });
+      if (key === "workspace get") {
+        const workspace = workspaces.get(args[2]!);
+        return response({
+          workspace: {
+            workspace_id: args[2],
+            worktree: workspace
+              ? {
+                  repo_key: workspace.repoKey,
+                  checkout_path: workspace.checkoutPath,
+                  is_linked_worktree: workspace.isLinked,
+                }
+              : null,
+          },
+        });
+      }
+      if (key === "workspace create") {
+        workspaces.set("created-workspace", {
+          id: "created-workspace",
+          repoKey: options.repoKey,
+          checkoutPath: options.checkoutPath,
+          gitDir: options.repoKey,
+          commonDir: options.repoKey,
+          isLinked: false,
+        });
+        return response({
+          workspace: { workspace_id: "created-workspace" },
+        });
+      }
+      if (key === "worktree list") {
+        const primary = [...workspaces.values()].find(
+          (workspace) =>
+            workspace.isLinked === false &&
+            workspace.repoKey === options.repoKey,
+        );
+        return response({
+          source: {
+            repo_key: options.herdrRepoKey ?? options.repoKey,
+            source_workspace_id: primary?.id ?? null,
+          },
+          worktrees: [],
+        });
+      }
+      if (key === "tab list")
+        return response({
+          tabs: tabCreated
+            ? [{ tab_id: "manager-tab", workspace_id: targetWorkspaceId }]
+            : [],
+        });
+      if (key === "pane list")
+        return response({
+          panes: tabCreated
+            ? [
+                {
+                  pane_id: "manager-pane",
+                  workspace_id: targetWorkspaceId,
+                  tab_id: "manager-tab",
+                  terminal_id: "manager-terminal",
+                  cwd: options.checkoutPath,
+                  agent_status: "unknown",
+                },
+              ]
+            : [],
+        });
+      if (key === "tab create") {
+        tabCreated = true;
+        targetWorkspaceId = args[args.indexOf("--workspace") + 1]!;
+        return response({
+          tab: { tab_id: "manager-tab", workspace_id: targetWorkspaceId },
+          root_pane: {
+            pane_id: "manager-pane",
+            terminal_id: "manager-terminal",
+          },
+        });
+      }
+      if (key === "agent list")
+        return response({
+          agents: options.occupiedPane ? [{ pane_id: "manager-pane" }] : [],
+        });
+      throw new Error("unexpected Herdr command: " + args.join(" "));
+    },
+  } as any;
+  return { calls, pi };
+}

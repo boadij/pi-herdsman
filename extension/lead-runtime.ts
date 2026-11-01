@@ -30,6 +30,7 @@ import type {
   WorkspaceProvenance,
   SessionRole,
   SupervisionSnapshot,
+  ManagerRecoveryReference,
 } from "./supervision.ts";
 import {
   listPendingRetirements,
@@ -56,6 +57,8 @@ import {
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
   writePeerDeliveryReceipt,
+  writeManagerRecoveryReference,
+  removeManagerRecoveryReference,
 } from "./supervision.ts";
 
 import { OperationError } from "./errors.ts";
@@ -69,6 +72,10 @@ import {
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import { readConfig } from "./config.ts";
+import {
+  confirmManagerGitSetup,
+  ensureManagerGitRepository,
+} from "./manager-git.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
@@ -956,6 +963,10 @@ export function createLeadSessionStartRuntime(host: {
   hasLeadExecutionState(ctx: ExtensionContext): boolean;
   diagnostic(): void;
   autoActivateManager(ctx: ExtensionContext): boolean;
+  consumeManagerStartIntent?(
+    ctx: ExtensionContext,
+    sessionId: string,
+  ): boolean | Promise<boolean>;
   clearDefinitionRoster(): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
@@ -1095,7 +1106,18 @@ export function createLeadSessionStartRuntime(host: {
         skipLeadExecutionProfileResolution = persistedRole === "chief";
         host.roleTransitions.reconcileRoleTools();
         let optionalManager = false;
+        let explicitManagerIntent = false;
         if (!hasPersistedRole && !malformedRole) {
+          try {
+            explicitManagerIntent =
+              (await host.consumeManagerStartIntent?.(ctx, sessionId)) ?? false;
+            if (explicitManagerIntent) persistedRole = "manager";
+          } catch (error) {
+            malformedRole = true;
+            host.appendRoleError(ctx, error);
+          }
+        }
+        if (!hasPersistedRole && !explicitManagerIntent && !malformedRole) {
           try {
             optionalManager = host.autoActivateManager(ctx);
           } catch (error) {
@@ -3140,7 +3162,9 @@ export function registerLeadRuntime(
           }
           const checkoutAbsent =
             typeof checkoutPath === "string" &&
-            topology?.source?.repo_key === identity.repoKey &&
+            typeof topology?.source?.repo_key === "string" &&
+            sameDirectory(topology.source.repo_key, identity.repoKey) &&
+            typeof topology.source.source_checkout_path === "string" &&
             Array.isArray(topology.worktrees) &&
             !topology.worktrees.some(
               (worktree: any) =>
@@ -3784,7 +3808,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         manager.workspaceId,
         topology,
       );
-      if (group.repoKey !== manager.repoKey)
+      if (!sameDirectory(group.repoKey, manager.repoKey))
         throw new Error("Manager workspace is not the assigned project");
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
       const unverified: UnverifiedAssignedLead[] = [];
@@ -3803,7 +3827,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         },
       );
       if (
-        topology?.source?.repo_key !== group.repoKey ||
+        typeof topology?.source?.repo_key !== "string" ||
+        !sameDirectory(topology.source.repo_key, group.repoKey) ||
         topology?.source?.source_workspace_id !== group.primaryWorkspaceId ||
         !Array.isArray(topology?.worktrees)
       )
@@ -4079,7 +4104,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         throw new Error("Multiple project assignments match a Lead session");
       const repoManagers = host
         .listManagerDescriptors(host.supervisionRuntime())
-        .filter((candidate) => candidate.repoKey === manager.repoKey);
+        .filter((candidate) =>
+          sameDirectory(candidate.repoKey, manager.repoKey),
+        );
       const ordinarySupervisionAvailable =
         repoManagers.length === 1 &&
         host.sameManagerDescriptor(repoManagers[0], manager);
@@ -4312,7 +4339,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         continue;
       }
       if (
-        scope.repoKey !== descriptor.repoKey ||
+        !sameDirectory(scope.repoKey, descriptor.repoKey) ||
         scope.primaryWorkspaceId !== descriptor.workspaceId
       )
         continue;
@@ -4327,7 +4354,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           error.detail.category === "incompatible_build" &&
           state.piSessionId === descriptor.piSessionId &&
           state.role === "manager" &&
-          scope.repoKey === descriptor.repoKey &&
+          sameDirectory(scope.repoKey, descriptor.repoKey) &&
           scope.primaryWorkspaceId === descriptor.workspaceId &&
           isRuntimeBuild(remoteBuild) &&
           isRuntimeBuild(stateBuild) &&
@@ -6881,7 +6908,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       managerDiagnostic("project_assignment_topology_complete");
       if (
         topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
-        topology?.source?.repo_key !== scope.repoKey ||
+        typeof topology?.source?.repo_key !== "string" ||
+        !sameDirectory(topology.source.repo_key, scope.repoKey) ||
         !Array.isArray(topology?.worktrees)
       )
         return projectAssignmentAuthorized(false, "worktree_topology_mismatch");
@@ -7037,7 +7065,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         manager.workspaceId,
         ctx.signal,
       );
-      return scope.repoKey === manager.repoKey;
+      return sameDirectory(scope.repoKey, manager.repoKey);
     }
     if (activeRole() === "manager" && !leadRuntime.roleSuspended) {
       if (record.kind === "chief_message") {
@@ -7090,7 +7118,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         supervisor.kind === "manager" &&
         supervisor.manager.piSessionId === manager.piSessionId &&
         supervisor.manager.leaseId === manager.leaseId &&
-        scope.repoKey === manager.repoKey &&
+        sameDirectory(scope.repoKey, manager.repoKey) &&
         !!state &&
         (state.role ?? "lead") === "lead"
       );
@@ -7189,7 +7217,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       workspaceId,
       ctx.signal,
     );
-    if (localScope.repoKey !== manager.repoKey) return false;
+    if (!sameDirectory(localScope.repoKey, manager.repoKey)) return false;
     const assignment = host.projectAssignmentForScope(localScope, sessionId);
     if (assignment) {
       if (assignment.branch !== record.branch) return false;
@@ -8125,8 +8153,15 @@ export async function resolveLeadControllerRole(
     localRepositoryScope: (
       workspaceId: string,
       signal: AbortSignal,
-    ) => Promise<{ isPrimary: boolean; repoKey: string }>;
+    ) => Promise<{
+      isPrimary: boolean;
+      repoKey: string;
+      canonicalRepoKey: string;
+    }>;
     claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
+    writeManagerRecoveryReference: (
+      reference: ManagerRecoveryReference,
+    ) => void;
     coordinationHealthy(): boolean;
     verifyManagerIdentity(
       descriptor: import("./supervision.ts").ManagerDescriptor,
@@ -8135,6 +8170,7 @@ export async function resolveLeadControllerRole(
     unresolvedManagerLease(): void;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
+    persistManagerRole: () => void;
     isCurrent(): boolean;
   },
   optional = false,
@@ -8188,6 +8224,7 @@ export async function resolveLeadControllerRole(
       tabId,
       workspaceId,
       repoKey: scope.repoKey,
+      canonicalRepoKey: scope.canonicalRepoKey,
     });
     {
       let verified: unknown;
@@ -8199,7 +8236,8 @@ export async function resolveLeadControllerRole(
         );
         if (
           !currentScope.isPrimary ||
-          currentScope.repoKey !== scope.repoKey ||
+          !sameDirectory(currentScope.repoKey, scope.repoKey) ||
+          currentScope.canonicalRepoKey !== scope.canonicalRepoKey ||
           !(await deps.verifyCurrentIdentity()) ||
           ctx.sessionManager.getSessionId() !== sessionId
         )
@@ -8251,6 +8289,33 @@ export async function resolveLeadControllerRole(
     }
     state.managerLease = lease;
     state.controllerRole = "manager";
+    if (requestedRole === "manager" && !optional) {
+      try {
+        deps.persistManagerRole();
+        deps.writeManagerRecoveryReference({
+          version: 1,
+          canonicalRepoKey: scope.canonicalRepoKey,
+          piSessionId: lease.descriptor.piSessionId,
+          piSessionFile: lease.descriptor.piSessionFile,
+        });
+      } catch (error) {
+        state.managerLease = undefined;
+        state.controllerRole = "lead";
+        try {
+          lease.release();
+        } catch (releaseError) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw releaseError;
+        }
+        try {
+          deps.persistLeadRole();
+        } catch {}
+        throw error;
+      }
+    }
   } catch (error) {
     if (!deps.isCurrent()) throw error;
     if (!state.roleSuspended) state.managerLease = undefined;
@@ -8982,7 +9047,8 @@ export function createLeadRoleTransitions(
       { signal: ctx.signal },
     );
     if (
-      topology?.source?.repo_key !== manager.repoKey ||
+      typeof topology?.source?.repo_key !== "string" ||
+      !sameDirectory(topology.source.repo_key, manager.repoKey) ||
       typeof topology?.source?.source_checkout_path !== "string"
     )
       throw new Error("Manager worktree topology is not authoritative");
@@ -9017,7 +9083,8 @@ export function createLeadRoleTransitions(
       { signal },
     );
     if (
-      topology?.source?.repo_key !== removed.repoKey ||
+      typeof topology?.source?.repo_key !== "string" ||
+      !sameDirectory(topology.source.repo_key, removed.repoKey) ||
       topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
       typeof topology?.source?.source_checkout_path !== "string"
     )
@@ -9370,12 +9437,6 @@ export function createLeadRoleTransitions(
         error.detail.details?.herdrCode !== "not_git_worktree"
       )
         throw error;
-      const skipConfirmation =
-        readConfig().managerGitBootstrapWithoutConfirmation;
-      if (!ctx.hasUI && !skipConfirmation)
-        throw new Error(
-          "/manager requires interactive confirmation to initialize Git",
-        );
       const target = realpathSync(resolve(ctx.cwd));
       const targetStat = statSync(target, { bigint: true });
       if (
@@ -9409,209 +9470,49 @@ export function createLeadRoleTransitions(
             "Manager activation cancelled because Herdr workspace identity does not match the approved directory",
           );
       };
-      await verifyHerdrTarget();
-      if (
-        [
-          "GIT_DIR",
-          "GIT_WORK_TREE",
-          "GIT_INDEX_FILE",
-          "GIT_COMMON_DIR",
-          "GIT_OBJECT_DIRECTORY",
-          "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-          "GIT_CEILING_DIRECTORIES",
-          "GIT_PREFIX",
-        ].some((key) => process.env[key])
-      )
-        throw new Error(
-          "Cannot initialize Git while repository-redirection environment variables are set",
-        );
-      if (
-        !skipConfirmation &&
-        !(await ctx.ui.confirm(
-          "Initialize Git repository?",
-          `Initialize ${target} with an empty initial commit, then start Manager mode? Existing files will not be committed.`,
-        ))
-      )
-        throw new Error("Manager activation cancelled.");
-      await verifyHerdrTarget();
-      if (
-        ctx.sessionManager.getSessionId() !== sessionId ||
-        host.identity.workspaceId !== workspaceId ||
-        host.identity.paneId !== paneId ||
-        host.identity.tabId !== tabId ||
-        !sameDirectory(resolve(ctx.cwd), target) ||
-        (() => {
-          const current = statSync(target, { bigint: true });
-          return (
-            current.dev !== targetStat.dev || current.ino !== targetStat.ino
-          );
-        })()
-      )
-        throw new Error(
-          "Manager activation cancelled because the workspace changed",
-        );
-      const runGit = async (args: string[]) => {
-        const result = await host.pi.exec("git", args, {
-          cwd: target,
-          signal: ctx.signal,
-          timeout: 30_000,
-        });
-        if (result.code !== 0 || result.killed)
-          throw new Error(
-            `Git ${args[0]} failed: ${result.stderr?.trim() || "process unsuccessful"}`,
-          );
-        return result.stdout.trim();
-      };
-      const probeRoot = async (): Promise<string | undefined> => {
-        const result = await host.pi.exec(
-          "git",
-          ["rev-parse", "--show-toplevel"],
-          { cwd: target, signal: ctx.signal, timeout: 30_000 },
-        );
-        if (result.code === 0 && !result.killed)
-          return String(result.stdout ?? "").trim();
-        if (result.killed) throw new Error("Git repository inspection failed");
-        return undefined;
-      };
-      const bootstrapLock = host.acquireProcessLock(
-        join(
-          herdsmanTempRoot(),
-          "locks",
-          `manager-bootstrap-${createHash("sha256").update(target).digest("hex")}`,
-        ),
-        { name: "Manager Git bootstrap" },
-      );
-      try {
-        const hasRepositoryMetadata = () => {
-          let directory = target;
-          while (true) {
-            try {
-              lstatSync(resolve(directory, ".git"));
-              return true;
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                throw error;
-            }
-            const parent = dirname(directory);
-            if (parent === directory) return false;
-            directory = parent;
-          }
-        };
-        let root = await probeRoot();
-        if (!root) {
-          const bare = await host.pi.exec(
-            "git",
-            ["rev-parse", "--is-bare-repository"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          if (bare.killed)
-            throw new Error("Git repository type inspection failed");
-          const bareStatus = String(bare.stdout ?? "").trim();
-          if (bare.code === 0 && bareStatus === "true")
-            throw new Error(
-              "Cannot initialize Manager Git inside an existing bare repository",
-            );
-          if (bare.code === 0 && bareStatus !== "false")
-            throw new Error("Git repository type inspection failed");
-          if (hasRepositoryMetadata())
-            throw new Error(
-              "Refusing to initialize: existing Git metadata is invalid or conflicting",
-            );
-          await runGit(["init", "--initial-branch=main"]);
-          root = await probeRoot();
-        }
-        if (root && !sameDirectory(root, target))
-          throw new Error(
-            "Refusing to initialize inside an enclosing Git repository",
-          );
-        if (!root)
-          throw new Error(
-            "Git initialization could not verify its working-tree root",
-          );
-        const actualRoot = await runGit(["rev-parse", "--show-toplevel"]);
-        if (!sameDirectory(actualRoot, target))
-          throw new Error(
-            "Git repository root does not match the approved directory",
-          );
-        const inspectHead = async (): Promise<string | undefined> => {
-          const result = await host.pi.exec(
-            "git",
-            ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          if (result.code === 0 && !result.killed)
-            return String(result.stdout ?? "").trim();
-          if (result.killed || result.code !== 1)
-            throw new Error(
-              `Git HEAD inspection failed: ${String(result.stderr ?? "").trim() || "process unsuccessful"}`,
-            );
-          return undefined;
-        };
-        let head = await inspectHead();
-        let createdInitialCommit = false;
-        if (!head) {
-          const staged = await host.pi.exec(
-            "git",
-            ["diff", "--cached", "--quiet"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          const index = await runGit(["ls-files", "--stage"]);
-          if (
-            staged.killed ||
-            (staged.code !== 0 && staged.code !== 1) ||
-            index
-          )
-            throw new Error(
-              "Refusing to complete an unborn repository with an existing or unreadable index",
-            );
-          await runGit([
-            "commit",
-            "--only",
-            "--allow-empty",
-            "-m",
-            "chore: initialize repository",
-          ]);
-          createdInitialCommit = true;
-          head = await inspectHead();
-        }
-        if (!head) throw new Error("Git did not create an initial commit");
-        if (createdInitialCommit) {
-          const parents = await runGit([
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            "HEAD",
-          ]);
-          if (parents.trim().split(/\s+/).length !== 1)
-            throw new Error("Initial Git commit is not a root commit");
-          const tree = await runGit(["rev-parse", "HEAD^{tree}"]);
-          if (tree !== (await runGit(["mktree"])))
-            throw new Error("Initial Git commit is not empty");
-        }
+      const verifyApprovedTarget = async () => {
         await verifyHerdrTarget();
-        const gitCommonDir = await runGit([
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-common-dir",
-        ]);
-        scope = await localRepositoryScope(
-          host.pi,
-          ctx,
-          workspaceId,
-          ctx.signal,
-        );
+        const current = statSync(target, { bigint: true });
         if (
-          !scope ||
-          !scope.isPrimary ||
-          !sameDirectory(scope.repoKey, gitCommonDir)
+          ctx.sessionManager.getSessionId() !== sessionId ||
+          host.identity.workspaceId !== workspaceId ||
+          host.identity.paneId !== paneId ||
+          host.identity.tabId !== tabId ||
+          !sameDirectory(resolve(ctx.cwd), target) ||
+          current.dev !== targetStat.dev ||
+          current.ino !== targetStat.ino
         )
           throw new Error(
-            "Manager activation could not verify the initialized repository in Herdr",
+            "Manager activation cancelled because the workspace changed",
           );
-      } finally {
-        bootstrapLock.release();
-      }
+      };
+      const initialized = await ensureManagerGitRepository(host.pi, target, {
+        signal: ctx.signal,
+        confirm: async (path) => {
+          if (
+            !ctx.hasUI &&
+            !readConfig().managerGitBootstrapWithoutConfirmation
+          )
+            throw new Error(
+              "/manager requires interactive confirmation to initialize Git",
+            );
+          const approved = await confirmManagerGitSetup(ctx, path);
+          if (!approved) throw new Error("Manager activation cancelled.");
+          return approved;
+        },
+        verifyApprovedTarget,
+      });
+      if (!initialized) throw new Error("Manager activation cancelled.");
+      await verifyApprovedTarget();
+      scope = await localRepositoryScope(host.pi, ctx, workspaceId, ctx.signal);
+      if (
+        !scope.isPrimary ||
+        !sameDirectory(scope.canonicalRepoKey, initialized.commonDir) ||
+        !sameDirectory(scope.checkoutPath, initialized.checkoutPath)
+      )
+        throw new Error(
+          "Manager activation could not verify the initialized repository in Herdr",
+        );
     }
     if (!scope)
       throw new Error("Manager workspace could not be verified in Herdr");
@@ -9646,6 +9547,7 @@ export function createLeadRoleTransitions(
         tabId,
         workspaceId,
         repoKey: scope.repoKey,
+        canonicalRepoKey: scope.canonicalRepoKey,
       });
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError)
@@ -9672,6 +9574,7 @@ export function createLeadRoleTransitions(
       if (
         !currentScope.isPrimary ||
         !sameDirectory(currentScope.repoKey, scope.repoKey) ||
+        currentScope.canonicalRepoKey !== scope.canonicalRepoKey ||
         !(await host.remoteChiefAgent(ctx, lease.descriptor)) ||
         ctx.sessionManager.getSessionId() !== sessionId
       )
@@ -9687,6 +9590,12 @@ export function createLeadRoleTransitions(
       } catch (error) {
         host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
       }
+      writeManagerRecoveryReference(host.supervisionRuntime(), {
+        version: 1,
+        canonicalRepoKey: scope.canonicalRepoKey,
+        piSessionId: lease.descriptor.piSessionId,
+        piSessionFile: lease.descriptor.piSessionFile,
+      });
       return "Manager mode active.";
     } catch (error) {
       state.controllerRole = "lead";
@@ -9711,6 +9620,7 @@ export function createLeadRoleTransitions(
   ): Promise<string> => {
     if (state.controllerRole !== "manager" || !state.managerLease)
       throw new Error("Manager mode is not active");
+    const managerDescriptor = state.managerLease.descriptor;
     host.invalidateManagerRemovalRequests?.(ctx);
     state.controllerRole = "lead";
     try {
@@ -9754,6 +9664,12 @@ export function createLeadRoleTransitions(
     host.startNormalUI(ctx);
     if (host.coordinationHealthy()) await host.schedulePeerPresence(ctx);
     await host.publishLeadRole(ctx, "inactive", state.chiefModeGeneration);
+    if (managerDescriptor.canonicalRepoKey)
+      removeManagerRecoveryReference(
+        host.supervisionRuntime(),
+        managerDescriptor.canonicalRepoKey,
+        managerDescriptor.piSessionId,
+      );
     return "Manager mode left.";
   };
   const deactivateChief = async (ctx: ExtensionContext): Promise<void> => {
@@ -9994,6 +9910,8 @@ export function createLeadRoleTransitions(
           localRepositoryScope: (workspaceId, signal) =>
             localRepositoryScope(host.pi, ctx, workspaceId, signal),
           claimManagerLease: host.claimManagerLease,
+          writeManagerRecoveryReference: (reference) =>
+            writeManagerRecoveryReference(host.supervisionRuntime(), reference),
           coordinationHealthy: host.coordinationHealthy,
           verifyManagerIdentity: (descriptor) =>
             host.remoteChiefAgent(ctx, descriptor),
@@ -10016,6 +9934,7 @@ export function createLeadRoleTransitions(
           },
           activationGuard: host.activationGuard,
           persistLeadRole: () => host.persistRole("lead"),
+          persistManagerRole: () => host.persistRole("manager"),
           isCurrent: () => state.sessionGeneration === generation,
         },
         optional,

@@ -99,6 +99,14 @@ start its own Agents using definitions in its effective `agents` profile; that
 direct ownership is separate from supervision and does not include staff
 Agents.
 
+Chief can also provision a project with `clone_repository` or
+`start_manager`, and restore a saved Manager conversation with
+`resume_manager`. These project operations do not give Chief general filesystem
+or shell access and do not make it the project's execution Manager. A recovery
+reference identifies a candidate saved session, not live authority; a resume
+must verify the exact Pi session, repository, Herdr identity, Manager role, and
+lease. Restoring a Manager does not automatically restart its descendants.
+
 Chief can observe bounded descendant summaries but acts only on direct reports.
 Its reserved `chief` definition customizes instructions and ordinary tool
 selection, not its workspace-neutral scope or supervision authority. Chief
@@ -251,8 +259,9 @@ Leads use nonblocking `message_supervisor` for timely coordination with their
 effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait
 belongs in the automatic result. Legitimate messages and later results are not
-deduplicated. Manager has direct-report and project tools; Chief has
-direct-report tools but no project tools.
+deduplicated. Manager has direct-report and project-execution tools; Chief has
+direct-report tools and can provision projects or restore Manager sessions,
+but does not have project-execution authority.
 
 ## Usage follows ownership
 

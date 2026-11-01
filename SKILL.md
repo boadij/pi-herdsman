@@ -533,7 +533,12 @@ Pi Herdsman uses one durable vocabulary:
   definition allows it;
 - the **chief** supervises direct reports through `list_staff`,
   `inspect_staff`, `read_staff_transcript`, and `message_staff`, and never
-  owns their Agents.
+  owns their Agents. Chief can also provision a project with
+  `clone_repository` or `start_manager` and restore its saved Manager session
+  with `resume_manager`. These tools do not grant general filesystem or shell
+  access. A recovery reference is only a lookup hint, not live authority;
+  resume verifies the exact session and Manager readiness and never
+  automatically restarts descendants.
 
 The `agents` frontmatter field names permitted direct Agent definitions for a
 delegating Agent, or the fresh-delegation allowlist for Manager/Chief. For

@@ -269,6 +269,13 @@ Lead; successful automatic startup does not persist Manager intent. Changing
 the setting affects only a later `session_start`, not the running role.
 Automatic startup and Manager restoration do not initialize Git or ask for
 confirmation; Git initialization is limited to explicit Manager activation.
+An active Chief can also use `clone_repository`, `start_manager`, and
+`resume_manager` to provision a project and start or restore its Manager.
+Starting a local non-Git directory uses the same initialization confirmation
+and **Skip Manager Git setup confirmation** setting; approval is requested in
+Chief before Git initialization. Existing Git repositories do not need
+bootstrap approval. See [Staff tools](staff.md#chief-project-tools) for inputs
+and exact-session recovery behavior.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
 live assigned Lead, plus `Remove worktree…` for assigned projects including
