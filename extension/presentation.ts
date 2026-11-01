@@ -1411,7 +1411,6 @@ function renderSupervisionRows(
         const branchText = themed(options.theme, "muted", displayedBranch);
         const truncatedBranch = displayedBranch !== item.work.branch;
         const clickRegion =
-          width >= 16 &&
           (git || truncatedBranch) &&
           visibleWidth(displayedBranch) >
             (truncatedBranch ? visibleWidth("…") : 0)

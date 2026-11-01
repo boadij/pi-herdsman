@@ -7438,9 +7438,9 @@ test("hidden and ineligible truncated Manager work targets remain inert", () => 
     (intent) => focused.push(intent),
   );
 
-  const width = 15;
+  const width = 5;
   const rows = widget.render(width);
-  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● feature/6…");
+  assert.doesNotMatch(stripVTControlCharacters(rows[1]!), /feature/u);
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width }),
     undefined,
@@ -7477,6 +7477,47 @@ test("width-16 status collision keeps only the visible branch segment clickable"
     undefined,
   );
   assert.equal(focused.length, 1);
+});
+
+test("width-15 visible Manager branch is clickable but Git suffix is not", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [{ branch: "a", session: "assigned", status: "active" }],
+      leads: [lead({ lead: "assigned", branch: "a", runtimeState: "working" })],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+    () => ({ dirty: true, additions: 0, deletions: 0, changedFiles: 0 }),
+  );
+
+  const width = 15;
+  const row = stripVTControlCharacters(widget.render(width)[1]!);
+  assert.match(row, /a.*±0\*/u);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf("±0"),
+      y: 1,
+      width,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: row.indexOf("a"),
+      y: 1,
+      width,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [{ kind: "session", sessionId: "assigned" }]);
 });
 
 test("Manager work status outranks live Lead markers except when active", () => {
