@@ -44,6 +44,73 @@ import {
 } from "./compatibility.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+export const COORDINATOR_MESSAGE_PROTOCOL = 1;
+
+export function supportsCoordinatorMessaging(protocol: unknown): boolean {
+  return protocol === COORDINATOR_MESSAGE_PROTOCOL;
+}
+
+const protocolDiagnostics = new Map<string, string[]>();
+const protocolDiagnosticSeen = new Map<string, string[]>();
+const protocolDiagnosticLimit = 20;
+const protocolDiagnosticSeenLimit = 100;
+
+export function reportProtocolDiagnostic(
+  sessionId: string,
+  recordId: string,
+  reason: "protocol_mismatch" | "protocol_unverified",
+  direction: "inbound coordination message" | "assigned project message",
+): void {
+  const key = `${recordId}\0${reason}\0${direction}`;
+  const seen = protocolDiagnosticSeen.get(sessionId) ?? [];
+  if (seen.includes(key)) return;
+  seen.push(key);
+  if (seen.length > protocolDiagnosticSeenLimit)
+    seen.splice(0, seen.length - protocolDiagnosticSeenLimit);
+  protocolDiagnosticSeen.delete(sessionId);
+  protocolDiagnosticSeen.set(sessionId, seen);
+  while (protocolDiagnosticSeen.size > 50)
+    protocolDiagnosticSeen.delete(protocolDiagnosticSeen.keys().next().value!);
+  const diagnostics = protocolDiagnostics.get(sessionId) ?? [];
+  const message = `${direction} was not delivered (${reason}): ${reason === "protocol_mismatch" ? "the sender advertises an unsupported coordinator messaging protocol" : "the sender's coordinator messaging protocol is absent or unverified"}. Required protocol: ${COORDINATOR_MESSAGE_PROTOCOL}. Update both Pi Herdsman sessions to support the same coordinator messaging protocol.`;
+  if (diagnostics.includes(message)) return;
+  diagnostics.push(message);
+  if (diagnostics.length > protocolDiagnosticLimit)
+    diagnostics.splice(0, diagnostics.length - protocolDiagnosticLimit);
+  protocolDiagnostics.delete(sessionId);
+  protocolDiagnostics.set(sessionId, diagnostics);
+  while (protocolDiagnostics.size > 50)
+    protocolDiagnostics.delete(protocolDiagnostics.keys().next().value!);
+}
+
+export function takeProtocolDiagnostics(sessionId: string): string[] {
+  return protocolDiagnostics.get(sessionId)?.splice(0) ?? [];
+}
+
+function validOptionalMessageProtocol(
+  record: Record<string, unknown>,
+  allowUnsupported = false,
+): boolean {
+  return (
+    !Object.hasOwn(record, "messageProtocol") ||
+    supportsCoordinatorMessaging(record.messageProtocol) ||
+    (allowUnsupported &&
+      Number.isSafeInteger(record.messageProtocol) &&
+      (record.messageProtocol as number) > 0)
+  );
+}
+
+function validObservedMessageProtocol(
+  record: Record<string, unknown>,
+): boolean {
+  return (
+    !Object.hasOwn(record, "messageProtocol") ||
+    supportsCoordinatorMessaging(record.messageProtocol) ||
+    (Number.isSafeInteger(record.messageProtocol) &&
+      (record.messageProtocol as number) > 0)
+  );
+}
+
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
 export type SessionRole = "lead" | "manager" | "chief";
@@ -138,6 +205,7 @@ export function sessionLeadRoleState(
 export type ChiefDescriptor = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -150,7 +218,7 @@ export type ChiefDescriptor = {
 
 export type ChiefIdentity = Omit<
   ChiefDescriptor,
-  "version" | "leaseId" | "claim" | "createdAt"
+  "version" | "leaseId" | "claim" | "createdAt" | "messageProtocol"
 > & {
   build: RuntimeBuild;
   createdAt?: number;
@@ -190,6 +258,7 @@ export type CoordinationMessageKind = ChiefMessageKind;
 export type ChiefMessageRecord = {
   version: 2;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   id: string;
   leaseId: string;
   kind: ChiefMessageKind;
@@ -327,7 +396,10 @@ function validNativeIdentity(value: unknown): value is string {
   );
 }
 
-function validMessage(value: unknown): value is ChiefMessageRecord {
+function validMessage(
+  value: unknown,
+  allowUnsupportedProtocol = false,
+): value is ChiefMessageRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   const keys = [
@@ -347,6 +419,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "build",
     "peerSource",
     "bodyRef",
+    "messageProtocol",
   ];
   if (
     Object.keys(record).some(
@@ -395,6 +468,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     record.version === 2 &&
     (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    validOptionalMessageProtocol(record, allowUnsupportedProtocol) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
     typeof record.leaseId === "string" &&
@@ -495,6 +569,7 @@ export function coordinationMessageDigest(record: ChiefMessageRecord): string {
   const content = {
     version: record.version,
     build: record.build,
+    messageProtocol: record.messageProtocol,
     id: record.id,
     leaseId: record.leaseId,
     kind: record.kind,
@@ -998,7 +1073,10 @@ function assertChiefMessageNotQuarantined(
     throw new Error("Chief message is quarantined");
 }
 
-function readStoredChiefMessage(path: string): StoredChiefMessage {
+function readStoredChiefMessage(
+  path: string,
+  allowUnsupportedProtocol = false,
+): StoredChiefMessage {
   let size: number;
   try {
     size = statSync(path).size;
@@ -1009,7 +1087,8 @@ function readStoredChiefMessage(path: string): StoredChiefMessage {
     throw new Error("Chief message record is too large");
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    assertMessage(parsed);
+    if (!validMessage(parsed, allowUnsupportedProtocol))
+      throw new Error("Invalid Chief message record");
     return parsed as StoredChiefMessage;
   } catch (error) {
     if (error instanceof Error && /Chief message record/.test(error.message))
@@ -1018,13 +1097,17 @@ function readStoredChiefMessage(path: string): StoredChiefMessage {
   }
 }
 
-export function readChiefMessage(path: string): ChiefMessageRecord {
-  const parsed = readStoredChiefMessage(path);
+export function readChiefMessage(
+  path: string,
+  allowUnsupportedProtocol = false,
+): ChiefMessageRecord {
+  const parsed = readStoredChiefMessage(path, allowUnsupportedProtocol);
   if (parsed.bodyRef) {
     const body = readOverflowBody(`${path}.body`, parsed.bodyRef);
     const logical = { ...parsed, ...body } as ChiefMessageRecord;
     delete (logical as any).bodyRef;
-    if (!validMessage(logical)) throw new Error("Invalid Chief message body");
+    if (!validMessage(logical, allowUnsupportedProtocol))
+      throw new Error("Invalid Chief message body");
     return logical;
   }
   return parsed as ChiefMessageRecord;
@@ -1103,10 +1186,16 @@ function removeChiefMessageUnlocked(
   const matchesExpected = (): boolean => {
     if (!expected) return true;
     try {
-      const stored = readStoredChiefMessage(path);
+      const allowUnsupportedProtocol =
+        expected.messageProtocol !== undefined &&
+        !supportsCoordinatorMessaging(expected.messageProtocol);
+      const stored = readStoredChiefMessage(path, allowUnsupportedProtocol);
       if ((expected as StoredChiefMessage).bodyRef)
         return isDeepStrictEqual(stored, expected);
-      return isDeepStrictEqual(readChiefMessage(path), expected);
+      return isDeepStrictEqual(
+        readChiefMessage(path, allowUnsupportedProtocol),
+        expected,
+      );
     } catch {
       return false;
     }
@@ -1245,7 +1334,7 @@ export async function drainCoordinationInbox(
     let stored: StoredChiefMessage;
     let record: ChiefMessageRecord;
     try {
-      stored = readStoredChiefMessage(path);
+      stored = readStoredChiefMessage(path, true);
       record = stored as ChiefMessageRecord;
     } catch {
       if (UUID.test(id) && conclusivelyMalformedChiefMessage(path)) {
@@ -1583,6 +1672,7 @@ export type PeerRuntime = SupervisionRuntime & {
 export type PeerRecord = Readonly<{
   version: 2;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   role?: PeerRole;
   sessionKind: "ordinary" | "managed";
   piSessionId: string;
@@ -1646,7 +1736,10 @@ export function peerLeadLockPath(
   return `${peerLeadRecordPath(runtime, piSessionId)}.lock`;
 }
 
-function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
+function validPeerLeadRecord(
+  value: unknown,
+  observeUnsupportedProtocol = false,
+): value is PeerLeadRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   const metadata = ["name", "cwd", "repo", "branch", "workspaceLabel"];
@@ -1655,6 +1748,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       [
         "version",
         "build",
+        "messageProtocol",
         "role",
         "sessionKind",
         "piSessionId",
@@ -1680,6 +1774,9 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 2 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    (observeUnsupportedProtocol
+      ? validObservedMessageProtocol(record)
+      : validOptionalMessageProtocol(record)) &&
     (record.role === undefined ||
       record.role === "lead" ||
       record.role === "manager") &&
@@ -1725,6 +1822,7 @@ export function samePeerLeadRecord(
   return (
     actual.version === expected.version &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.sessionKind === expected.sessionKind &&
     (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
@@ -1751,6 +1849,7 @@ export function samePeerLeadGeneration(
   return (
     actual.piSessionId === expected.piSessionId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id
   );
@@ -1861,6 +1960,40 @@ export function listPeerLeadRecords(
     });
 }
 
+/** Lists structurally valid live peers for diagnostics, not authorization. */
+export function listPeerLeadRecordsForDiscovery(
+  runtime: PeerRuntime = peerRuntime(),
+): PeerLeadRecord[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(runtime.peers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error("Unable to scan peer lead records", { cause: error });
+  }
+  return entries
+    .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
+    .sort()
+    .flatMap((entry) => {
+      try {
+        const path = join(runtime.peers, entry);
+        if (statSync(path).size > PEER_LEAD_RECORD_MAX_BYTES) return [];
+        const value = JSON.parse(readFileSync(path, "utf8"));
+        if (
+          !validPeerLeadRecord(value, true) ||
+          peerLeadRecordFilename(value.piSessionId) !== entry
+        )
+          return [];
+        const claim = livePeerClaim(runtime, value.piSessionId);
+        if (claim.pid !== value.claim.pid || claim.id !== value.claim.id)
+          return [];
+        return [value as PeerLeadRecord];
+      } catch {
+        return [];
+      }
+    });
+}
+
 function validDescriptor(value: unknown): value is ChiefDescriptor {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
@@ -1873,7 +2006,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId", "piSessionFile", "build"];
+  const optional = ["tabId", "piSessionFile", "build", "messageProtocol"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1882,6 +2015,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     keys.every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    validOptionalMessageProtocol(record) &&
     typeof record.leaseId === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       record.leaseId,
@@ -1975,6 +2109,7 @@ export function sameChiefDescriptor(
   return (
     actual.leaseId === expected.leaseId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -2023,6 +2158,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
   const descriptor: ChiefDescriptor = {
     version: 1,
     build: identity.build,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -2069,6 +2205,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
 export type ManagerDescriptor = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -2126,11 +2263,16 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
   ];
   return (
     Object.keys(r).every(
-      (key) => keys.includes(key) || key === "piSessionFile" || key === "build",
+      (key) =>
+        keys.includes(key) ||
+        key === "piSessionFile" ||
+        key === "build" ||
+        key === "messageProtocol",
     ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
+    validOptionalMessageProtocol(r) &&
     UUID.test(String(r.leaseId)) &&
     isProcessLockClaim(r.claim) &&
     validSession(r.piSessionId) &&
@@ -2153,6 +2295,7 @@ export function sameManagerDescriptor(
     actual.version === expected.version &&
     actual.leaseId === expected.leaseId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -2290,6 +2433,7 @@ export function claimManagerLease(
   const descriptor: ManagerDescriptor = {
     version: 1,
     build: identity.build,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -2990,6 +3134,7 @@ export function globalProjectAssignmentSnapshot(): Map<
 
 export type ProjectMessage = Readonly<{
   version: 2;
+  messageProtocol?: number;
   id: string;
   repoKey: string;
   branch: string;
@@ -3042,6 +3187,16 @@ export type ProjectMessageHeader = Omit<
   resultBindings?: ResultBinding[];
   bodyRef?: OverflowBodyRef;
 };
+export type ProjectMessageHeaderIssue = Readonly<{
+  id: string;
+  reason:
+    "malformed" | "oversized" | "protocol_mismatch" | "protocol_unverified";
+  /** Internal candidates used only to verify diagnostic attribution. */
+  sourceSessionId?: string;
+  repoKey?: string;
+  branch?: string;
+  messageProtocol?: unknown;
+}>;
 type StoredProjectMessage = ProjectMessageHeader;
 
 function projectMessageDirectory(
@@ -3060,6 +3215,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
     Object.keys(r).every((key) =>
       [
         "version",
+        "messageProtocol",
         "id",
         "repoKey",
         "branch",
@@ -3082,6 +3238,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       "createdAt",
     ].every((key) => Object.hasOwn(r, key)) &&
     r.version === 2 &&
+    validOptionalMessageProtocol(r) &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&
@@ -3235,11 +3392,47 @@ export function listProjectMessages(
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+/** Identifies invalid explicit messages without treating them as deliverable. */
+function invalidExplicitProjectMessageHeader(
+  path: string,
+  id: string,
+): ProjectMessageHeaderIssue | undefined {
+  try {
+    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
+      return { id, reason: "oversized" };
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return undefined;
+    const record = value as Record<string, unknown>;
+    if (record.kind !== "supervisor_message") return undefined;
+    const sourceSessionId = validSession(record.fromSessionId)
+      ? record.fromSessionId
+      : undefined;
+    return {
+      id,
+      reason: supportsCoordinatorMessaging(record.messageProtocol)
+        ? "malformed"
+        : record.messageProtocol === undefined
+          ? "protocol_unverified"
+          : "protocol_mismatch",
+      ...(sourceSessionId ? { sourceSessionId } : {}),
+      ...(validNativeIdentity(record.repoKey)
+        ? { repoKey: record.repoKey }
+        : {}),
+      ...(validNativeIdentity(record.branch) ? { branch: record.branch } : {}),
+      messageProtocol: record.messageProtocol,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lists compact pending records without opening or validating overflow bodies. */
 export function listProjectMessageHeaders(
   runtime: SupervisionRuntime,
   repoKey: string,
   branch: string,
+  onInvalid?: (issue: ProjectMessageHeaderIssue) => void,
 ): ProjectMessageHeader[] {
   const directory = projectMessageDirectory(runtime, repoKey, branch);
   let entries: string[];
@@ -3252,8 +3445,9 @@ export function listProjectMessageHeaders(
   return entries
     .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
     .flatMap((entry) => {
+      const path = join(directory, entry);
       try {
-        const value = readStoredProjectMessageFile(join(directory, entry));
+        const value = readStoredProjectMessageFile(path);
         if (value.repoKey !== repoKey || value.branch !== branch)
           throw new Error(
             `Project message identity does not match ${directory}`,
@@ -3265,6 +3459,13 @@ export function listProjectMessageHeaders(
           (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
         )
           return [];
+        const issue = onInvalid
+          ? invalidExplicitProjectMessageHeader(path, entry.slice(0, -5))
+          : undefined;
+        if (issue) {
+          onInvalid(issue);
+          return [];
+        }
         throw error;
       }
     })
@@ -3469,6 +3670,7 @@ export function mightHaveProjectMessages(
 export type CoordinatorState = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
@@ -3476,11 +3678,14 @@ export type CoordinatorState = {
 };
 export type LeadCoordinationState = CoordinatorState;
 
+export type VerificationPolicy = "exact-build" | "identity-only";
+
 export function verifyManagerCoordinationAuthority(
   descriptor: ManagerDescriptor,
   coordinator: LeadCoordinationState | undefined,
   build: RuntimeBuild,
   requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild,
+  policy: VerificationPolicy = "exact-build",
 ): void {
   if (
     !coordinator ||
@@ -3490,6 +3695,17 @@ export function verifyManagerCoordinationAuthority(
     throw new Error(
       "Manager authority exists but its coordination state could not be verified",
     );
+  if (descriptor.messageProtocol !== coordinator.messageProtocol)
+    throw new Error(
+      "Manager descriptor and coordination state messaging protocols do not match",
+    );
+  if (policy === "identity-only") {
+    if (!sameRuntimeBuildEvidence(descriptor.build, coordinator.build))
+      throw new Error(
+        "Manager descriptor and coordination state build evidence does not match",
+      );
+    return;
+  }
   requireCompatibleBuild(
     build,
     descriptor.build,
@@ -3510,15 +3726,17 @@ export async function verifyRemoteChiefAuthority(
     remoteIdentity(): Promise<unknown | undefined>;
     requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
     build: RuntimeBuild;
+    policy?: VerificationPolicy;
   },
 ): Promise<boolean> {
   if (!(await options.remoteIdentity())) return false;
-  options.requireCompatibleBuild(
-    options.build,
-    descriptor.build,
-    "supervision",
-    `Chief ${descriptor.piSessionId}`,
-  );
+  if ((options.policy ?? "exact-build") === "exact-build")
+    options.requireCompatibleBuild(
+      options.build,
+      descriptor.build,
+      "supervision",
+      `Chief ${descriptor.piSessionId}`,
+    );
   return true;
 }
 
@@ -3652,6 +3870,8 @@ export type IncompatibleStaff = Readonly<{
   tabId: string;
   runtimeState: RuntimeState;
   build: RuntimeBuild;
+  protocolDiagnostic?: "protocol_mismatch" | "protocol_unverified";
+  availableActions?: readonly ["message"];
   reason: "incompatible_build";
 }>;
 export type SupervisionSnapshot = {
@@ -3847,13 +4067,20 @@ export function leadCoordinationStatePath(
     createHash("sha256").update(piSessionId).digest("hex") + ".json",
   );
 }
-function validLeadState(value: unknown): value is CoordinatorState {
+function validLeadState(
+  value: unknown,
+  observeUnsupportedProtocol = false,
+): value is CoordinatorState {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
     Object.keys(r).some(
-      (k) => !keys.includes(k) && k !== "role" && k !== "build",
+      (k) =>
+        !keys.includes(k) &&
+        k !== "role" &&
+        k !== "build" &&
+        k !== "messageProtocol",
     ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
@@ -3861,6 +4088,9 @@ function validLeadState(value: unknown): value is CoordinatorState {
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
+    (observeUnsupportedProtocol
+      ? validObservedMessageProtocol(r)
+      : validOptionalMessageProtocol(r)) &&
     (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
@@ -3886,6 +4116,35 @@ export function readLeadCoordinationState(
         : value;
     if (
       !validLeadState(currentState) ||
+      currentState.piSessionId !== piSessionId
+    )
+      throw new Error("invalid lead state");
+    return currentState;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Unable to read lead coordination state", { cause: e });
+  }
+}
+
+/** Reads structurally valid state for projection; never establishes authorization. */
+export function readLeadCoordinationStateForObservation(
+  runtime: SupervisionRuntime,
+  piSessionId: string,
+): LeadCoordinationState | undefined {
+  const path = leadCoordinationStatePath(runtime, piSessionId);
+  try {
+    const text = readFileSync(path, "utf8");
+    if (Buffer.byteLength(text, "utf8") > LEAD_STATE_MAX_BYTES)
+      throw new Error("lead state too large");
+    const value: unknown = JSON.parse(text);
+    const currentState =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).filter(([key]) => key !== "pendingAsk"),
+          )
+        : value;
+    if (
+      !validLeadState(currentState, true) ||
       currentState.piSessionId !== piSessionId
     )
       throw new Error("invalid lead state");
@@ -4027,6 +4286,14 @@ export function projectSupervision(options: {
         tabId: agent.tabId,
         runtimeState: agent.runtimeState ?? "unknown",
         build: state.build,
+        ...(!supportsCoordinatorMessaging(state.messageProtocol)
+          ? {
+              protocolDiagnostic:
+                state.messageProtocol === undefined
+                  ? ("protocol_unverified" as const)
+                  : ("protocol_mismatch" as const),
+            }
+          : {}),
         reason: "incompatible_build",
       });
       continue;

@@ -12,16 +12,12 @@ import {
   writeSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  isRuntimeBuild,
-  runtimeBuild,
-  sameRuntimeBuild,
-} from "../extension/compatibility.ts";
 import { nodeOnlyAgentDir, herdsmanDataRoot } from "../extension/storage.ts";
 import {
+  COORDINATOR_MESSAGE_PROTOCOL,
+  supportsCoordinatorMessaging,
   listPeerLeadRecords,
   globalProjectAssignmentSnapshot,
   isRemoteOrdinaryLead,
@@ -91,28 +87,11 @@ if (!isAbsolute(agentDir)) {
 }
 
 const runtime = peerRuntime();
-const bridgeDirectory = dirname(fileURLToPath(import.meta.url));
-const packageRoot = dirname(bridgeDirectory);
-const compatible = (peer: { build?: unknown }): boolean => {
-  try {
-    const metadata = JSON.parse(
-      readFileSync(join(packageRoot, "package.json"), "utf8"),
-    );
-    const build = runtimeBuild(
-      metadata.version,
-      basename(bridgeDirectory) === "bin"
-        ? join(packageRoot, "extension", "index.ts")
-        : join(packageRoot, "dist", "index.js"),
-    );
-    return (
-      isRuntimeBuild(build) &&
-      isRuntimeBuild(peer.build) &&
-      sameRuntimeBuild(build, peer.build)
-    );
-  } catch {
-    return false;
-  }
-};
+const supportsBridgeMessaging = supportsCoordinatorMessaging(
+  COORDINATOR_MESSAGE_PROTOCOL,
+);
+const supportsPeerMessaging = (protocol: unknown): boolean =>
+  supportsBridgeMessaging && supportsCoordinatorMessaging(protocol);
 let recoveringStatus = false;
 const syncDirectory = (directory: string): void => {
   if (process.platform === "win32") return;
@@ -138,6 +117,7 @@ if (action === "probe") {
   console.log(
     JSON.stringify({
       dataRoot: herdsmanDataRoot(),
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       peers: [
         ...peers.filter((peer) => peer.role === "manager"),
         ...eligibleLeads,
@@ -279,7 +259,6 @@ if (action === "probe") {
             isRemoteOrdinaryLead(live, assignments));
       if (
         !recipientIsLive ||
-        (action !== "poll" && !compatible(live!)) ||
         !correspondence ||
         correspondenceRole !== (correspondence?.role ?? "manager") ||
         correspondence.originSession !== originSession ||
@@ -288,6 +267,10 @@ if (action === "probe") {
       )
         throw new Error(
           "exact correspondence recipient is not live or authorized",
+        );
+      if (!supportsPeerMessaging(live!.messageProtocol))
+        throw new Error(
+          "recipient does not support coordinator messaging protocol 1",
         );
       if (action === "recover") {
         if (typeof previousOriginGeneration !== "string")
@@ -396,6 +379,13 @@ if (action === "probe") {
     typeof record.toSessionId !== "string"
   )
     throw new Error("invalid peer transfer");
+  if (
+    !supportsBridgeMessaging ||
+    !supportsCoordinatorMessaging(record.messageProtocol)
+  )
+    throw new Error(
+      "peer message has an unsupported or missing coordinator messaging protocol",
+    );
   const correspondenceRole = envelope.correspondence?.role ?? "manager";
   const remoteOrdinarySource =
     record.peerSource.role === "lead" &&
@@ -476,9 +466,13 @@ if (action === "probe") {
         : withProjectAssignmentAuthority((assignments) =>
             isRemoteOrdinaryLead(liveRecipient, assignments),
           ));
-    if (!authorized || !compatible(liveRecipient))
+    if (!authorized)
       throw new Error(
         "exact correspondence recipient is not live or authorized",
+      );
+    if (!supportsPeerMessaging(liveRecipient.messageProtocol))
+      throw new Error(
+        "recipient does not support coordinator messaging protocol 1",
       );
     mkdirSync(markerDir, { recursive: true, mode: 0o700 });
     syncDirectory(runtime.root);
@@ -639,52 +633,71 @@ if (action === "probe") {
     )
       published = true;
     if (!published) {
-      const liveRecipient = listPeerLeadRecords(runtime).find(
-        (peer) => peer.piSessionId === record.toSessionId,
-      );
-      if (!liveRecipient || !compatible(liveRecipient))
-        throw new Error(
+      const persistEvidence = (
+        assignments?: ReturnType<typeof globalProjectAssignmentSnapshot>,
+      ) => {
+        const liveRecipient = listPeerLeadRecords(runtime).find(
+          (peer) => peer.piSessionId === record.toSessionId,
+        );
+        if (!liveRecipient)
+          throw new Error(
+            correspondenceRole === "manager"
+              ? "exact destination Manager is not live"
+              : "exact correspondence recipient is not live",
+          );
+        if (
           correspondenceRole === "manager"
-            ? "exact destination Manager is not live"
-            : "exact correspondence recipient is not live",
-        );
-      if (liveRecipient.claim.id !== envelope.recipientClaimId) {
-        envelope = {
-          ...envelope,
-          recipientClaimId: liveRecipient.claim.id,
-          correspondence: {
-            ...envelope.correspondence,
-            recipientGeneration: liveRecipient.claim.id,
-          },
-        };
-        const pendingTemp = `${marker}.${randomUUID()}.tmp`;
-        try {
-          writeFileSync(
-            pendingTemp,
-            `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`,
-            { encoding: "utf8", flag: "wx", mode: 0o600, flush: true },
+            ? liveRecipient.role !== "manager"
+            : !assignments || !isRemoteOrdinaryLead(liveRecipient, assignments)
+        )
+          throw new Error(
+            "exact correspondence recipient is not live or authorized",
           );
-          renameSync(pendingTemp, marker);
-        } finally {
-          rmSync(pendingTemp, { force: true });
+        if (!supportsPeerMessaging(liveRecipient.messageProtocol))
+          throw new Error(
+            "recipient does not support coordinator messaging protocol 1",
+          );
+        if (liveRecipient.claim.id !== envelope.recipientClaimId) {
+          envelope = {
+            ...envelope,
+            recipientClaimId: liveRecipient.claim.id,
+            correspondence: {
+              ...envelope.correspondence,
+              recipientGeneration: liveRecipient.claim.id,
+            },
+          };
+          const pendingTemp = `${marker}.${randomUUID()}.tmp`;
+          try {
+            writeFileSync(
+              pendingTemp,
+              `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`,
+              { encoding: "utf8", flag: "wx", mode: 0o600, flush: true },
+            );
+            renameSync(pendingTemp, marker);
+          } finally {
+            rmSync(pendingTemp, { force: true });
+          }
+          syncDirectory(markerDir);
         }
-        syncDirectory(markerDir);
-      }
-      for (const attachment of envelope.attachments) {
-        const binding = record.resultBindings?.find(
-          (item: { ref?: unknown }) => item.ref === attachment.ref,
-        );
-        if (binding)
-          persistPeerResultArtifact(
-            binding.canonicalRef,
-            attachment.text as string,
+        for (const attachment of envelope.attachments) {
+          const binding = record.resultBindings?.find(
+            (item: { ref?: unknown }) => item.ref === attachment.ref,
           );
-        else
-          persistPeerAttachment(
-            attachment.name as string,
-            attachment.text as string,
-          );
-      }
+          if (binding)
+            persistPeerResultArtifact(
+              binding.canonicalRef,
+              attachment.text as string,
+            );
+          else
+            persistPeerAttachment(
+              attachment.name as string,
+              attachment.text as string,
+            );
+        }
+      };
+      if (correspondenceRole === "lead")
+        withProjectAssignmentAuthority(persistEvidence);
+      else persistEvidence();
     } else {
       for (const attachment of envelope.attachments) {
         const binding = record.resultBindings?.find(
@@ -719,9 +732,13 @@ if (action === "probe") {
         (correspondenceRole === "manager"
           ? current.role === "manager"
           : isRemoteOrdinaryLead(current, globalProjectAssignmentSnapshot()));
-      if (!authorized || (!published && !compatible(current)))
+      if (!authorized)
         throw new Error(
           "exact correspondence recipient is not live or authorized",
+        );
+      if (!published && !supportsPeerMessaging(current.messageProtocol))
+        throw new Error(
+          "recipient does not support coordinator messaging protocol 1",
         );
       if (!published) {
         if (
@@ -746,13 +763,13 @@ if (action === "probe") {
             peer.piSessionId === record.toSessionId &&
             peer.claim.id === envelope.recipientClaimId,
         );
-        if (
-          !current ||
-          !isRemoteOrdinaryLead(current, assignments) ||
-          (!published && !compatible(current))
-        )
+        if (!current || !isRemoteOrdinaryLead(current, assignments))
           throw new Error(
             "exact correspondence recipient is not live or authorized",
+          );
+        if (!published && !supportsPeerMessaging(current.messageProtocol))
+          throw new Error(
+            "recipient does not support coordinator messaging protocol 1",
           );
         if (!published) {
           if (

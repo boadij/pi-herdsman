@@ -22,6 +22,7 @@ export type SavedPeerMachine = Readonly<{
 }>;
 export type RemotePeerSnapshot = Readonly<{
   dataRoot: string;
+  messageProtocol?: unknown;
   peers: Array<{
     role?: string;
     piSessionId: string;
@@ -33,6 +34,7 @@ export type RemotePeerSnapshot = Readonly<{
     workspaceLabel?: string;
     sessionKind?: "ordinary" | "managed";
     build?: unknown;
+    messageProtocol?: unknown;
   }>;
   ordinaryLeadsComplete?: boolean;
 }>;
@@ -507,6 +509,10 @@ export async function probePeerEndpoint(
   signal?: AbortSignal,
 ): Promise<RemotePeerSnapshot> {
   const output = await runPeerEndpoint(machine, "probe", undefined, signal);
+  return parsePeerEndpointProbe(output);
+}
+
+export function parsePeerEndpointProbe(output: string): RemotePeerSnapshot {
   const probe: unknown = JSON.parse(output);
   if (
     !probe ||
@@ -515,6 +521,8 @@ export async function probePeerEndpoint(
     !Array.isArray((probe as { peers?: unknown }).peers)
   )
     throw new Error("Peer endpoint returned invalid probe data");
+  if (!Object.hasOwn(probe, "messageProtocol"))
+    throw new Error("Peer endpoint omitted coordinator message protocol");
   const snapshot = probe as RemotePeerSnapshot;
   if (
     snapshot.peers.some(

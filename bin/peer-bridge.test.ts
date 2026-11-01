@@ -22,6 +22,7 @@ import {
   resultPath,
 } from "../extension/storage.ts";
 import {
+  COORDINATOR_MESSAGE_PROTOCOL,
   chiefMessagePath,
   coordinationMessageDelivered,
   coordinationMessageDigest,
@@ -65,6 +66,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
   let manager = {
     version: 2 as const,
     build: HERDSMAN_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     role: "manager" as const,
     sessionKind: "ordinary" as const,
     piSessionId: sessionId,
@@ -111,6 +113,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
       const record = {
         version: 2 as const,
         build: manager.build,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         id: messageId,
         leaseId,
         kind: "peer_message" as const,
@@ -159,10 +162,8 @@ test("bridge recovers after process death at both durable acceptance cut points"
           .digest("hex")}.json`,
       );
       if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
-        const peerPath = writePeerLeadRecord(runtime, {
-          ...manager,
-          build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
-        });
+        const { messageProtocol: _messageProtocol, ...unverified } = manager;
+        const peerPath = writePeerLeadRecord(runtime, unverified);
         const rejectedAttachment = {
           name: "new.txt",
           marker: "<new>",
@@ -176,8 +177,8 @@ test("bridge recovers after process death at both durable acceptance cut points"
         };
         for (const missing of [false, true]) {
           if (missing) {
-            const { build: _build, ...unverified } = manager;
-            writeFileSync(peerPath, JSON.stringify(unverified));
+            const { build: _build, ...missingBuild } = unverified;
+            writeFileSync(peerPath, JSON.stringify(missingBuild));
           }
           const stale = spawnSync(
             process.execPath,
@@ -190,6 +191,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
             },
           );
           assert.notEqual(stale.status, 0);
+          assert.match(stale.stderr, /coordinator messaging protocol/);
           assert.equal(existsSync(marker), false);
           assert.equal(
             existsSync(join(runtime.root, "received-evidence")),
@@ -323,8 +325,9 @@ test("bridge recovers after process death at both durable acceptance cut points"
       });
       if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
         const before = readFileSync(marker, "utf8");
+        const { messageProtocol: _messageProtocol, ...unverified } = manager;
         writePeerLeadRecord(runtime, {
-          ...manager,
+          ...unverified,
           build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
         });
         const stale = spawnSync(
@@ -338,6 +341,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           },
         );
         assert.notEqual(stale.status, 0);
+        assert.match(stale.stderr, /coordinator messaging protocol/);
         assert.equal(readFileSync(marker, "utf8"), before);
         writePeerLeadRecord(runtime, manager);
       }
@@ -425,11 +429,13 @@ test("bridge recovers after process death at both durable acceptance cut points"
           "failed accepted-marker publication removes its exact temporary file",
         );
       }
-      if (cut === "inbox-publication-durable")
+      if (cut === "inbox-publication-durable") {
+        const { messageProtocol: _messageProtocol, ...unverified } = manager;
         writePeerLeadRecord(runtime, {
-          ...manager,
+          ...unverified,
           build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
         });
+      }
       const correspondencePath = join(
         herdsmanDataRoot(),
         "runtime",
@@ -649,6 +655,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
     const manager = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
@@ -663,6 +670,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
     const record = {
       version: 2 as const,
       build: manager.build,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       id: id(),
       leaseId,
       kind: "peer_message" as const,
@@ -694,7 +702,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
       "peer-acceptances",
       `${createHash("sha256").update(`${originSession}\0${record.id}`).digest("hex")}.json`,
     );
-    const run = (fail: boolean, payload = transfer) =>
+    const run = (fail: boolean, payload: unknown = transfer) =>
       spawnSync(
         process.execPath,
         [
@@ -717,6 +725,26 @@ test("partial pending-marker write leaves no final marker and identical retry su
           encoding: "utf8",
         },
       );
+    for (const protocol of [undefined, 2]) {
+      const rejectedTransfer = JSON.parse(JSON.stringify(transfer));
+      if (protocol === undefined)
+        delete rejectedTransfer.record.messageProtocol;
+      else rejectedTransfer.record.messageProtocol = protocol;
+      const rejected = run(false, rejectedTransfer);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /unsupported or missing.*protocol/);
+      assert.equal(existsSync(marker), false);
+      assert.equal(
+        existsSync(chiefMessagePath(runtime, sessionId, record.id)),
+        false,
+      );
+      assert.equal(
+        listPeerCorrespondences().some(
+          (item) => item.id === transfer.correspondence.id,
+        ),
+        false,
+      );
+    }
     const failed = run(true);
     assert.notEqual(failed.status, 0, failed.stderr);
     assert.match(failed.stderr, /injected pending marker temp write failure/);
@@ -746,7 +774,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
   }
 });
 
-test("bridge accepts a directly addressed ordinary Lead and rejects role-transition transfers", () => {
+test("bridge accepts protocol-compatible cross-build Leads and rejects role-transition transfers", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   const previousConnection = process.env.SSH_CONNECTION;
@@ -765,7 +793,8 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
     const runtime = peerRuntime();
     const lead = {
       version: 2 as const,
-      build: HERDSMAN_BUILD,
+      build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "lead" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
@@ -779,7 +808,8 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
     writePeerLeadRecord(runtime, lead);
     const record = {
       version: 2 as const,
-      build: lead.build,
+      build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       id: id(),
       leaseId,
       kind: "peer_message" as const,
@@ -842,58 +872,76 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       record,
     );
 
-    const buildRaceRecord = { ...record, id: id() };
-    const buildRaceCorrespondence = {
+    const protocolRaceRecord = { ...record, id: id() };
+    const protocolRaceCorrespondence = {
       ...correspondence,
       id: id(),
-      acceptanceId: buildRaceRecord.id,
+      acceptanceId: protocolRaceRecord.id,
     };
-    const buildRaceTransfer = {
+    const protocolRaceTransfer = {
       ...transfer,
-      record: buildRaceRecord,
-      correspondence: buildRaceCorrespondence,
+      record: protocolRaceRecord,
+      correspondence: protocolRaceCorrespondence,
     };
-    const staleLead = {
-      ...lead,
-      build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
-    };
-    const buildHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writePeerLeadRecord, peerRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writePeerLeadRecord(peerRuntime(), ${JSON.stringify(staleLead)}); });`;
-    const buildRace = run(buildRaceTransfer, buildHook);
-    assert.notEqual(buildRace.status, 0);
+    const { messageProtocol: _messageProtocol, ...unverifiedLead } = lead;
+    const protocolHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writePeerLeadRecord, peerRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writePeerLeadRecord(peerRuntime(), ${JSON.stringify(unverifiedLead)}); });`;
+    const protocolRace = run(protocolRaceTransfer, protocolHook);
+    assert.notEqual(protocolRace.status, 0);
+    assert.match(protocolRace.stderr, /coordinator messaging protocol/);
     assert.equal(
-      existsSync(chiefMessagePath(runtime, sessionId, buildRaceRecord.id)),
+      existsSync(chiefMessagePath(runtime, sessionId, protocolRaceRecord.id)),
       false,
     );
     assert.equal(
       listPeerCorrespondences().some(
-        (item) => item.id === buildRaceCorrespondence.id,
+        (item) => item.id === protocolRaceCorrespondence.id,
       ),
       false,
     );
     writePeerLeadRecord(runtime, lead);
-    const recoveredBuildRace = run(buildRaceTransfer);
-    assert.equal(recoveredBuildRace.status, 0, recoveredBuildRace.stderr);
+    const recoveredProtocolRace = run(protocolRaceTransfer);
+    assert.equal(recoveredProtocolRace.status, 0, recoveredProtocolRace.stderr);
     assert.deepEqual(
       readCoordinationMessage(
-        chiefMessagePath(runtime, sessionId, buildRaceRecord.id),
+        chiefMessagePath(runtime, sessionId, protocolRaceRecord.id),
       ),
-      buildRaceRecord,
+      protocolRaceRecord,
     );
 
     const assignmentHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writeProjectAssignment, supervisionRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writeProjectAssignment(supervisionRuntime(), { version: 2, id: ${JSON.stringify(sessionId)}, repoKey: "race-repo", branch: "assigned-after-discovery", text: "assignment changed before publication" }); });`;
-    const racedRecord = { ...record, id: id() };
-    const raced = run(
+    const raceBinding = {
+      ref: "result:scout#1",
+      canonicalRef: `result:${id()}`,
+    };
+    const raceAttachments = [
+      { name: "race.txt", marker: "<race>", text: "race attachment" },
       {
-        ...transfer,
-        record: racedRecord,
-        correspondence: {
-          ...correspondence,
-          id: id(),
-          acceptanceId: racedRecord.id,
-        },
+        name: "race-result.txt",
+        ref: raceBinding.ref,
+        marker: "<result>",
+        text: "race result",
       },
-      assignmentHook,
-    );
+    ].map((attachment) => ({
+      ...attachment,
+      sha256: createHash("sha256").update(attachment.text).digest("hex"),
+    }));
+    const racedRecord = {
+      ...record,
+      id: id(),
+      text: "evidence <race> and <result>",
+      resultBindings: [raceBinding],
+    };
+    const racedTransfer = {
+      ...transfer,
+      record: racedRecord,
+      attachments: raceAttachments,
+      correspondence: {
+        ...correspondence,
+        id: id(),
+        acceptanceId: racedRecord.id,
+      },
+    };
+    const raced = run(racedTransfer, assignmentHook);
     assert.notEqual(raced.status, 0);
     assert.match(
       raced.stderr,
@@ -906,6 +954,16 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
         ),
       /Unable to read Chief message/,
       "assignment added after discovery must reject before inbox publication",
+    );
+    assert.equal(
+      existsSync(peerAttachmentPath("race.txt", "race attachment")),
+      false,
+      "assignment added after discovery must reject before persisting attachments",
+    );
+    assert.equal(
+      existsSync(resultPath(raceBinding.canonicalRef.slice("result:".length))),
+      false,
+      "assignment added after discovery must reject before persisting results",
     );
     rmSync(supervisionRuntime().assignments, { recursive: true, force: true });
 
@@ -947,7 +1005,110 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
   }
 });
 
-test("probe preserves incompatible Managers and rejects their delivery before mutation", () => {
+test("bridge accepts a protocol-1 Manager with a different build", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(
+    join(tmpdir(), "peer-bridge-cross-build-manager-"),
+  );
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const sessionId = id();
+  const originSession = id();
+  const leaseId = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), sessionId), {
+    name: "test cross-build Manager peer presence",
+  });
+  try {
+    const runtime = peerRuntime();
+    const remoteBuild = { ...HERDSMAN_BUILD, sha256: "b".repeat(64) };
+    assert.notEqual(remoteBuild.sha256, HERDSMAN_BUILD.sha256);
+    const manager = {
+      version: 2 as const,
+      build: remoteBuild,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+      role: "manager" as const,
+      sessionKind: "ordinary" as const,
+      piSessionId: sessionId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, manager);
+    const record = {
+      version: 2 as const,
+      build: remoteBuild,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+      id: id(),
+      leaseId,
+      kind: "peer_message" as const,
+      fromSessionId: originSession,
+      toSessionId: sessionId,
+      leadSessionId: sessionId,
+      text: "cross-build Manager acceptance",
+      peerSource: { role: "manager" as const },
+      createdAt: Date.now(),
+    };
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "d".repeat(64),
+      role: "manager",
+      originSession,
+      originGeneration: leaseId,
+      recipientSession: sessionId,
+      recipientGeneration: manager.claim.id,
+      acceptanceId: record.id,
+      replies: [],
+    };
+    const accepted = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "accept"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+          SSH_CONNECTION: "test-ssh-connection",
+        },
+        input: `${JSON.stringify({
+          record,
+          attachments: [],
+          correspondence,
+          recipientClaimId: manager.claim.id,
+          expectedDataRoot: herdsmanDataRoot(),
+        })}\n`,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.deepEqual(JSON.parse(accepted.stdout), {
+      accepted: true,
+      id: record.id,
+    });
+    assert.deepEqual(
+      readCoordinationMessage(chiefMessagePath(runtime, sessionId, record.id)),
+      record,
+    );
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("probe advertises messaging protocol and rejects unversioned Managers before mutation", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-probe-scan-"));
@@ -979,6 +1140,7 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
       writePeerLeadRecord(peerRuntime(), {
         version: 2,
         build,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         role,
         sessionKind: "ordinary",
         piSessionId: session,
@@ -989,11 +1151,11 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
         claim: claim.claim,
         updatedAt: Date.now(),
       });
-    writePeerLeadRecord(peerRuntime(), {
-      version: 2,
+    const { messageProtocol: _messageProtocol, ...unverifiedManager } = {
+      version: 2 as const,
       build: { ...build, sha256: "a".repeat(64) },
-      role: "manager",
-      sessionKind: "ordinary",
+      role: "manager" as const,
+      sessionKind: "ordinary" as const,
       piSessionId: staleId,
       paneId: "pane",
       tabId: "tab",
@@ -1001,7 +1163,8 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
       socket,
       claim: staleClaim.claim,
       updatedAt: Date.now(),
-    });
+    };
+    writePeerLeadRecord(peerRuntime(), unverifiedManager);
     const assignments = supervisionRuntime().assignments;
     mkdirSync(assignments, { recursive: true });
     mkdirSync(join(assignments, "unexpected"));
@@ -1020,6 +1183,7 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
     );
     assert.equal(probe.status, 0, probe.stderr);
     const result = JSON.parse(probe.stdout);
+    assert.equal(result.messageProtocol, COORDINATOR_MESSAGE_PROTOCOL);
     assert.equal(result.ordinaryLeadsComplete, false);
     assert.deepEqual(
       result.peers
@@ -1041,6 +1205,7 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
           record: {
             version: 2,
             build,
+            messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
             id: messageId,
             leaseId,
             kind: "peer_message",
@@ -1073,10 +1238,7 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
       },
     );
     assert.notEqual(delivery.status, 0);
-    assert.match(
-      delivery.stderr,
-      /exact correspondence recipient is not live or authorized/,
-    );
+    assert.match(delivery.stderr, /coordinator messaging protocol/);
     assert.equal(existsSync(join(runtime.root, "peer-acceptances")), false);
     assert.equal(
       existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")),
@@ -1118,6 +1280,7 @@ test("Lead correspondence commands reject a recipient transitioned to Manager", 
     const manager = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: recipient,
@@ -1217,6 +1380,7 @@ test("live replacement Manager cannot recover prior Manager correspondence", () 
     writePeerLeadRecord(peerRuntime(), {
       version: 2,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager",
       sessionKind: "ordinary",
       piSessionId: replacementSession,
@@ -1304,6 +1468,7 @@ test("Lead ACK does not complete after assignment authority changes", () => {
     const lead = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "lead" as const,
       sessionKind: "ordinary" as const,
       piSessionId: recipient,
@@ -1336,6 +1501,43 @@ test("Lead ACK does not complete after assignment authority changes", () => {
       ],
     };
     storePeerCorrespondence(correspondence);
+    const payload = JSON.stringify({
+      id: correspondence.id,
+      capability: correspondence.capability,
+      originSession: origin,
+      originGeneration: generation,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      replyId,
+      expectedDataRoot: herdsmanDataRoot(),
+    });
+    const runAck = () =>
+      spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", "ack"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${payload}\n`,
+          encoding: "utf8",
+        },
+      );
+    const { messageProtocol: _messageProtocol, ...unverifiedLead } = lead;
+    writePeerLeadRecord(peerRuntime(), unverifiedLead);
+    const unsupported = runAck();
+    assert.notEqual(unsupported.status, 0);
+    assert.match(unsupported.stderr, /coordinator messaging protocol/);
+    assert.equal(
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)
+        ?.replies[0]?.acknowledged,
+      false,
+    );
+    writePeerLeadRecord(peerRuntime(), lead);
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: recipient,
@@ -1343,30 +1545,7 @@ test("Lead ACK does not complete after assignment authority changes", () => {
       branch: "assigned-before-ack",
       text: "authority changed after discovery",
     });
-    const result = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "bin/peer-bridge.ts", "ack"],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          PI_CODING_AGENT_DIR: agentDir,
-          HERDR_SOCKET_PATH: socket,
-          SSH_CONNECTION: "test-ssh-connection",
-        },
-        input: `${JSON.stringify({
-          id: correspondence.id,
-          capability: correspondence.capability,
-          originSession: origin,
-          originGeneration: generation,
-          recipientSession: recipient,
-          recipientGeneration: claim.claim.id,
-          replyId,
-          expectedDataRoot: herdsmanDataRoot(),
-        })}\n`,
-        encoding: "utf8",
-      },
-    );
+    const result = runAck();
     assert.notEqual(result.status, 0);
     assert.match(
       result.stderr,
@@ -1410,6 +1589,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
     const manager = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager" as const,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
@@ -1425,6 +1605,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       const record = {
         version: 2 as const,
         build: manager.build,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         id: id(),
         leaseId,
         kind: "peer_message" as const,

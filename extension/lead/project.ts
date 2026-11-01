@@ -14,11 +14,14 @@ import type {
   SessionRole,
 } from "../supervision.ts";
 import {
+  COORDINATOR_MESSAGE_PROTOCOL,
   projectTaskSummary,
   migrateProjectAssignmentEvidence,
   readManagerDescriptor,
   writeProjectAssignmentAfter,
   staffToolName,
+  sameChiefDescriptor,
+  supportsCoordinatorMessaging,
 } from "../supervision.ts";
 import { OperationError } from "../errors.ts";
 import {
@@ -3507,14 +3510,50 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     if (activeRole() !== "chief" && activeRole() !== "manager")
       throw new Error("Staff is available only to active supervisors");
+    const senderRole = activeRole();
     const authority =
-      activeRole() === "chief"
+      senderRole === "chief"
         ? await currentChiefAuthority(ctx)
         : await currentManager(ctx);
     if (!authority || leadRuntime.roleSuspended)
       throw new Error("Supervisor lease is no longer active");
     const params = raw as StaffOperation;
-    const resolveActiveAssignedBranch = async (branch: string) => {
+    const currentAuthority = async () => {
+      if (activeRole() !== senderRole || leadRuntime.roleSuspended)
+        return undefined;
+      const current =
+        senderRole === "chief"
+          ? currentChiefAuthority(ctx)
+          : currentManager(ctx);
+      const verified = await current;
+      return activeRole() === senderRole && !leadRuntime.roleSuspended
+        ? verified
+        : undefined;
+    };
+    const sameAuthority = (current: any, expected: any): boolean =>
+      !!current &&
+      !!expected &&
+      (senderRole === "manager"
+        ? host.sameManagerDescriptor(current, expected)
+        : sameChiefDescriptor(current, expected));
+    const requireMessageProtocol = (protocol: unknown, participant: string) => {
+      if (!supportsCoordinatorMessaging(protocol))
+        throw new Error(
+          `${participant} does not support coordinator messaging protocol ${COORDINATOR_MESSAGE_PROTOCOL}`,
+        );
+    };
+    const isVerifiedMessageOnly = (report: any): boolean =>
+      report.reason === "incompatible_build" &&
+      Array.isArray(report.availableActions) &&
+      report.availableActions.length === 1 &&
+      report.availableActions[0] === "message" &&
+      typeof report.instanceId === "string" &&
+      typeof report.paneId === "string" &&
+      typeof report.tabId === "string";
+    const resolveActiveAssignedBranch = async (
+      branch: string,
+      allowMessageOnlyIncompatible = false,
+    ) => {
       const manager = await currentManager(ctx);
       const assignment =
         manager &&
@@ -3532,7 +3571,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const incompatible = snapshot.incompatible?.find(
         (report) => report.role === "lead" && report.session === assignment.id,
       );
-      if (incompatible)
+      if (
+        incompatible &&
+        !(
+          allowMessageOnlyIncompatible &&
+          incompatible.instanceId &&
+          incompatible.paneId &&
+          incompatible.tabId
+        )
+      )
         requireCompatibleBuild(
           HERDSMAN_BUILD,
           incompatible.build,
@@ -3552,6 +3599,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           lead.relationship === "assigned" &&
           lead.branch === assignment.branch,
       );
+      if (leads.length === 1) return { assignment, lead: leads[0] };
+      if (allowMessageOnlyIncompatible && incompatible)
+        return {
+          assignment,
+          lead: {
+            ...incompatible,
+            lead: incompatible.session,
+            relationship: "assigned",
+            branch: assignment.branch,
+            compatibility: "incompatible",
+          },
+        };
       if (leads.length !== 1)
         throw new Error("Assigned Lead is not eligible for staff action");
       return { assignment, lead: leads[0] };
@@ -3685,11 +3744,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action !== "list" && params.branch !== undefined) {
       if (activeRole() !== "manager" || !params.branch.trim())
         throw new Error("Only Managers can target an exact assigned branch");
-      const selected = await resolveActiveAssignedBranch(params.branch);
+      const selected = await resolveActiveAssignedBranch(
+        params.branch,
+        params.action === "message",
+      );
       selectedAssignment = selected.assignment;
       selectedLead = selected.lead;
     }
-    const refresh = async () => directReports(ctx);
+    const refreshMessageReports = async () => {
+      const messageableIncompatible: import("../supervision.ts").IncompatibleStaff[] =
+        [];
+      const compatible = await directReports(
+        ctx,
+        undefined,
+        undefined,
+        messageableIncompatible,
+      );
+      return {
+        compatible,
+        incompatible: messageableIncompatible,
+      };
+    };
+    const asIncompatibleMessageReport = (report: any) => ({
+      ...report,
+      lead: report.session,
+      relationship: report.branch ? "assigned" : "supervised",
+      compatibility: "incompatible",
+    });
     const result = (value: Record<string, unknown>) => {
       const bounded = truncateModelText(JSON.stringify(value, null, 2), {
         keep: "head",
@@ -3731,9 +3812,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         )
       )
         discoveryWarning =
-          "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
+          "Some staff sessions run an incompatible Herdsman build; reload those Pi sessions with a matching Herdsman build for control or inspection. Verified protocol-compatible direct reports may still be messaged.";
+    } else if (params.action === "message") {
+      if (selectedAssignment && selectedLead) {
+        reports = [selectedLead];
+      } else {
+        const current = await refreshMessageReports();
+        reports = current.compatible;
+        incompatibleReports = current.incompatible;
+      }
     } else {
-      reports = selectedLead ? [selectedLead] : await refresh();
+      reports = selectedLead ? [selectedLead] : await directReports(ctx);
     }
     const reportSession = (report: any): string =>
       report.session ?? report.lead;
@@ -3830,10 +3919,43 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           .concat(
             incompatibleReports.map((report) => ({
               role: report.role,
+              ...(isVerifiedMessageOnly(report) &&
+              !(
+                activeRole() === "manager" &&
+                report.role === "lead" &&
+                (report as any).branch
+              )
+                ? {
+                    target: rememberCoordinatorTarget(
+                      pi,
+                      ctx,
+                      report.role,
+                      report.session,
+                    ),
+                  }
+                : {}),
+              ...(activeRole() === "manager" && report.role === "lead"
+                ? {
+                    relationship: (report as any).branch
+                      ? "assigned"
+                      : "supervised",
+                    ...((report as any).branch
+                      ? { branch: (report as any).branch }
+                      : {}),
+                  }
+                : {}),
               display_name: report.displayName,
               compatibility: "incompatible",
               build: report.build,
-              available_tools: [],
+              ...(report.protocolDiagnostic
+                ? {
+                    protocol_diagnostic: report.protocolDiagnostic,
+                    required_protocol: 1,
+                  }
+                : {}),
+              available_tools: isVerifiedMessageOnly(report)
+                ? [staffToolName("message")]
+                : [],
             })),
           ),
         ...(discoveryWarning ? { warning: discoveryWarning } : {}),
@@ -3854,7 +3976,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           selectedAssignment ? { exactSession: targetSession } : undefined,
         )
       ).find((candidate: any) => reportSession(candidate) === targetSession);
-    const targets = reports.filter(
+    const targetReports =
+      params.action === "message"
+        ? [
+            ...reports,
+            ...incompatibleReports
+              .filter(isVerifiedMessageOnly)
+              .map(asIncompatibleMessageReport),
+          ]
+        : reports;
+    const targets = targetReports.filter(
       (candidate: any) => reportSession(candidate) === targetSession,
     );
     const lead = targets.length === 1 ? targets[0] : undefined;
@@ -3887,6 +4018,28 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Assigned Leads require branch targeting; target selectors are for ordinary direct reports",
       );
+    if (params.action === "message") {
+      requireMessageProtocol(
+        authority.messageProtocol,
+        `${senderRole === "chief" ? "Chief" : "Manager"} sender`,
+      );
+      if (lead.compatibility === "incompatible" && !isVerifiedMessageOnly(lead))
+        throw new Error(
+          "Incompatible staff may only receive verified messages",
+        );
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        reportSession(lead),
+      );
+      if (
+        !state ||
+        state.piSessionId !== reportSession(lead) ||
+        (state.role ?? "lead") !== (lead.role ?? "lead") ||
+        (lead.instanceId !== undefined && state.instanceId !== lead.instanceId)
+      )
+        throw new Error("Staff target identity changed before messaging");
+      requireMessageProtocol(state.messageProtocol, "Staff recipient");
+    }
     const assignmentStillCurrent = () => {
       if (!selectedAssignment) return true;
       const current = host.readProjectAssignment(
@@ -4031,29 +4184,50 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : await currentManager(ctx);
     if (!currentChief || currentChief.leaseId !== authority.leaseId)
       throw new Error("Chief lease is no longer active");
-    const currentLead = await revalidateTarget();
+    const currentLead = await (async () => {
+      const currentReports =
+        params.action === "message"
+          ? await refreshMessageReports()
+          : { compatible: await directReports(ctx), incompatible: [] };
+      const currentTargets =
+        params.action === "message"
+          ? [
+              ...currentReports.compatible,
+              ...currentReports.incompatible
+                .filter(isVerifiedMessageOnly)
+                .map(asIncompatibleMessageReport),
+            ]
+          : currentReports.compatible;
+      return currentTargets.find(
+        (candidate: any) => reportSession(candidate) === targetSession,
+      );
+    })();
+    const checkedCurrentAuthority = await currentAuthority();
+    if (!sameAuthority(checkedCurrentAuthority, authority))
+      throw new Error("Supervisor authority changed during target resolution");
+    const currentLeadForTarget = currentLead;
     if (
-      !currentLead ||
-      !sameLeadTarget(currentLead, lead) ||
-      currentLead.relationship !== lead.relationship ||
-      !currentLead.availableActions.includes(params.action) ||
+      !currentLeadForTarget ||
+      !sameLeadTarget(currentLeadForTarget, lead) ||
+      currentLeadForTarget.relationship !== lead.relationship ||
+      currentLeadForTarget.compatibility !== lead.compatibility ||
+      !currentLeadForTarget.availableActions.includes(params.action) ||
       !assignmentStillCurrent()
     )
       throw new Error("Lead target changed before the message was queued");
     // The supervision snapshot load is awaited and can observe a lease replacement.
-    const finalChief =
-      activeRole() === "chief"
-        ? await currentChiefAuthority(ctx)
-        : await currentManager(ctx);
-    if (!finalChief || finalChief.leaseId !== authority.leaseId)
-      throw new Error("Chief lease is no longer active");
+    const finalChief = await currentAuthority();
+    if (!finalChief || !sameAuthority(finalChief, authority))
+      throw new Error("Supervisor authority changed during target resolution");
     const recordId = randomUUID();
     const createdAt = Date.now();
     const assignmentMatches = (candidate: typeof lead) => {
       if (activeRole() !== "manager") return undefined;
+      const lease = host.managerLease();
+      if (!lease) return undefined;
       const assignments = host.findProjectAssignmentBySession(
         supervisionRuntime(),
-        host.managerLease()!.descriptor.repoKey,
+        lease.descriptor.repoKey,
         reportSession(candidate),
       );
       if (assignments.length > 1)
@@ -4066,12 +4240,29 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (lead.relationship === "assigned") !== !!initialAssignment
     )
       throw new Error("Lead assignment changed before the message was queued");
+    if (
+      selectedAssignment &&
+      (initialAssignment?.id !== selectedAssignment.id ||
+        initialAssignment.repoKey !== selectedAssignment.repoKey ||
+        initialAssignment.branch !== selectedAssignment.branch)
+    )
+      throw new Error("Lead assignment changed before the message was queued");
     let retainedFiles: RequiredEvidence[] = [];
     if (params.retain === true) {
       if (activeRole() !== "manager" || !initialAssignment)
         throw new Error(
           "Required evidence can be retained only by a Manager forwarding to an assigned project Lead",
         );
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        reportSession(lead),
+      );
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        state?.build,
+        "message_staff retention",
+        `Lead on branch ${initialAssignment.branch}`,
+      );
       const supplied = resolveMessageFiles(
         ctx,
         params.files,
@@ -4108,6 +4299,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         (candidate, resultBindings) => ({
           version: 2,
           build: HERDSMAN_BUILD,
+          messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
           id: recordId,
           leaseId: finalChief.leaseId,
           kind: activeRole() === "chief" ? "chief_message" : "manager_message",
@@ -4124,26 +4316,35 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
       // Attachment preparation can reread Herdsman configuration and files. Recheck
       // every identity and authority field immediately before transport.
-      const writeChief =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
-      const writeLead = await revalidateTarget();
-      const finalAuthority =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+      const currentReports =
+        params.action === "message"
+          ? await refreshMessageReports()
+          : { compatible: await directReports(ctx), incompatible: [] };
+      const writeTargets =
+        params.action === "message"
+          ? [
+              ...currentReports.compatible,
+              ...currentReports.incompatible
+                .filter(isVerifiedMessageOnly)
+                .map(asIncompatibleMessageReport),
+            ]
+          : currentReports.compatible;
+      const writeChief = await currentAuthority();
+      const writeLead = writeTargets.find(
+        (candidate: any) => reportSession(candidate) === targetSession,
+      );
+      const finalAuthority = await currentAuthority();
       const writeAssignment = writeLead
         ? assignmentMatches(writeLead)
         : undefined;
       if (
-        !writeChief ||
-        writeChief.leaseId !== finalChief.leaseId ||
-        !finalAuthority ||
-        finalAuthority.leaseId !== finalChief.leaseId ||
+        !sameAuthority(writeChief, finalChief) ||
+        !sameAuthority(finalAuthority, finalChief) ||
         !writeLead ||
-        !sameLeadTarget(writeLead, currentLead) ||
+        !sameLeadTarget(writeLead, lead) ||
+        writeLead.role !== lead.role ||
         writeLead.relationship !== lead.relationship ||
+        writeLead.compatibility !== lead.compatibility ||
         !writeLead.availableActions.includes(params.action) ||
         !assignmentStillCurrent()
       )
@@ -4160,15 +4361,28 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         supervisionRuntime(),
         reportSession(writeLead),
       );
-      requireCompatibleBuild(
-        HERDSMAN_BUILD,
-        targetState?.build,
-        "message_staff",
-        `${targetState?.role ?? "Lead"} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
-      );
+      if (params.action === "message") {
+        if (
+          !targetState ||
+          targetState.piSessionId !== reportSession(writeLead) ||
+          (targetState.role ?? "lead") !== (writeLead.role ?? "lead") ||
+          (writeLead.instanceId !== undefined &&
+            targetState.instanceId !== writeLead.instanceId)
+        )
+          throw new Error("Staff target identity changed before publication");
+        requireMessageProtocol(targetState.messageProtocol, "Staff recipient");
+        if (!isVerifiedMessageOnly(writeLead))
+          requireCompatibleBuild(
+            HERDSMAN_BUILD,
+            targetState.build,
+            "message_staff",
+            `${targetState.role ?? "Lead"} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
+          );
+      }
       const record: ChiefMessageRecord = {
         version: 2,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         id: recordId,
         leaseId: finalChief.leaseId,
         kind: activeRole() === "chief" ? "chief_message" : "manager_message",

@@ -20,6 +20,12 @@ assignment. An unavailable or retired Managed Lead never falls back to Chief
 or ordinary direct supervision; previously queued information retains its own
 validated delivery contract.
 
+Supervisor messages may cross Herdsman builds only when both current
+participants explicitly advertise coordinator messaging protocol 1. A
+different build alone does not reject a message; current identity, role,
+supervisor scope, assignment, and generation authorization still apply. This
+does not relax build-strict control operations.
+
 ## `message_supervisor`
 
 Available to Leads and Managers.
@@ -63,8 +69,14 @@ Direct-supervisor messages are queued for the exact current recipient and
 validated against current authority before delivery. A Manager message to an
 ordinary Lead uses Pi's cooperative steering lane whether the Lead is active or
 idle. Steering does not abort the current operation or interrupt an in-flight
-tool call. Ordinary Leads can reply explicitly with `message_supervisor`; a
-triggered turn does not guarantee a reply.
+tool call. An assigned Lead's explicit `message_supervisor` uses the existing
+durable project-message queue and may remain queued while no Manager is active;
+the Manager checks the explicit message record's `messageProtocol` metadata
+when consuming it. This check applies only to explicit messages. Automatic
+project-result handoffs and
+`execution_failure` handling remain unchanged. Ordinary Leads can reply
+explicitly with `message_supervisor`; a triggered turn does not guarantee a
+reply.
 
 ## See also
 

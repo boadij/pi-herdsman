@@ -175,6 +175,7 @@ test("peer send boundary rejects unavailable local presence", async () => {
   const peerInboxRuntime = {};
   const sent: unknown[] = [];
   let peerOptions: any;
+  let projectDrains = 0;
   const runtime = createLeadInboxRuntime({
     leadRuntime: {
       chiefMode: "inactive",
@@ -197,10 +198,17 @@ test("peer send boundary rejects unavailable local presence", async () => {
       return 0;
     },
     authorizePeerRecord: async () => true,
+    authorizeChiefRecord: async () => true,
     livePeerLead: async () => ({ piSessionId: "recipient", role: "manager" }),
     peerContext: async () => ({ role: "manager" }),
+    resolvePeerResultBindings: () => ({ bindings: [], conflicts: [] }),
+    describePeerResultConflicts: () => "",
     currentPeerPresenceValid: async () => false,
-    drainProjectMessages: async () => 0,
+    importResultBindings: () => {},
+    drainProjectMessages: async () => {
+      projectDrains++;
+      return 0;
+    },
   } as any);
 
   try {
@@ -214,6 +222,7 @@ test("peer send boundary rejects unavailable local presence", async () => {
         { triggerTurn: false },
         {
           id: "queued-peer",
+          messageProtocol: 1,
           kind: "peer_message",
           fromSessionId: "sender",
           toSessionId: "recipient",
@@ -222,6 +231,7 @@ test("peer send boundary rejects unavailable local presence", async () => {
       ),
       /Peer presence is unavailable before delivery/,
     );
+    assert.ok(projectDrains > 0, "the project-message inbox still drains");
     assert.deepEqual(sent, []);
   } finally {
     runtime.beginShutdown();

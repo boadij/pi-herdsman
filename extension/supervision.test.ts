@@ -18,8 +18,10 @@ import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import support, { PI_AGENT_ROOT, realFs } from "./support.ts";
 import { acquireProcessLock } from "./lock.ts";
+import { requireCompatibleBuild } from "./compatibility.ts";
 import { test } from "node:test";
 const {
+  COORDINATOR_MESSAGE_PROTOCOL,
   chiefMessagePath,
   chiefMessageBytes,
   COORDINATION_INBOX_SCAN_LIMIT,
@@ -59,6 +61,8 @@ const {
   withCurrentProjectAssignment,
   projectAssignmentAuthorityLockPath,
   samePeerLeadAuthority,
+  samePeerLeadGeneration,
+  samePeerLeadRecord,
   canMessagePeer,
   isRemoteOrdinaryLead,
   PROJECT_ASSIGNMENT_MAX_BYTES,
@@ -69,6 +73,7 @@ const {
   drainCoordinationInbox,
   listCoordinationMessagePaths,
   listPeerLeadRecords,
+  listPeerLeadRecordsForDiscovery,
   peerLeadLockPath,
   peerLeadRecordPath,
   peerRuntime,
@@ -87,7 +92,11 @@ const {
   quarantineChiefMessage,
   readChiefMessage,
   readLeadCoordinationState,
+  readLeadCoordinationStateForObservation,
   readChiefDescriptor,
+  supportsCoordinatorMessaging,
+  reportProtocolDiagnostic,
+  takeProtocolDiagnostics,
   serializeSupervision,
   sessionLeadRoleState: readLeadRoleState,
   readSessionKind,
@@ -96,6 +105,8 @@ const {
   writePeerLeadRecord,
   removeChiefMessage,
   writeLeadCoordinationState,
+  verifyManagerCoordinationAuthority,
+  verifyRemoteChiefAuthority,
 } = await import("./supervision.ts");
 import type {
   GlobalProjectAssignment,
@@ -110,6 +121,41 @@ const socket = () =>
   join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
+const OTHER_BUILD = { version: "0.18.1", sha256: "b".repeat(64) } as const;
+
+test("protocol rejection notices are safe and deduplicated after context consumption", () => {
+  const session = randomUUID();
+  const record = randomUUID();
+  reportProtocolDiagnostic(
+    session,
+    record,
+    "protocol_mismatch",
+    "inbound coordination message",
+  );
+  const first = takeProtocolDiagnostics(session);
+  assert.equal(first.length, 1);
+  assert.match(first[0], /protocol_mismatch/u);
+  assert.match(first[0], /Required protocol: 1/u);
+  assert.match(first[0], /inbound coordination message/u);
+  assert.doesNotMatch(first[0], new RegExp(record, "u"));
+  reportProtocolDiagnostic(
+    session,
+    record,
+    "protocol_mismatch",
+    "inbound coordination message",
+  );
+  assert.deepEqual(takeProtocolDiagnostics(session), []);
+  reportProtocolDiagnostic(
+    session,
+    randomUUID(),
+    "protocol_unverified",
+    "assigned project message",
+  );
+  const next = takeProtocolDiagnostics(session);
+  assert.equal(next.length, 1);
+  assert.match(next[0], /protocol_unverified/u);
+  assert.match(next[0], /assigned project message/u);
+});
 
 test("peer delivery receipts bind exact session, ID, and content durably", () => {
   const runtime = supervisionRuntime(socket());
@@ -124,6 +170,10 @@ test("peer delivery receipts bind exact session, ID, and content durably", () =>
         Object.entries(record).reverse(),
       ) as ChiefMessageRecord,
     ),
+    digest,
+  );
+  assert.notEqual(
+    coordinationMessageDigest({ ...record, messageProtocol: 1 }),
     digest,
   );
   assert.equal(
@@ -344,6 +394,126 @@ function peerRecord(
     release: lease.release,
   };
 }
+
+test("coordinator messaging protocol accepts only the fixed supported version", () => {
+  assert.equal(COORDINATOR_MESSAGE_PROTOCOL, 1);
+  for (const [value, expected] of [
+    [1, true],
+    [undefined, false],
+    [0, false],
+    [2, false],
+    ["1", false],
+    [null, false],
+  ] as const)
+    assert.equal(supportsCoordinatorMessaging(value), expected);
+});
+
+test("supervisor verification separates local build policy from remote identity", async () => {
+  const descriptor = {
+    version: 1,
+    build: OTHER_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    leaseId: id(),
+    claim: { pid: process.pid, id: id() },
+    piSessionId: "manager-session",
+    paneId: "pane",
+    tabId: "tab",
+    workspaceId: "workspace",
+    repoKey: "repo",
+    createdAt: 1,
+  } as Parameters<typeof verifyManagerCoordinationAuthority>[0];
+  const coordination = state("manager-session", {
+    build: OTHER_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    role: "manager",
+  });
+
+  assert.throws(
+    () =>
+      verifyManagerCoordinationAuthority(
+        descriptor,
+        coordination,
+        BUILD,
+        requireCompatibleBuild,
+      ),
+    /build mismatch/i,
+  );
+  assert.doesNotThrow(() =>
+    verifyManagerCoordinationAuthority(
+      descriptor,
+      coordination,
+      BUILD,
+      requireCompatibleBuild,
+      "identity-only",
+    ),
+  );
+  assert.throws(
+    () =>
+      verifyManagerCoordinationAuthority(
+        descriptor,
+        { ...coordination, build: BUILD },
+        BUILD,
+        requireCompatibleBuild,
+        "identity-only",
+      ),
+    /build evidence does not match/,
+  );
+  assert.throws(
+    () =>
+      verifyManagerCoordinationAuthority(
+        descriptor,
+        { ...coordination, messageProtocol: undefined },
+        BUILD,
+        requireCompatibleBuild,
+        "identity-only",
+      ),
+    /messaging protocols do not match/,
+  );
+  assert.throws(
+    () =>
+      verifyManagerCoordinationAuthority(
+        descriptor,
+        { ...coordination, role: "lead" },
+        BUILD,
+        requireCompatibleBuild,
+        "identity-only",
+      ),
+    /coordination state could not be verified/,
+  );
+
+  const chief = {
+    version: 1,
+    build: OTHER_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    leaseId: id(),
+    claim: { pid: process.pid, id: id() },
+    piSessionId: "chief-session",
+    paneId: "pane",
+    workspaceId: "workspace",
+    createdAt: 1,
+  } as Parameters<typeof verifyRemoteChiefAuthority>[0];
+  const options = {
+    remoteIdentity: async () => ({ live: true }),
+    requireCompatibleBuild,
+    build: BUILD,
+  };
+  assert.equal(
+    await verifyRemoteChiefAuthority(chief, {
+      ...options,
+      policy: "identity-only",
+    }),
+    true,
+  );
+  await assert.rejects(() => verifyRemoteChiefAuthority(chief, options));
+  assert.equal(
+    await verifyRemoteChiefAuthority(chief, {
+      ...options,
+      policy: "identity-only",
+      remoteIdentity: async () => undefined,
+    }),
+    false,
+  );
+});
 
 test("message writes recover a stale crash-held lock", () => {
   const runtime = supervisionRuntime(socket());
@@ -631,6 +801,22 @@ test("peer lead presence requires a live generation and excludes corruption", ()
   }
 });
 
+test("peer discovery observes positive unsupported protocols without authorizing them", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "peer-protocol-two");
+  try {
+    const path = writePeerLeadRecord(runtime, fixture.record as any);
+    const unsupported = { ...fixture.record, messageProtocol: 2 };
+    writeFileSync(path, JSON.stringify(unsupported));
+    assert.deepEqual(listPeerLeadRecords(runtime), []);
+    assert.deepEqual(listPeerLeadRecordsForDiscovery(runtime), [unsupported]);
+    assert.throws(() => readPeerLeadRecord(runtime, "peer-protocol-two"));
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).messageProtocol, 2);
+  } finally {
+    fixture.release();
+  }
+});
+
 test("peer lead presence rejects a changed or missing process-lock generation", () => {
   const runtime = peerRuntime(socket());
   const fixture = peerRecord(runtime, "lead-generation");
@@ -650,10 +836,25 @@ test("peer lead presence rejects a changed or missing process-lock generation", 
 });
 
 test("peer authority comparison rejects provenance changes but ignores presentation metadata", () => {
-  const fixture = peerRecord(peerRuntime(socket()), "peer-authority");
+  const fixture = peerRecord(peerRuntime(socket()), "peer-authority", {
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  });
   try {
     const expected = fixture.record;
     assert.equal(samePeerLeadAuthority(expected, expected), true);
+    assert.equal(samePeerLeadGeneration(expected, expected), true);
+    assert.equal(samePeerLeadRecord(expected, expected), true);
+    assert.equal(
+      samePeerLeadGeneration(
+        { ...expected, messageProtocol: undefined },
+        expected,
+      ),
+      false,
+    );
+    assert.equal(
+      samePeerLeadRecord({ ...expected, messageProtocol: undefined }, expected),
+      false,
+    );
     for (const changed of [
       { role: "manager" as const },
       { socket: `${expected.socket}-other` },
@@ -1186,6 +1387,25 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   );
 });
 
+test("coordination observation recognizes protocol 2 while authorization reads stay strict", () => {
+  const runtime = supervisionRuntime(socket());
+  const value = { ...state("lead"), messageProtocol: 2 };
+  const path = leadCoordinationStatePath(runtime, "lead");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value));
+  assert.throws(() => readLeadCoordinationState(runtime, "lead"));
+  assert.deepEqual(
+    readLeadCoordinationStateForObservation(runtime, "lead"),
+    value,
+  );
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "2"]) {
+    writeFileSync(path, JSON.stringify({ ...value, messageProtocol: invalid }));
+    assert.throws(() =>
+      readLeadCoordinationStateForObservation(runtime, "lead"),
+    );
+  }
+});
+
 test("lead coordination reader ignores only the retired pendingAsk field", () => {
   const runtime = supervisionRuntime(socket());
   const current = state("legacy-lead");
@@ -1227,10 +1447,13 @@ test("lead coordination reader ignores only the retired pendingAsk field", () =>
 
 test("live supervision records validate optional build evidence and require it for writes", () => {
   const runtime = supervisionRuntime(socket());
-  const value = state("legacy-live");
+  const value = state("legacy-live", {
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  });
   const path = writeLeadCoordinationState(runtime, value);
   const legacy = { ...value } as Record<string, unknown>;
   delete legacy.build;
+  delete legacy.messageProtocol;
   writeFileSync(path, JSON.stringify(legacy));
   assert.deepEqual(
     readLeadCoordinationState(runtime, value.piSessionId),
@@ -1252,8 +1475,26 @@ test("live supervision records validate optional build evidence and require it f
       } as never),
     /Invalid lead coordination state/,
   );
+  assert.throws(
+    () =>
+      writeLeadCoordinationState(runtime, {
+        ...value,
+        messageProtocol: 2,
+      } as never),
+    /Invalid lead coordination state/,
+  );
 
-  const record = message();
+  const record = message({ messageProtocol: COORDINATOR_MESSAGE_PROTOCOL });
+  const messagePath = writeChiefMessage(record, runtime);
+  const legacyMessage = { ...record } as Record<string, unknown>;
+  delete legacyMessage.messageProtocol;
+  writeFileSync(messagePath, JSON.stringify(legacyMessage));
+  assert.deepEqual(readChiefMessage(messagePath), legacyMessage);
+  assert.throws(
+    () =>
+      writeChiefMessage({ ...record, messageProtocol: 2 } as never, runtime),
+    /Invalid Chief message record/,
+  );
   assert.throws(
     () => writeChiefMessage({ ...record, build: undefined } as never, runtime),
     /build identity is required/,
@@ -1268,8 +1509,26 @@ test("live supervision records validate optional build evidence and require it f
   );
 
   const peers = peerRuntime();
-  const peer = peerRecord(peers);
+  const peer = peerRecord(peers, undefined, {
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  });
   try {
+    const peerPath = writePeerLeadRecord(peers, peer.record);
+    const legacyPeer = { ...peer.record } as Record<string, unknown>;
+    delete legacyPeer.messageProtocol;
+    writeFileSync(peerPath, JSON.stringify(legacyPeer));
+    assert.deepEqual(
+      readPeerLeadRecord(peers, peer.record.piSessionId),
+      legacyPeer,
+    );
+    assert.throws(
+      () =>
+        writePeerLeadRecord(peers, {
+          ...peer.record,
+          messageProtocol: 2,
+        } as never),
+      /Invalid peer lead record/,
+    );
     assert.throws(
       () =>
         writePeerLeadRecord(peers, {
@@ -1455,6 +1714,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
   const incompatibleState = state(incompatibleId, {
     role: "lead",
     build: differentSha,
+    messageProtocol: 1,
   });
   const snapshot = projectSupervision({
     agents: [
@@ -1489,6 +1749,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
     snapshot.incompatible?.map((report) => report.session),
     [incompatibleId],
   );
+  assert.equal(snapshot.incompatible?.[0]?.protocolDiagnostic, undefined);
   assert.deepEqual(
     snapshot.incompatible?.[0] && {
       instanceId: snapshot.incompatible[0].instanceId,
@@ -1504,6 +1765,36 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
     },
   );
   assert.equal(snapshot.incompatible?.[0]?.build.sha256, differentSha.sha256);
+});
+
+test("staff discovery diagnoses protocol 2 without creating an actionable target", () => {
+  const sessionId = id();
+  const differentSha = { version: BUILD.version, sha256: "c".repeat(64) };
+  const snapshot = projectSupervision({
+    agents: [
+      {
+        sessionId,
+        sessionKind: "id",
+        workspaceId: "workspace-v2",
+        paneId: "pane-v2",
+        tabId: "tab-v2",
+      },
+    ],
+    managedAgents: [],
+    coordinationStates: [
+      state(sessionId, {
+        role: "lead",
+        build: differentSha,
+        messageProtocol: 2,
+      }),
+    ],
+    localBuild: BUILD,
+  });
+  const report = snapshot.incompatible?.[0];
+  assert.equal(report?.protocolDiagnostic, "protocol_mismatch");
+  assert.equal("availableActions" in (report ?? {}), false);
+  assert.equal("target" in (report ?? {}), false);
+  assert.deepEqual(snapshot.leads, []);
 });
 
 test("Lead without legacy coordination build is not actionable when build verification is requested", () => {
@@ -2662,6 +2953,10 @@ test("Chief lease reclaims a stale claim and publishes a matching new pair", () 
     });
     assert.equal(chiefLeaseIsHeld(runtime), true);
     assert.deepEqual(readChiefDescriptor(runtime.descriptor), lease.descriptor);
+    assert.equal(
+      lease.descriptor.messageProtocol,
+      COORDINATOR_MESSAGE_PROTOCOL,
+    );
     assert.equal(lease.descriptor.piSessionFile, "/tmp/chief-session.jsonl");
     assert.equal(
       sameChiefDescriptor(lease.descriptor, {
@@ -2670,6 +2965,23 @@ test("Chief lease reclaims a stale claim and publishes a matching new pair", () 
       }),
       false,
     );
+    assert.equal(
+      sameChiefDescriptor(
+        { ...lease.descriptor, messageProtocol: undefined },
+        lease.descriptor,
+      ),
+      false,
+    );
+    writeFileSync(
+      runtime.descriptor,
+      JSON.stringify({ ...lease.descriptor, messageProtocol: 2 }),
+    );
+    assert.throws(() => readChiefDescriptor(runtime.descriptor));
+    const legacy = { ...lease.descriptor } as Record<string, unknown>;
+    delete legacy.messageProtocol;
+    writeFileSync(runtime.descriptor, JSON.stringify(legacy));
+    assert.deepEqual(readChiefDescriptor(runtime.descriptor), legacy);
+    writeFileSync(runtime.descriptor, JSON.stringify(lease.descriptor));
     lease.release();
   } finally {
     if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
@@ -2795,11 +3107,32 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       new Set(["root", "other"]),
     );
     assert.deepEqual(readManagerDescriptor(runtime, "root"), first.descriptor);
+    assert.equal(
+      first.descriptor.messageProtocol,
+      COORDINATOR_MESSAGE_PROTOCOL,
+    );
     assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
     const path = join(
       runtime.managers,
       `${createHash("sha256").update("root").digest("hex")}.json`,
     );
+    assert.equal(
+      sameManagerDescriptor(
+        { ...first.descriptor, messageProtocol: undefined },
+        first.descriptor,
+      ),
+      false,
+    );
+    writeFileSync(
+      path,
+      JSON.stringify({ ...first.descriptor, messageProtocol: 2 }),
+    );
+    assert.throws(() => readManagerDescriptor(runtime, "root"));
+    const legacy = { ...first.descriptor } as Record<string, unknown>;
+    delete legacy.messageProtocol;
+    writeFileSync(path, JSON.stringify(legacy));
+    assert.deepEqual(readManagerDescriptor(runtime, "root"), legacy);
+    writeFileSync(path, JSON.stringify(first.descriptor));
     writeFileSync(
       path,
       JSON.stringify({
@@ -4074,6 +4407,90 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
       ),
     /Invalid project message/,
   );
+  const protocolMessage: ProjectMessage = {
+    ...record,
+    id: id(),
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  };
+  writeProjectMessage(protocolMessage, runtime);
+  const protocolPath = join(dirname(largePath), `${protocolMessage.id}.json`);
+  assert.deepEqual(
+    readProjectMessage(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      protocolMessage.id,
+    ),
+    protocolMessage,
+  );
+  assert.throws(
+    () =>
+      writeProjectMessage(
+        { ...protocolMessage, messageProtocol: 2 } as never,
+        runtime,
+      ),
+    /Invalid project message/,
+  );
+  const legacyProtocolMessage = { ...protocolMessage } as Record<
+    string,
+    unknown
+  >;
+  delete legacyProtocolMessage.messageProtocol;
+  assert.throws(
+    () => writeProjectMessage(legacyProtocolMessage as never, runtime),
+    /Project message identity conflicts with durable payload/,
+  );
+  writeFileSync(protocolPath, JSON.stringify(legacyProtocolMessage));
+  assert.deepEqual(
+    readProjectMessage(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      protocolMessage.id,
+    ),
+    legacyProtocolMessage,
+  );
+  const supervisorMessage: ProjectMessage = {
+    ...record,
+    id: id(),
+    text: "Explicit supervisor message",
+    kind: "supervisor_message",
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  };
+  writeProjectMessage(supervisorMessage, runtime);
+  assert.deepEqual(
+    readProjectMessage(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      supervisorMessage.id,
+    ),
+    supervisorMessage,
+  );
+  const missingProtocolMessage = { ...supervisorMessage } as Record<
+    string,
+    unknown
+  >;
+  delete missingProtocolMessage.messageProtocol;
+  missingProtocolMessage.id = id();
+  writeProjectMessage(missingProtocolMessage as never, runtime);
+  assert.deepEqual(
+    readProjectMessage(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      missingProtocolMessage.id as string,
+    ),
+    missingProtocolMessage,
+  );
+  assert.throws(
+    () =>
+      writeProjectMessage(
+        { ...supervisorMessage, messageProtocol: 2 } as never,
+        runtime,
+      ),
+    /Invalid project message/,
+  );
   rmSync(
     projectAssignmentPath(
       runtime,
@@ -4202,6 +4619,141 @@ fs.rmSync(runtime.root, { recursive: true, force: true });`,
     { encoding: "utf8" },
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+test("project header listing diagnoses an explicit message with missing routing identity", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "repo",
+    branch: "feat/malformed-message",
+    text: "task",
+  };
+  const automatic: ProjectMessage = {
+    version: 2,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "automatic result",
+    createdAt: 1,
+  };
+  writeProjectAssignment(runtime, assignment);
+  writeProjectMessage(automatic, runtime);
+  const invalidId = id();
+  const invalid: Record<string, unknown> = {
+    ...automatic,
+    id: invalidId,
+    text: "explicit message missing its routing identity",
+    kind: "supervisor_message",
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    createdAt: 2,
+  };
+  delete invalid.fromSessionId;
+  const assignmentFile = projectAssignmentPath(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  const invalidPath = join(
+    dirname(assignmentFile),
+    `${basename(assignmentFile, ".json")}.messages`,
+    `${invalidId}.json`,
+  );
+  writeFileSync(invalidPath, JSON.stringify(invalid));
+
+  const issues: unknown[] = [];
+  assert.deepEqual(
+    listProjectMessageHeaders(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      (issue) => issues.push(issue),
+    ),
+    [automatic],
+  );
+  assert.deepEqual(issues, [
+    {
+      id: invalidId,
+      reason: "malformed",
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    },
+  ]);
+  assert.equal(existsSync(invalidPath), true);
+  assert.throws(
+    () =>
+      listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch),
+    /Unable to read project message/u,
+    "without an isolation callback, malformed headers remain strict",
+  );
+  assert.throws(
+    () =>
+      readProjectMessage(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+        invalidId,
+      ),
+    /Unable to read project message/u,
+  );
+});
+
+test("project header listing isolates oversized entries without parsing their contents", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "repo",
+    branch: "feat/oversized-message",
+    text: "task",
+  };
+  const automatic: ProjectMessage = {
+    version: 2,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "automatic result",
+    createdAt: 1,
+  };
+  writeProjectAssignment(runtime, assignment);
+  writeProjectMessage(automatic, runtime);
+  const oversizedId = id();
+  const assignmentFile = projectAssignmentPath(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  const oversizedPath = join(
+    dirname(assignmentFile),
+    `${basename(assignmentFile, ".json")}.messages`,
+    `${oversizedId}.json`,
+  );
+  writeFileSync(
+    oversizedPath,
+    Buffer.alloc(COORDINATION_MESSAGE_MAX_BYTES + 1, "x"),
+  );
+
+  const issues: unknown[] = [];
+  assert.deepEqual(
+    listProjectMessageHeaders(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      (issue) => issues.push(issue),
+    ),
+    [automatic],
+  );
+  assert.deepEqual(issues, [{ id: oversizedId, reason: "oversized" }]);
+  assert.equal(existsSync(oversizedPath), true);
+  assert.throws(
+    () =>
+      listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch),
+    /Unable to read project message/u,
+    "without an isolation callback, oversized headers remain strict",
+  );
 });
 
 test("project assignment uses durable project transport, not Manager message framing", async () => {

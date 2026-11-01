@@ -8,7 +8,15 @@ import {
   createLeadCommandRuntime,
   type LeadCommandBaseHost,
 } from "./lead/commands.ts";
-import { readSessionKind, type SessionKindEntry } from "./supervision.ts";
+import {
+  COORDINATOR_MESSAGE_PROTOCOL,
+  readSessionKind,
+  supportsCoordinatorMessaging,
+  reportProtocolDiagnostic,
+  takeProtocolDiagnostics,
+  type SessionKindEntry,
+  type VerificationPolicy,
+} from "./supervision.ts";
 import type {
   BuildSystemPromptOptions,
   ExtensionAPI,
@@ -95,6 +103,7 @@ import type {
 import {
   formatRuntimeBuild,
   isRuntimeBuild,
+  requireCompatibleBuild,
   sameRuntimeBuild,
   type RuntimeBuild,
 } from "./compatibility.ts";
@@ -653,6 +662,7 @@ type LeadSupervisionHost = {
   ): Promise<void>;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  readLeadCoordinationStateForObservation: typeof import("./supervision.ts").readLeadCoordinationStateForObservation;
   remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
   runHerdr: typeof runHerdr;
   sameChiefDescriptor: typeof import("./supervision.ts").sameChiefDescriptor;
@@ -1744,6 +1754,11 @@ export function registerLeadRuntime(
         signal,
       ),
     ...options.coordinationHost,
+    liveAgent: (
+      ctx: ExtensionContext,
+      sessionId: string,
+      sessionPath?: string,
+    ) => identityRuntime.liveAgent(ctx, sessionId, sessionPath),
     workspaceId: () => options.roleTransitionHost.workspaceId(),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
@@ -2368,7 +2383,13 @@ export function registerLeadRuntime(
     currentChiefAuthority: (
       ctx: ExtensionContext,
       failOnVerificationError = false,
-    ) => roleTransitions.currentChiefAuthority(ctx, failOnVerificationError),
+      policy?: VerificationPolicy,
+    ) =>
+      roleTransitions.currentChiefAuthority(
+        ctx,
+        failOnVerificationError,
+        policy,
+      ),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
@@ -3746,6 +3767,67 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
 }
 
 export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
+  const verifyIncompatibleLeadCandidate = async (
+    ctx: ExtensionContext,
+    report: import("./supervision.ts").IncompatibleStaff,
+    expectedRepoKey?: string,
+  ): Promise<boolean> => {
+    if (
+      report.role !== "lead" ||
+      !report.instanceId ||
+      !report.paneId ||
+      !report.tabId
+    )
+      return false;
+    try {
+      const descriptor = {
+        piSessionId: report.session,
+        paneId: report.paneId,
+        tabId: report.tabId,
+        workspaceId: report.workspaceId,
+      };
+      const matchesIdentity = () => {
+        const state = host.readLeadCoordinationState(
+          host.supervisionRuntime(),
+          report.session,
+        );
+        return (
+          !!state &&
+          (state.role ?? "lead") === "lead" &&
+          state.piSessionId === report.session &&
+          state.instanceId === report.instanceId &&
+          isRuntimeBuild(state.build) &&
+          sameRuntimeBuild(state.build, report.build) &&
+          supportsCoordinatorMessaging(state.messageProtocol)
+        );
+      };
+      if (!matchesIdentity()) return false;
+      const observed = await host.remoteChiefAgent(ctx, descriptor);
+      if (!observed || (expectedRepoKey && !observed.cwd)) return false;
+      if (expectedRepoKey) {
+        const scope = await localRepositoryScope(
+          host.pi,
+          { ...ctx, cwd: observed.cwd },
+          report.workspaceId,
+          ctx.signal,
+        );
+        if (scope.repoKey !== expectedRepoKey) return false;
+      }
+      const current = await host.remoteChiefAgent(ctx, descriptor);
+      return (
+        !!current &&
+        current.workspace_id === observed.workspace_id &&
+        current.pane_id === observed.pane_id &&
+        current.tab_id === observed.tab_id &&
+        current.cwd === observed.cwd &&
+        matchesIdentity()
+      );
+    } catch (error) {
+      if (ctx.signal?.aborted) throw ctx.signal.reason;
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      return false;
+    }
+  };
   const loadSupervisionSnapshot = async (
     ctx: ExtensionContext,
     suppliedInventory?: HerdrSessionSnapshot,
@@ -3997,7 +4079,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       : undefined;
     const coordinationStates = agents.flatMap((agent) => {
       try {
-        const state = host.readLeadCoordinationState(
+        const state = host.readLeadCoordinationStateForObservation(
           host.supervisionRuntime(),
           agent.sessionId,
         );
@@ -4023,7 +4105,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       ]),
       managedAgentSessionIds,
     });
-    return { ...snapshot, ...(diagnostics ? { diagnostics } : {}) };
+    return {
+      ...snapshot,
+      ...(diagnostics ? { diagnostics } : {}),
+    };
   };
   const directReports = async (
     ctx: ExtensionContext,
@@ -4064,12 +4149,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         true,
         options?.topology,
       );
-      for (const report of snapshot.incompatible ?? [])
-        if (
-          report.role === "lead" &&
-          scope.workspaceIds.includes(report.workspaceId)
-        )
-          incompatible?.push(report);
       const assignments = host.listProjectAssignments(
         host.supervisionRuntime(),
         manager.repoKey,
@@ -4083,6 +4162,29 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const ordinarySupervisionAvailable =
         repoManagers.length === 1 &&
         host.sameManagerDescriptor(repoManagers[0], manager);
+      for (const report of snapshot.incompatible ?? []) {
+        if (
+          report.role !== "lead" ||
+          !scope.workspaceIds.includes(report.workspaceId)
+        )
+          continue;
+        const assignment = assignments.find(
+          (candidate) => candidate.id === report.session,
+        );
+        const eligible =
+          !!report.instanceId &&
+          !!report.paneId &&
+          !!report.tabId &&
+          (assignment
+            ? sessions.has(report.session)
+            : ordinarySupervisionAvailable) &&
+          (await verifyIncompatibleLeadCandidate(ctx, report, manager.repoKey));
+        incompatible?.push({
+          ...report,
+          ...(eligible ? { availableActions: ["message"] } : {}),
+          ...(assignment ? { branch: assignment.branch } : {}),
+        } as import("./supervision.ts").IncompatibleStaff);
+      }
       const candidates = options?.exactSession
         ? snapshot.leads.filter((lead) => lead.lead === options.exactSession)
         : snapshot.leads;
@@ -4220,6 +4322,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     );
     const allLeads = allLeadSnapshot.leads;
     const incompatibleLeadParents = new Map<string, string>();
+    const messageableChiefLeads = new Set<string>();
     const managedAgents = (
       suppliedAgents ??
       (await host.managedAgentSnapshots(
@@ -4246,6 +4349,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           lead.lead,
           lead.workspaceId,
           scope,
+          "identity-only",
         );
         if (supervisor.kind !== "chief") managerLeadSessions.add(lead.lead);
       } catch {
@@ -4267,6 +4371,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           lead.session,
           lead.workspaceId,
           scope,
+          "identity-only",
         );
         if (supervisor.kind === "manager") {
           managerLeadSessions.add(lead.session);
@@ -4274,8 +4379,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             lead.session,
             supervisor.manager.piSessionId,
           );
-        } else if (supervisor.kind !== "chief")
-          managerLeadSessions.add(lead.session);
+        } else if (supervisor.kind === "chief") {
+          if (await verifyIncompatibleLeadCandidate(ctx, lead))
+            messageableChiefLeads.add(lead.session);
+        } else managerLeadSessions.add(lead.session);
       } catch {
         managerLeadSessions.add(lead.session);
       }
@@ -4334,6 +4441,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           sameRuntimeBuild(remoteBuild, stateBuild) &&
           !sameRuntimeBuild(remoteBuild, host.build)
         ) {
+          const identityManager = await host.currentManager(
+            ctx,
+            scope,
+            "identity-only",
+          );
+          if (
+            !identityManager ||
+            !host.sameManagerDescriptor(identityManager, descriptor)
+          )
+            continue;
+          const messageable =
+            supportsCoordinatorMessaging(descriptor.messageProtocol) &&
+            supportsCoordinatorMessaging(state.messageProtocol);
           incompatible?.push({
             role: "manager",
             session: descriptor.piSessionId,
@@ -4345,7 +4465,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             runtimeState: host.normalizeHerdrLifecycleState(live),
             build: remoteBuild,
             reason: "incompatible_build",
-          });
+            ...(messageable ? { availableActions: ["message"] } : {}),
+          } as import("./supervision.ts").IncompatibleStaff);
           continue;
         }
         throw error;
@@ -4472,7 +4593,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     );
     for (const report of allLeadSnapshot.incompatible ?? [])
       if (report.role === "lead" && !managerLeadSessions.has(report.session))
-        incompatible?.push(report);
+        incompatible?.push({
+          ...report,
+          ...(messageableChiefLeads.has(report.session)
+            ? { availableActions: ["message"] }
+            : {}),
+        } as import("./supervision.ts").IncompatibleStaff);
     return [
       ...managers.map((manager: any) => ({
         ...manager,
@@ -5711,7 +5837,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             });
           }
         }
-        const content = host.formatContext(
+        const statusContent = host.formatContext(
           contextStatus === "unavailable" ? undefined : snapshot,
           {
             status: contextStatus,
@@ -5719,6 +5845,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             targets,
           },
         );
+        const diagnostics = takeProtocolDiagnostics(
+          ctx.sessionManager.getSessionId(),
+        );
+        const content = [
+          statusContent,
+          ...diagnostics.map((item) => `Coordination diagnostic: ${item}`),
+        ].join("\n");
         for (const candidate of candidates)
           if (content.split("\n").includes(`  target: ${candidate.target}`))
             rememberCoordinatorTarget(
@@ -6796,6 +6929,48 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       ctx.sessionManager.getSessionId(),
       ctx.sessionManager.getEntries(),
     );
+  const ordinaryMessage = (record: ChiefMessageRecord): boolean =>
+    record.kind === "chief_message" ||
+    record.kind === "manager_message" ||
+    record.kind === "lead_message" ||
+    record.kind === "peer_message";
+  const acceptsCoordinatorMessage = (record: ChiefMessageRecord): boolean =>
+    ordinaryMessage(record) && record.messageProtocol !== undefined
+      ? supportsCoordinatorMessaging(record.messageProtocol)
+      : !!record.build && sameRuntimeBuild(record.build, HERDSMAN_BUILD);
+  const coordinatorCompatibilityDiagnostic = (
+    record: ChiefMessageRecord,
+  ): string | undefined => {
+    if (
+      ordinaryMessage(record) &&
+      record.messageProtocol !== undefined &&
+      !supportsCoordinatorMessaging(record.messageProtocol)
+    )
+      return `Rejected coordination message with unsupported messaging protocol ${record.messageProtocol}. Update both Pi Herdsman sessions to support the same coordinator messaging protocol.`;
+    if (
+      ordinaryMessage(record) &&
+      record.messageProtocol === undefined &&
+      (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
+    )
+      return "Rejected legacy coordination message without a supported messaging protocol from a different or unidentified Herdsman build. Update both Pi Herdsman sessions to support the same coordinator messaging protocol.";
+    if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
+      return record.build
+        ? `Rejected Pi Herdsman coordination from ${formatRuntimeBuild(record.build)}; local build is ${formatRuntimeBuild(HERDSMAN_BUILD)}. Restart the stale Pi session.`
+        : "Rejected coordination from a Pi Herdsman runtime without build identity. Restart the stale Pi session.";
+    return undefined;
+  };
+  const senderProtocolFailures = new Map<string, string>();
+  const senderSupportsMessaging = (
+    record: ChiefMessageRecord,
+    ...protocols: unknown[]
+  ): boolean => {
+    if (protocols.every(supportsCoordinatorMessaging)) return true;
+    senderProtocolFailures.set(
+      record.id,
+      "Rejected coordination message because its currently verified sender does not advertise coordinator messaging protocol 1. Update the sender's Pi Herdsman session.",
+    );
+    return false;
+  };
   const projectAssignmentAuthorized = (
     authorized: boolean,
     reason: string,
@@ -6830,6 +7005,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     ctx: ExtensionContext,
     verifyLiveChief = true,
   ): Promise<boolean> => {
+    senderProtocolFailures.delete(record.id);
     const sameLiveLead = (current: HerdrRecord, original: HerdrRecord) =>
       current.workspace_id === original.workspace_id &&
       current.pane_id === original.pane_id &&
@@ -6837,7 +7013,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       current.cwd === original.cwd;
     const sessionId = ctx.sessionManager.getSessionId();
     if (record.toSessionId !== sessionId) return false;
-    if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
+    if (
+      record.kind === "project_assignment" &&
+      !acceptsCoordinatorMessage(record)
+    )
       return false;
     if (record.kind === "project_assignment") {
       const workspaceId = process.env.HERDR_WORKSPACE_ID;
@@ -6966,7 +7145,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       return projectAssignmentAuthorized(true, "matched");
     }
     if (leadRuntime.chiefMode === "active") {
-      const chief = await currentChiefAuthority(ctx, true);
+      const chief = await currentChiefAuthority(ctx, true, "identity-only");
       if (
         !chief ||
         (record.kind !== "manager_message" &&
@@ -7001,10 +7180,12 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           record.fromSessionId,
           leads[0].workspace_id,
           scope,
+          "identity-only",
         );
         return (
           !!state &&
           (state.role ?? "lead") === "lead" &&
+          senderSupportsMessaging(record, state.messageProtocol) &&
           supervisor.kind === "chief" &&
           supervisor.chief.piSessionId === chief.piSessionId &&
           supervisor.chief.leaseId === chief.leaseId
@@ -7022,11 +7203,24 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         throw new Error(
           "Manager coordination state is temporarily unavailable",
         );
+      verifyManagerCoordinationAuthority(
+        manager,
+        managerState,
+        HERDSMAN_BUILD,
+        requireCompatibleBuild,
+        "identity-only",
+      );
       if (
         managerState.role !== "manager" ||
-        managerState.piSessionId !== manager.piSessionId ||
-        !sameRuntimeBuild(manager.build, HERDSMAN_BUILD) ||
-        !sameRuntimeBuild(managerState.build, HERDSMAN_BUILD)
+        managerState.piSessionId !== manager.piSessionId
+      )
+        return false;
+      if (
+        !senderSupportsMessaging(
+          record,
+          manager.messageProtocol,
+          managerState.messageProtocol,
+        )
       )
         return false;
       if (!(await remoteChiefAgent(ctx, manager)))
@@ -7041,13 +7235,15 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     }
     if (activeRole() === "manager" && !leadRuntime.roleSuspended) {
       if (record.kind === "chief_message") {
-        const chief = await currentChiefAuthority(ctx);
-        return (
-          !!chief &&
-          chief.piSessionId === record.fromSessionId &&
-          chief.leaseId === record.leaseId &&
-          record.leadSessionId === sessionId
-        );
+        const chief = await currentChiefAuthority(ctx, false, "identity-only");
+        if (
+          !chief ||
+          chief.piSessionId !== record.fromSessionId ||
+          chief.leaseId !== record.leaseId ||
+          record.leadSessionId !== sessionId
+        )
+          return false;
+        return senderSupportsMessaging(record, chief.messageProtocol);
       }
       const manager = await currentManager(ctx);
       if (
@@ -7071,9 +7267,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         record.fromSessionId,
         lead.workspace_id,
         scope,
+        "identity-only",
       );
       const [refreshedManager, currentLeads] = await Promise.all([
-        host.currentManager(ctx),
+        host.currentManager(ctx, undefined, "identity-only"),
         liveLead(ctx, record.fromSessionId),
       ]);
       const state = readLeadCoordinationState(
@@ -7092,12 +7289,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         supervisor.manager.leaseId === manager.leaseId &&
         scope.repoKey === manager.repoKey &&
         !!state &&
-        (state.role ?? "lead") === "lead"
+        (state.role ?? "lead") === "lead" &&
+        senderSupportsMessaging(record, state.messageProtocol)
       );
     }
     if (activeRole() !== "lead" || leadRuntime.roleSuspended) return false;
     if (record.kind === "chief_message") {
-      const chief = await currentChiefAuthority(ctx);
+      const chief = await currentChiefAuthority(ctx, false, "identity-only");
       const workspaceId = host.workspaceId();
       if (!workspaceId) return false;
       let localScope:
@@ -7121,6 +7319,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         sessionId,
         workspaceId,
         localScope,
+        "identity-only",
       );
       let currentLocalScope = localScope;
       if (localScope) {
@@ -7136,14 +7335,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         )
           return false;
       }
-      const currentChief = await currentChiefAuthority(ctx);
+      const currentChief = await currentChiefAuthority(
+        ctx,
+        false,
+        "identity-only",
+      );
       if (
         host.workspaceId() !== workspaceId ||
         ctx.sessionManager.getSessionId() !== sessionId
       )
         return false;
       const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
-      return (
+      const authorized =
         !!chief &&
         !!currentChief &&
         currentChief.piSessionId === chief.piSessionId &&
@@ -7155,7 +7358,14 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         !!state &&
         chief.piSessionId === record.fromSessionId &&
         chief.leaseId === record.leaseId &&
-        record.leadSessionId === sessionId
+        record.leadSessionId === sessionId;
+      return (
+        authorized &&
+        senderSupportsMessaging(
+          record,
+          chief?.messageProtocol,
+          currentChief?.messageProtocol,
+        )
       );
     }
     if (record.kind !== "manager_message") return false;
@@ -7172,11 +7382,24 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     );
     if (!managerState)
       throw new Error("Manager coordination state is temporarily unavailable");
+    verifyManagerCoordinationAuthority(
+      manager,
+      managerState,
+      HERDSMAN_BUILD,
+      requireCompatibleBuild,
+      "identity-only",
+    );
     if (
       managerState.role !== "manager" ||
-      managerState.piSessionId !== manager.piSessionId ||
-      !sameRuntimeBuild(manager.build, HERDSMAN_BUILD) ||
-      !sameRuntimeBuild(managerState.build, HERDSMAN_BUILD)
+      managerState.piSessionId !== manager.piSessionId
+    )
+      return false;
+    if (
+      !senderSupportsMessaging(
+        record,
+        manager.messageProtocol,
+        managerState.messageProtocol,
+      )
     )
       return false;
     if (!(await remoteChiefAgent(ctx, manager)))
@@ -7190,6 +7413,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       ctx.signal,
     );
     if (localScope.repoKey !== manager.repoKey) return false;
+    const verifiedManager = await host.currentManager(
+      ctx,
+      localScope,
+      "identity-only",
+    );
+    if (
+      !verifiedManager ||
+      verifiedManager.leaseId !== manager.leaseId ||
+      verifiedManager.piSessionId !== manager.piSessionId ||
+      verifiedManager.repoKey !== manager.repoKey
+    )
+      return false;
     const assignment = host.projectAssignmentForScope(localScope, sessionId);
     if (assignment) {
       if (assignment.branch !== record.branch) return false;
@@ -7402,45 +7637,75 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           return record ? messageDelivered(ctx, record) : false;
         },
         isAuthorized: async (record: ChiefMessageRecord) => {
-          if (record.kind === "peer_message")
-            return authorizePeerRecord(record, ctx);
-          try {
-            if (
-              verifyLease &&
-              !(
-                record.kind === "manager_message" &&
-                (activeRole() === "lead" || activeRole() === "chief")
-              )
-            ) {
-              const chief =
-                activeRole() === "chief" ||
-                (activeRole() === "manager" && record.kind === "chief_message")
-                  ? await currentChiefAuthority(ctx)
-                  : await currentManager(ctx);
-              if (!chief)
-                throw new Error("Supervisor lease could not be verified");
-              if (record.toSessionId !== ctx.sessionManager.getSessionId())
-                return record.kind === "project_assignment"
-                  ? projectAssignmentAuthorized(
-                      false,
-                      "target_or_workspace_mismatch",
-                    )
-                  : false;
-              if (record.leaseId !== chief.leaseId)
-                return record.kind === "project_assignment"
-                  ? projectAssignmentAuthorized(false, "lease_mismatch")
-                  : false;
+          let authorized: boolean;
+          if (record.kind === "peer_message") {
+            authorized = await authorizePeerRecord(record, ctx);
+          } else
+            try {
+              if (
+                verifyLease &&
+                !(
+                  record.kind === "manager_message" &&
+                  (activeRole() === "lead" || activeRole() === "chief")
+                )
+              ) {
+                const chief =
+                  activeRole() === "chief" || record.kind === "chief_message"
+                    ? await currentChiefAuthority(ctx, false, "identity-only")
+                    : await currentManager(ctx);
+                if (!chief)
+                  throw new Error("Supervisor lease could not be verified");
+                if (record.toSessionId !== ctx.sessionManager.getSessionId())
+                  return record.kind === "project_assignment"
+                    ? projectAssignmentAuthorized(
+                        false,
+                        "target_or_workspace_mismatch",
+                      )
+                    : false;
+                if (record.leaseId !== chief.leaseId)
+                  return record.kind === "project_assignment"
+                    ? projectAssignmentAuthorized(false, "lease_mismatch")
+                    : false;
+              }
+              authorized = await authorizeChiefRecord(
+                record,
+                ctx,
+                verifyLiveChief,
+              );
+            } catch (error) {
+              managerDiagnostic("inbox_catch", { category: "authorization" });
+              if (record.kind === "project_assignment")
+                managerDiagnostic("project_assignment_authorization", {
+                  outcome: "error",
+                  reason: "authorization_exception",
+                });
+              throw error;
             }
-            return await authorizeChiefRecord(record, ctx, verifyLiveChief);
-          } catch (error) {
-            managerDiagnostic("inbox_catch", { category: "authorization" });
-            if (record.kind === "project_assignment")
-              managerDiagnostic("project_assignment_authorization", {
-                outcome: "error",
-                reason: "authorization_exception",
-              });
-            throw error;
+          if (!authorized) {
+            if (
+              ordinaryMessage(record) &&
+              senderProtocolFailures.has(record.id)
+            )
+              reportProtocolDiagnostic(
+                ctx.sessionManager.getSessionId(),
+                record.id,
+                "protocol_mismatch",
+                "inbound coordination message",
+              );
+            return false;
           }
+          if (ordinaryMessage(record) && !acceptsCoordinatorMessage(record)) {
+            reportProtocolDiagnostic(
+              ctx.sessionManager.getSessionId(),
+              record.id,
+              record.messageProtocol === undefined
+                ? "protocol_unverified"
+                : "protocol_mismatch",
+              "inbound coordination message",
+            );
+            return false;
+          }
+          return true;
         },
         sendMessage: async (
           message: unknown,
@@ -7585,10 +7850,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     : !canMessagePeer(source, recipientContext))
                 )
                   throw new Error("Peer eligibility changed before delivery");
-                if (!(await currentPeerPresenceValid(ctx)))
-                  throw new Error(
-                    "Peer presence is unavailable before delivery",
-                  );
                 const peerBindings = resolvePeerResultBindings(
                   ctx,
                   resultBindings ?? [],
@@ -7620,7 +7881,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                     string,
                     import("./supervision.ts").GlobalProjectAssignment[]
                   >,
-                ) => {
+                ): void => {
                   const current = readPeerLeadRecord(
                     peerRuntime(),
                     recipient.piSessionId,
@@ -7658,6 +7919,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   importResultBindings(pi, ctx, resultBindings, record.kind);
                   submitted = pi.sendMessage(payload, options);
                 };
+                if (!(await currentPeerPresenceValid(ctx)))
+                  throw new Error(
+                    "Peer presence is unavailable before delivery",
+                  );
                 if (
                   source.role === "manager" &&
                   recipientContext.role === "manager"
@@ -7742,14 +8007,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         rejected: (record: ChiefMessageRecord) => {
           submittedAt.delete(record.id);
           settledSubmissions.delete(record.id);
-          if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
-            ctx.ui.notify(
-              record.build
-                ? `Rejected Pi Herdsman coordination from ${formatRuntimeBuild(record.build)}; local build is ${formatRuntimeBuild(HERDSMAN_BUILD)}. Restart the stale Pi session.`
-                : "Rejected coordination from a Pi Herdsman runtime without build identity. Restart the stale Pi session.",
-              "error",
-            );
-          void record;
+          const diagnostic =
+            senderProtocolFailures.get(record.id) ??
+            coordinatorCompatibilityDiagnostic(record);
+          senderProtocolFailures.delete(record.id);
+          if (diagnostic) ctx.ui.notify(diagnostic, "error");
         },
       };
     };
@@ -8427,6 +8689,8 @@ export function createLeadRoleTransitions(
     if (!current || current.id !== sessionId) return undefined;
     const id = reportId ?? randomUUID();
     const createdAt = Date.now();
+    const messageProtocol =
+      kind === "supervisor_message" ? COORDINATOR_MESSAGE_PROTOCOL : undefined;
     const prepared = await host.prepareCoordinationInput(
       ctx,
       message,
@@ -8440,6 +8704,7 @@ export function createLeadRoleTransitions(
           repoKey: assignment.repoKey,
           branch: assignment.branch,
           fromSessionId: sessionId,
+          ...(messageProtocol === undefined ? {} : { messageProtocol }),
           text: candidate,
           ...(kind ? { kind } : {}),
           ...(resultBindings.length
@@ -8454,6 +8719,7 @@ export function createLeadRoleTransitions(
       repoKey: assignment.repoKey,
       branch: assignment.branch,
       fromSessionId: sessionId,
+      ...(messageProtocol === undefined ? {} : { messageProtocol }),
       text: prepared.text,
       ...(kind ? { kind } : {}),
       ...(prepared.resultBindings.length
@@ -8489,6 +8755,7 @@ export function createLeadRoleTransitions(
             existing.fromSessionId !== sessionId ||
             existing.text !== record.text ||
             existing.kind !== record.kind ||
+            existing.messageProtocol !== record.messageProtocol ||
             JSON.stringify(existing.resultBindings ?? []) !==
               JSON.stringify(record.resultBindings ?? [])
           )
@@ -8517,6 +8784,7 @@ export function createLeadRoleTransitions(
   const currentManager = async (
     ctx: ExtensionContext,
     scope?: Pick<WorktreeGroupScope, "repoKey"> | null,
+    policy: VerificationPolicy = "exact-build",
   ): Promise<ManagerDescriptor | undefined> => {
     const ownLease =
       activeLeadRole(state) === "manager" && !state.roleSuspended
@@ -8547,6 +8815,7 @@ export function createLeadRoleTransitions(
       ),
       host.build,
       host.requireCompatibleBuild,
+      policy,
     );
     if (activeLeadRole(state) === "manager" && !state.roleSuspended) {
       return state.managerLease &&
@@ -8586,15 +8855,17 @@ export function createLeadRoleTransitions(
   const currentChiefAuthority = async (
     ctx: ExtensionContext,
     failOnVerificationError = false,
+    policy: VerificationPolicy = "exact-build",
   ): Promise<ChiefDescriptor | undefined> => {
     const descriptor = currentChief(failOnVerificationError);
     if (!descriptor) return undefined;
-    host.requireCompatibleBuild(
-      host.build,
-      descriptor.build,
-      "supervision",
-      `Chief ${descriptor.piSessionId}`,
-    );
+    if (policy === "exact-build")
+      host.requireCompatibleBuild(
+        host.build,
+        descriptor.build,
+        "supervision",
+        `Chief ${descriptor.piSessionId}`,
+      );
     const runtime = host.supervisionRuntime();
     if (state.chiefMode === "active") {
       let onDisk: ChiefDescriptor;
@@ -8622,12 +8893,13 @@ export function createLeadRoleTransitions(
         descriptor.workspaceId !== host.identity.workspaceId
       )
         return undefined;
-      host.requireCompatibleBuild(
-        host.build,
-        descriptor.build,
-        "supervision",
-        `Chief ${descriptor.piSessionId}`,
-      );
+      if (policy === "exact-build")
+        host.requireCompatibleBuild(
+          host.build,
+          descriptor.build,
+          "supervision",
+          `Chief ${descriptor.piSessionId}`,
+        );
       return descriptor;
     }
     if (
@@ -8646,6 +8918,7 @@ export function createLeadRoleTransitions(
         remoteIdentity: () => host.remoteChiefAgent(ctx, descriptor),
         requireCompatibleBuild: host.requireCompatibleBuild,
         build: host.build,
+        policy,
       });
       if (!verified) return undefined;
       return descriptor;
@@ -8664,6 +8937,7 @@ export function createLeadRoleTransitions(
     sessionId: string,
     workspaceId: string,
     verifiedScope?: Pick<WorktreeGroupScope, "repoKey">,
+    policy: VerificationPolicy = "exact-build",
   ) => {
     let scope: Pick<WorktreeGroupScope, "repoKey"> | undefined = verifiedScope;
     if (!scope) {
@@ -8675,7 +8949,7 @@ export function createLeadRoleTransitions(
           error.detail.details?.herdrCode === "not_git_worktree"
         ))
           throw error;
-        const chief = await currentChiefAuthority(ctx, true);
+        const chief = await currentChiefAuthority(ctx, true, policy);
         return chief
           ? { kind: "chief" as const, chief, scope: undefined }
           : { kind: "none" as const, scope: undefined };
@@ -8683,16 +8957,19 @@ export function createLeadRoleTransitions(
     }
     const assignment = projectAssignmentForScope(scope, sessionId);
     if (assignment) return { kind: "assigned" as const, assignment, scope };
-    const manager = await currentManager(ctx, scope);
+    const manager = await currentManager(ctx, scope, policy);
     if (manager) return { kind: "manager" as const, manager, scope };
-    const chief = await currentChiefAuthority(ctx, true);
+    const chief = await currentChiefAuthority(ctx, true, policy);
     return chief
       ? { kind: "chief" as const, chief, scope }
       : { kind: "none" as const, scope };
   };
-  const currentSupervisor = async (ctx: ExtensionContext) => {
+  const currentSupervisor = async (
+    ctx: ExtensionContext,
+    policy: VerificationPolicy = "exact-build",
+  ) => {
     if (activeLeadRole(state) === "manager")
-      return host.currentChiefAuthority(ctx);
+      return host.currentChiefAuthority(ctx, false, policy);
     if (activeLeadRole(state) !== "lead") return undefined;
     const identity = readSessionKind(
       ctx.sessionManager.getEntries(),
@@ -8703,21 +8980,22 @@ export function createLeadRoleTransitions(
       if (!scope || scope.repoKey !== identity.repoKey) return undefined;
       const assignment = projectAssignmentForScope(scope, identity.sessionId);
       return assignment && assignment.branch === identity.branch
-        ? currentManager(ctx, scope)
+        ? currentManager(ctx, scope, policy)
         : undefined;
     }
     const scope = await currentLocalRepositoryScope(ctx);
-    if (!scope) return host.currentChiefAuthority(ctx);
+    if (!scope) return host.currentChiefAuthority(ctx, false, policy);
     const workspaceId = host.workspaceId();
-    if (!workspaceId) return host.currentChiefAuthority(ctx);
+    if (!workspaceId) return host.currentChiefAuthority(ctx, false, policy);
     const supervisor = await resolveEffectiveSupervisor(
       ctx,
       ctx.sessionManager.getSessionId(),
       workspaceId,
       scope,
+      policy,
     );
     if (supervisor.kind === "assigned")
-      return currentManager(ctx, supervisor.scope);
+      return currentManager(ctx, supervisor.scope, policy);
     if (supervisor.kind === "manager") return supervisor.manager;
     return supervisor.kind === "chief" ? supervisor.chief : undefined;
   };

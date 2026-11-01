@@ -1059,6 +1059,7 @@ test("list peers and message use global peer presence, not caller inventory", as
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: 1,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
       paneId,
@@ -1120,6 +1121,8 @@ test("list peers and message use global peer presence, not caller inventory", as
     getSessionId: () => senderId,
   };
   try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_shutdown")![0]();
     const peerList = pi.tools.find((tool) => tool.name === "list_peers");
     const peerMessage = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peerList);
@@ -1358,6 +1361,7 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       "build",
       "claim",
       "cwd",
+      "messageProtocol",
       "paneId",
       "piSessionId",
       "role",
@@ -1628,6 +1632,7 @@ test("peer publication rejects sender and target generation replacement during a
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: 1,
       sessionKind,
       piSessionId: sessionId,
       paneId,
@@ -1673,6 +1678,8 @@ test("peer publication rejects sender and target generation replacement during a
     targetId,
   );
   try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_shutdown")![0]();
     const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
     for (const replaced of ["sender", "target"] as const) {
@@ -1871,6 +1878,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
     const record = {
       version: 2 as const,
       build: HERDSMAN_BUILD,
+      messageProtocol: 1,
       sessionKind: "ordinary" as const,
       piSessionId: sessionId,
       paneId,
@@ -1908,6 +1916,8 @@ test("peer publication tolerates sender and target presentation enrichment durin
     targetId,
   );
   try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_shutdown")![0]();
     const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
     for (const enriched of ["sender", "target"] as const) {

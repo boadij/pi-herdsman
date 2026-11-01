@@ -247,6 +247,15 @@ For peers on another Herdr socket, Herdsman uses their live generation-bound
 published group and socket-scoped assignment evidence; it does not add a
 cross-socket topology RPC. Delivery always rechecks the recipient locally.
 
+Ordinary peer, staff, and supervisor messages may cross Herdsman builds only
+when both current participants explicitly advertise coordinator messaging
+protocol 1. A build difference alone does not reject a message; current
+identity, role, scope, assignment, and generation authorization still applies.
+This does not relax build-strict control operations. See the
+[peer](../reference/peer.md), [staff](../reference/staff.md), and
+[supervisor](../reference/supervisor.md) references for channel-specific
+behavior.
+
 Leads use nonblocking `message_supervisor` for timely coordination with their
 effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait
