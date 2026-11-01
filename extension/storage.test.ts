@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import {
+  chmodSync as realChmodSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -416,7 +417,7 @@ test("required evidence cleanup failures preserve publication and primary errors
       chmodSync(path: fs.PathLike, mode: fs.Mode) {
         if (primaryFailure && String(path).includes("primary.md"))
           throw new Error("primary failed");
-        return fs.chmodSync(path, mode);
+        return realChmodSync(path, mode);
       },
       closeSync(fd: number) {
         const isDirectoryFd = fd === directoryFd;
