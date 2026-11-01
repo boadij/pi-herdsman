@@ -114,9 +114,9 @@ Manager accepts trusted project overlays at `<project>/.pi/pi-herdsman/roles/man
 and global overlays at `<agentDir>/pi-herdsman/roles/manager.md`.
 Chief accepts only global overlays because it
 is workspace-neutral; a project-local `chief.md` is an error. Both resolve
-when the role activates or is restored. Repeating `/manager` or `/chief`
-refreshes an active profile after validating it; a failed refresh keeps the
-previous effective profile. A `bodyMode: replace` overlay replaces customizable
+when the role activates or is restored. `/manager refresh` or `/chief refresh`
+validates and refreshes the active profile after the current turn becomes idle;
+a failed refresh keeps the previous effective profile. A `bodyMode: replace` overlay replaces customizable
 role guidance only. Runtime-owned authority and role contracts remain active.
 
 For example, this global Chief overlay enables a registered ordinary tool while

@@ -1842,17 +1842,22 @@ function registerExtensionImpl(
       if (process.env.HERDR_PANE_ID)
         pi.registerCommand("manager", {
           description:
-            "Activate Manager mode, open its overview, remove a worktree, or forget a legacy assignment",
+            "Activate Manager mode, open its overview, refresh its profile, or manage worktrees",
           getArgumentCompletions: (prefix: string) => {
+            const actions = [
+              "refresh",
+              "leave",
+              "remove",
+              "forget",
+              "remove-preapproval",
+            ];
             const input = prefix.trimStart();
             const [command, branchPrefix] = input.split(/\s+/u);
             if (!command)
-              return ["leave", "remove", "forget", "remove-preapproval"].map(
-                (value) => ({
-                  value,
-                  label: value,
-                }),
-              );
+              return actions.map((value) => ({
+                value,
+                label: value,
+              }));
             if (command === "remove-preapproval")
               return input.trim().split(/\s+/u).length === 2
                 ? ["on", "off"]
@@ -1865,7 +1870,7 @@ function registerExtensionImpl(
             if (command !== "remove" && command !== "forget")
               return input.includes(" ")
                 ? null
-                : ["leave", "remove", "forget", "remove-preapproval"]
+                : actions
                     .filter((value) => value.startsWith(command))
                     .map((value) => ({ value, label: value }));
             if (input === "remove") return [];
@@ -2008,9 +2013,9 @@ function registerExtensionImpl(
       if (process.env.HERDR_PANE_ID)
         pi.registerCommand("chief", {
           description:
-            "Activate chief mode, or open its overview when already active",
+            "Activate Chief mode, open its overview, or refresh its profile",
           getArgumentCompletions: (prefix: string) =>
-            ["leave"]
+            ["refresh", "leave"]
               .filter((value) => value.startsWith(prefix.trim()))
               .map((value) => ({ value, label: value })),
           handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {

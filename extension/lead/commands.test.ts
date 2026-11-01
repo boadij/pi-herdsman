@@ -40,7 +40,7 @@ test("Herdsman root renders when status and definition metadata fail", async () 
   assert.deepEqual(notices, []);
 });
 
-test("Herdsman role menus dispatch through the shared role transition", async () => {
+test("Herdsman role menus dispatch shared role commands", async () => {
   for (const role of ["manager", "chief"] as const) {
     for (const scenario of [
       {
@@ -53,6 +53,16 @@ test("Herdsman role menus dispatch through the shared role transition", async ()
         action: "overview",
         labels: [
           "Overview",
+          "Refresh profile",
+          `Leave ${role === "manager" ? "Manager" : "Chief"} mode`,
+        ],
+      },
+      {
+        active: true,
+        action: "refresh",
+        labels: [
+          "Overview",
+          "Refresh profile",
           `Leave ${role === "manager" ? "Manager" : "Chief"} mode`,
         ],
       },
@@ -61,6 +71,7 @@ test("Herdsman role menus dispatch through the shared role transition", async ()
         action: "leave",
         labels: [
           "Overview",
+          "Refresh profile",
           `Leave ${role === "manager" ? "Manager" : "Chief"} mode`,
         ],
       },
@@ -115,11 +126,82 @@ test("Herdsman role menus dispatch through the shared role transition", async ()
           ? [[role, false]]
           : scenario.action === "leave"
             ? [[role, true]]
-            : [[role, false]],
+            : scenario.action === "refresh"
+              ? [[role, false]]
+              : [],
       );
       assert.deepEqual(overviews, scenario.action === "overview" ? [role] : []);
-      assert.deepEqual(notices, ["transition requested"]);
+      assert.deepEqual(
+        notices,
+        scenario.action === "overview" ? [] : ["transition requested"],
+      );
     }
+  }
+});
+
+test("role overview bypasses the idle-gated refresh and invalid commands do nothing", async () => {
+  for (const role of ["manager", "chief"] as const) {
+    let active = true;
+    let transitions = 0;
+    let overviews = 0;
+    let release!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const notices: [string, string | undefined][] = [];
+    const runtime = createLeadCommandRuntime({
+      roleActive: () => active,
+      transitionRole: async () => {
+        transitions++;
+        await idle;
+        return "refreshed";
+      },
+      openSupervisionOverview: async () => {
+        overviews++;
+      },
+    } as any);
+    const ctx = {
+      ui: {
+        notify: (message: string, level?: string) =>
+          notices.push([message, level]),
+      },
+    } as any;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        runtime.runRoleCommand(role, "", ctx),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("overview waited for idle")),
+            1000,
+          );
+        }),
+      ]);
+      assert.equal(overviews, 1);
+      assert.equal(transitions, 0);
+      const refresh = runtime.runRoleCommand(role, "refresh", ctx);
+      assert.equal(transitions, 1);
+      release();
+      await refresh;
+    } finally {
+      clearTimeout(timer);
+      release();
+    }
+    assert.deepEqual(notices.splice(0), [["refreshed", undefined]]);
+    active = false;
+    await runtime.runRoleCommand(role, "refresh", ctx);
+    for (const args of ["unknown", "refresh extra", "leave extra"]) {
+      await runtime.runRoleCommand(role, args, ctx);
+    }
+    assert.equal(transitions, 1);
+    assert.equal(overviews, 1);
+    assert.deepEqual(notices, [
+      [`/${role} refresh requires active ${role} mode`, "error"],
+      ...Array.from({ length: 3 }, () => [
+        `Usage: /${role} [refresh|leave]`,
+        "error",
+      ]),
+    ]);
   }
 });
 
