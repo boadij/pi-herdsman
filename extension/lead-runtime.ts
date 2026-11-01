@@ -108,11 +108,12 @@ import {
   discoverRoleDefinition,
   discoverRoleDefinitions,
   discoverAgentDefinitions,
-  validateSupervisorAgentDefinitionReferences,
+  validateRoleAgentDefinitionReferences,
   matchesToolPattern,
   expandAgentBodyFiles,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
+  MANAGED_LEAD_DEFINITION_NAME,
   MANAGER_DEFINITION_NAME,
   CHIEF_DEFINITION_NAME,
   type AgentDefinition,
@@ -1601,7 +1602,11 @@ export function registerLeadRuntime(
       (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
     )
       return new Set<string>();
-    if (role === "lead") return "all";
+    if (role === "lead") {
+      if (!leadExecution?.valid) return new Set<string>();
+      const agents = leadExecution.definition.frontmatter.agents;
+      return agents === undefined ? "all" : new Set(agents);
+    }
     if (role === "manager" || role === "chief") {
       const profile = currentSupervisoryProfile(
         options.leadRuntime!.leadContext!,
@@ -1609,7 +1614,7 @@ export function registerLeadRuntime(
       );
       if (profile?.valid) {
         try {
-          validateSupervisorAgentDefinitionReferences(
+          validateRoleAgentDefinitionReferences(
             profile.definition,
             discoverAgentDefinitions(
               options.leadRuntime!.leadContext!.isProjectTrusted()
@@ -1643,9 +1648,11 @@ export function registerLeadRuntime(
             ? state.chiefLease
             : undefined,
       profile:
-        role === "manager" || role === "chief"
-          ? currentSupervisoryProfile(ctx!, role)
-          : undefined,
+        role === "lead"
+          ? leadExecution
+          : role === "manager" || role === "chief"
+            ? currentSupervisoryProfile(ctx!, role)
+            : undefined,
     };
   };
   const ownedAgentManagementTools = (ctx: ExtensionContext): string[] =>
@@ -1654,6 +1661,21 @@ export function registerLeadRuntime(
           (name) => name !== "delegate_agent" && name !== "continue_agent",
         )
       : [];
+  const restrictLeadAgentTools = (
+    tools: readonly string[],
+    policy: RootDelegationPolicy,
+    ctx?: ExtensionContext,
+  ): string[] => {
+    const mayDelegate = policy === "all" || policy.size > 0;
+    const hasOwned = !!ctx && hasOwnedRootAgents(ctx);
+    return tools.filter((name) => {
+      if (!(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name))
+        return true;
+      if (name === "delegate_agent" || name === "continue_agent")
+        return mayDelegate;
+      return mayDelegate || hasOwned;
+    });
+  };
   const supervisoryAgentTools = (
     ctx: ExtensionContext,
     definition: AgentDefinition,
@@ -2205,20 +2227,38 @@ export function registerLeadRuntime(
     enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
   const executionTools = (): string[] => {
     const baseline = leadToolState.getLeadTools() ?? [];
+    const restrict = (tools: readonly string[]) => {
+      let policy: RootDelegationPolicy = new Set<string>();
+      try {
+        policy = rootDelegationPolicy();
+      } catch {}
+      return restrictLeadAgentTools(
+        tools,
+        policy,
+        options.leadRuntime?.leadContext,
+      );
+    };
     if (!sessionKind) return [];
     if (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
       return options.leadRuntime?.leadContext
         ? ownedAgentManagementTools(options.leadRuntime.leadContext)
         : [];
-    if (leadExecutionPending) return leadToolState.normalizeLeadTools([]);
+    if (leadExecutionPending)
+      return restrict(leadToolState.normalizeLeadTools([]));
     if (sessionKind.kind === "managed")
-      return leadToolState.appendRegisteredTools(
-        leadToolState.normalizeLeadTools(baseline),
-        ["read_evidence"],
+      return restrict(
+        leadToolState.appendRegisteredTools(
+          leadToolState.normalizeLeadTools(baseline),
+          ["read_evidence"],
+        ),
       );
-    if (!leadExecution) return leadToolState.normalizeLeadTools(baseline);
-    if (!leadExecution.valid) return leadToolState.normalizeLeadTools([]);
-    return leadToolState.projectLeadTools(baseline, leadExecution.definition);
+    if (!leadExecution)
+      return restrict(leadToolState.normalizeLeadTools(baseline));
+    if (!leadExecution.valid)
+      return restrict(leadToolState.normalizeLeadTools([]));
+    return restrict(
+      leadToolState.projectLeadTools(baseline, leadExecution.definition),
+    );
   };
   const activationGuard = (
     _sessionId: string,
@@ -3221,6 +3261,13 @@ export function registerLeadRuntime(
           ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
         );
     if (!definition) throw new Error(`Lead definition ${name} not found`);
+    if (definitions && definition.frontmatter.agents?.length)
+      validateRoleAgentDefinitionReferences(
+        definition,
+        discoverAgentDefinitions(
+          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+        ),
+      );
     return {
       ...definition,
       body: expandAgentBodyFiles(
@@ -3293,7 +3340,17 @@ export function registerLeadRuntime(
     if (!saved && sessionKind?.kind === "ordinary")
       persistLeadExecution(mode, baseline);
     if (sessionKind?.kind === "managed") {
-      leadExecution = { mode, valid: false, managed: true };
+      try {
+        const definition = options.commandHost.discoverRoleDefinition(
+          MANAGED_LEAD_DEFINITION_NAME,
+          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+        );
+        if (signal.aborted) return;
+        leadExecution = { mode, definition, valid: true, managed: true };
+      } catch (error) {
+        leadExecution = { mode, valid: false, managed: true };
+        options.sessionStartOptions.appendDefinitionError(ctx, error);
+      }
       return;
     }
     if (skipProfileResolution) {
@@ -3326,7 +3383,6 @@ export function registerLeadRuntime(
       const assignment = await currentProjectAssignment(ctx);
       if (signal?.aborted) return;
       if (sessionKind?.kind === "managed") {
-        leadExecution = { mode, valid: false, managed: true };
         statusRuntime.requestRefresh();
         publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
         return;
@@ -3384,7 +3440,12 @@ export function registerLeadRuntime(
       leadToolState.getLeadTools() ??
       leadToolState.normalizeBaseTools(pi.getActiveTools());
     const baseline = [...saved];
-    const targetTools = leadToolState.projectLeadTools(baseline, definition);
+    const agents = definition.frontmatter.agents;
+    const targetTools = restrictLeadAgentTools(
+      leadToolState.projectLeadTools(baseline, definition),
+      agents === undefined ? "all" : new Set(agents),
+      ctx,
+    );
     const previousExecution = leadExecution;
     const previousTools = pi.getActiveTools();
     const shouldActivate =
@@ -3424,7 +3485,7 @@ export function registerLeadRuntime(
         inheritedProjection = undefined;
         leadExecution = { mode, valid: false, managed: false };
         try {
-          pi.setActiveTools(leadToolState.normalizeLeadTools([]));
+          pi.setActiveTools(executionTools());
         } catch {
           // Preserve the original transition failure.
         }
@@ -3468,10 +3529,7 @@ export function registerLeadRuntime(
     leadToolState.setLeadTools(baseline);
     leadExecution = { mode, valid: false, managed: !!leadExecution?.managed };
     await restoreLeadExecution(ctx);
-    if (leadExecution && !leadExecution.managed && leadExecution.valid)
-      pi.setActiveTools(
-        leadToolState.projectLeadTools(baseline, leadExecution.definition),
-      );
+    pi.setActiveTools(executionTools());
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,

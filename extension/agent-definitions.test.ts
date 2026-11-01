@@ -631,7 +631,6 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
 
   for (const [field, value] of [
     ["enabled", "false"],
-    ["agents", '["scout"]'],
     ["permission", '{ "*": "deny" }'],
   ] as const) {
     writeFileSync(
@@ -819,7 +818,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
     }
 });
 
-test("Manager and Chief agent allowlists validate effective targets", () => {
+test("role agent allowlists validate effective targets", () => {
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-agents-"));
   const agents = join(global, "pi-herdsman", "roles");
   mkdirSync(agents, { recursive: true });
@@ -838,6 +837,29 @@ test("Manager and Chief agent allowlists validate effective targets", () => {
   );
 
   withPiAgentDir(global, () => {
+    for (const name of [
+      "flexible-lead",
+      "orchestrator-lead",
+      "managed-lead",
+    ] as const) {
+      const path = join(agents, `${name}.md`);
+      for (const targets of ["[]", "[scout]"]) {
+        writeFileSync(path, `---\nname: ${name}\nagents: ${targets}\n---\n`);
+        assert.deepEqual(
+          discoverRoleDefinition(name).frontmatter.agents,
+          targets === "[]" ? [] : ["scout"],
+        );
+      }
+      writeFileSync(path, `---\nname: ${name}\nagents: [missing]\n---\n`);
+      assert.throws(
+        () => discoverRoleDefinition(name),
+        /references missing agent definition missing/,
+      );
+      assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, [
+        "reviewer",
+      ]);
+      unlinkSync(path);
+    }
     assert.deepEqual(discoverRoleDefinition("manager").frontmatter.agents, [
       "scout",
       "disabled-helper",
@@ -866,9 +888,13 @@ test("Manager and Chief agent allowlists validate effective targets", () => {
       join(agents, "orchestrator-lead.md"),
       "---\nname: orchestrator-lead\nagents: [scout]\n---\n",
     );
+    assert.deepEqual(
+      discoverRoleDefinition("orchestrator-lead").frontmatter.agents,
+      ["scout"],
+    );
     assert.throws(
       () => discoverRoleDefinition("manager"),
-      /orchestrator-lead field agents: is not supported/,
+      /reserved agent definition chief/,
     );
   });
 });

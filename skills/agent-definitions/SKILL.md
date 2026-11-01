@@ -67,8 +67,8 @@ this skill does not define a second schema or management API.
      its restrictions and authority boundaries.
    - Lead, Manager, and Chief runtime profiles are not launch definitions. They
      support only `name`, `description`, `body`, `bodyMode` on overlays,
-     `tools`, and `excludeTools`; Manager and Chief also support `agents` as
-     their direct-delegation allowlist. Do not configure
+     `tools`, `excludeTools`, and `agents` as their direct-delegation
+     allowlist. Do not configure
      model, thinking, prompt launch mode, enabled or permission policy,
      tools-default switches, skills, extensions, or context inheritance on
      these profiles. Their tool policy affects registered ordinary tools;
@@ -86,7 +86,7 @@ this skill does not define a second schema or management API.
      target file. Its returned summary can confirm discoverability and
      validation, not the complete effective configuration or role-profile
      validation. Validate role profiles through the relevant role resolution;
-     Manager and Chief allowlist references must resolve against the Agent roster.
+     Active role allowlist references must resolve against the Agent roster.
    - If `list_agents` is unavailable, do not claim that the effective Herdsman
      definition set was runtime-validated. The next normal definition discovery
      will validate it.

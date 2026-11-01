@@ -2691,6 +2691,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
         "session status must start its initial snapshot before delegation",
       ),
     );
+    await fixture.sessionStart;
     const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
@@ -2965,6 +2966,7 @@ test("staged fresh assignment removes a fast completion during the initial resul
         "session status must start its initial snapshot before delegation",
       ),
     );
+    await fixture.sessionStart;
     const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
@@ -3035,6 +3037,7 @@ test("staged fresh assignment ignores a mismatched completion before delivery", 
   try {
     await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
     fixture.releaseInitialStatus();
+    await fixture.sessionStart;
     const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       { definition: "agent", task: "reject mismatched completion" },
@@ -11246,6 +11249,53 @@ test("automatic prompt failures happen before topology or mailbox mutation", asy
     realFs.rmSync(directoryPath, { recursive: true, force: true });
     realFs.rmSync(invalidPath, { force: true });
     realFs.rmSync(nulPath, { force: true });
+  }
+});
+
+test("Lead allowlist rejects direct continuation of a historical session", async () => {
+  setLeadEnvironment();
+  const role = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "flexible-lead.md");
+  realFs.mkdirSync(dirname(role), { recursive: true });
+  realFs.writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
+  const session = {
+    id: DEFAULT_PI_SESSION_ID,
+    path: join(PI_AGENT_ROOT, `denied-session-${randomUUID()}.jsonl`),
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: DEFAULT_PI_SESSION_ID,
+          definition: "agent",
+          label: "denied-agent",
+        },
+      },
+    ],
+  };
+  writeValidPiSessionFile(session);
+  nativeSessions.set(session.id, session);
+  const startup = startupExecutor("denied-agent", () => session.id);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  const context = ownedSessionContext(session.id, "denied-agent");
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const result = await registeredAgentTool(pi, "continue").execute(
+      "id",
+      { session: session.path, task: "must not start" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(result.details.error.message, /not allowed/);
+    assert.equal(startup.getCount(), 0);
+    assert.equal(realFs.existsSync(startup.mailbox), false);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.delete(session.id);
+    realFs.rmSync(session.path, { force: true });
+    realFs.rmSync(role, { force: true });
   }
 });
 

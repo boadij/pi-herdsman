@@ -20,11 +20,11 @@ ordinary, unassigned Lead sessions. The session's persisted execution mode
 selects exactly one: `flexible` uses `flexible-lead`; `orchestrate` uses
 `orchestrator-lead`. These are standalone runtime profiles, not Agents or
 launch definitions, and they never inherit from or compose with one another.
-They can customize instructions and ordinary tool selection only. Their
+They can customize instructions, ordinary tool selection, and direct Agent delegation. Their
 frontmatter supports `name`, `description`, `body`, `tools`, and
-`excludeTools`; `bodyMode` is supported on matching overlays. Fields affecting
+`excludeTools`, and `agents`; `bodyMode` is supported on matching overlays. Fields affecting
 model, thinking, system-prompt launch mode, skills, extensions, context
-inheritance, or Agent/permission policy are not supported.
+inheritance, or permission policy are not supported.
 
 The bundled `flexible-lead` leaves `tools` unspecified, preserving Pi's normal
 ordinary tool baseline, and supplies flexible direct/delegated-work guidance.
@@ -52,6 +52,20 @@ is simply unavailable. Profile resolution respects project trust. Definition
 changes take effect when the profile is next resolved: at session start/resume,
 or when a user explicitly selects an execution mode with `/lead` (including
 reselecting the current mode).
+
+For example, an overlay can restrict direct delegation:
+
+```yaml
+---
+name: orchestrator-lead
+agents: [scout, reviewer]
+---
+```
+
+An omitted `agents` field leaves Leads unrestricted; `agents: []` disables
+fresh delegation. Overlay arrays replace lower-layer arrays, including with
+`[]`. Existing owned Agents remain manageable. The policy covers direct
+children only and is independent of ordinary tool selection.
 
 Ordinary Leads persist their execution mode separately from role/authority
 state and retain their ordinary tool baseline while a restrictive profile is
@@ -168,12 +182,17 @@ bodyMode: append
 Include the team's branch-validation checklist in the final handoff.
 ```
 
-`managed-lead` does not support `enabled`, `agents`, or `permission`.
+`managed-lead` does not support `enabled` or `permission`. For example, add
+`agents: [scout, reviewer]` to its overlay to restrict direct delegation;
+omitting it permits all available Agents, while `agents: []` denies fresh
+delegation. The managed runtime enforces this policy independently of Pi's
+launch arguments.
 Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
 coordination tools cannot be removed. Definition changes apply to future Lead
 launches, not already-running Leads. Use `stop_lead` followed by
 `resume_work` when a running project Lead must restart with changed launch
-policy.
+policy. Native extension/session reinitialization may resolve the delegation
+policy again; a live definition edit alone does not hot-apply it.
 
 ## Minimal model override
 

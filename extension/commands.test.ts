@@ -666,6 +666,11 @@ const leadTools = [
   "list_peers",
   "message_peer",
 ];
+const leadToolsWithoutAgents = [
+  "message_supervisor",
+  "list_peers",
+  "message_peer",
+];
 const managerTools = [
   "message_supervisor",
   "list_peers",
@@ -1407,7 +1412,7 @@ test("failed ordinary mode rollback invalidates execution and fails closed", asy
     };
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     assert.ok(notices.some((message) => message.includes("projection failed")));
-    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
     assert.deepEqual(sessionLeadExecutionState(entries)?.mode, "flexible");
     const prompt: any = {
       systemPrompt: "base",
@@ -1639,7 +1644,7 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
     pi.pi.setActiveTools(["read", "history"]);
     failPersistence = true;
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -9636,7 +9641,7 @@ async function managerDelegateAssignmentTest(
       );
       assert.deepEqual(lead.pi.getActiveTools(), [
         "read",
-        ...leadTools,
+        ...leadToolsWithoutAgents,
         "read_evidence",
       ]);
       unavailableScope = true;
@@ -9648,7 +9653,7 @@ async function managerDelegateAssignmentTest(
       );
       assert.deepEqual(lead.pi.getActiveTools(), [
         "read",
-        ...leadTools,
+        ...leadToolsWithoutAgents,
         "read_evidence",
       ]);
       unavailableScope = false;
@@ -9687,13 +9692,13 @@ async function managerDelegateAssignmentTest(
       );
       assert.deepEqual(lead.pi.getActiveTools(), [
         "read",
-        ...leadTools,
+        ...leadToolsWithoutAgents,
         "read_evidence",
       ]);
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
       assert.deepEqual(lead.pi.getActiveTools(), [
         "read",
-        ...leadTools,
+        ...leadToolsWithoutAgents,
         "read_evidence",
       ]);
       managedPresentation = [];
@@ -13450,7 +13455,7 @@ test("malformed selected branch withdraws stale Chief authority", async () => {
     pi.pi.setActiveTools(["read", "bash"]);
     await pi.events.get("session_tree")![0](undefined, context);
     assert.equal(pi.pi.getActiveTools().includes("list_staff"), false);
-    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
     const ordinaryPrompt: any = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -14201,6 +14206,211 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
     for (const [key, value] of previousEnvironment)
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
+  }
+});
+
+test("Lead profile switch during Agent startup rejects and rolls back stale assignment", async () => {
+  setLeadEnvironment();
+  const previousEnvironment = new Map(
+    [
+      "HERDR_PANE_ID",
+      "HERDR_TAB_ID",
+      "HERDR_WORKSPACE_ID",
+      "HERDR_SOCKET_PATH",
+    ].map((key) => [key, process.env[key]]),
+  );
+  const chiefPath = join(
+    PI_AGENT_ROOT,
+    "pi-herdsman",
+    "roles",
+    "orchestrator-lead.md",
+  );
+  mkdirSync(dirname(chiefPath), { recursive: true });
+  const previousChief = realFs.existsSync(chiefPath)
+    ? readFileSync(chiefPath, "utf8")
+    : undefined;
+  writeFileSync(chiefPath, "---\nname: orchestrator-lead\nagents: []\n---\n");
+  process.env.HERDR_PANE_ID = "role-start-race-pane";
+  process.env.HERDR_TAB_ID = "role-start-race-tab";
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `role-start-race-${randomUUID()}.sock`,
+  );
+
+  const label = `role-start-race-${randomUUID().slice(0, 8)}`;
+  let taskAccepted = false;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    () => {
+      taskAccepted = true;
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  let enteredStart!: () => void;
+  let releaseStart!: () => void;
+  const startEntered = new Promise<void>((resolve) => (enteredStart = resolve));
+  const startRelease = new Promise<void>((resolve) => (releaseStart = resolve));
+  let paused = false;
+  let started = false;
+  let stopped = false;
+  const pi = fakeChiefPi({
+    exec: async (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        started = true;
+        paused = true;
+        enteredStart();
+        await startRelease;
+      }
+      return result;
+    },
+  });
+  const context = fakeContext() as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const pending = pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "role-start-race",
+        { definition: "agent", label, task: "must not be published" },
+        undefined,
+        undefined,
+        context,
+      );
+    await startEntered;
+    assert.equal(paused, true);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+    releaseStart();
+
+    const result = await pending;
+    assert.equal(
+      result.details.error.category,
+      "invalid_request",
+      JSON.stringify(result.details.error),
+    );
+    assert.match(result.details.error.message, /role or authority changed/i);
+    assert.equal(taskAccepted, false);
+    assert.equal(
+      stopped,
+      true,
+      "the unauthorized started Agent must be stopped",
+    );
+    assert.equal(
+      readAgentState(agentMailboxPath(WORKSPACE, label)),
+      undefined,
+      "rollback must leave no unresolved live Agent generation",
+    );
+    assert.equal(
+      realFs.existsSync(startup.mailbox) &&
+        realFs
+          .readdirSync(startup.mailbox)
+          .some((entry) => entry.startsWith("request-")),
+      false,
+      "no task request may remain committed",
+    );
+  } finally {
+    releaseStart();
+    startup.stopMailboxConsumer();
+    await pi.events.get("session_shutdown")?.[0](undefined, context);
+    resetAgentMailbox(startup.mailbox);
+    if (previousChief === undefined) rmSync(chiefPath, { force: true });
+    else writeFileSync(chiefPath, previousChief);
+    for (const [key, value] of previousEnvironment)
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+});
+
+test("Lead retains owned Agent controls after switching to an empty allowlist", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "owned-policy-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `owned-policy-${randomUUID()}.sock`,
+  );
+  const rolePath = join(
+    PI_AGENT_ROOT,
+    "pi-herdsman",
+    "roles",
+    "orchestrator-lead.md",
+  );
+  mkdirSync(dirname(rolePath), { recursive: true });
+  const previousRole = realFs.existsSync(rolePath)
+    ? readFileSync(rolePath, "utf8")
+    : undefined;
+  writeFileSync(rolePath, "---\nname: orchestrator-lead\nagents: []\n---\n");
+  const label = `owned-policy-${randomUUID().slice(0, 8)}`;
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const pi = fakeChiefPi();
+  const context = fakeContext() as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    writeAgentState(mailbox, {
+      ...managedState(label),
+      ownerSessionId: context.sessionManager.getSessionId(),
+    });
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    const active = pi.pi.getActiveTools();
+    for (const name of ["delegate_agent", "continue_agent"])
+      assert.ok(!active.includes(name), name);
+    for (const name of [
+      "list_agents",
+      "inspect_agent",
+      "steer_agent",
+      "interrupt_agent",
+      "close_agent",
+    ])
+      assert.ok(active.includes(name), name);
+    assert.equal(
+      readAgentState(mailbox)?.ownerSessionId,
+      context.sessionManager.getSessionId(),
+    );
+  } finally {
+    resetAgentMailbox(mailbox);
+    await pi.events.get("session_shutdown")?.[0](undefined, context);
+    if (previousRole === undefined) rmSync(rolePath, { force: true });
+    else writeFileSync(rolePath, previousRole);
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 

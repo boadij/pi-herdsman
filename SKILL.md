@@ -287,7 +287,8 @@ Every assignment gets one bounded objective with:
 
 ## Delegation locality
 
-A lead session may delegate to any discovered definition.
+A Lead may delegate to available definitions permitted by its effective
+`agents` field; omission permits all, while an empty list permits none.
 
 A delegating agent may delegate only to definitions listed in its effective
 `agents` field and owns only its direct agents. Agent-started agents are
@@ -536,10 +537,11 @@ Pi Herdsman uses one durable vocabulary:
   owns their Agents.
 
 The `agents` frontmatter field names permitted direct Agent definitions for a
-delegating Agent, or the fresh-delegation allowlist for Manager/Chief. For
-supervisors it is independent of ordinary `tools`: `tools: []` does not disable
-authorized Agent coordination, and an absent or empty list disables fresh
-delegation only, not management of existing owned work. A delegation-capable
+delegating Agent, or the fresh-delegation allowlist for a Lead, Manager, or
+Chief. For these roles it is independent of ordinary `tools`: `tools: []` does
+not disable authorized Agent coordination. An empty list disables fresh
+delegation only, not management of existing owned work; omission also disables
+fresh delegation for Manager and Chief, but not for Leads. A delegation-capable
 managed session remains an Agent at every depth.
 Every managed agent receives `ask_owner`. A non-empty effective `agents` list
 is necessary but not sufficient to enable the nine Agent ownership tools:

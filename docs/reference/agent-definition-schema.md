@@ -72,18 +72,17 @@ are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
 Precedence is `bundled < project < global`.
 
 All effective Agent definitions are sorted and validated together, including
-every `agents` reference. Manager and Chief `agents` allowlists are validated
-against the effective Agent roster when their policy is evaluated; invalid
-references are not silently discarded. Agent discovery does not validate the
-complete role-profile configuration.
+every `agents` reference. A selected role's `agents` allowlist is validated
+against the effective Agent roster; invalid references are not silently
+discarded. Agent discovery does not validate every role-profile configuration.
 
 ### Reserved role definitions
 
 `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
 are reserved role definitions, not Agents. They are excluded from the Agent
 roster and cannot be selected by `delegate_agent`, referenced as delegation
-targets from `agents`, or disabled. Manager and Chief may themselves declare
-`agents` to allowlist ordinary Agent targets. The `Agents & Roles` menu lists reserved roles under `Roles`, separately from
+targets from `agents`, or disabled. Each role may declare `agents` to
+allowlist direct ordinary Agent targets. The `Agents & Roles` menu lists reserved roles under `Roles`, separately from
 ordinary `Agents`. Runtime profiles
 provide `Details` only; `managed-lead` additionally provides `Model` and
 `Thinking`.
@@ -97,9 +96,8 @@ choice is separate from Manager authority: only the current exact
 
 The ordinary Lead profiles and the Manager and Chief definitions are runtime
 profiles, not Pi launch definitions. They may configure only `name`,
-`description`, `body`, `bodyMode` on matching overlays, `tools`, and
-`excludeTools`; Manager and Chief may additionally configure `agents` as their
-direct-delegation allowlist. Ordinary Lead profiles reject `agents`. These
+`description`, `body`, `bodyMode` on matching overlays, `tools`,
+`excludeTools`, and `agents` as their direct-delegation allowlist. These
 profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`,
 `noTools`,
 `noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
@@ -131,7 +129,7 @@ and uses the runtime-owned role contract without configurable instructions.
 
 If a persisted ordinary mode resolves to an invalid profile, Herdsman keeps the
 saved mode rather than silently switching to the other profile. The ordinary
-Lead fails closed to mandatory Lead coordination tools only and surfaces the
+Lead denies fresh delegation, retains applicable owned-Agent controls, and surfaces the
 definition error. Repair the selected definition, or explicitly choose the
 other mode with `/lead`; either action resolves the profile again.
 
@@ -140,10 +138,13 @@ the same bundled, project, and global overlay engine as other definitions, but
 is a full launch definition with the launch-policy fields below. A trusted
 project layer is resolved from the delegated worktree. The effective
 definition is launch configuration, not assignment state. A running managed
-Lead is not hot-reconfigured when definition files change.
+Lead is not hot-reconfigured when definition files change. The managed runtime
+also resolves the effective definition for delegation policy; native
+extension/session reinitialization may resolve it again.
 
 `managed-lead` supports the ordinary launch-policy fields, except it does not
-support `enabled`, `agents`, or `permission`. Its system prompt must use
+support `enabled` or `permission`. Its `agents` field is runtime-enforced
+delegation policy, not a Pi launch argument. Its system prompt must use
 `append`; an override that selects `replace` is rejected so project or global
 policy cannot remove the Lead runtime contract. Herdsman always preserves the
 Lead coordination tools required by the runtime role even when an explicit tool
@@ -151,7 +152,8 @@ allowlist or exclusion policy is used.
 
 Managed Lead project assignment handoff and settlement behavior is described
 in [Project orchestration](../guides/project-orchestration.md). Runtime
-profiles modify execution instructions and ordinary tool projection only;
+profiles modify execution instructions, ordinary tool projection, and direct
+Agent delegation policy;
 reserved runtime profiles are independent and do not compose or inherit (see
 [ADR 0018](../adr/0018-use-standalone-lead-execution-profiles.md)).
 
@@ -208,7 +210,7 @@ the fallback.
 | `skills`                | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                                                                                                               |
 | `noExtensions`          | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains.                                                 |
 | `extensions`            | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                                                                                                     |
-| `agents`                | array of unique non-empty definition names                            | no direct agents                                                       | Names permitted direct children for managed Agents, or the fresh-delegation allowlist for Manager/Chief.                                                                                  |
+| `agents`                | array of unique non-empty definition names                            | all available Agents for Leads; no direct agents for other owners      | Fresh-delegation allowlist for direct Agent children.                                                                                                                                     |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls project context-file inheritance.                                                                                                                                                |
 | `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                              | Controls global context-file inheritance.                                                                                                                                                 |
 
@@ -222,11 +224,15 @@ an explicit `[]`.
 Managed-Agent child references must be enabled: a delegating Agent that
 references a disabled child is omitted from runtime definition discovery and
 rejected during assignment or fresh startup with an explicit disabled-agent
-error. Manager/Chief allowlists reject missing or reserved target names; a
+error. Role allowlists reject missing or reserved target names; a
 listed disabled Agent simply remains unavailable for discovery or assignment
-until enabled. Removing or emptying a supervisor allowlist disables new direct
-delegation, not management of Agents that session already owns. This policy is
-independent of `tools` and `excludeTools`.
+until enabled. Omitted `agents` permits all available targets for Leads but no
+fresh delegation for Manager, Chief, or managed Agents. An explicit empty list
+denies fresh delegation for every owner. Fresh delegation includes new
+assignments and continuations, not management of already-owned Agents. A
+Lead with no fresh delegation retains applicable controls for owned Agents;
+otherwise Agent coordination tools are not advertised. Role policy is independent
+of `tools` and `excludeTools`; managed Agents retain their existing tool eligibility rules.
 
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.
@@ -246,8 +252,8 @@ explicit `tools`.
 
 An explicit `tools` allowlist takes precedence over the default-selection
 switches `noTools` and `noBuiltinTools`; `excludeTools` removes matching
-ordinary tool names. Managed agents and managed project Leads always retain their role-required
-Herdsman coordination tools, which are protected from exclusions. When `tools`
+ordinary tool names. Managed agents and managed project Leads retain their applicable role-required
+Herdsman coordination tools, which are protected from exclusions and subject to delegation policy. When `tools`
 is omitted, Pi Herdsman does not emit `--tools`, preserving Pi's
 configured/default tool selection. When `tools` is explicitly set, the
 selected allowlist is closed across Pi callable tool sources and augmented
