@@ -123,7 +123,8 @@ session-file path is not returned.
 Use exactly one of `branch` (assigned Lead) or `target` (ordinary supervised
 Lead or Chief direct report). Sends an asynchronous durable message to the
 exact current direct report. The
-message is queued by Herdsman before submission. If an assigned report is
+message is queued by Herdsman before submission; queue acceptance does not mean
+delivery. If current target verification fails, no message is queued. If an assigned report is
 actively running, supervisor direction uses Pi's cooperative steering lane;
 steering does not abort the current operation or interrupt an in-flight tool
 call. Authorized Manager messages to ordinary Leads use the same cooperative

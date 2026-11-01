@@ -12,6 +12,7 @@ import type {
   ProjectAssignment,
   ChiefMessageRecord,
   SessionRole,
+  UnverifiedLead,
 } from "../supervision.ts";
 import {
   projectTaskSummary,
@@ -3689,7 +3690,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       selectedAssignment = selected.assignment;
       selectedLead = selected.lead;
     }
-    const refresh = async () => directReports(ctx);
     const result = (value: Record<string, unknown>) => {
       const bounded = truncateModelText(JSON.stringify(value, null, 2), {
         keep: "head",
@@ -3732,8 +3732,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       )
         discoveryWarning =
           "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
-    } else {
-      reports = selectedLead ? [selectedLead] : await refresh();
     }
     const reportSession = (report: any): string =>
       report.session ?? report.lead;
@@ -3844,23 +3842,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ? resolveCoordinatorTarget(ctx, params.target)
         : undefined;
     const targetSession = selectedAssignment?.id ?? resolvedTarget?.sessionId;
-    const revalidateTarget = async () =>
-      (
-        await directReports(
+    const unverified: UnverifiedLead[] = [];
+    const incompatible: import("../supervision.ts").IncompatibleStaff[] = [];
+    reports = selectedLead
+      ? [selectedLead]
+      : await directReports(
           ctx,
           undefined,
           undefined,
-          undefined,
-          selectedAssignment ? { exactSession: targetSession } : undefined,
-        )
-      ).find((candidate: any) => reportSession(candidate) === targetSession);
-    const targets = reports.filter(
-      (candidate: any) => reportSession(candidate) === targetSession,
-    );
-    const lead = targets.length === 1 ? targets[0] : undefined;
-    if (!lead) {
-      const observation = await loadSupervisionSnapshot(ctx);
-      const incompatibleTarget = observation.incompatible?.find(
+          incompatible,
+          activeRole() === "manager"
+            ? { exactSession: targetSession, unverified }
+            : undefined,
+        );
+    const verificationFailure = (
+      failures: UnverifiedLead[],
+      incompatibleReports: import("../supervision.ts").IncompatibleStaff[],
+    ) => {
+      const incompatibleTarget = incompatibleReports.find(
         (report) => report.session === targetSession,
       );
       if (incompatibleTarget)
@@ -3870,6 +3869,43 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "staff action",
           `${incompatibleTarget.role} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
         );
+      const failure = failures.find((item) => item.lead === targetSession);
+      if (failure)
+        throw new Error(`Staff target verification failed: ${failure.issue}`);
+    };
+    const revalidateTarget = async () => {
+      const failures: UnverifiedLead[] = [];
+      const incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
+        [];
+      const current = await directReports(
+        ctx,
+        undefined,
+        undefined,
+        incompatibleReports,
+        activeRole() === "manager"
+          ? { exactSession: targetSession, unverified: failures }
+          : undefined,
+      );
+      const matches = current.filter(
+        (candidate: any) => reportSession(candidate) === targetSession,
+      );
+      if (matches.length !== 1) {
+        verificationFailure(failures, incompatibleReports);
+        return undefined;
+      }
+      return matches[0];
+    };
+    const targets = reports.filter(
+      (candidate: any) => reportSession(candidate) === targetSession,
+    );
+    const lead = targets.length === 1 ? targets[0] : undefined;
+    if (!lead) {
+      if (activeRole() === "manager") {
+        verificationFailure(unverified, incompatible);
+      } else {
+        const observation = await loadSupervisionSnapshot(ctx);
+        verificationFailure([], observation.incompatible ?? []);
+      }
       throw new Error(
         "Staff target was not found or is no longer eligible. Rediscover current staff with list_staff and use its target or assigned branch; never use display_name.",
       );
