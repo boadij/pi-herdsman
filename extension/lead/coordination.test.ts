@@ -779,13 +779,14 @@ function projectMessageDrainFixture(
     }
   }
   const sourcePeers = peerRuntime();
-  const sourcePresenceLease =
-    useRealHeaderReader && persistLiveEvidence
-      ? acquireProcessLock(peerLeadLockPath(sourcePeers, assignment.id), {
-          name: "project-message source test presence",
-        })
-      : undefined;
-  if (sourcePresenceLease) {
+  let liveEvidenceEnabled = persistLiveEvidence;
+  let sourcePresenceLease: ReturnType<typeof acquireProcessLock> | undefined;
+  const publishLiveEvidence = () => {
+    liveEvidenceEnabled = true;
+    sourcePresenceLease ??= acquireProcessLock(
+      peerLeadLockPath(sourcePeers, assignment.id),
+      { name: "project-message source test presence" },
+    );
     const peerPath = peerLeadRecordPath(sourcePeers, assignment.id);
     writeFileSync(
       peerPath,
@@ -808,6 +809,9 @@ function projectMessageDrainFixture(
         updatedAt: 50,
       }),
     );
+  };
+  if (useRealHeaderReader && persistLiveEvidence) {
+    publishLiveEvidence();
   }
   const messageDirectory = join(
     dirname(assignmentFile),
@@ -891,7 +895,7 @@ function projectMessageDrainFixture(
         sessionId: string,
         sessionPath?: string,
       ) =>
-        persistLiveEvidence &&
+        liveEvidenceEnabled &&
         sessionId === assignment.id &&
         sessionPath === assignment.piSessionFile
           ? [
@@ -958,6 +962,7 @@ function projectMessageDrainFixture(
     sourceSessionId: assignment.id,
     recordId: header.id,
     headerPath: persistedHeaderPath,
+    publishLiveEvidence,
     releaseSourcePresence: () => {
       sourcePresenceLease?.release();
     },
@@ -1103,6 +1108,68 @@ test("forged protocol-2 project header stays generic without verified source att
       "u",
     ),
   );
+  fixture.releaseSourcePresence();
+});
+
+test("project header protocol diagnostic retries after source evidence becomes verifiable", async () => {
+  const fixture = projectMessageDrainFixture(
+    "supervisor_message",
+    2,
+    false,
+    {
+      text: "private retry supervisor text",
+      resultBindings: [
+        {
+          ref: "private retry attachment",
+          canonicalRef: "result:retry-secret",
+        },
+      ],
+    },
+    undefined,
+    true,
+    true,
+    false,
+  );
+  const sessionId = fixture.context.sessionManager.getSessionId();
+
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.deepEqual(fixture.delivered, []);
+  assert.deepEqual(fixture.removed, []);
+  assert.equal(fixture.reads, 0);
+  assert.equal(existsSync(fixture.headerPath), true);
+  assert.equal(fixture.errors.length, 1);
+  assert.match(
+    String(fixture.errors[0]),
+    /Malformed explicit project message/u,
+  );
+  assert.deepEqual(takeProtocolDiagnostics(sessionId), []);
+
+  fixture.publishLiveEvidence();
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.deepEqual(fixture.delivered, []);
+  assert.deepEqual(fixture.removed, []);
+  assert.equal(fixture.reads, 0);
+  assert.equal(existsSync(fixture.headerPath), true);
+  assert.equal(fixture.errors.length, 1);
+  const diagnostics = takeProtocolDiagnostics(sessionId);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]!, /protocol_mismatch/u);
+  assert.match(diagnostics[0]!, /assigned project message/u);
+  assert.doesNotMatch(
+    diagnostics[0]!,
+    new RegExp(
+      `private retry supervisor text|private retry attachment|result:retry-secret|${fixture.recordId}|${fixture.sourceSessionId}`,
+      "u",
+    ),
+  );
+
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.deepEqual(takeProtocolDiagnostics(sessionId), []);
+  assert.equal(fixture.errors.length, 1);
+  assert.deepEqual(fixture.delivered, []);
+  assert.deepEqual(fixture.removed, []);
+  assert.equal(fixture.reads, 0);
+  assert.equal(existsSync(fixture.headerPath), true);
   fixture.releaseSourcePresence();
 });
 

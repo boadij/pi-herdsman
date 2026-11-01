@@ -2915,7 +2915,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       reason: ProjectMessageHeaderIssue["reason"],
       verifiedProtocolSource = false,
     ): void => {
-      if (reportedProjectMessageHeaderErrors.has(id)) return;
       try {
         const verifiedProtocolIssue =
           verifiedProtocolSource &&
@@ -2927,6 +2926,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             reason,
             "assigned project message",
           );
+        if (reportedProjectMessageHeaderErrors.has(id)) return;
         appendDurableError(
           pi,
           ctx,
