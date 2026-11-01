@@ -413,7 +413,7 @@ test("required evidence cleanup failures preserve publication and primary errors
   let directoryFd: number | undefined;
   let failDirectoryFsync = false;
   mock.module("node:fs", {
-    exports: {
+    namedExports: {
       chmodSync(path: fs.PathLike, mode: fs.Mode) {
         if (primaryFailure && String(path).includes("primary.md"))
           throw new Error("primary failed");
