@@ -765,11 +765,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     )
       return false;
     const source = record.peerSource;
-    if (
-      source?.role === "lead" &&
-      "remoteOrdinary" in source &&
-      source.remoteOrdinary === true
-    ) {
+    if (source?.role === "lead" && "remoteOrdinary" in source) {
       if (activeRole() !== "lead") return false;
       const assignments = globalProjectAssignmentSnapshot();
       return (
