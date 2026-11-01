@@ -1223,6 +1223,8 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
     });
     writeLeadCoordinationState(runtime, {
       version: 1,
+      build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager",
       instanceId: randomUUID(),
       piSessionId: managerId,
