@@ -12,6 +12,8 @@ import {
   COORDINATOR_MESSAGE_PROTOCOL,
   readSessionKind,
   supportsCoordinatorMessaging,
+  reportProtocolDiagnostic,
+  takeProtocolDiagnostics,
   type SessionKindEntry,
   type VerificationPolicy,
 } from "./supervision.ts";
@@ -5830,7 +5832,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             });
           }
         }
-        const content = host.formatContext(
+        const statusContent = host.formatContext(
           contextStatus === "unavailable" ? undefined : snapshot,
           {
             status: contextStatus,
@@ -5838,6 +5840,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             targets,
           },
         );
+        const diagnostics = takeProtocolDiagnostics(
+          ctx.sessionManager.getSessionId(),
+        );
+        const content = [
+          statusContent,
+          ...diagnostics.map((item) => `Coordination diagnostic: ${item}`),
+        ].join("\n");
         for (const candidate of candidates)
           if (content.split("\n").includes(`  target: ${candidate.target}`))
             rememberCoordinatorTarget(
@@ -6999,7 +7008,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       current.cwd === original.cwd;
     const sessionId = ctx.sessionManager.getSessionId();
     if (record.toSessionId !== sessionId) return false;
-    if (!acceptsCoordinatorMessage(record)) return false;
+    if (
+      record.kind === "project_assignment" &&
+      !acceptsCoordinatorMessage(record)
+    )
+      return false;
     if (record.kind === "project_assignment") {
       const workspaceId = process.env.HERDR_WORKSPACE_ID;
       if (
@@ -7619,45 +7632,75 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           return record ? messageDelivered(ctx, record) : false;
         },
         isAuthorized: async (record: ChiefMessageRecord) => {
-          if (!acceptsCoordinatorMessage(record)) return false;
-          if (record.kind === "peer_message")
-            return authorizePeerRecord(record, ctx);
-          try {
-            if (
-              verifyLease &&
-              !(
-                record.kind === "manager_message" &&
-                (activeRole() === "lead" || activeRole() === "chief")
-              )
-            ) {
-              const chief =
-                activeRole() === "chief" || record.kind === "chief_message"
-                  ? await currentChiefAuthority(ctx, false, "identity-only")
-                  : await currentManager(ctx);
-              if (!chief)
-                throw new Error("Supervisor lease could not be verified");
-              if (record.toSessionId !== ctx.sessionManager.getSessionId())
-                return record.kind === "project_assignment"
-                  ? projectAssignmentAuthorized(
-                      false,
-                      "target_or_workspace_mismatch",
-                    )
-                  : false;
-              if (record.leaseId !== chief.leaseId)
-                return record.kind === "project_assignment"
-                  ? projectAssignmentAuthorized(false, "lease_mismatch")
-                  : false;
+          let authorized: boolean;
+          if (record.kind === "peer_message") {
+            authorized = await authorizePeerRecord(record, ctx);
+          } else
+            try {
+              if (
+                verifyLease &&
+                !(
+                  record.kind === "manager_message" &&
+                  (activeRole() === "lead" || activeRole() === "chief")
+                )
+              ) {
+                const chief =
+                  activeRole() === "chief" || record.kind === "chief_message"
+                    ? await currentChiefAuthority(ctx, false, "identity-only")
+                    : await currentManager(ctx);
+                if (!chief)
+                  throw new Error("Supervisor lease could not be verified");
+                if (record.toSessionId !== ctx.sessionManager.getSessionId())
+                  return record.kind === "project_assignment"
+                    ? projectAssignmentAuthorized(
+                        false,
+                        "target_or_workspace_mismatch",
+                      )
+                    : false;
+                if (record.leaseId !== chief.leaseId)
+                  return record.kind === "project_assignment"
+                    ? projectAssignmentAuthorized(false, "lease_mismatch")
+                    : false;
+              }
+              authorized = await authorizeChiefRecord(
+                record,
+                ctx,
+                verifyLiveChief,
+              );
+            } catch (error) {
+              managerDiagnostic("inbox_catch", { category: "authorization" });
+              if (record.kind === "project_assignment")
+                managerDiagnostic("project_assignment_authorization", {
+                  outcome: "error",
+                  reason: "authorization_exception",
+                });
+              throw error;
             }
-            return await authorizeChiefRecord(record, ctx, verifyLiveChief);
-          } catch (error) {
-            managerDiagnostic("inbox_catch", { category: "authorization" });
-            if (record.kind === "project_assignment")
-              managerDiagnostic("project_assignment_authorization", {
-                outcome: "error",
-                reason: "authorization_exception",
-              });
-            throw error;
+          if (!authorized) {
+            if (
+              ordinaryMessage(record) &&
+              senderProtocolFailures.has(record.id)
+            )
+              reportProtocolDiagnostic(
+                ctx.sessionManager.getSessionId(),
+                record.id,
+                "protocol_mismatch",
+                "inbound coordination message",
+              );
+            return false;
           }
+          if (ordinaryMessage(record) && !acceptsCoordinatorMessage(record)) {
+            reportProtocolDiagnostic(
+              ctx.sessionManager.getSessionId(),
+              record.id,
+              record.messageProtocol === undefined
+                ? "protocol_unverified"
+                : "protocol_mismatch",
+              "inbound coordination message",
+            );
+            return false;
+          }
+          return true;
         },
         sendMessage: async (
           message: unknown,

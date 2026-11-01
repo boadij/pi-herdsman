@@ -50,12 +50,53 @@ export function supportsCoordinatorMessaging(protocol: unknown): boolean {
   return protocol === COORDINATOR_MESSAGE_PROTOCOL;
 }
 
+const protocolDiagnostics = new Map<string, string[]>();
+const protocolDiagnosticSeen = new Map<string, string[]>();
+const protocolDiagnosticLimit = 20;
+const protocolDiagnosticSeenLimit = 100;
+
+export function reportProtocolDiagnostic(
+  sessionId: string,
+  recordId: string,
+  reason: "protocol_mismatch" | "protocol_unverified",
+  direction: "inbound coordination message" | "assigned project message",
+): void {
+  const key = `${recordId}\0${reason}\0${direction}`;
+  const seen = protocolDiagnosticSeen.get(sessionId) ?? [];
+  if (seen.includes(key)) return;
+  seen.push(key);
+  if (seen.length > protocolDiagnosticSeenLimit)
+    seen.splice(0, seen.length - protocolDiagnosticSeenLimit);
+  protocolDiagnosticSeen.delete(sessionId);
+  protocolDiagnosticSeen.set(sessionId, seen);
+  while (protocolDiagnosticSeen.size > 50)
+    protocolDiagnosticSeen.delete(protocolDiagnosticSeen.keys().next().value!);
+  const diagnostics = protocolDiagnostics.get(sessionId) ?? [];
+  const message = `${direction} was not delivered (${reason}): ${reason === "protocol_mismatch" ? "the sender advertises an unsupported coordinator messaging protocol" : "the sender's coordinator messaging protocol is absent or unverified"}. Required protocol: ${COORDINATOR_MESSAGE_PROTOCOL}. Update both Pi Herdsman sessions to support the same coordinator messaging protocol.`;
+  if (diagnostics.includes(message)) return;
+  diagnostics.push(message);
+  if (diagnostics.length > protocolDiagnosticLimit)
+    diagnostics.splice(0, diagnostics.length - protocolDiagnosticLimit);
+  protocolDiagnostics.delete(sessionId);
+  protocolDiagnostics.set(sessionId, diagnostics);
+  while (protocolDiagnostics.size > 50)
+    protocolDiagnostics.delete(protocolDiagnostics.keys().next().value!);
+}
+
+export function takeProtocolDiagnostics(sessionId: string): string[] {
+  return protocolDiagnostics.get(sessionId)?.splice(0) ?? [];
+}
+
 function validOptionalMessageProtocol(
   record: Record<string, unknown>,
+  allowUnsupported = false,
 ): boolean {
   return (
     !Object.hasOwn(record, "messageProtocol") ||
-    supportsCoordinatorMessaging(record.messageProtocol)
+    supportsCoordinatorMessaging(record.messageProtocol) ||
+    (allowUnsupported &&
+      Number.isSafeInteger(record.messageProtocol) &&
+      (record.messageProtocol as number) > 0)
   );
 }
 
@@ -344,7 +385,10 @@ function validNativeIdentity(value: unknown): value is string {
   );
 }
 
-function validMessage(value: unknown): value is ChiefMessageRecord {
+function validMessage(
+  value: unknown,
+  allowUnsupportedProtocol = false,
+): value is ChiefMessageRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   const keys = [
@@ -413,7 +457,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     record.version === 2 &&
     (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
-    validOptionalMessageProtocol(record) &&
+    validOptionalMessageProtocol(record, allowUnsupportedProtocol) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
     typeof record.leaseId === "string" &&
@@ -1018,7 +1062,10 @@ function assertChiefMessageNotQuarantined(
     throw new Error("Chief message is quarantined");
 }
 
-function readStoredChiefMessage(path: string): StoredChiefMessage {
+function readStoredChiefMessage(
+  path: string,
+  allowUnsupportedProtocol = false,
+): StoredChiefMessage {
   let size: number;
   try {
     size = statSync(path).size;
@@ -1029,7 +1076,8 @@ function readStoredChiefMessage(path: string): StoredChiefMessage {
     throw new Error("Chief message record is too large");
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    assertMessage(parsed);
+    if (!validMessage(parsed, allowUnsupportedProtocol))
+      throw new Error("Invalid Chief message record");
     return parsed as StoredChiefMessage;
   } catch (error) {
     if (error instanceof Error && /Chief message record/.test(error.message))
@@ -1038,13 +1086,17 @@ function readStoredChiefMessage(path: string): StoredChiefMessage {
   }
 }
 
-export function readChiefMessage(path: string): ChiefMessageRecord {
-  const parsed = readStoredChiefMessage(path);
+export function readChiefMessage(
+  path: string,
+  allowUnsupportedProtocol = false,
+): ChiefMessageRecord {
+  const parsed = readStoredChiefMessage(path, allowUnsupportedProtocol);
   if (parsed.bodyRef) {
     const body = readOverflowBody(`${path}.body`, parsed.bodyRef);
     const logical = { ...parsed, ...body } as ChiefMessageRecord;
     delete (logical as any).bodyRef;
-    if (!validMessage(logical)) throw new Error("Invalid Chief message body");
+    if (!validMessage(logical, allowUnsupportedProtocol))
+      throw new Error("Invalid Chief message body");
     return logical;
   }
   return parsed as ChiefMessageRecord;
@@ -1123,10 +1175,16 @@ function removeChiefMessageUnlocked(
   const matchesExpected = (): boolean => {
     if (!expected) return true;
     try {
-      const stored = readStoredChiefMessage(path);
+      const allowUnsupportedProtocol =
+        expected.messageProtocol !== undefined &&
+        !supportsCoordinatorMessaging(expected.messageProtocol);
+      const stored = readStoredChiefMessage(path, allowUnsupportedProtocol);
       if ((expected as StoredChiefMessage).bodyRef)
         return isDeepStrictEqual(stored, expected);
-      return isDeepStrictEqual(readChiefMessage(path), expected);
+      return isDeepStrictEqual(
+        readChiefMessage(path, allowUnsupportedProtocol),
+        expected,
+      );
     } catch {
       return false;
     }
@@ -1265,7 +1323,7 @@ export async function drainCoordinationInbox(
     let stored: StoredChiefMessage;
     let record: ChiefMessageRecord;
     try {
-      stored = readStoredChiefMessage(path);
+      stored = readStoredChiefMessage(path, true);
       record = stored as ChiefMessageRecord;
     } catch {
       if (UUID.test(id) && conclusivelyMalformedChiefMessage(path)) {
@@ -3081,7 +3139,8 @@ export type ProjectMessageHeader = Omit<
 };
 export type ProjectMessageHeaderIssue = Readonly<{
   id: string;
-  reason: "malformed" | "oversized" | "unsupported_protocol";
+  reason:
+    "malformed" | "oversized" | "protocol_mismatch" | "protocol_unverified";
 }>;
 type StoredProjectMessage = ProjectMessageHeader;
 
@@ -3295,7 +3354,9 @@ function invalidExplicitProjectMessageHeader(
       id,
       reason: supportsCoordinatorMessaging(record.messageProtocol)
         ? "malformed"
-        : "unsupported_protocol",
+        : record.messageProtocol === undefined
+          ? "protocol_unverified"
+          : "protocol_mismatch",
     };
   } catch {
     return undefined;
@@ -3745,6 +3806,7 @@ export type IncompatibleStaff = Readonly<{
   tabId: string;
   runtimeState: RuntimeState;
   build: RuntimeBuild;
+  protocolDiagnostic?: "protocol_mismatch" | "protocol_unverified";
   availableActions?: readonly ["message"];
   reason: "incompatible_build";
 }>;
@@ -4126,6 +4188,10 @@ export function projectSupervision(options: {
         tabId: agent.tabId,
         runtimeState: agent.runtimeState ?? "unknown",
         build: state.build,
+        protocolDiagnostic:
+          state.messageProtocol === undefined
+            ? "protocol_unverified"
+            : "protocol_mismatch",
         reason: "incompatible_build",
       });
       continue;

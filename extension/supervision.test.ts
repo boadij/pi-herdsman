@@ -93,6 +93,8 @@ const {
   readLeadCoordinationState,
   readChiefDescriptor,
   supportsCoordinatorMessaging,
+  reportProtocolDiagnostic,
+  takeProtocolDiagnostics,
   serializeSupervision,
   sessionLeadRoleState: readLeadRoleState,
   readSessionKind,
@@ -118,6 +120,40 @@ const socket = () =>
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
 const OTHER_BUILD = { version: "0.18.1", sha256: "b".repeat(64) } as const;
+
+test("protocol rejection notices are safe and deduplicated after context consumption", () => {
+  const session = randomUUID();
+  const record = randomUUID();
+  reportProtocolDiagnostic(
+    session,
+    record,
+    "protocol_mismatch",
+    "inbound coordination message",
+  );
+  const first = takeProtocolDiagnostics(session);
+  assert.equal(first.length, 1);
+  assert.match(first[0], /protocol_mismatch/u);
+  assert.match(first[0], /Required protocol: 1/u);
+  assert.match(first[0], /inbound coordination message/u);
+  assert.doesNotMatch(first[0], new RegExp(record, "u"));
+  reportProtocolDiagnostic(
+    session,
+    record,
+    "protocol_mismatch",
+    "inbound coordination message",
+  );
+  assert.deepEqual(takeProtocolDiagnostics(session), []);
+  reportProtocolDiagnostic(
+    session,
+    randomUUID(),
+    "protocol_unverified",
+    "assigned project message",
+  );
+  const next = takeProtocolDiagnostics(session);
+  assert.equal(next.length, 1);
+  assert.match(next[0], /protocol_unverified/u);
+  assert.match(next[0], /assigned project message/u);
+});
 
 test("peer delivery receipts bind exact session, ID, and content durably", () => {
   const runtime = supervisionRuntime(socket());

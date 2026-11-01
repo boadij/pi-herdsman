@@ -3945,6 +3945,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               display_name: report.displayName,
               compatibility: "incompatible",
               build: report.build,
+              ...(report.protocolDiagnostic
+                ? {
+                    protocol_diagnostic: report.protocolDiagnostic,
+                    required_protocol: 1,
+                  }
+                : {}),
               available_tools: isVerifiedMessageOnly(report)
                 ? [staffToolName("message")]
                 : [],

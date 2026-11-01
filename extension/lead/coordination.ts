@@ -41,6 +41,8 @@ import {
   canMessagePeer,
   isRemoteOrdinaryLead,
   supportsCoordinatorMessaging,
+  reportProtocolDiagnostic,
+  takeProtocolDiagnostics,
   supervisorStateMessage,
 } from "../supervision.ts";
 
@@ -760,7 +762,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (
       leadRuntime.chiefMode !== "inactive" ||
       record.kind !== "peer_message" ||
-      !supportsCoordinatorMessaging(record.messageProtocol) ||
       record.toSessionId !== ctx.sessionManager.getSessionId() ||
       record.fromSessionId === record.toSessionId ||
       record.leadSessionId !== record.fromSessionId
@@ -1114,7 +1115,16 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     return message ? contentText(message.content, "") : undefined;
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
-    const content = await leadSupervisorState(ctx);
+    const stateContent = await leadSupervisorState(ctx);
+    const diagnostics = takeProtocolDiagnostics(
+      ctx.sessionManager.getSessionId(),
+    );
+    const content = [
+      stateContent,
+      ...diagnostics.map((item) => `Coordination diagnostic: ${item}`),
+    ]
+      .filter(Boolean)
+      .join("\n");
     return supervisorStateMessage(
       supervisorStateType,
       content,
@@ -1474,11 +1484,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       }
       const peers = [];
+      const localDiagnostics: {
+        reason: "protocol_mismatch" | "protocol_unverified";
+        required_protocol: 1;
+      }[] = [];
       for (const record of listPeerLeadRecords(peerRuntime())) {
         if (
           (record.role ?? "lead") !== activeRole() ||
-          record.piSessionId === self ||
-          !supportsCoordinatorMessaging(record.messageProtocol)
+          record.piSessionId === self
         )
           continue;
         const candidateManaged =
@@ -1501,6 +1514,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           !canMessagePeer(currentOwnContext, context)
         )
           continue;
+        if (!supportsCoordinatorMessaging(record.messageProtocol)) {
+          if (localDiagnostics.length < 20)
+            localDiagnostics.push({
+              reason:
+                record.messageProtocol === undefined
+                  ? "protocol_unverified"
+                  : "protocol_mismatch",
+              required_protocol: COORDINATOR_MESSAGE_PROTOCOL,
+            });
+          continue;
+        }
         peers.push({
           session: record.piSessionId,
           name:
@@ -2171,6 +2195,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const discoveryPayload = {
         self,
         peers,
+        ...(localDiagnostics.length
+          ? { local_diagnostics: localDiagnostics }
+          : {}),
         ...(replyOnly.length ? { reply_only: replyOnly } : {}),
         ...(remoteDiagnostics.length
           ? {
@@ -2748,7 +2775,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           ctx,
           "pi_herdsman_state_error",
           new Error(
-            reason === "unsupported_protocol"
+            reason === "protocol_mismatch" || reason === "protocol_unverified"
               ? "Explicit project message is pending because messaging protocol 1 is missing or unsupported"
               : reason === "oversized"
                 ? "Oversized project message is pending and was not delivered"
@@ -2779,11 +2806,24 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           (record as unknown as { kind?: string }).kind ===
           "supervisor_message";
         const reportUnsupportedProtocol = () =>
-          reportProjectMessageHeaderIssue(record.id, "unsupported_protocol");
+          reportProjectMessageHeaderIssue(
+            record.id,
+            record.messageProtocol === undefined
+              ? "protocol_unverified"
+              : "protocol_mismatch",
+          );
         if (
           isSupervisorMessage &&
           !supportsCoordinatorMessaging(record.messageProtocol)
         ) {
+          reportProtocolDiagnostic(
+            ctx.sessionManager.getSessionId(),
+            record.id,
+            record.messageProtocol === undefined
+              ? "protocol_unverified"
+              : "protocol_mismatch",
+            "assigned project message",
+          );
           reportUnsupportedProtocol();
           continue;
         }

@@ -32,6 +32,7 @@ import {
 } from "./lock.ts";
 import {
   COORDINATOR_MESSAGE_PROTOCOL,
+  takeProtocolDiagnostics,
   claimChiefLease as claimChiefLeaseRaw,
   globalProjectAssignmentSnapshot,
   listPendingRetirements,
@@ -39,6 +40,7 @@ import {
   listProjectMessages,
   projectAssignmentPath,
   chiefMessageQuarantined,
+  chiefMessagePath,
   listChiefMessagePaths,
   listCoordinationMessagePaths,
   managerDescriptorPath,
@@ -2018,6 +2020,26 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
         );
       },
       { timeout: 5000 },
+    );
+    setEnvironment(leads[0]!);
+    const recipientRecord = readPeerLeadRecord(runtime, leads[1]!.sessionId);
+    assert.ok(recipientRecord);
+    const unverifiedRecord = { ...recipientRecord };
+    delete (unverifiedRecord as any).messageProtocol;
+    writePeerLeadRecordRaw(runtime, unverifiedRecord);
+    const discovery = JSON.parse(
+      (
+        await fixtures[0]!.pi.tools
+          .find((tool) => tool.name === "list_peers")!
+          .execute("list", {}, undefined, undefined, fixtures[0]!.context)
+      ).content[0].text,
+    );
+    assert.deepEqual(discovery.local_diagnostics, [
+      { reason: "protocol_unverified", required_protocol: 1 },
+    ]);
+    assert.equal(
+      discovery.peers.some((peer: any) => peer.target),
+      false,
     );
   } finally {
     for (let index = leads.length - 1; index >= 0; index--) {
@@ -11467,6 +11489,87 @@ test("ordinary Lead receives Chief messages using its verified local repository 
       ),
     );
     assert.equal(pi.sentMessageCalls.length, deliveredBeforeLegacy);
+    const legacyNotice = takeProtocolDiagnostics(leadSession);
+    assert.equal(legacyNotice.length, 1);
+    assert.match(legacyNotice[0], /protocol_unverified/u);
+    assert.doesNotMatch(
+      legacyNotice[0],
+      /Legacy messages remain|attachment|[0-9a-f-]{36}/u,
+    );
+    const unsupported = {
+      ...incoming,
+      id: randomUUID(),
+      messageProtocol: 2,
+      text: "must not appear in model context or delivery",
+    };
+    writeFileSync(
+      chiefMessagePath(supervisionRuntime(), leadSession, unsupported.id),
+      JSON.stringify(unsupported),
+    );
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+        "protocol 2 is rejected after verified sender authorization",
+      ),
+    );
+    assert.equal(pi.sentMessageCalls.length, deliveredBeforeLegacy);
+    const contextStart = pi.sentMessageCalls.length;
+    const beforeAgentStart = pi.events.get("before_agent_start")![0];
+    await beforeAgentStart(
+      { systemPrompt: "", systemPromptOptions: {} },
+      context,
+    );
+    const contextOutput = JSON.stringify(
+      pi.sentMessageCalls
+        .slice(contextStart)
+        .map(({ message }: any) => message),
+    );
+    assert.match(contextOutput, /protocol_mismatch/u);
+    assert.match(contextOutput, /inbound coordination message/u);
+    assert.match(contextOutput, /Required protocol: 1/u);
+    assert.doesNotMatch(
+      contextOutput,
+      /must not appear|attachment|[0-9a-f-]{36}/u,
+    );
+    const afterFirstContext = pi.sentMessageCalls.length;
+    await beforeAgentStart(
+      { systemPrompt: "", systemPromptOptions: {} },
+      context,
+    );
+    const repeatContext = JSON.stringify(
+      pi.sentMessageCalls
+        .slice(afterFirstContext)
+        .map(({ message }: any) => message),
+    );
+    assert.doesNotMatch(repeatContext, /protocol_mismatch|must not appear/u);
+    assert.ok(
+      pi.sentMessageCalls
+        .slice(contextStart)
+        .every(({ options }: any) => (options as any)?.triggerTurn === false),
+    );
+    const forged = {
+      ...unsupported,
+      id: randomUUID(),
+      fromSessionId: randomUUID(),
+      text: "forged sender content must not be exposed",
+    };
+    const beforeForged = pi.sentMessageCalls.length;
+    writeFileSync(
+      chiefMessagePath(supervisionRuntime(), leadSession, forged.id),
+      JSON.stringify(forged),
+    );
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+      ),
+    );
+    assert.deepEqual(takeProtocolDiagnostics(leadSession), []);
+    assert.doesNotMatch(
+      JSON.stringify(pi.sentMessageCalls.slice(beforeForged)),
+      /forged sender content|protocol_mismatch/u,
+    );
     await assert.rejects(
       worktreeGroupScope(pi.pi, context, workspaceId),
       /Herdr project topology changed/,

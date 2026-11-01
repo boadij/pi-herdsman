@@ -12,6 +12,7 @@ import {
 } from "../support.ts";
 import {
   canMessagePeer,
+  takeProtocolDiagnostics,
   samePeerLeadAuthority,
   samePeerLeadGeneration,
   type ProjectMessageHeaderIssue,
@@ -859,6 +860,16 @@ test("explicit assigned-Lead messages stay pending without protocol 1, even with
     assert.deepEqual(fixture.delivered, []);
     assert.deepEqual(fixture.removed, []);
     assert.match(String(fixture.errors[0]), /messaging protocol 1/u);
+    const diagnostics = takeProtocolDiagnostics(
+      fixture.context.sessionManager.getSessionId(),
+    );
+    assert.equal(diagnostics.length, 1);
+    assert.match(
+      diagnostics[0],
+      protocol === undefined ? /protocol_unverified/u : /protocol_mismatch/u,
+    );
+    assert.match(diagnostics[0], /assigned project message/u);
+    assert.doesNotMatch(diagnostics[0], /project-message-id|text|attachment/u);
   }
 });
 

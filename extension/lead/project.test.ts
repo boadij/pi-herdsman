@@ -199,7 +199,11 @@ function baselineLifecycle(options: {
 }
 
 function staffMessageFixture(
-  options: { assigned?: boolean; availableActions?: string[] } = {},
+  options: {
+    assigned?: boolean;
+    availableActions?: string[];
+    protocolDiagnostic?: "protocol_mismatch" | "protocol_unverified";
+  } = {},
 ) {
   const localBuild = runtimeBuild("local", join(process.cwd(), "package.json"));
   const remoteBuild = {
@@ -234,6 +238,7 @@ function staffMessageFixture(
     runtimeState: "active" as const,
     build: remoteBuild,
     reason: "incompatible_build" as const,
+    protocolDiagnostic: options.protocolDiagnostic,
     availableActions: options.availableActions ?? ["message"],
     ...(assignment ? { branch: assignment.branch } : {}),
   };
@@ -497,6 +502,32 @@ test("list_staff exposes verified incompatible messages with session or branch t
     } else {
       assert.match(report.target, /^lead:/u);
     }
+  }
+});
+
+test("list_staff reports protocol incompatibility without exposing a target or action", async () => {
+  for (const protocolDiagnostic of [
+    "protocol_mismatch",
+    "protocol_unverified",
+  ] as const) {
+    const fixture = staffMessageFixture({
+      availableActions: [],
+      protocolDiagnostic,
+    });
+    const output = await fixture.runtime.executeStaff(
+      "list_staff",
+      { action: "list" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    const report = output.details.reports.find(
+      (item: any) => item.role === "lead" && item.display_name === "recipient",
+    );
+    assert.equal(report.protocol_diagnostic, protocolDiagnostic);
+    assert.equal(report.required_protocol, 1);
+    assert.deepEqual(report.available_tools, []);
+    assert.equal(report.target, undefined);
   }
 });
 
