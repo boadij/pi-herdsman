@@ -530,7 +530,6 @@ export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
 
 export type StatusDisplayRow = Omit<StatusRow, "tree" | "indicator"> & {
   text: string;
-  labelStart: number;
 };
 
 const MIN_TASK_WIDTH = 16;
@@ -674,9 +673,6 @@ export function layoutStatusRows(
     }) ?? layouts.at(-1)!;
   return rows.map((row) => ({
     label: row.label,
-    labelStart: visibleWidth(
-      `${row.tree}${row.indicator} ${padVisible(row.definition, columns.definitionWidth)}  `,
-    ),
     ...(row.paneId ? { paneId: row.paneId } : {}),
     ...(row.sessionId ? { sessionId: row.sessionId } : {}),
     text: renderStatusLine(row, columns, layout, available, options.theme),
@@ -1109,10 +1105,7 @@ function identifyingLabelVisible(
   text: string,
   label: string,
   width: number,
-  expectedStart?: number,
 ): boolean {
-  if (expectedStart !== undefined)
-    return label.length > 0 && expectedStart + visibleWidth(label) <= width;
   const start = text.lastIndexOf(label);
   return (
     label.length > 0 &&
@@ -1168,6 +1161,7 @@ function renderSupervisionRows(
     ordinaryCap?: number;
     role?: "chief" | "manager";
     theme?: any;
+    hasFollowingGroup?: boolean;
   } = {},
   selectedLead?: string,
   getGitSummary?: (work: ProjectWorkSnapshot) => GitChangeSummary | undefined,
@@ -1253,7 +1247,12 @@ function renderSupervisionRows(
     return [
       { text: safeLine(header, width) },
       ...visible.map((item, index) => {
-        const branch = index === visible.length - 1 && !remaining ? "└─" : "├─";
+        const branch =
+          index === visible.length - 1 &&
+          !remaining &&
+          !options.hasFollowingGroup
+            ? "└─"
+            : "├─";
         const lead = item.lead;
         const navigation = lead && lead.lead === selectedLead ? ">" : "";
         if (item.kind === "lead")
@@ -1435,14 +1434,24 @@ function renderSupervisionRows(
         };
       }),
       ...(remaining
-        ? [{ text: safeLine(`└─ … ${remaining} more · /manager`, width) }]
+        ? [
+            {
+              text: safeLine(
+                `${options.hasFollowingGroup ? "├─" : "└─"} … ${remaining} more · /manager`,
+                width,
+              ),
+            },
+          ]
         : []),
     ];
   }
   return [
     { text: safeLine(header, width) },
     ...shown.flatMap((lead, index) => {
-      const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
+      const branch =
+        index === shown.length - 1 && hidden === 0 && !options.hasFollowingGroup
+          ? "└─"
+          : "├─";
       const isIncompatible = lead.compatibility === "incompatible";
       const marker = isIncompatible ? "!" : supervisionLeadMarker(lead);
       const navigation =
@@ -1512,7 +1521,14 @@ function renderSupervisionRows(
       ];
     }),
     ...(hidden > 0
-      ? [{ text: safeLine(`└─ … ${hidden} more · /${role}`, width) }]
+      ? [
+          {
+            text: safeLine(
+              `${options.hasFollowingGroup ? "├─" : "└─"} … ${hidden} more · /${role}`,
+              width,
+            ),
+          },
+        ]
       : []),
   ];
 }
@@ -1792,6 +1808,11 @@ export function createSupervisionWidget(
   theme?: any,
   onFocus?: (intent: FocusIntent) => void,
   getGitSummary?: (work: ProjectWorkSnapshot) => GitChangeSummary | undefined,
+  ownedAgents?: {
+    getSnapshot(): StatusSnapshot;
+    onFocus(intent: FocusIntent): void;
+    getFrame?(): number;
+  },
 ): {
   render(width: number): string[];
   handleMouse(event: {
@@ -1804,10 +1825,14 @@ export function createSupervisionWidget(
   invalidate(): void;
 } {
   let renderedWidth = -1;
-  let hits: HitRegion[] = [];
+  let hits: (HitRegion & { origin: "supervision" | "agent" })[] = [];
   return {
     render(width) {
       renderedWidth = width;
+      const snapshot = ownedAgents?.getSnapshot();
+      const showAgents =
+        !!snapshot &&
+        (snapshot.agents.length > 0 || snapshot.stale || snapshot.unavailable);
       const rows = renderSupervisionRows(
         getLeads(),
         width,
@@ -1816,6 +1841,7 @@ export function createSupervisionWidget(
           ordinaryCap: 6,
           role,
           theme,
+          hasFollowingGroup: showAgents,
         },
         undefined,
         getGitSummary,
@@ -1824,17 +1850,68 @@ export function createSupervisionWidget(
       rows.forEach((row, index) => {
         if (!row.intent || !row.label) return;
         if (row.clickRegion) {
-          hits.push({ row: index, ...row.clickRegion, intent: row.intent });
+          hits.push({
+            row: index,
+            ...row.clickRegion,
+            intent: row.intent,
+            origin: "supervision",
+          });
         } else if (identifyingLabelVisible(row.text, row.label, width)) {
           hits.push({
             row: index,
             from: 0,
             to: Math.min(width, visibleWidth(row.text)),
             intent: row.intent,
+            origin: "supervision",
           });
         }
       });
-      return rows.map(({ text }) => text);
+      const output = rows.map(({ text }) => text);
+      if (showAgents && snapshot) {
+        const freshness = snapshot.unavailable
+          ? "unavailable"
+          : snapshot.stale
+            ? "stale"
+            : String(snapshot.agents.length);
+        output.push(safeLine(`└─ Agents · ${freshness}`, width));
+        const childWidth = Math.max(0, width - 3);
+        const agentRows = renderStatusRows(snapshot.agents, {
+          width: childWidth,
+          now: snapshot.stale ? snapshot.refreshedAt : Date.now(),
+          animate: !snapshot.stale && !snapshot.unavailable,
+          frame: ownedAgents?.getFrame?.() ?? 0,
+          theme,
+        });
+        agentRows.forEach((row, index) => {
+          const agent = snapshot.agents.find(
+            ({ label, sessionId }) =>
+              label === row.label && sessionId === row.sessionId,
+          );
+          if (
+            !snapshot.stale &&
+            !snapshot.unavailable &&
+            row.sessionId &&
+            snapshot.agents.filter(
+              ({ sessionId }) => sessionId === row.sessionId,
+            ).length === 1 &&
+            agent &&
+            agent.state !== "unknown" &&
+            agent.state !== "lost" &&
+            agent.state !== "starting"
+          )
+            hits.push({
+              row: output.length + index,
+              from: 0,
+              to: Math.min(width, 3 + visibleWidth(row.text)),
+              intent: { kind: "session", sessionId: row.sessionId },
+              origin: "agent",
+            });
+        });
+        output.push(
+          ...agentRows.map(({ text }) => safeLine(`   ${text}`, width)),
+        );
+      }
+      return output;
     },
     handleMouse(event) {
       if (
@@ -1847,8 +1924,10 @@ export function createSupervisionWidget(
         ({ row, from, to }) =>
           row === event.y && event.x >= from && event.x < to,
       );
-      if (!hit || !onFocus) return;
-      onFocus(hit.intent);
+      if (!hit) return;
+      const focus = hit.origin === "agent" ? ownedAgents?.onFocus : onFocus;
+      if (!focus) return;
+      focus(hit.intent);
       return { handled: true, render: false };
     },
     invalidate() {},
@@ -4598,12 +4677,6 @@ export class StatusWidget {
         );
         if (
           !row.sessionId ||
-          !identifyingLabelVisible(
-            row.text,
-            row.label,
-            availableWidth,
-            row.labelStart,
-          ) ||
           s.agents.filter(({ sessionId }) => sessionId === row.sessionId)
             .length !== 1 ||
           !agent ||

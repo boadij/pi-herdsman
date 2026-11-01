@@ -54,6 +54,91 @@ import {
 import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
 
+test("Agent status observer publishes freshness and invalidates old refreshes", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  let resolveSnapshot: ((value: any) => void) | undefined;
+  let fail = false;
+  const widgets: unknown[] = [];
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    ui: { setWidget: (_name: string, value: unknown) => widgets.push(value) },
+  } as any;
+  runtime.configure({
+    loadSnapshot: () =>
+      fail
+        ? Promise.reject(new Error("unavailable"))
+        : new Promise((resolve) => {
+            resolveSnapshot = resolve;
+          }),
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  let changes = 0;
+  runtime.prepareSession(ctx);
+  runtime.startObserver(ctx, () => changes++);
+  assert.equal(widgets.length, 0);
+  assert.equal(runtime.getSnapshot().unavailable, true);
+  resolveSnapshot!({ agents: [], stale: false, unavailable: false });
+  await t.waitFor(() => assert.equal(runtime.getSnapshot().unavailable, false));
+  fail = true;
+  runtime.requestRefresh();
+  await t.waitFor(() => assert.equal(runtime.getSnapshot().stale, true));
+  fail = false;
+  runtime.startObserver(ctx, () => changes++);
+  assert.equal(runtime.getSnapshot().stale, true);
+  const oldResolve = resolveSnapshot!;
+  runtime.clear();
+  const afterClear = changes;
+  oldResolve({ agents: [], stale: false, unavailable: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(changes, afterClear);
+  assert.equal(runtime.getSnapshot().unavailable, true);
+  runtime.startObserver(ctx, () => changes++);
+  assert.equal(runtime.getSnapshot().unavailable, true);
+  assert.equal(runtime.getSnapshot().stale, false);
+  resolveSnapshot!({ agents: [], stale: false, unavailable: false });
+  await t.waitFor(() => assert.equal(runtime.getSnapshot().unavailable, false));
+  runtime.start(ctx);
+  assert.equal(typeof widgets.at(-1), "function");
+  runtime.shutdown();
+});
+
+test("Agent status observer retains unavailable with pending starts", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  const ctx = { mode: "tui", hasUI: true, ui: { setWidget() {} } } as any;
+  const pending = {
+    label: "scout",
+    definition: "scout",
+    task: "inspect",
+    startedAt: 123,
+  };
+  runtime.configure({
+    loadSnapshot: async () => {
+      throw new Error("unavailable");
+    },
+    pendingStartEntries: () => [pending],
+    hasPendingStart: () => true,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  runtime.prepareSession(ctx);
+  let changes = 0;
+  runtime.startObserver(ctx, () => changes++);
+  await t.waitFor(() => assert.ok(changes >= 2));
+  assert.equal(runtime.getSnapshot().unavailable, true);
+  assert.deepEqual(runtime.getSnapshot().agents, [
+    { ...pending, state: "starting" },
+  ]);
+  runtime.shutdown();
+});
+
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,

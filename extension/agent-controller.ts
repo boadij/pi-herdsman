@@ -302,7 +302,12 @@ export function createAgentStatusRuntime() {
     stale: false,
     unavailable: true,
   };
-  const widgetSnapshot = (snapshot: StatusSnapshot): StatusSnapshot => {
+  let presentedStatus = lastValidStatus;
+  let onStatusChange: (() => void) | undefined;
+  const widgetSnapshot = (
+    snapshot: StatusSnapshot,
+    standalone = false,
+  ): StatusSnapshot => {
     const pendingStarts = options?.pendingStartEntries() ?? [];
     if (!pendingStarts.length) return snapshot;
     const agents = snapshot.agents.map((agent) =>
@@ -324,7 +329,7 @@ export function createAgentStatusRuntime() {
       }));
     return {
       ...snapshot,
-      unavailable: false,
+      unavailable: standalone ? false : snapshot.unavailable,
       agents: [...agents, ...pendingAgents],
     };
   };
@@ -343,6 +348,15 @@ export function createAgentStatusRuntime() {
             agent.state !== "settling") ||
           runtime?.completedRequestId === pending.requestId);
       if (resolved) options.clearPendingStart(label, pending);
+    }
+  };
+  const publishStatus = (snapshot: StatusSnapshot): void => {
+    presentedStatus = widgetSnapshot(snapshot);
+    statusWidget?.setSnapshot(widgetSnapshot(snapshot, true));
+    try {
+      onStatusChange?.();
+    } catch {
+      // A presentation callback must not turn an observation into a failure.
     }
   };
   const refresh = async (
@@ -367,30 +381,23 @@ export function createAgentStatusRuntime() {
       if (generation !== statusGeneration || ctx !== statusContext) return;
       lastValidStatus = snapshot;
       reconcilePendingStarts(snapshot);
-      if (
-        generation === statusGeneration &&
-        ctx === statusContext &&
-        statusWidgetGeneration === generation
-      )
-        statusWidget?.setSnapshot(widgetSnapshot(snapshot));
+      publishStatus(snapshot);
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
-        statusWidget?.setSnapshot(
-          widgetSnapshot(
-            lastValidStatus.unavailable
-              ? {
-                  agents: [],
-                  stale: false,
-                  unavailable: true,
-                  breadcrumb: lastValidStatus.breadcrumb,
-                  ...configured.ownToolsSnapshot(),
-                }
-              : {
-                  ...lastValidStatus,
-                  stale: true,
-                  ...configured.ownToolsSnapshot(),
-                },
-          ),
+        publishStatus(
+          lastValidStatus.unavailable
+            ? {
+                agents: [],
+                stale: false,
+                unavailable: true,
+                breadcrumb: lastValidStatus.breadcrumb,
+                ...configured.ownToolsSnapshot(),
+              }
+            : {
+                ...lastValidStatus,
+                stale: true,
+                ...configured.ownToolsSnapshot(),
+              },
         );
     } finally {
       if (generation === statusGeneration && ctx === statusContext) {
@@ -421,6 +428,25 @@ export function createAgentStatusRuntime() {
       if (requestActive && statusContext)
         void refresh(statusContext, statusGeneration);
     },
+    getSnapshot: () => presentedStatus,
+    startObserver: (ctx: ExtensionContext, onChange: () => void) => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      const primed = statusPrimed && ctx === statusContext;
+      const generation =
+        ctx === statusContext && requestActive
+          ? statusGeneration
+          : ++statusGeneration;
+      clearTimer();
+      removeWidget();
+      statusContext = ctx;
+      onStatusChange = onChange;
+      requestActive = true;
+      statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
+      statusTimer.unref?.();
+      statusPrimed = false;
+      publishStatus(presentedStatus);
+      if (!primed) void refresh(ctx, generation);
+    },
     prime: (ctx: ExtensionContext) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       const generation = statusGeneration;
@@ -431,6 +457,7 @@ export function createAgentStatusRuntime() {
     },
     start: (ctx: ExtensionContext) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      onStatusChange = undefined;
       const primed = statusPrimed && ctx === statusContext;
       const generation =
         ctx === statusContext && requestActive
@@ -472,7 +499,7 @@ export function createAgentStatusRuntime() {
               });
           },
         );
-        widget.setSnapshot(widgetSnapshot(lastValidStatus));
+        widget.setSnapshot(widgetSnapshot(presentedStatus, true));
         if (generation === statusGeneration && ctx === statusContext) {
           statusWidget = widget;
           statusWidgetGeneration = generation;
@@ -486,6 +513,7 @@ export function createAgentStatusRuntime() {
       if (!primed) void refresh(ctx, generation);
     },
     clear: () => {
+      ++statusGeneration;
       clearTimer();
       if (statusContext) statusContext.ui.setWidget("pi-herdsman", undefined);
       statusWidget?.dispose();
@@ -493,6 +521,10 @@ export function createAgentStatusRuntime() {
       requestActive = false;
       focusInFlight = false;
       statusPrimed = false;
+      statusRefresh = false;
+      statusInFlight = false;
+      onStatusChange = undefined;
+      presentedStatus = { agents: [], stale: false, unavailable: true };
     },
     prepareSession: (ctx: ExtensionContext, beforeActivate?: () => void) => {
       clearTimer();
@@ -509,12 +541,15 @@ export function createAgentStatusRuntime() {
         stale: false,
         unavailable: true,
       };
+      presentedStatus = lastValidStatus;
+      onStatusChange = undefined;
       beforeActivate?.();
       statusContext = ctx;
       return ++statusGeneration;
     },
     setSnapshot: (snapshot: StatusSnapshot) => {
       lastValidStatus = snapshot;
+      presentedStatus = widgetSnapshot(snapshot);
     },
     shutdown: () => {
       ++statusGeneration;
@@ -527,6 +562,8 @@ export function createAgentStatusRuntime() {
       statusContext = undefined;
       requestActive = false;
       statusPrimed = false;
+      onStatusChange = undefined;
+      presentedStatus = { agents: [], stale: false, unavailable: true };
     },
   };
 }

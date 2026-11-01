@@ -1845,6 +1845,13 @@ export function registerLeadRuntime(
       supervisionUiRuntime.registerWidget(
         ctx,
         activeLeadRole(leadRuntime) === "manager" ? "manager" : "chief",
+        {
+          getSnapshot: () => statusRuntime.getSnapshot(),
+          onFocus: (intent, isCurrent) => focusTarget(ctx, intent, isCurrent),
+        },
+      );
+      statusRuntime.startObserver(ctx, () =>
+        supervisionUiRuntime.invalidateWidget(),
       );
     } catch {
       return;
@@ -2635,15 +2642,19 @@ export function registerLeadRuntime(
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
     const signal = controller.sessionSignal();
+    const expectedRole = activeRootRoleForPresentation();
     const current = () =>
       !!signal &&
       !signal.aborted &&
       isCurrent() &&
       ctx.sessionManager.getSessionId() === sessionId &&
-      activeLeadRole(options.leadRuntime) === "lead" &&
+      expectedRole !== undefined &&
+      activeRootRoleForPresentation() === expectedRole &&
       !options.leadRuntime.roleSuspended;
     if (!current()) throw new Error("Navigation is no longer available.");
     if (intent.kind === "assigned-manager") {
+      if (expectedRole !== "lead")
+        throw new Error("Navigation is no longer available.");
       const scope = await roleTransitions.currentWorktreeScope(ctx);
       if (!current() || !scope)
         throw new Error("Managed project assignment changed.");
@@ -4489,6 +4500,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let stale = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let redrawTimer: ReturnType<typeof setInterval> | undefined;
+  let animationTimer: ReturnType<typeof setInterval> | undefined;
+  let animationFrame = 0;
+  let ownedAgents:
+    | {
+        getSnapshot(): StatusSnapshot;
+        onFocus(intent: FocusIntent, isCurrent: () => boolean): Promise<void>;
+      }
+    | undefined;
   let uiContext: ExtensionContext | undefined;
   let inFlight: Promise<void> | undefined;
   let pending: ExtensionContext | undefined;
@@ -5736,10 +5755,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     setWidgetRender: (render: (() => void) | undefined) => {
       renderWidget = render;
     },
-    registerWidget: (ctx: ExtensionContext, role: "chief" | "manager") => {
+    registerWidget: (
+      ctx: ExtensionContext,
+      role: "chief" | "manager",
+      owned?: typeof ownedAgents,
+    ) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      ownedAgents = owned;
       try {
         const widgetGeneration = ++supervisionWidgetGeneration;
+        const expectedGeneration = generation(ctx);
+        widgetFocusInFlight = false;
         ctx.ui.setWidget("pi-herdsman-staff", (tui: any, theme: any) => {
           renderWidget = () => tui.requestRender();
           return createSupervisionWidget(
@@ -5775,7 +5801,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                     );
                 })
                 .finally(() => {
-                  widgetFocusInFlight = false;
+                  if (widgetGeneration === supervisionWidgetGeneration)
+                    widgetFocusInFlight = false;
                 });
             },
             (work) => {
@@ -5812,6 +5839,31 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 return undefined;
               return cached.summary;
             },
+            owned && {
+              getSnapshot: owned.getSnapshot,
+              getFrame: () => animationFrame,
+              onFocus: (intent) => {
+                const isCurrent = () =>
+                  widgetGeneration === supervisionWidgetGeneration &&
+                  uiContext === ctx &&
+                  generation(ctx) === expectedGeneration;
+                if (widgetFocusInFlight || !isCurrent()) return;
+                widgetFocusInFlight = true;
+                void owned
+                  .onFocus(intent, isCurrent)
+                  .catch((error) => {
+                    if (isCurrent())
+                      ctx.ui.notify(
+                        String(error).replace(/^Error: /u, ""),
+                        "warning",
+                      );
+                  })
+                  .finally(() => {
+                    if (widgetGeneration === supervisionWidgetGeneration)
+                      widgetFocusInFlight = false;
+                  });
+              },
+            },
           );
         });
       } catch {
@@ -5821,6 +5873,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     },
     removeWidget: (ctx: ExtensionContext) => {
       cancelGitSampling();
+      if (animationTimer) clearInterval(animationTimer);
+      animationTimer = undefined;
+      ownedAgents = undefined;
       supervisionWidgetGeneration++;
       widgetFocusInFlight = false;
       try {
@@ -5851,6 +5906,27 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     requestRefresh: () => {
       if (uiContext) void refresh(uiContext);
     },
+    invalidateWidget: () => {
+      const snapshot = ownedAgents?.getSnapshot();
+      const animate =
+        snapshot &&
+        !snapshot.stale &&
+        !snapshot.unavailable &&
+        snapshot.agents.some(
+          (agent) => agent.state === "working" || agent.state === "starting",
+        );
+      if (animate && !animationTimer) {
+        animationTimer = setInterval(() => {
+          animationFrame++;
+          renderWidget?.();
+        }, 120);
+        animationTimer.unref?.();
+      } else if (!animate && animationTimer) {
+        clearInterval(animationTimer);
+        animationTimer = undefined;
+      }
+      renderWidget?.();
+    },
     stopPeriodic: () => {
       cancelGitSampling();
       pending = undefined;
@@ -5861,6 +5937,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       timer = undefined;
       if (redrawTimer) clearInterval(redrawTimer);
       redrawTimer = undefined;
+      if (animationTimer) clearInterval(animationTimer);
+      animationTimer = undefined;
+      ownedAgents = undefined;
     },
   };
 }

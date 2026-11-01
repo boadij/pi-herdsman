@@ -7,16 +7,23 @@ agents plus controller-local transient starting assignments.
 
 It does not replace mailbox assignment/result authority.
 
-An active Chief receives a separate supervision widget for its current direct
-reports (Managers and ordinary Leads without an active project Manager). It
-shows both categories together when both exist, not managed Agent rows. An
-active Manager receives a work-centric branch projection rather than the
-ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
-is documented in the [command reference](commands.md#project-manager-and-chief). Supervision and
-Agent widgets are never combined.
+An active Chief's supervision widget shows its current direct reports
+(Managers and ordinary Leads without an active project Manager). An active
+Manager's widget shows a work-centric branch projection. Both can append an
+`Agents` subtree for the current session's own Agent hierarchy, using the same
+Agent rows as the ordinary Lead widget. Supervised staff and their Agents do
+not become owned Agents of the supervisor. Chief's complete overview, peek,
+and focus behavior is documented in the [command reference](commands.md#project-manager-and-chief).
 
-The Chief supervision tree uses `├─` for non-final visible reports and `└─` for the
-final visible report. A Manager's observational assigned and ordinary
+The `Agents` group appears when owned Agent rows exist or their observation is
+stale or unavailable. A fresh empty Agent snapshot leaves the supervision view
+unchanged. The group preserves nested Agent ownership and is a presentation
+label, not a navigation target. Agent observation and supervision observation
+have independent freshness: failure of one does not discard the other's view.
+
+The Chief supervision tree uses `├─` for reports followed by another report,
+an overflow row, or an `Agents` group; otherwise the final report uses `└─`.
+A Manager's observational assigned and ordinary
 supervised Leads appear as second-level children; these children do not become
 Chief control targets.
 Chief direct reports and their nested Manager work follow this shape:
@@ -47,8 +54,10 @@ as:
    └─ worktree/silver-stone-21b7 · done
 ```
 
-The widget caps ordinary reports and shows omitted reports in a final
-`└─ … N more · /chief` or `└─ … N more · /manager` row, according to the active role.
+The widget caps ordinary reports at six and shows omitted reports in an
+`… N more · /chief` or `… N more · /manager` row, according to the active
+role. The owned-Agent subtree follows the supervision rows, including any
+overflow row; it is not included in that cap.
 
 Chief's header shows only nonzero categories (`manager`, `direct lead`), or
 `no reports`. Manager's header shows the project name and lists managed
@@ -146,10 +155,9 @@ integration readiness.
 The widget is installed only when the current session has a valid supported
 herdr/Pi identity and Pi is in TUI mode.
 
-A root Lead, Manager, or Chief session gets its exact owned subtree view when
-the ordinary Agent projection is applicable. Manager/Chief ownership rows, if
-shown, are only for Agents directly owned by that exact session; staff
-supervision never adds a Lead's Agent tree.
+A root Lead receives the ordinary owned-Agent widget. A Manager or Chief sees
+its exact owned hierarchy in the supervision widget, including proven nested
+Agent descendants; staff supervision never adds a Lead's Agent tree.
 
 A valid managed leaf can receive an identity-only header.
 
@@ -160,7 +168,7 @@ Unmanaged or invalid agent environments do not receive the managed widget.
 ## Refresh
 
 Ordinary status refreshes on explicit requests and controller or Herdr
-invalidations, with a 10-second reconciliation while its TUI widget is active.
+invalidations, with a 10-second reconciliation while its TUI presentation is active.
 Herdr events invalidate the view; presentation-only events refresh status but
 do not trigger health scans.
 
@@ -189,12 +197,20 @@ observational. A visible truncated Manager project-work branch can focus its
 exact verified Lead only for a fresh, active row; only the rendered branch
 segment is clickable, not its status suffix. A build mismatch remains visible
 but does not by itself disable native Herdr focus. Paused or conflicted project
-work, lost or unresolved sessions, stale projections, wholly hidden labels,
-omitted entries, and targets without a uniquely verified live Herdr pane are
+work, lost or unresolved sessions, stale projections, omitted entries, and
+targets without a uniquely verified live Herdr pane are
 inert. Current placement is checked again when a click is handled; the status
 projection itself is never authorization. Focus grants no cross-build
 staff-operation authority; inspection, messaging, and control retain their
 existing authorization checks.
+
+In a combined widget, Agent and staff rows use their respective verification
+paths and independent freshness checks. An Agent row requires a fresh,
+available Agent snapshot, a unique Agent session, and a fresh exact-owned
+live-pane verification on click. Agent rows remain clickable when their labels
+are truncated at narrow widths. Starting, unknown, and lost Agent rows and the
+`Agents` group heading are inert. Stale supervision does not by
+itself disable an otherwise eligible owned-Agent target, or vice versa.
 
 Headless mode has no UI-only periodic supervision observation. Explicit and
 model-context refreshes still acquire fresh state. A refresh failure never

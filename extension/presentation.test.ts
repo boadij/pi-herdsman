@@ -4173,7 +4173,7 @@ test("status widget hit regions select exact rows and visible ancestors only", (
   assert.equal(click(0, 1, 139), undefined);
 });
 
-test("truncated Agent rows are not clickable when their label is hidden", (t) => {
+test("truncated Agent rows remain clickable when their label is hidden", (t) => {
   const selected: unknown[] = [];
   const widget = new StatusWidget(undefined, undefined, (intent) =>
     selected.push(intent),
@@ -4196,10 +4196,11 @@ test("truncated Agent rows are not clickable when their label is hidden", (t) =>
   const rows = widget.render(1);
   assert.equal(stripVTControlCharacters(rows[1]!), "…");
   assert.equal(
-    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
-    undefined,
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 })
+      ?.handled,
+    true,
   );
-  assert.deepEqual(selected, []);
+  assert.deepEqual(selected, [{ kind: "session", sessionId: "agent-session" }]);
 });
 
 test("stale Agent rows remain non-clickable", (t) => {
@@ -4236,7 +4237,7 @@ test("stale Agent rows remain non-clickable", (t) => {
   assert.deepEqual(selected, []);
 });
 
-test("Agent definition does not substitute for a clipped identifying label", (t) => {
+test("Agent rows remain clickable when their identifying label is clipped", (t) => {
   const selected: unknown[] = [];
   const widget = new StatusWidget(undefined, undefined, (intent) =>
     selected.push(intent),
@@ -4260,9 +4261,147 @@ test("Agent definition does not substitute for a clipped identifying label", (t)
   const rows = widget.render(width);
   assert.equal(stripVTControlCharacters(rows[1]!), "└─ ⠋ worker  …");
   assert.equal(
-    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
-    undefined,
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width })
+      ?.handled,
+    true,
   );
+  assert.deepEqual(selected, [{ kind: "session", sessionId: "agent-session" }]);
+});
+
+test("truncated Agent rows focus their session in standalone and mixed widgets", (t) => {
+  const snapshot = {
+    agents: [
+      {
+        label: "scout",
+        definition: "scout",
+        state: "blocked" as const,
+        sessionId: "agent",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  const selected: unknown[] = [];
+  const standalone = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => standalone.dispose());
+  standalone.setSnapshot(snapshot);
+  const mixed = createSupervisionWidget(
+    () => [],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    { getSnapshot: () => snapshot, onFocus: (intent) => selected.push(intent) },
+  );
+  for (const [widget, width, row, x] of [
+    [standalone, 17, 1, 0],
+    [mixed, 20, 2, 3],
+  ] as const) {
+    assert.match(
+      stripVTControlCharacters(widget.render(width)[row]!),
+      /scou…$/,
+    );
+    assert.equal(
+      widget.handleMouse({ type: "click", button: "left", x, y: row, width })
+        ?.handled,
+      true,
+    );
+    assert.match(
+      stripVTControlCharacters(widget.render(width + 1)[row]!),
+      /scout/,
+    );
+    assert.equal(
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x,
+        y: row,
+        width: width + 1,
+      })?.handled,
+      true,
+    );
+  }
+  for (const [widget, row] of [
+    [standalone, 1],
+    [mixed, 2],
+  ] as const) {
+    assert.equal(stripVTControlCharacters(widget.render(1)[row]!), "…");
+    assert.equal(
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 0,
+        y: row,
+        width: 1,
+      })?.handled,
+      true,
+    );
+  }
+  assert.deepEqual(
+    selected,
+    Array.from({ length: 6 }, () => ({ kind: "session", sessionId: "agent" })),
+  );
+});
+
+test("truncated Agent rows retain freshness, uniqueness and state guards", (t) => {
+  const agent = {
+    label: "scout",
+    definition: "scout",
+    state: "blocked" as "blocked" | "starting" | "unknown" | "lost",
+    sessionId: "agent",
+  };
+  const snapshot = { agents: [agent], stale: false, unavailable: false };
+  const selected: unknown[] = [];
+  const standalone = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => standalone.dispose());
+  const mixed = createSupervisionWidget(
+    () => [],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    { getSnapshot: () => snapshot, onFocus: (intent) => selected.push(intent) },
+  );
+  const checkInert = () => {
+    standalone.setSnapshot(snapshot);
+    for (const [widget, row, widths] of [
+      [standalone, 1, [1, 17]],
+      [mixed, 2, [1, 20]],
+    ] as const) {
+      for (const width of widths) {
+        widget.render(width);
+        assert.equal(
+          widget.handleMouse({
+            type: "click",
+            button: "left",
+            x: 0,
+            y: row,
+            width,
+          }),
+          undefined,
+        );
+      }
+    }
+  };
+  snapshot.stale = true;
+  checkInert();
+  snapshot.stale = false;
+  snapshot.unavailable = true;
+  checkInert();
+  snapshot.unavailable = false;
+  snapshot.agents.push({ ...agent, label: "other" });
+  checkInert();
+  snapshot.agents.pop();
+  for (const state of ["starting", "unknown", "lost"] as const) {
+    agent.state = state;
+    checkInert();
+  }
   assert.deepEqual(selected, []);
 });
 
@@ -6495,6 +6634,127 @@ test("Chief tree shows project and branch without internal paths or zero counts"
     parentSessionId: "manager-session",
   });
   assert.equal(click(0, 0), undefined);
+});
+
+test("supervision widget composes owned Agents with independent focus and freshness", () => {
+  const staff = [lead()];
+  const snapshot = {
+    agents: [
+      {
+        label: "scout",
+        definition: "scout",
+        state: "working" as const,
+        sessionId: "agent-session",
+      },
+      {
+        label: "child",
+        definition: "scout",
+        state: "blocked" as const,
+        sessionId: "child-session",
+        parentLabel: "scout",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  const focused: string[] = [];
+  const widget = createSupervisionWidget(
+    () => staff,
+    () => "fresh",
+    "chief",
+    undefined,
+    () => focused.push("staff"),
+    undefined,
+    {
+      getSnapshot: () => snapshot,
+      onFocus: () => focused.push("agent"),
+      getFrame: () => 1,
+    },
+  );
+  const rows = widget.render(80);
+  assert.match(rows[1]!, /^├─/);
+  assert.equal(rows[2], "└─ Agents · 2");
+  assert.match(rows[3]!, /^   └─ .*scout/);
+  assert.match(rows[4]!, /^      └─ .*child/);
+  const click = (x: number, y: number) =>
+    widget.handleMouse({ type: "click", button: "left", x, y, width: 80 });
+  assert.equal(click(0, 2), undefined);
+  assert.equal(click(3, 1)?.handled, true);
+  assert.equal(click(5, 3)?.handled, true);
+  assert.deepEqual(focused, ["staff", "agent"]);
+  snapshot.stale = true;
+  assert.match(widget.render(80)[2]!, /stale/);
+  assert.equal(click(5, 3), undefined);
+  for (const width of [1, 4, 8, 20]) {
+    const narrow = widget.render(width);
+    assert.ok(narrow.every((row) => visibleWidth(row) <= width));
+  }
+  snapshot.stale = false;
+  snapshot.agents.length = 0;
+  assert.deepEqual(
+    widget.render(80),
+    createSupervisionWidget(
+      () => staff,
+      () => "fresh",
+      "chief",
+    ).render(80),
+  );
+});
+
+test("owned Agent composition preserves overflow and independent supervision freshness", () => {
+  const reports = Array.from({ length: 7 }, (_, index) =>
+    lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
+  );
+  const snapshot = {
+    agents: [
+      {
+        label: "scout",
+        definition: "scout",
+        state: "working" as const,
+        sessionId: "agent",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  let frame = 0;
+  let focused = 0;
+  const widget = createSupervisionWidget(
+    () => reports,
+    () => "stale",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    {
+      getSnapshot: () => snapshot,
+      onFocus: () => focused++,
+      getFrame: () => frame,
+    },
+  );
+  const rows = widget.render(80);
+  assert.match(rows[7]!, /^├─ … 1 more/);
+  assert.equal(rows[8], "└─ Agents · 1");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 9, width: 80 })
+      ?.handled,
+    true,
+  );
+  assert.equal(focused, 1);
+  frame++;
+  assert.notEqual(widget.render(80)[9], rows[9]);
+  snapshot.unavailable = true;
+  assert.match(widget.render(80)[8]!, /unavailable/);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 5,
+      y: 9,
+      width: 80,
+    }),
+    undefined,
+  );
 });
 
 test("Chief tree connects nested Manager Leads without nesting direct Leads", () => {
