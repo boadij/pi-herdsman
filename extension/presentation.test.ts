@@ -1557,7 +1557,7 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       breadcrumb: [{ text: "lead" }],
     });
     assert.deepEqual(widget.render(160), [
-      "● lead  ◌1",
+      "● lead  ◌ 1",
       "└─ ◌ agent  settling",
     ]);
     assert.equal((widget as any).timer, undefined);
@@ -1656,7 +1656,7 @@ test("status widget projects active herd duration without changing counts", (t) 
     breadcrumb: [{ text: "lead" }],
   });
   assert.match(widget.render(160)[0]!, /lead · \d+s/);
-  assert.match(widget.render(160)[0]!, /●1 ◐1/);
+  assert.match(widget.render(160)[0]!, /● 1  ◐ 1/);
 });
 
 test("Status widget freezes stale elapsed values at the observation time", (t) => {
@@ -3548,7 +3548,7 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0], /◌1/);
+    assert.match(widget.render(160)[0], /◌ 1/);
     widget.setSnapshot({
       agents: [{ label: "w", definition: "agent", state: "settling" }],
       stale: true,
@@ -3570,7 +3570,7 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       unavailable: false,
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /◌2/);
+    assert.match(rendered, /◌ 2/);
     assert.match(rendered, /working/);
     assert.match(rendered, /settling-leaf/);
     assert.match(rendered, /settling-other/);
@@ -3584,7 +3584,7 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0]!, /◌3/);
+    assert.match(widget.render(160)[0]!, /◌ 3/);
     assert.match(widget.render(160).join("\n"), /⠋ agent\s+starting/);
     assert.match(widget.render(160).join("\n"), /settling-[ab]/);
     assert.notEqual((widget as any).timer, undefined);
@@ -3635,7 +3635,7 @@ test("Status widgets preserve parent families and settling counts", (t) => {
       stale: false,
       unavailable: false,
     });
-    assert.match(widget.render(160)[0]!, /◌2/);
+    assert.match(widget.render(160)[0]!, /◌ 2/);
     assert.match(widget.render(160).join("\n"), /settling-[ab]/);
   }
 });
@@ -3722,7 +3722,7 @@ test("Status widget renders complete execution metadata without changing ownersh
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
-  assert.match(widget.render(160)[0]!, /^● lead · managed  ◐1$/);
+  assert.match(widget.render(160)[0]!, /^● lead · managed  ◐ 1$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
@@ -3913,7 +3913,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       ownTools: semanticTools,
     });
     const header = widget.render(54)[0]!;
-    assert.match(header, /●1/);
+    assert.match(header, /● 1/);
     assert.match(header, /\[read, bash, list_agents, …\]/);
   }
 });
@@ -4027,7 +4027,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     });
 
     assert.deepEqual(widget.render(160), [
-      "● lead → implementer  ●3",
+      "● lead → implementer  ● 3",
       "└─ ⠋ implementer  implementer:feature  0s  gpt-5.6-luna  low  3%  Parent task",
       "   ├─ ⠋ scout        scout:child-1     0s  gpt-5.6-luna  low  1%  Child one",
       "   └─ ⠋ scout        scout:child-2     0s  gpt-5.6-luna  low  1%  Child two",
@@ -7717,7 +7717,7 @@ test("ambient Agent headers compact counts and routine rows keep one state marke
     unavailable: false,
   });
   const rows = widget.render(160);
-  assert.match(rows[0]!, /●2 ◐1 ◌2 \?1/);
+  assert.match(rows[0]!, /● 2  ◐ 1  ◌ 2  \? 1/);
   const workingRow = rows.find((row) => row.includes("working-a"))!;
   assert.match(workingRow, /⠋ agent  working-a/);
   assert.doesNotMatch(workingRow, /● working/);
