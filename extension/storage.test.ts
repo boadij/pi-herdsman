@@ -409,6 +409,8 @@ test("required evidence cleanup failures preserve publication and primary errors
   const assignmentId = randomUUID();
   const directory = requiredEvidenceDirectory(assignmentId);
   let primaryFailure = false;
+  let directoryFd: number | undefined;
+  let failDirectoryFsync = false;
   mock.module("node:fs", {
     exports: {
       chmodSync(path: fs.PathLike, mode: fs.Mode) {
@@ -416,12 +418,25 @@ test("required evidence cleanup failures preserve publication and primary errors
           throw new Error("primary failed");
         return fs.chmodSync(path, mode);
       },
-      closeSync: fs.closeSync,
+      closeSync(fd: number) {
+        const isDirectoryFd = fd === directoryFd;
+        if (isDirectoryFd) directoryFd = undefined;
+        fs.closeSync(fd);
+        if (isDirectoryFd) throw new Error("directory close failed");
+      },
       constants: fs.constants,
       fstatSync: fs.fstatSync,
-      fsyncSync: fs.fsyncSync,
+      fsyncSync(fd: number) {
+        if (fd === directoryFd && failDirectoryFsync)
+          throw new Error("directory fsync failed");
+        return fs.fsyncSync(fd);
+      },
       mkdirSync: fs.mkdirSync,
-      openSync: fs.openSync,
+      openSync(path: fs.PathLike, flags: string | number, mode?: number) {
+        const fd = fs.openSync(path, flags, mode);
+        if (String(path) === directory) directoryFd = fd;
+        return fd;
+      },
       readdirSync: fs.readdirSync,
       readFileSync: fs.readFileSync,
       renameSync: fs.renameSync,
@@ -441,6 +456,12 @@ test("required evidence cleanup failures preserve publication and primary errors
       readRequiredEvidenceSnapshot(assignmentId, entry),
       "published\n",
     );
+    failDirectoryFsync = true;
+    assert.throws(
+      () => persist(assignmentId, "fsync.md", "body"),
+      /directory fsync failed/,
+    );
+    failDirectoryFsync = false;
     primaryFailure = true;
     assert.throws(
       () => persist(assignmentId, "primary.md", "body"),

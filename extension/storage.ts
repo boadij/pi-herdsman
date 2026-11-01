@@ -217,7 +217,11 @@ export function persistRequiredEvidenceSnapshot(
       try {
         fsyncSync(dirFd);
       } finally {
-        closeSync(dirFd);
+        try {
+          closeSync(dirFd);
+        } catch {
+          // Cleanup must not replace the persistence outcome.
+        }
       }
     }
     return {
