@@ -14571,6 +14571,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   let mismatch = false;
   let deferNextLookup = false;
   let loadCount = 0;
+  let failSupervision = false;
   let sampleRefresh = false;
   const untrackedFile = join(assignedCheckout, "untracked.txt");
   let markFocusLookupStarted!: () => void;
@@ -14697,6 +14698,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     herdrSessionSnapshot: async () => ({ agents: [] }),
     managedAgentSnapshots: async () => ({ agents: [] }),
     loadSnapshot: async () => {
+      if (failSupervision) throw new Error("supervision unavailable");
       if (sampleRefresh) {
         sampleRefresh = false;
         return currentSnapshot;
@@ -15224,6 +15226,104 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "generation replacement during fresh lookup must not focus",
   );
 
+  const ownedSnapshot: any = {
+    agents: [
+      {
+        label: "owned",
+        definition: "scout",
+        state: "working",
+        sessionId: "owned-session",
+        paneId: "owned-pane",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  const ownedFocused: string[] = [];
+  let focusCurrent: (() => boolean) | undefined;
+  runtime.registerWidget(ctx, "manager", {
+    getSnapshot: () => ownedSnapshot,
+    onFocus: async (intent, isCurrent) => {
+      if (intent.kind === "session") ownedFocused.push(intent.sessionId);
+      focusCurrent = isCurrent;
+    },
+  });
+  await runtime.refresh(ctx);
+  failSupervision = true;
+  await runtime.refresh(ctx);
+  assert.equal(runtime.status(ctx), "stale");
+  failSupervision = false;
+  runtime.invalidateWidget();
+  const ownedRow = widget
+    .render(120)
+    .findIndex((line: string) => line.includes("owned"));
+  assert.ok(ownedRow > 0);
+  widget.handleMouse({
+    type: "click",
+    button: "left",
+    x: 8,
+    y: ownedRow,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(ownedFocused, ["owned-session"]);
+  assert.equal(focusCurrent?.(), true);
+  ownedSnapshot.stale = true;
+  runtime.invalidateWidget();
+  widget.render(120);
+  widget.handleMouse({
+    type: "click",
+    button: "left",
+    x: 8,
+    y: ownedRow,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(ownedFocused, ["owned-session"]);
+  runtime.removeWidget(ctx);
+  assert.equal(focusCurrent?.(), false);
+
+  ownedSnapshot.stale = false;
+  const pendingFocus: (() => void)[] = [];
+  const registerDeferred = () =>
+    runtime.registerWidget(ctx, "manager", {
+      getSnapshot: () => ownedSnapshot,
+      onFocus: () => new Promise<void>((resolve) => pendingFocus.push(resolve)),
+    });
+  const clickOwned = () => {
+    const row = widget
+      .render(120)
+      .findIndex((line: string) => line.includes("owned"));
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 8,
+      y: row,
+      width: 120,
+    });
+  };
+  registerDeferred();
+  clickOwned();
+  assert.equal(pendingFocus.length, 1);
+  runtime.removeWidget(ctx);
+  registerDeferred();
+  clickOwned();
+  assert.equal(pendingFocus.length, 2);
+  pendingFocus[0]!();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  clickOwned();
+  assert.equal(
+    pendingFocus.length,
+    2,
+    "old completion must not unlock replacement focus",
+  );
+  pendingFocus[1]!();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  clickOwned();
+  assert.equal(pendingFocus.length, 3);
+  pendingFocus[2]!();
+  runtime.removeWidget(ctx);
+
   diffMode = "cancelDeferred";
   assignedHead = "f".repeat(40);
   testNow += 30_001;
@@ -15731,11 +15831,16 @@ test("Chief overview renders incompatible staff without counts and allows focus 
 
 test("Chief overview redraws identical herds when freshness changes", async () => {
   const originalSetInterval = globalThis.setInterval;
-  const callbacks: TimerHandler[] = [];
+  const originalClearInterval = globalThis.clearInterval;
+  const callbacks = new Map<object, () => void>();
   globalThis.setInterval = ((callback: TimerHandler) => {
-    callbacks.push(callback);
-    return { unref: () => undefined } as any;
+    const timer = { unref: () => undefined };
+    callbacks.set(timer, callback as () => void);
+    return timer as any;
   }) as typeof setInterval;
+  globalThis.clearInterval = ((timer: any) => {
+    callbacks.delete(timer);
+  }) as typeof clearInterval;
   try {
     const harness = await openChiefOverview(true);
     try {
@@ -15746,12 +15851,13 @@ test("Chief overview redraws identical herds when freshness changes", async () =
       );
 
       harness.setFailRefresh(true);
-      (callbacks.at(-1) as () => void)();
+      // The supervision interval precedes the independent Agent observer.
+      callbacks.values().next().value!();
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.match(harness.component.render(120).join("\n"), /1 herd · stale/);
 
       harness.setFailRefresh(false);
-      (callbacks.at(-1) as () => void)();
+      callbacks.values().next().value!();
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.match(harness.component.render(120).join("\n"), /1 herd/);
       assert.doesNotMatch(
@@ -15763,6 +15869,7 @@ test("Chief overview redraws identical herds when freshness changes", async () =
     }
   } finally {
     globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
   }
 });
 
@@ -15771,23 +15878,25 @@ test("Chief overview redraws after a background refresh", async () => {
   const originalClearInterval = globalThis.clearInterval;
   const activeTimers = new Set<object>();
   let intervalCalls = 0;
-  let refresh: (() => void) | undefined;
+  const callbacks = new Map<object, () => void>();
   globalThis.setInterval = ((callback: TimerHandler) => {
-    refresh = callback as () => void;
     intervalCalls++;
     const timer = { unref: () => undefined };
     activeTimers.add(timer);
+    callbacks.set(timer, callback as () => void);
     return timer as any;
   }) as typeof setInterval;
   globalThis.clearInterval = ((timer: any) => {
     activeTimers.delete(timer);
+    callbacks.delete(timer);
   }) as typeof clearInterval;
   try {
     const harness = await openChiefOverview(true);
-    assert.equal(intervalCalls, 2);
-    assert.equal(activeTimers.size, 1);
+    assert.equal(intervalCalls, 3);
+    // Supervision and owned-Agent observation each retain an interval.
+    assert.equal(activeTimers.size, 2);
     const before = harness.renderRequests;
-    refresh!();
+    callbacks.values().next().value!();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(harness.renderRequests > before);
     await harness.cleanup();
@@ -19714,6 +19823,210 @@ test("delegating managed Agents focus only fresh owned child-row identities", as
   assert.deepEqual(focused, ["owned-child-pane"]);
   assert.ok(notices.some((message) => /Agent changed/u.test(message)));
 });
+
+for (const role of ["chief", "manager"] as const)
+  test(`${role} owned-Agent focus revalidates ownership and physical identity`, async (t) => {
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = "chief-pane";
+    process.env.HERDR_TAB_ID = "chief-tab";
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `chief-agent-focus-${randomUUID()}.sock`,
+    );
+    const child = {
+      ...managedState("chief-owned-child"),
+      paneId: "chief-owned-pane",
+      piSessionId: CHILD_SESSION_ID,
+      piSessionFile: "/tmp/chief-owned-child.jsonl",
+    };
+    const mailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+    writeAgentState(mailbox, child);
+    nativeSessions.set(child.piSessionFile, {
+      id: child.piSessionId,
+      path: child.piSessionFile,
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: {
+            sessionId: child.piSessionId,
+            definition: "agent",
+            label: child.agentLabel,
+          },
+        },
+      ],
+    });
+    const focused: string[] = [];
+    let replaceIdentity = false;
+    let deferIdentity = false;
+    let releaseIdentity!: () => void;
+    let identityStarted!: () => void;
+    const identityLookup = new Promise<void>((resolve) => {
+      identityStarted = resolve;
+    });
+    const executor = agentControllerExecutor(child);
+    const pi = (role === "manager" ? fakeRepositoryChiefPi : fakeChiefPi)({
+      activeTools: ["agent", "chief", "read"],
+      exec: async (command, args, options) => {
+        if (
+          role === "manager" &&
+          command === "herdr" &&
+          args[0] === "workspace" &&
+          args[1] === "get"
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { workspace: { worktree: null } },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (
+          role === "manager" &&
+          command === "herdr" &&
+          args[0] === "worktree" &&
+          args[1] === "list"
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  source_workspace_id: WORKSPACE,
+                  repo_key: "/tmp",
+                  repo_name: "project",
+                },
+                worktrees: [],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (role === "manager" && command === "herdr" && isAgentList(args))
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                agents: [managerAgentIdentity(), agentFromState(child)],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (
+          role === "manager" &&
+          command === "herdr" &&
+          args[0] === "agent" &&
+          args[1] === "get" &&
+          args[2] === process.env.HERDR_PANE_ID
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agent: managerAgentIdentity() },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (command === "herdr" && args[0] === "agent" && args[1] === "focus") {
+          focused.push(args[2]!);
+          return { stdout: "{}", stderr: "", code: 0 };
+        }
+        if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+          if (deferIdentity) {
+            deferIdentity = false;
+            identityStarted();
+            await new Promise<void>((resolve) => {
+              releaseIdentity = resolve;
+            });
+          }
+          const agent = agentFromState(child) as any;
+          if (replaceIdentity)
+            agent.agent_session.value = "replacement-session";
+          return {
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agent } }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        return executor(command, args, options);
+      },
+    });
+    const ctx = fakeContext() as any;
+    ctx.mode = "tui";
+    ctx.hasUI = true;
+    let widget: any;
+    const notices: string[] = [];
+    ctx.ui = {
+      ...ctx.ui,
+      setWidget: (key: string, content: any) => {
+        if (key === "pi-herdsman-staff" && typeof content === "function")
+          widget = content(
+            { requestRender: () => undefined },
+            {
+              fg: (_: string, value: string) => value,
+              bold: (value: string) => value,
+            },
+          );
+      },
+      notify: (message: string) => notices.push(message),
+    };
+    registerExtension!(pi.pi as never);
+    t.after(async () => {
+      await pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+      nativeSessions.delete(child.piSessionFile);
+      delete process.env.HERDR_SOCKET_PATH;
+      setLeadEnvironment();
+    });
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get(role).handler("", ctx);
+    assert.ok(widget, notices.join(" | "));
+    await t.waitFor(() =>
+      assert.match(widget.render(120).join("\n"), /chief-owned-child/),
+    );
+    const click = () => {
+      const row = widget
+        .render(120)
+        .findIndex((line: string) => line.includes("chief-owned-child"));
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 8,
+        y: row,
+        width: 120,
+      });
+    };
+    click();
+    await t.waitFor(() => assert.deepEqual(focused, ["chief-owned-pane"]));
+    replaceIdentity = true;
+    click();
+    await t.waitFor(() =>
+      assert.ok(notices.some((message) => /Agent changed/u.test(message))),
+    );
+    assert.deepEqual(focused, ["chief-owned-pane"]);
+    replaceIdentity = false;
+    child.ownerSessionId = "foreign-owner";
+    writeAgentState(mailbox, child);
+    const previousNotices = notices.length;
+    click();
+    await t.waitFor(() => assert.ok(notices.length > previousNotices));
+    assert.deepEqual(focused, ["chief-owned-pane"]);
+    child.ownerSessionId = LEAD_SESSION_ID;
+    writeAgentState(mailbox, child);
+    deferIdentity = true;
+    click();
+    await identityLookup;
+    await pi.commandOptions.get(role).handler("leave", ctx);
+    releaseIdentity();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      focused,
+      ["chief-owned-pane"],
+      `leaving ${role} during verification must prevent focus`,
+    );
+  });
 
 test("Lead status child-row focus rechecks the exact Herdr session identity", async (t) => {
   setLeadEnvironment();
