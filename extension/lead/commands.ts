@@ -1245,12 +1245,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         active
           ? [
               { value: "overview", label: "Overview" },
+              {
+                value: "refresh",
+                label: "Refresh profile",
+                help: "Apply definition changes after the current turn becomes idle.",
+              },
               { value: "leave", label: `Leave ${name} mode` },
             ]
           : [{ value: "start", label: `Start ${name} mode` }],
       );
       if (selected === "overview" || selected === "start")
         await this.runRoleCommand(role, "", ctx);
+      else if (selected === "refresh")
+        await this.runRoleCommand(role, "refresh", ctx);
       else if (selected === "leave")
         await this.runRoleCommand(role, "leave", ctx);
     },
@@ -1260,24 +1267,29 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       ctx: ExtensionCommandContext,
     ): Promise<void> {
       const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
-      const usage = `Usage: /${role} [leave]`;
-      if (args.length > 1 || (args[0] && args[0] !== "leave")) {
-        ctx.ui.notify(usage, "error");
+      const action = args[0];
+      if (
+        args.length > 1 ||
+        (action && action !== "refresh" && action !== "leave")
+      ) {
+        ctx.ui.notify(`Usage: /${role} [refresh|leave]`, "error");
         return;
       }
       try {
-        if (!args.length && host.roleActive(role)) {
-          ctx.ui.notify(await host.transitionRole(role, false, ctx));
+        if (!action && host.roleActive(role)) {
           await host.openSupervisionOverview(ctx);
           return;
         }
-        ctx.ui.notify(
-          await host.transitionRole(role, args[0] === "leave", ctx),
-        );
+        if (action === "refresh" && !host.roleActive(role)) {
+          ctx.ui.notify(
+            `/${role} refresh requires active ${role} mode`,
+            "error",
+          );
+          return;
+        }
+        ctx.ui.notify(await host.transitionRole(role, action === "leave", ctx));
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
-        if (!args.length && host.roleActive(role))
-          await host.openSupervisionOverview(ctx);
       }
     },
     async runHerdsmanCommand(

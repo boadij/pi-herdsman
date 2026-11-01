@@ -486,39 +486,49 @@ test("registered Manager command removes persisted required evidence through the
         {},
         resolve,
       );
-      const rendered = component.render(120).join("\n");
-      if (
-        notices?.includes(
-          "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
-        ) &&
-        (rendered.includes("Pi Herdsman · project") ||
-          rendered.includes("Pi Herdsman · unavailable"))
-      ) {
-        setImmediate(() => component.handleInput("\u001b"));
-        return;
-      }
-      const choice = rendered.includes("Pi Herdsman · project")
-        ? "feature/evidence-bridge"
-        : rendered.includes("Remove requirement")
-          ? "Remove requirement"
-          : rendered.includes(evidenceId)
-            ? evidenceId
-            : rendered.includes("Retained evidence")
-              ? "Retained evidence"
-              : undefined;
-      assert.ok(choice, `unexpected menu:\n${rendered}`);
-      assert.ok(
-        rendered.includes(choice),
-        `expected ${choice} in menu:\n${rendered}`,
-      );
-      selected.push(choice);
-      setImmediate(() => {
-        try {
-          selectTuiItem(component, choice);
-        } catch (error) {
-          reject(error);
+      const inspect = async () => {
+        if (selected.length === 0)
+          await t.waitFor(() =>
+            assert.match(
+              component.render(120).join("\n"),
+              /Pi Herdsman · project/,
+            ),
+          );
+        const rendered = component.render(120).join("\n");
+        if (
+          notices?.includes(
+            "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
+          ) &&
+          (rendered.includes("Pi Herdsman · project") ||
+            rendered.includes("Pi Herdsman · unavailable"))
+        ) {
+          setImmediate(() => component.handleInput("\u001b"));
+          return;
         }
-      });
+        const choice = rendered.includes("Pi Herdsman · project")
+          ? "feature/evidence-bridge"
+          : rendered.includes("Remove requirement")
+            ? "Remove requirement"
+            : rendered.includes(evidenceId)
+              ? evidenceId
+              : rendered.includes("Retained evidence")
+                ? "Retained evidence"
+                : undefined;
+        assert.ok(choice, `unexpected menu:\n${rendered}`);
+        assert.ok(
+          rendered.includes(choice),
+          `expected ${choice} in menu:\n${rendered}`,
+        );
+        selected.push(choice);
+        setImmediate(() => {
+          try {
+            selectTuiItem(component, choice);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      };
+      void inspect().catch(reject);
     });
   };
   const notices: string[] = [];
@@ -542,13 +552,17 @@ test("registered Manager command removes persisted required evidence through the
   );
   context.mode = "tui";
   await pi.commandOptions.get("manager").handler("", context);
-  assert.deepEqual(selected.slice(0, 5), [
-    "feature/evidence-bridge",
-    "Retained evidence",
-    evidenceId,
-    "Remove requirement",
-    "Remove requirement",
-  ]);
+  assert.deepEqual(
+    selected.slice(0, 5),
+    [
+      "feature/evidence-bridge",
+      "Retained evidence",
+      evidenceId,
+      "Remove requirement",
+      "Remove requirement",
+    ],
+    notices.join("\n"),
+  );
   assert.ok(
     notices.includes(
       "Required evidence removed. Existing Agent assignments and snapshots are unchanged.",
@@ -1879,7 +1893,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: []\n---\n");
-    await pi.commandOptions.get("manager").handler("", context);
+    await pi.commandOptions.get("manager").handler("refresh", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     let releaseIdle!: () => void;
     let markWaiting!: () => void;
@@ -1891,7 +1905,9 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       markWaiting();
       await idle;
     };
-    const refresh = pi.commandOptions.get("manager").handler("", context);
+    const refresh = pi.commandOptions
+      .get("manager")
+      .handler("refresh", context);
     await waiting;
     await pi.commandOptions.get("manager").handler("leave", context);
     assert.deepEqual(pi.pi.getActiveTools(), [
@@ -9229,6 +9245,7 @@ async function managerDelegateAssignmentTest(
     assert.equal(assignment?.id, childSession);
     const managerCommand = pi.commandOptions.get("manager")!;
     assert.deepEqual(managerCommand.getArgumentCompletions(""), [
+      { value: "refresh", label: "refresh" },
       { value: "leave", label: "leave" },
       { value: "remove", label: "remove" },
       { value: "forget", label: "forget" },
@@ -9237,6 +9254,9 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
       { value: "remove", label: "remove" },
       { value: "remove-preapproval", label: "remove-preapproval" },
+    ]);
+    assert.deepEqual(managerCommand.getArgumentCompletions("ref"), [
+      { value: "refresh", label: "refresh" },
     ]);
     assert.deepEqual(
       managerCommand.getArgumentCompletions("remove-preapproval o"),
@@ -13910,6 +13930,39 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
           reason: "Tool is unavailable in the active Chief profile.",
         },
       );
+    const notices: string[] = [];
+    ctx.ui.notify = (message: string) => notices.push(message);
+    const previousTools = pi.pi.getActiveTools();
+    writeFileSync(overridePath, "---\nname: chief\ntools: invalid\n---\n");
+    await pi.commandOptions.get("chief").handler("refresh", ctx);
+    assert.ok(notices.length > 0);
+    assert.deepEqual(pi.pi.getActiveTools(), previousTools);
+    const afterInvalid = await pi.events.get("before_agent_start")![0](
+      event,
+      ctx,
+    );
+    assert.match(afterInvalid?.systemPrompt ?? "", /Configured chief body/);
+
+    writeFileSync(
+      overridePath,
+      "---\nname: chief\ntools: []\n---\nChanged chief body",
+    );
+    let releaseIdle!: () => void;
+    let markWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => (markWaiting = resolve));
+    const idle = new Promise<void>((resolve) => (releaseIdle = resolve));
+    ctx.waitForIdle = async () => {
+      markWaiting();
+      await idle;
+    };
+    const refresh = pi.commandOptions.get("chief").handler("refresh", ctx);
+    await waiting;
+    await pi.commandOptions.get("chief").handler("leave", ctx);
+    const leadToolsAfterLeave = pi.pi.getActiveTools();
+    releaseIdle();
+    await refresh;
+    assert.ok(notices.some((message) => message.includes("mode changed")));
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsAfterLeave);
     resetAgentMailbox(ownerMailbox);
     await pi.events.get("session_shutdown")?.[0](undefined, ctx);
   } finally {
@@ -14255,10 +14308,23 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.ok(widgetKeys.includes("pi-herdsman-staff"));
   assert.equal(
     pi.commandOptions.get("chief").description,
-    "Activate chief mode, or open its overview when already active",
+    "Activate Chief mode, open its overview, or refresh its profile",
+  );
+  assert.deepEqual(pi.commandOptions.get("chief").getArgumentCompletions(""), [
+    { value: "refresh", label: "refresh" },
+    { value: "leave", label: "leave" },
+  ]);
+  assert.deepEqual(
+    pi.commandOptions.get("chief").getArgumentCompletions("ref"),
+    [{ value: "refresh", label: "refresh" }],
   );
   assert.equal(customCalls, 0);
+  let idleCalls = 0;
+  context.waitForIdle = async () => {
+    idleCalls++;
+  };
   await pi.commandOptions.get("chief").handler("", context);
+  assert.equal(idleCalls, 0);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(customCalls, 1);
   assert.ok(overview);
