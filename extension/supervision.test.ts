@@ -4676,6 +4676,9 @@ test("project header listing diagnoses an explicit message with missing routing 
     {
       id: invalidId,
       reason: "malformed",
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     },
   ]);
   assert.equal(existsSync(invalidPath), true);
