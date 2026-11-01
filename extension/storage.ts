@@ -217,7 +217,11 @@ export function persistRequiredEvidenceSnapshot(
       try {
         fsyncSync(dirFd);
       } finally {
-        closeSync(dirFd);
+        try {
+          closeSync(dirFd);
+        } catch {
+          // Cleanup must not replace the persistence outcome.
+        }
       }
     }
     return {
@@ -229,11 +233,17 @@ export function persistRequiredEvidenceSnapshot(
       sha256: createHash("sha256").update(bytes).digest("hex"),
     };
   } finally {
-    if (fd !== undefined) closeSync(fd);
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Cleanup must not replace the persistence outcome.
+      }
+    }
     try {
       unlinkSync(temporary);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    } catch {
+      // The temporary file is unpublished; cleanup must not replace the outcome.
     }
   }
 }

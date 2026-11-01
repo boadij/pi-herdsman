@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import {
+  chmodSync as realChmodSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,7 +14,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import { test } from "node:test";
 import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
 import {
@@ -400,6 +402,82 @@ test("required evidence snapshots are private, immutable, and integrity checked"
       /unsafe/,
     );
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("required evidence cleanup failures preserve publication and primary errors", async (t) => {
+  const assignmentId = randomUUID();
+  const directory = requiredEvidenceDirectory(assignmentId);
+  let primaryFailure = false;
+  let directoryFd: number | undefined;
+  let failDirectoryFsync = false;
+  t.mock.module("node:fs", {
+    namedExports: {
+      chmodSync(path: fs.PathLike, mode: fs.Mode) {
+        if (primaryFailure && String(path).includes("primary.md"))
+          throw new Error("primary failed");
+        return realChmodSync(path, mode);
+      },
+      closeSync(fd: number) {
+        const isDirectoryFd = fd === directoryFd;
+        if (isDirectoryFd) directoryFd = undefined;
+        fs.closeSync(fd);
+        if (isDirectoryFd && process.platform !== "win32")
+          throw new Error("directory close failed");
+      },
+      constants: fs.constants,
+      fstatSync: fs.fstatSync,
+      fsyncSync(fd: number) {
+        if (fd === directoryFd && failDirectoryFsync)
+          throw new Error("directory fsync failed");
+        return fs.fsyncSync(fd);
+      },
+      mkdirSync: fs.mkdirSync,
+      openSync(path: fs.PathLike, flags: string | number, mode?: number) {
+        const fd = fs.openSync(path, flags, mode);
+        if (String(path) === directory) directoryFd = fd;
+        return fd;
+      },
+      readdirSync: fs.readdirSync,
+      readFileSync: fs.readFileSync,
+      renameSync: fs.renameSync,
+      lstatSync: fs.lstatSync,
+      unlinkSync() {
+        throw new Error("cleanup failed");
+      },
+      writeFileSync: fs.writeFileSync,
+    },
+  });
+  try {
+    const { persistRequiredEvidenceSnapshot: persist } = await import(
+      `./storage.ts?cleanup-${randomUUID()}`
+    );
+    const entry = persist(assignmentId, "published.md", "published\n");
+    assert.equal(
+      readRequiredEvidenceSnapshot(assignmentId, entry),
+      "published\n",
+    );
+    if (process.platform !== "win32") {
+      failDirectoryFsync = true;
+      assert.throws(
+        () => persist(assignmentId, "fsync.md", "body"),
+        /directory fsync failed/,
+      );
+      failDirectoryFsync = false;
+    }
+    primaryFailure = true;
+    assert.throws(
+      () => persist(assignmentId, "primary.md", "body"),
+      /primary failed/,
+    );
+    assert.equal(
+      readdirSync(directory).some((name) => name.includes("primary.md")),
+      true,
+      "published snapshot is retained despite the later primary error",
+    );
+  } finally {
+    t.mock.restoreAll();
     rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -7642,6 +7642,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   source.role === "lead" &&
                   "remoteOrdinary" in source &&
                   source.remoteOrdinary === true;
+                const localSource =
+                  source.role === "lead" && "remoteOrdinary" in source
+                    ? undefined
+                    : source;
                 const assignmentSnapshot =
                   source.role === "lead"
                     ? globalProjectAssignmentSnapshot()
@@ -7653,15 +7657,16 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   recipient,
                   ctx,
                   assignmentSnapshot,
-                  source.role === "lead" &&
-                    (source.managed || recipientManaged),
+                  localSource?.role === "lead" &&
+                    (localSource.managed || recipientManaged),
                 );
                 if (
                   !recipientContext ||
                   (remoteOrdinarySource
                     ? recipientContext.role !== "lead" ||
                       !isRemoteOrdinaryLead(recipient, assignmentSnapshot!)
-                    : !canMessagePeer(source, recipientContext))
+                    : !localSource ||
+                      !canMessagePeer(localSource, recipientContext))
                 )
                   throw new Error("Peer eligibility changed before delivery");
                 if (!(await currentPeerPresenceValid(ctx)))
@@ -7731,7 +7736,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                       ? recipientContext.role !== "lead" ||
                         !snapshot ||
                         !isRemoteOrdinaryLead(current, snapshot)
-                      : !canMessagePeer(source, recipientContext))
+                      : !localSource ||
+                        !canMessagePeer(localSource, recipientContext))
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
