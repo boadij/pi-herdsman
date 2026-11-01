@@ -4000,7 +4000,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
           state: "working",
           task: "Parent task",
           startedAt,
-          model: "openai-codex/gpt-5.6-luna",
+          model: "fixture-provider/fixture-model",
           thinking: "low",
           contextPercent: 3,
         },
@@ -4011,7 +4011,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
           parentLabel: "implementer:feature",
           task: "Child one",
           startedAt,
-          model: "openai-codex/gpt-5.6-luna",
+          model: "fixture-provider/fixture-model",
           thinking: "low",
           contextPercent: 1,
         },
@@ -4022,7 +4022,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
           parentLabel: "implementer:feature",
           task: "Child two",
           startedAt,
-          model: "openai-codex/gpt-5.6-luna",
+          model: "fixture-provider/fixture-model",
           thinking: "low",
           contextPercent: 1,
         },
@@ -4034,9 +4034,9 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
 
     assert.deepEqual(widget.render(160), [
       "● lead → implementer  3 working",
-      "└─ ⠋ implementer  implementer:feature  ● working  0s  gpt-5.6-luna  low  3%  Parent task",
-      "   ├─ ⠋ scout        scout:child-1     ● working  0s  gpt-5.6-luna  low  1%  Child one",
-      "   └─ ⠋ scout        scout:child-2     ● working  0s  gpt-5.6-luna  low  1%  Child two",
+      "└─ ⠋ implementer  implementer:feature  ● working  0s  fixture-model  low  3%  Parent task",
+      "   ├─ ⠋ scout        scout:child-1     ● working  0s  fixture-model  low  1%  Child one",
+      "   └─ ⠋ scout        scout:child-2     ● working  0s  fixture-model  low  1%  Child two",
     ]);
   }
 });
