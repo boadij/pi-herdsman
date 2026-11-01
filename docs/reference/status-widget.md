@@ -99,7 +99,7 @@ only blocked, unknown, lost, and incompatible-build rows add explanatory text.
 The ordinary Lead Agent widget retains a single animated/static lifecycle
 marker. It adds aligned text only for blocked, unknown, and lost Agents, while
 its ambient header summarizes nonzero working, blocked, transitioning,
-unknown, and lost categories as `●N ◐N ◌N ?N ×N` (starting and settling share
+unknown, and lost categories as `● N  ◐ N  ◌ N  ? N  × N` (starting and settling share
 `◌`). If no Agent needs an attention label, the state-text column disappears;
 when attention is present, routine rows keep its blank alignment. Running
 menus and consequential confirmations continue to use full descriptive

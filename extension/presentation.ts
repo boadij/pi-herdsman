@@ -734,8 +734,8 @@ function formatAmbientStatusCounts(agents: readonly StatusAgent[]): string {
         ] as const,
     )
     .filter(([, count]) => count > 0)
-    .map(([marker, count]) => `${marker}${count}`)
-    .join(" ");
+    .map(([marker, count]) => `${marker} ${count}`)
+    .join("  ");
 }
 
 /** A presentation-only snapshot supplied by the supervision runtime. */
