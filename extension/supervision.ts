@@ -44,6 +44,21 @@ import {
 } from "./compatibility.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+export const COORDINATOR_MESSAGE_PROTOCOL = 1;
+
+export function supportsCoordinatorMessaging(protocol: unknown): boolean {
+  return protocol === COORDINATOR_MESSAGE_PROTOCOL;
+}
+
+function validOptionalMessageProtocol(
+  record: Record<string, unknown>,
+): boolean {
+  return (
+    !Object.hasOwn(record, "messageProtocol") ||
+    supportsCoordinatorMessaging(record.messageProtocol)
+  );
+}
+
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
 export type SessionRole = "lead" | "manager" | "chief";
@@ -138,6 +153,7 @@ export function sessionLeadRoleState(
 export type ChiefDescriptor = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -150,7 +166,7 @@ export type ChiefDescriptor = {
 
 export type ChiefIdentity = Omit<
   ChiefDescriptor,
-  "version" | "leaseId" | "claim" | "createdAt"
+  "version" | "leaseId" | "claim" | "createdAt" | "messageProtocol"
 > & {
   build: RuntimeBuild;
   createdAt?: number;
@@ -190,6 +206,7 @@ export type CoordinationMessageKind = ChiefMessageKind;
 export type ChiefMessageRecord = {
   version: 2;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   id: string;
   leaseId: string;
   kind: ChiefMessageKind;
@@ -347,6 +364,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "build",
     "peerSource",
     "bodyRef",
+    "messageProtocol",
   ];
   if (
     Object.keys(record).some(
@@ -395,6 +413,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     record.version === 2 &&
     (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    validOptionalMessageProtocol(record) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
     typeof record.leaseId === "string" &&
@@ -495,6 +514,7 @@ export function coordinationMessageDigest(record: ChiefMessageRecord): string {
   const content = {
     version: record.version,
     build: record.build,
+    messageProtocol: record.messageProtocol,
     id: record.id,
     leaseId: record.leaseId,
     kind: record.kind,
@@ -1583,6 +1603,7 @@ export type PeerRuntime = SupervisionRuntime & {
 export type PeerRecord = Readonly<{
   version: 2;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   role?: PeerRole;
   sessionKind: "ordinary" | "managed";
   piSessionId: string;
@@ -1655,6 +1676,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       [
         "version",
         "build",
+        "messageProtocol",
         "role",
         "sessionKind",
         "piSessionId",
@@ -1680,6 +1702,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 2 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    validOptionalMessageProtocol(record) &&
     (record.role === undefined ||
       record.role === "lead" ||
       record.role === "manager") &&
@@ -1725,6 +1748,7 @@ export function samePeerLeadRecord(
   return (
     actual.version === expected.version &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.sessionKind === expected.sessionKind &&
     (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
@@ -1751,6 +1775,7 @@ export function samePeerLeadGeneration(
   return (
     actual.piSessionId === expected.piSessionId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id
   );
@@ -1873,7 +1898,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId", "piSessionFile", "build"];
+  const optional = ["tabId", "piSessionFile", "build", "messageProtocol"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1882,6 +1907,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     keys.every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
+    validOptionalMessageProtocol(record) &&
     typeof record.leaseId === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       record.leaseId,
@@ -1975,6 +2001,7 @@ export function sameChiefDescriptor(
   return (
     actual.leaseId === expected.leaseId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -2023,6 +2050,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
   const descriptor: ChiefDescriptor = {
     version: 1,
     build: identity.build,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -2069,6 +2097,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
 export type ManagerDescriptor = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -2126,11 +2155,16 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
   ];
   return (
     Object.keys(r).every(
-      (key) => keys.includes(key) || key === "piSessionFile" || key === "build",
+      (key) =>
+        keys.includes(key) ||
+        key === "piSessionFile" ||
+        key === "build" ||
+        key === "messageProtocol",
     ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
+    validOptionalMessageProtocol(r) &&
     UUID.test(String(r.leaseId)) &&
     isProcessLockClaim(r.claim) &&
     validSession(r.piSessionId) &&
@@ -2153,6 +2187,7 @@ export function sameManagerDescriptor(
     actual.version === expected.version &&
     actual.leaseId === expected.leaseId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
+    actual.messageProtocol === expected.messageProtocol &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -2290,6 +2325,7 @@ export function claimManagerLease(
   const descriptor: ManagerDescriptor = {
     version: 1,
     build: identity.build,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -2990,6 +3026,7 @@ export function globalProjectAssignmentSnapshot(): Map<
 
 export type ProjectMessage = Readonly<{
   version: 2;
+  messageProtocol?: number;
   id: string;
   repoKey: string;
   branch: string;
@@ -3042,6 +3079,10 @@ export type ProjectMessageHeader = Omit<
   resultBindings?: ResultBinding[];
   bodyRef?: OverflowBodyRef;
 };
+export type ProjectMessageHeaderIssue = Readonly<{
+  id: string;
+  reason: "malformed" | "oversized" | "unsupported_protocol";
+}>;
 type StoredProjectMessage = ProjectMessageHeader;
 
 function projectMessageDirectory(
@@ -3060,6 +3101,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
     Object.keys(r).every((key) =>
       [
         "version",
+        "messageProtocol",
         "id",
         "repoKey",
         "branch",
@@ -3082,6 +3124,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       "createdAt",
     ].every((key) => Object.hasOwn(r, key)) &&
     r.version === 2 &&
+    validOptionalMessageProtocol(r) &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&
@@ -3235,11 +3278,36 @@ export function listProjectMessages(
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+/** Identifies invalid explicit messages without treating them as deliverable. */
+function invalidExplicitProjectMessageHeader(
+  path: string,
+  id: string,
+): ProjectMessageHeaderIssue | undefined {
+  try {
+    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
+      return { id, reason: "oversized" };
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return undefined;
+    const record = value as Record<string, unknown>;
+    if (record.kind !== "supervisor_message") return undefined;
+    return {
+      id,
+      reason: supportsCoordinatorMessaging(record.messageProtocol)
+        ? "malformed"
+        : "unsupported_protocol",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lists compact pending records without opening or validating overflow bodies. */
 export function listProjectMessageHeaders(
   runtime: SupervisionRuntime,
   repoKey: string,
   branch: string,
+  onInvalid?: (issue: ProjectMessageHeaderIssue) => void,
 ): ProjectMessageHeader[] {
   const directory = projectMessageDirectory(runtime, repoKey, branch);
   let entries: string[];
@@ -3252,8 +3320,9 @@ export function listProjectMessageHeaders(
   return entries
     .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
     .flatMap((entry) => {
+      const path = join(directory, entry);
       try {
-        const value = readStoredProjectMessageFile(join(directory, entry));
+        const value = readStoredProjectMessageFile(path);
         if (value.repoKey !== repoKey || value.branch !== branch)
           throw new Error(
             `Project message identity does not match ${directory}`,
@@ -3265,6 +3334,13 @@ export function listProjectMessageHeaders(
           (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
         )
           return [];
+        const issue = onInvalid
+          ? invalidExplicitProjectMessageHeader(path, entry.slice(0, -5))
+          : undefined;
+        if (issue) {
+          onInvalid(issue);
+          return [];
+        }
         throw error;
       }
     })
@@ -3469,6 +3545,7 @@ export function mightHaveProjectMessages(
 export type CoordinatorState = {
   version: 1;
   build?: RuntimeBuild;
+  messageProtocol?: number;
   role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
@@ -3476,11 +3553,14 @@ export type CoordinatorState = {
 };
 export type LeadCoordinationState = CoordinatorState;
 
+export type VerificationPolicy = "exact-build" | "identity-only";
+
 export function verifyManagerCoordinationAuthority(
   descriptor: ManagerDescriptor,
   coordinator: LeadCoordinationState | undefined,
   build: RuntimeBuild,
   requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild,
+  policy: VerificationPolicy = "exact-build",
 ): void {
   if (
     !coordinator ||
@@ -3490,6 +3570,17 @@ export function verifyManagerCoordinationAuthority(
     throw new Error(
       "Manager authority exists but its coordination state could not be verified",
     );
+  if (descriptor.messageProtocol !== coordinator.messageProtocol)
+    throw new Error(
+      "Manager descriptor and coordination state messaging protocols do not match",
+    );
+  if (policy === "identity-only") {
+    if (!sameRuntimeBuildEvidence(descriptor.build, coordinator.build))
+      throw new Error(
+        "Manager descriptor and coordination state build evidence does not match",
+      );
+    return;
+  }
   requireCompatibleBuild(
     build,
     descriptor.build,
@@ -3510,15 +3601,17 @@ export async function verifyRemoteChiefAuthority(
     remoteIdentity(): Promise<unknown | undefined>;
     requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
     build: RuntimeBuild;
+    policy?: VerificationPolicy;
   },
 ): Promise<boolean> {
   if (!(await options.remoteIdentity())) return false;
-  options.requireCompatibleBuild(
-    options.build,
-    descriptor.build,
-    "supervision",
-    `Chief ${descriptor.piSessionId}`,
-  );
+  if ((options.policy ?? "exact-build") === "exact-build")
+    options.requireCompatibleBuild(
+      options.build,
+      descriptor.build,
+      "supervision",
+      `Chief ${descriptor.piSessionId}`,
+    );
   return true;
 }
 
@@ -3652,6 +3745,7 @@ export type IncompatibleStaff = Readonly<{
   tabId: string;
   runtimeState: RuntimeState;
   build: RuntimeBuild;
+  availableActions?: readonly ["message"];
   reason: "incompatible_build";
 }>;
 export type SupervisionSnapshot = {
@@ -3853,7 +3947,11 @@ function validLeadState(value: unknown): value is CoordinatorState {
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
     Object.keys(r).some(
-      (k) => !keys.includes(k) && k !== "role" && k !== "build",
+      (k) =>
+        !keys.includes(k) &&
+        k !== "role" &&
+        k !== "build" &&
+        k !== "messageProtocol",
     ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
@@ -3861,6 +3959,7 @@ function validLeadState(value: unknown): value is CoordinatorState {
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
+    validOptionalMessageProtocol(r) &&
     (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&

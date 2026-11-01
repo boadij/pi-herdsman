@@ -34,9 +34,14 @@ const cReply = {
   digest: realTransport.peerPayloadDigest({ text: "reply from C" }),
   createdAt: 1,
 };
-const endpointCalls: { action: string; recipientSession?: string }[] = [];
+const endpointCalls: {
+  action: string;
+  recipientSession?: string;
+  messageProtocol?: unknown;
+}[] = [];
 const acceptedEnvelopes: string[] = [];
 let outboundStatus: unknown;
+const localPeers: any[] = [];
 let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   const snapshot = nextSnapshots.shift();
   if (!snapshot) throw new Error("missing test snapshot");
@@ -67,7 +72,7 @@ mock.module("./peer-transport.ts", {
         id?: string;
         recipientSession?: string;
         replyId?: string;
-        record?: { id?: string };
+        record?: { id?: string; messageProtocol?: unknown };
         correspondence?: unknown;
       };
       if (request.correspondence)
@@ -76,6 +81,9 @@ mock.module("./peer-transport.ts", {
       endpointCalls.push({
         action,
         recipientSession: request.recipientSession,
+        ...(request.record
+          ? { messageProtocol: request.record.messageProtocol }
+          : {}),
       });
       if (action === "recover-recipient") {
         if (request.recipientSession === "peer-B" && failRecoveryForB) {
@@ -175,6 +183,21 @@ const assignment = {
 
 const dataRoot = "remote-route-test-root";
 const claim = { id: "local-generation", pid: 1, startedAt: 1 };
+
+test("remote probe parsing requires bridge protocol evidence", () => {
+  const parsed = realTransport.parsePeerEndpointProbe(
+    JSON.stringify({ dataRoot, messageProtocol: 1, peers: [] }),
+  );
+  assert.equal(parsed.messageProtocol, 1);
+  assert.throws(
+    () =>
+      realTransport.parsePeerEndpointProbe(
+        JSON.stringify({ dataRoot, peers: [] }),
+      ),
+    /omitted coordinator message protocol/u,
+  );
+});
+
 const machine = (id: string, reachable = true): Machine => ({
   id,
   label: id,
@@ -183,6 +206,7 @@ const machine = (id: string, reachable = true): Machine => ({
 });
 const snapshot = (peers: Snapshot["peers"], root = dataRoot): Snapshot => ({
   dataRoot: root,
+  messageProtocol: 1,
   peers,
 });
 const remote = (
@@ -194,6 +218,7 @@ const remote = (
   piSessionId: id,
   claim: { id: generation },
   build: build ?? support.HERDSMAN_BUILD,
+  messageProtocol: 1,
 });
 const gate = <T>() => {
   let resolve!: (value: T) => void;
@@ -210,6 +235,7 @@ function fixture(
   support.setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = "/test-route-refresh.sock";
   machines.length = 0;
+  localPeers.length = 0;
   listMachinesImpl = async () => machines;
   correspondences.length = 0;
   outboundInventory = [];
@@ -240,6 +266,13 @@ function fixture(
     return value;
   };
   const manager = { piSessionId: self, leaseId: "manager-lease", createdAt: 1 };
+  const coordinationState = {
+    instanceId: "route-test-instance",
+    piSessionId: self,
+    build: support.HERDSMAN_BUILD,
+    messageProtocol: 1,
+    role,
+  };
   const context = support.fakeContext() as any;
   context.activeRole = role;
   context.sessionManager = {
@@ -255,6 +288,7 @@ function fixture(
   const sender = {
     version: 2,
     build: support.HERDSMAN_BUILD,
+    messageProtocol: 1,
     sessionKind: "ordinary",
     role,
     name: "Local Research Manager",
@@ -277,11 +311,13 @@ function fixture(
     controllerScope: { kind: "root" },
     activeRole: () => role,
     HERDSMAN_BUILD: support.HERDSMAN_BUILD,
+    leadInstanceId: () => coordinationState.instanceId,
+    readLeadCoordinationState: () => coordinationState,
     supervisionRuntime: () => supervision.supervisionRuntime(),
     peerRuntime: () => supervision.peerRuntime(),
     readPeerLeadRecord: (_runtime: unknown, id: string) =>
       id === self ? sender : undefined,
-    listPeerLeadRecords: () => [],
+    listPeerLeadRecords: () => localPeers,
     currentManager: async () => manager,
     workspaceId: () => "route-test-workspace",
     currentWorktreeScope: async () => ({
@@ -327,6 +363,7 @@ function fixture(
     runtime,
     sender,
     leadRuntime,
+    localPeers,
     async close() {
       delete process.env.PI_CODING_AGENT_DIR;
       rmSync(root, { recursive: true, force: true });
@@ -752,6 +789,38 @@ test("internal peer reconciliation does not persist model-facing target bindings
   );
 });
 
+test("list_peers exposes only local peers with known protocol 1 support", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  localPeers.push(
+    {
+      ...remote(
+        "local-cross-build",
+        "local-generation",
+        support.OTHER_HERDSMAN_BUILD,
+      ),
+      sessionKind: "ordinary",
+    },
+    {
+      ...remote("local-missing-protocol"),
+      sessionKind: "ordinary",
+      messageProtocol: undefined,
+    },
+    {
+      ...remote("local-unsupported-protocol"),
+      sessionKind: "ordinary",
+      messageProtocol: 2,
+    },
+  );
+
+  const result = await list(f.runtime, f.context);
+
+  assert.deepEqual(
+    result.details?.peers.map((peer: any) => peer.target),
+    [coordinatorTarget("manager", "local-cross-build")],
+  );
+});
+
 test("Lead rejects a bound remote peer that becomes managed", async (t) => {
   const f = fixture("lead");
   t.after(f.close);
@@ -1156,7 +1225,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   nextSnapshots = [
     snapshot([
       remote("peer-B", "generation-1"),
-      remote("peer-C", "generation-C"),
+      remote("peer-C", "generation-C", support.OTHER_HERDSMAN_BUILD),
     ]),
   ];
   await list(f.runtime, f.context);
@@ -1186,7 +1255,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   probeImpl = async () =>
     snapshot([
       remote("peer-B", "generation-2"),
-      remote("peer-C", "generation-C"),
+      remote("peer-C", "generation-C", support.OTHER_HERDSMAN_BUILD),
     ]);
   const first = await list(f.runtime, f.context);
   assert.equal(first.details?.remote_diagnostics, undefined);
@@ -1237,6 +1306,35 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   );
   const sent = await send(f.runtime, f.context, "peer-B");
   assert.equal(sent.details?.accepted, true);
+});
+
+test("unsupported remote protocol leaves correspondence replies unconsumed", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-C", "generation-C")])];
+  await list(f.runtime, f.context);
+  correspondences.push({
+    id: "unsupported-reply-correspondence",
+    capability: "reply-capability",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-C",
+    recipientGeneration: "generation-C",
+    finalized: false,
+  });
+  probeImpl = async () => ({
+    ...snapshot([remote("peer-C", "generation-C")]),
+    messageProtocol: 2,
+  });
+  await list(f.runtime, f.context);
+  assert.deepEqual(deliveredReplies, []);
+  assert.equal(
+    endpointCalls.some(
+      (call) => call.action === "ack" && call.recipientSession === "peer-C",
+    ),
+    false,
+  );
 });
 
 test("aborted correspondence recovery stops later correspondence processing", async (t) => {
@@ -1334,50 +1432,73 @@ test("machine-list failures are reported without exposing transport details", as
   assert.doesNotMatch(result.content[0].text, /secret|private-target|ssh:/u);
 });
 
-test("build diagnostics exclude unverified and incompatible peers but retain compatible peers", async (t) => {
+test("remote discovery uses bridge and recipient messaging protocols, not builds", async (t) => {
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  const mismatchedBuild = {
-    ...support.OTHER_HERDSMAN_BUILD,
-    version: "0.34.0\nuntrusted",
-  };
   probeImpl = async () =>
     snapshot([
       {
-        ...remote("old-peer"),
-        name: "Old worker",
-        build: mismatchedBuild,
+        ...remote(
+          "cross-build-peer",
+          "cross-build-generation",
+          support.OTHER_HERDSMAN_BUILD,
+        ),
+        name: "Cross-build worker",
       },
-      { ...remote("missing-build"), name: "Missing build", build: undefined },
       {
-        ...remote("invalid-build"),
-        name: "Invalid build",
-        build: { version: "x", sha256: "bad" },
+        ...remote("missing-protocol"),
+        name: "Missing protocol",
+        messageProtocol: undefined,
       },
-      remote("compatible-peer"),
+      {
+        ...remote("unsupported-protocol"),
+        name: "Unsupported protocol",
+        messageProtocol: 2,
+      },
     ]);
   const result = await list(f.runtime, f.context);
   assert.deepEqual(
     result.details?.peers.map((peer: any) => peer.target),
-    [coordinatorTarget("manager", "compatible-peer")],
+    [coordinatorTarget("manager", "cross-build-peer")],
   );
   assert.deepEqual(result.details?.remote_diagnostics, [
     {
       machine: "one",
-      reason: "build_mismatch",
-      peer: "Old worker",
-      local_build: compatibility.formatRuntimeBuild(support.HERDSMAN_BUILD),
-      remote_build: `v0.34.0 untrusted · ${mismatchedBuild.sha256.slice(0, 12)}`,
+      reason: "protocol_unverified",
+      peer: "Missing protocol",
     },
-    { machine: "one", reason: "build_unverified", peer: "Missing build" },
-    { machine: "one", reason: "build_unverified", peer: "Invalid build" },
+    {
+      machine: "one",
+      reason: "protocol_mismatch",
+      peer: "Unsupported protocol",
+    },
   ]);
   assert.deepEqual(
     JSON.parse(result.content[0].text).remote_diagnostics,
     result.details?.remote_diagnostics,
   );
   assert.equal("unavailable_machines" in result.details!, false);
+});
+
+test("remote discovery rejects an unsupported or missing bridge protocol", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  for (const [protocol, reason] of [
+    [2, "protocol_mismatch"],
+    [undefined, "protocol_unverified"],
+  ] as const) {
+    probeImpl = async () => ({
+      ...snapshot([remote("bridge-peer")]),
+      messageProtocol: protocol,
+    });
+    const result = await list(f.runtime, f.context);
+    assert.deepEqual(result.details?.peers, []);
+    assert.deepEqual(result.details?.remote_diagnostics, [
+      { machine: "one", reason },
+    ]);
+  }
 });
 
 test("remote diagnostics are capped and report the omitted count in both result projections", async (t) => {
@@ -1389,6 +1510,7 @@ test("remote diagnostics are capped and report the omitted count in both result 
       Array.from({ length: 25 }, (_, index) => ({
         ...remote(`missing-build-${index}`),
         build: undefined,
+        messageProtocol: undefined,
       })),
     );
 
@@ -1680,17 +1802,44 @@ test("partial discovery refreshes healthy routes, retains unavailable routes, an
   );
 });
 
-test("fresh send-time probe rejects incompatible or missing build metadata", async (t) => {
+test("fresh send-time probes accept cross-build peers and reject protocol changes", async (t) => {
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  nextSnapshots = [snapshot([remote("peer")])];
+  nextSnapshots = [
+    snapshot([remote("peer", "peer-generation", support.OTHER_HERDSMAN_BUILD)]),
+  ];
   await list(f.runtime, f.context);
-  for (const build of [support.OTHER_HERDSMAN_BUILD, undefined]) {
-    probeImpl = async () => snapshot([{ ...remote("peer"), build }]);
-    await assert.rejects(
-      send(f.runtime, f.context, "peer"),
-      /incompatible|build/i,
-    );
+  probeImpl = async () =>
+    snapshot([remote("peer", "peer-generation", support.OTHER_HERDSMAN_BUILD)]);
+  assert.equal(
+    (await send(f.runtime, f.context, "peer")).details?.accepted,
+    true,
+  );
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(
+    endpointCalls
+      .filter((call) => call.action === "accept")
+      .map((call) => call.messageProtocol),
+    [1],
+  );
+
+  for (const [snapshotProtocol, peerProtocol] of [
+    [1, undefined],
+    [1, 2],
+    [undefined, 1],
+    [2, 1],
+  ] as const) {
+    probeImpl = async () => ({
+      ...snapshot([
+        {
+          ...remote("peer", "peer-generation", support.OTHER_HERDSMAN_BUILD),
+          messageProtocol: peerProtocol,
+        },
+      ]),
+      messageProtocol: snapshotProtocol,
+    });
+    await assert.rejects(send(f.runtime, f.context, "peer"), /protocol 1/u);
   }
+  assert.equal(deliveries.length, 1, "rejected attempts do not reach accept");
 });

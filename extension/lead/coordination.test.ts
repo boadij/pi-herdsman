@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
-import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
+import {
+  fakeContext,
+  HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
+  testTmpRoot,
+} from "../support.ts";
+import {
+  canMessagePeer,
+  samePeerLeadAuthority,
+  samePeerLeadGeneration,
+  type ProjectMessageHeaderIssue,
+} from "../supervision.ts";
+import { sameRuntimeBuild } from "../compatibility.ts";
 import { supervisionRuntime } from "../supervision.ts";
+import { projectAssignmentPath } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
 
 test("scoped peer presence writes its worktree group", async () => {
@@ -186,4 +201,742 @@ test("Managed supervisor messages never fall through when the active role is not
   assert.equal(ordinaryRoutingCalls, 0);
   assert.equal(assignmentLookups, 0);
   assert.equal(projectPublications, 0);
+});
+
+test("assigned Lead supervisor messages use the project publisher without a live Manager", async () => {
+  const sessionId = randomUUID();
+  const assignment = {
+    version: 2,
+    id: sessionId,
+    repoKey: "assigned-repo",
+    branch: "assigned-branch",
+    text: "assigned task",
+  };
+  let publishedArgs: unknown[] | undefined;
+  let supervisorLookups = 0;
+  const runtime = createLeadCoordinationRuntime(
+    hostWithDefaults({
+      pi: {},
+      leadRuntime: { chiefMode: "inactive", roleSuspended: false },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "lead",
+      currentProjectAssignment: async () => assignment,
+      currentSupervisor: async () => {
+        supervisorLookups++;
+        return undefined;
+      },
+      publishProjectMessage: async (...args: unknown[]) => {
+        publishedArgs = args;
+        return { id: "durable-project-message" };
+      },
+    }),
+  );
+  const context = fakeContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-kind",
+      data: {
+        version: 1,
+        sessionId,
+        kind: "managed",
+        repoKey: assignment.repoKey,
+        branch: assignment.branch,
+      },
+    },
+  ]) as any;
+  context.sessionManager.getSessionId = () => sessionId;
+
+  const result = await runtime.supervisorMessage(
+    "message",
+    { message: "explicit message" },
+    undefined,
+    undefined,
+    context,
+  );
+
+  assert.equal(publishedArgs?.[6], "supervisor_message");
+  assert.equal(supervisorLookups, 0);
+  assert.equal(result.details?.id, "durable-project-message");
+});
+
+function tempDataRoot(t: any): string {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = mkdtempSync(join(tmpdir(), "lead-coordination-test-"));
+  process.env.PI_CODING_AGENT_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  });
+  return root;
+}
+
+function hostWithDefaults(values: Record<string, unknown>): any {
+  return new Proxy(values, {
+    get(target, key: string) {
+      return key in target ? target[key] : () => undefined;
+    },
+  });
+}
+
+function managerPeer(sessionId: string, build = HERDSMAN_BUILD, protocol = 1) {
+  return {
+    version: 2,
+    build,
+    messageProtocol: protocol,
+    role: "manager",
+    sessionKind: "ordinary",
+    piSessionId: sessionId,
+    paneId: `pane-${sessionId}`,
+    tabId: `tab-${sessionId}`,
+    workspaceId: `workspace-${sessionId}`,
+    socket: "/peer-test.sock",
+    claim: { id: `generation-${sessionId}`, pid: 1, startedAt: 1 },
+    updatedAt: 1,
+  };
+}
+
+function peerQueueFixture(
+  records: Map<string, any>,
+  overrides: Record<string, unknown> = {},
+) {
+  const sessionId = [...records.keys()][0]!;
+  let coordinationState: any = {
+    instanceId: "peer-coordination-instance",
+    piSessionId: sessionId,
+    build: HERDSMAN_BUILD,
+    messageProtocol: 1,
+    role: "manager",
+  };
+  const context = fakeContext() as any;
+  context.sessionManager.getSessionId = () => sessionId;
+  const written: any[] = [];
+  const runtime = createLeadCoordinationRuntime(
+    hostWithDefaults({
+      pi: {},
+      leadRuntime: {
+        controllerRole: "lead",
+        chiefMode: "inactive",
+        roleSuspended: false,
+      },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "manager",
+      HERDSMAN_BUILD,
+      leadInstanceId: () => coordinationState.instanceId,
+      readLeadCoordinationState: () => coordinationState,
+      supervisionRuntime: () => ({}),
+      peerRuntime: () => ({}),
+      readPeerLeadRecord: (_runtime: unknown, id: string) => records.get(id),
+      samePeerLeadGeneration,
+      samePeerLeadAuthority,
+      canMessagePeer,
+      sameRuntimeBuild,
+      writeCoordinationMessage: (record: unknown) => written.push(record),
+      ...overrides,
+    }),
+  );
+  return {
+    runtime,
+    context,
+    written,
+    setCoordinationState: (state: unknown) => {
+      coordinationState = state;
+    },
+  };
+}
+
+test("local peers with protocol 1 can message across builds", async (t) => {
+  tempDataRoot(t);
+  const senderId = randomUUID();
+  const targetId = randomUUID();
+  const sender = managerPeer(senderId);
+  const target = managerPeer(targetId, OTHER_HERDSMAN_BUILD);
+  const fixture = peerQueueFixture(
+    new Map([
+      [senderId, sender],
+      [targetId, target],
+    ]),
+  );
+
+  const record = await fixture.runtime.queuePeerRecord(
+    "cross-build message",
+    targetId,
+    fixture.context,
+    sender,
+    target,
+  );
+
+  assert.equal(record.messageProtocol, 1);
+  assert.deepEqual(fixture.written, [record]);
+});
+
+test("local peer messaging rejects missing participant protocol and a changed generation", async (t) => {
+  tempDataRoot(t);
+  for (const [senderProtocol, targetProtocol, error] of [
+    [undefined, 1, /Local peer messaging protocol changed/u],
+    [1, undefined, /Peer messaging protocol 1 is required/u],
+    [2, 1, /Local peer messaging protocol changed/u],
+  ] as const) {
+    const senderId = randomUUID();
+    const targetId = randomUUID();
+    const sender = managerPeer(senderId, HERDSMAN_BUILD, senderProtocol as any);
+    const target = managerPeer(
+      targetId,
+      OTHER_HERDSMAN_BUILD,
+      targetProtocol as any,
+    );
+    if (senderProtocol === undefined) delete sender.messageProtocol;
+    if (targetProtocol === undefined) delete target.messageProtocol;
+    const fixture = peerQueueFixture(
+      new Map([
+        [senderId, sender],
+        [targetId, target],
+      ]),
+    );
+    await assert.rejects(
+      fixture.runtime.queuePeerRecord(
+        "blocked",
+        targetId,
+        fixture.context,
+        sender,
+        target,
+      ),
+      error,
+    );
+    assert.deepEqual(fixture.written, []);
+  }
+
+  const senderId = randomUUID();
+  const targetId = randomUUID();
+  const sender = managerPeer(senderId);
+  const target = managerPeer(targetId, OTHER_HERDSMAN_BUILD);
+  let targetReads = 0;
+  const fixture = peerQueueFixture(
+    new Map([
+      [senderId, sender],
+      [targetId, target],
+    ]),
+    {
+      readPeerLeadRecord: (_runtime: unknown, id: string) => {
+        if (id !== targetId || ++targetReads < 2)
+          return id === senderId ? sender : target;
+        return { ...target, claim: { ...target.claim, id: "new-generation" } };
+      },
+    },
+  );
+  await assert.rejects(
+    fixture.runtime.queuePeerRecord(
+      "stale generation",
+      targetId,
+      fixture.context,
+      sender,
+      target,
+    ),
+    /assignment changed/u,
+  );
+  assert.deepEqual(fixture.written, []);
+});
+
+test("local peer messaging still requires the sender's current build evidence", async (t) => {
+  tempDataRoot(t);
+  const senderId = randomUUID();
+  const targetId = randomUUID();
+  const sender = managerPeer(senderId);
+  const target = managerPeer(targetId, OTHER_HERDSMAN_BUILD);
+  const fixture = peerQueueFixture(
+    new Map([
+      [senderId, sender],
+      [targetId, target],
+    ]),
+    {
+      readLeadCoordinationState: () => ({
+        instanceId: "peer-coordination-instance",
+        piSessionId: senderId,
+        build: OTHER_HERDSMAN_BUILD,
+        role: "manager",
+      }),
+    },
+  );
+  await assert.rejects(
+    fixture.runtime.queuePeerRecord(
+      "stale local build",
+      targetId,
+      fixture.context,
+      sender,
+      target,
+    ),
+    /coordination state changed/u,
+  );
+  assert.deepEqual(fixture.written, []);
+});
+
+test("local peer publication requires current coordination protocol evidence", async (t) => {
+  tempDataRoot(t);
+  const cases = [
+    {
+      state: (_sessionId: string) => undefined,
+      error: /coordination state changed/u,
+    },
+    {
+      state: (sessionId: string) => ({
+        instanceId: "peer-coordination-instance",
+        piSessionId: sessionId,
+        build: HERDSMAN_BUILD,
+        role: "manager",
+      }),
+      error: /messaging protocol changed/u,
+    },
+    {
+      state: (sessionId: string) => ({
+        instanceId: "peer-coordination-instance",
+        piSessionId: sessionId,
+        messageProtocol: 2,
+        build: HERDSMAN_BUILD,
+        role: "manager",
+      }),
+      error: /messaging protocol changed/u,
+    },
+  ];
+
+  for (const { state: currentState, error } of cases) {
+    const senderId = randomUUID();
+    const targetId = randomUUID();
+    const sender = managerPeer(senderId);
+    const target = managerPeer(targetId, OTHER_HERDSMAN_BUILD);
+    const fixture = peerQueueFixture(
+      new Map([
+        [senderId, sender],
+        [targetId, target],
+      ]),
+      { readLeadCoordinationState: () => currentState(senderId) },
+    );
+    await assert.rejects(
+      fixture.runtime.queuePeerRecord(
+        "blocked",
+        targetId,
+        fixture.context,
+        sender,
+        target,
+      ),
+      error,
+    );
+    assert.deepEqual(fixture.written, []);
+  }
+});
+
+test("local peer publication revalidates coordination after async preparation", async (t) => {
+  tempDataRoot(t);
+  for (const changedState of [
+    undefined,
+    {
+      instanceId: "peer-coordination-instance",
+      piSessionId: "sender",
+      build: HERDSMAN_BUILD,
+      messageProtocol: 2,
+      role: "manager",
+    },
+  ]) {
+    const senderId = randomUUID();
+    const targetId = randomUUID();
+    const sender = managerPeer(senderId);
+    const target = managerPeer(targetId, OTHER_HERDSMAN_BUILD);
+    let fixture!: ReturnType<typeof peerQueueFixture>;
+    fixture = peerQueueFixture(
+      new Map([
+        [senderId, sender],
+        [targetId, target],
+      ]),
+      {
+        leadRuntime: {
+          controllerRole: "manager",
+          managerLease: { descriptor: { leaseId: "live-manager" } },
+          chiefMode: "inactive",
+          roleSuspended: false,
+        },
+        currentManager: async () => {
+          await Promise.resolve();
+          fixture.setCoordinationState(
+            changedState
+              ? { ...changedState, piSessionId: senderId }
+              : undefined,
+          );
+          return { leaseId: "live-manager" };
+        },
+      },
+    );
+
+    await assert.rejects(
+      fixture.runtime.queuePeerRecord(
+        "blocked after preparation",
+        targetId,
+        fixture.context,
+        sender,
+        target,
+      ),
+      /coordination state changed|messaging protocol changed/u,
+    );
+    assert.deepEqual(fixture.written, []);
+  }
+});
+
+test("local assigned peer scope is revalidated before message eligibility", async (t) => {
+  tempDataRoot(t);
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/peer-test.sock";
+  t.after(() => {
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  });
+  const senderId = randomUUID();
+  const context = fakeContext() as any;
+  context.sessionManager.getSessionId = () => senderId;
+  const lead = {
+    ...managerPeer("assigned-peer"),
+    role: "lead",
+    sessionKind: "managed",
+    socket: "/peer-test.sock",
+    workspaceId: "assigned-workspace",
+    group: { repoKey: "repo-a", primaryWorkspaceId: "primary" },
+  };
+  const runtime = createLeadCoordinationRuntime(
+    hostWithDefaults({
+      pi: {},
+      leadRuntime: { chiefMode: "inactive", roleSuspended: false },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "lead",
+      HERDSMAN_BUILD,
+      worktreeGroupScope: async () => ({
+        repoKey: "repo-b",
+        primaryWorkspaceId: "primary",
+        workspaceIds: ["assigned-workspace"],
+      }),
+    }),
+  );
+  const assignments = new Map([
+    [
+      lead.piSessionId,
+      [
+        {
+          socketHash: createHash("sha256").update(lead.socket).digest("hex"),
+          assignment: { repoKey: "repo-a" },
+        },
+      ],
+    ],
+  ]);
+
+  assert.equal(
+    await runtime.peerContext(lead, context, assignments, true),
+    undefined,
+  );
+});
+
+test("ordinary coordinator messages are protocol-tagged while automatic records remain strict", async () => {
+  const sessionId = randomUUID();
+  const instanceId = randomUUID();
+  const context = fakeContext() as any;
+  context.sessionManager.getSessionId = () => sessionId;
+  const state = {
+    instanceId,
+    piSessionId: sessionId,
+    build: HERDSMAN_BUILD,
+    role: "lead",
+  };
+  const chief = {
+    piSessionId: randomUUID(),
+    leaseId: "chief-lease",
+    messageProtocol: 1,
+  };
+  const written: any[] = [];
+  const policies: unknown[] = [];
+  const runtime = createLeadCoordinationRuntime(
+    hostWithDefaults({
+      pi: {},
+      leadRuntime: {
+        controllerRole: "lead",
+        chiefMode: "inactive",
+        roleSuspended: false,
+      },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "lead",
+      HERDSMAN_BUILD,
+      supervisionRuntime: () => ({}),
+      leadInstanceId: () => instanceId,
+      readLeadCoordinationState: () => state,
+      sameRuntimeBuild,
+      currentSupervisor: async (_ctx: unknown, policy: unknown) => {
+        policies.push(policy);
+        return chief;
+      },
+      writeChiefMessage: (record: unknown) => written.push(record),
+    }),
+  );
+
+  await runtime.queueChiefRecord("lead_message", "automatic result", context);
+  await runtime.queueChiefRecord(
+    "lead_message",
+    "ordinary message",
+    context,
+    randomUUID(),
+    Date.now(),
+    undefined,
+    undefined,
+    [],
+    1,
+  );
+
+  assert.equal(written[0].messageProtocol, undefined);
+  assert.equal(written[1].messageProtocol, 1);
+  assert.deepEqual(policies, [
+    undefined,
+    undefined,
+    "identity-only",
+    "identity-only",
+  ]);
+});
+
+function projectMessageDrainFixture(
+  kind?: string,
+  protocol?: number,
+  existingReceipt = false,
+  messageOverrides: Record<string, unknown> = {},
+  invalidHeaderIssue?: ProjectMessageHeaderIssue,
+) {
+  process.env.PI_CODING_AGENT_DIR ??= testTmpRoot;
+  const manager = {
+    piSessionId: "manager-session",
+    repoKey: "message-repo",
+    leaseId: "manager-lease",
+    createdAt: 100,
+  };
+  const assignment = {
+    version: 2,
+    id: "assigned-lead",
+    repoKey: manager.repoKey,
+    branch: "assigned-branch",
+    text: "assigned task",
+  };
+  const probeRuntime = supervisionRuntime(
+    `/tmp/project-message-drain-${randomUUID()}.sock`,
+  );
+  const assignmentFile = projectAssignmentPath(
+    probeRuntime,
+    manager.repoKey,
+    assignment.branch,
+  );
+  const messageDirectory = join(
+    dirname(assignmentFile),
+    `${basename(assignmentFile, ".json")}.messages`,
+  );
+  mkdirSync(messageDirectory, { recursive: true });
+  writeFileSync(join(messageDirectory, `${randomUUID()}.json`), "{}");
+  const header: any = {
+    version: 2,
+    id: "project-message-id",
+    repoKey: manager.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    createdAt: 50,
+  };
+  const message: any = {
+    ...header,
+    text: "project message",
+    ...messageOverrides,
+  };
+  if (kind !== undefined) {
+    header.kind = kind;
+    message.kind = kind;
+  }
+  if (protocol !== undefined) {
+    header.messageProtocol = protocol;
+    message.messageProtocol = protocol;
+  }
+  const entries: any[] = existingReceipt
+    ? [
+        {
+          customType: "pi-herdsman-project_message",
+          details: {
+            id: header.id,
+            repoKey: header.repoKey,
+            branch: header.branch,
+            fromSessionId: header.fromSessionId,
+          },
+        },
+      ]
+    : [];
+  const context = fakeContext() as any;
+  context.isIdle = () => true;
+  context.sessionManager.getEntries = () => entries;
+  const imported: unknown[] = [];
+  const delivered: any[] = [];
+  const removed: string[] = [];
+  const errors: unknown[] = [];
+  let reads = 0;
+  const runtime = createLeadCoordinationRuntime(
+    hostWithDefaults({
+      pi: {
+        sendMessage(value: unknown, options: unknown) {
+          delivered.push({ value, options });
+          entries.push({
+            customType: value && (value as any).customType,
+            details: (value as any).details,
+          });
+        },
+      },
+      leadRuntime: {
+        controllerRole: "manager",
+        managerLease: { descriptor: manager },
+        chiefMode: "inactive",
+        roleSuspended: false,
+      },
+      processRole: "lead",
+      controllerScope: { kind: "root" },
+      activeRole: () => "manager",
+      supervisionRuntime: () => probeRuntime,
+      currentManager: async () => manager,
+      sameManagerDescriptor: (left: any, right: any) =>
+        left?.piSessionId === right?.piSessionId &&
+        left?.leaseId === right?.leaseId,
+      listProjectAssignments: () => [assignment],
+      listProjectMessageHeaders: (
+        _runtime: unknown,
+        _repoKey: string,
+        _branch: string,
+        onInvalid?: (issue: ProjectMessageHeaderIssue) => void,
+      ) => {
+        if (invalidHeaderIssue) onInvalid?.(invalidHeaderIssue);
+        return [header];
+      },
+      readProjectAssignment: () => assignment,
+      readProjectMessage: () => {
+        reads++;
+        return message;
+      },
+      removeProjectMessage: (
+        _runtime: unknown,
+        _repo: string,
+        _branch: string,
+        id: string,
+      ) => removed.push(id),
+      importResultBindings: (...args: unknown[]) => imported.push(args),
+      appendDurableError: (
+        _pi: unknown,
+        _ctx: unknown,
+        _type: string,
+        error: unknown,
+      ) => errors.push(error),
+    }),
+  );
+  return {
+    runtime,
+    context,
+    imported,
+    delivered,
+    removed,
+    errors,
+    get reads() {
+      return reads;
+    },
+  };
+}
+
+test("explicit assigned-Lead messages stay pending without protocol 1, even with a receipt", async () => {
+  for (const protocol of [undefined, 2]) {
+    const fixture = projectMessageDrainFixture(
+      "supervisor_message",
+      protocol,
+      true,
+    );
+    assert.equal(
+      await fixture.runtime.drainProjectMessages(fixture.context),
+      0,
+    );
+    assert.equal(fixture.reads, 0);
+    assert.deepEqual(fixture.imported, []);
+    assert.deepEqual(fixture.delivered, []);
+    assert.deepEqual(fixture.removed, []);
+    assert.match(String(fixture.errors[0]), /messaging protocol 1/u);
+  }
+});
+
+test("protocol-1 assigned-Lead messages deliver and consume under current assignment", async () => {
+  const fixture = projectMessageDrainFixture("supervisor_message", 1);
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 1);
+  assert.equal(fixture.reads, 1);
+  assert.equal(fixture.imported.length, 1);
+  assert.equal(fixture.delivered.length, 1);
+  assert.deepEqual(fixture.removed, ["project-message-id"]);
+  assert.deepEqual(fixture.errors, []);
+});
+
+test("explicit assigned-Lead messages with a changed source remain pending", async () => {
+  const fixture = projectMessageDrainFixture("supervisor_message", 1, false, {
+    fromSessionId: "different-assignment",
+  });
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.equal(fixture.imported.length, 0);
+  assert.equal(fixture.delivered.length, 0);
+  assert.deepEqual(fixture.removed, []);
+});
+
+test("untagged automatic project results retain their existing delivery behavior", async () => {
+  for (const [kind, options] of [
+    [undefined, { triggerTurn: false }],
+    ["execution_failure", { deliverAs: "followUp", triggerTurn: true }],
+  ] as const) {
+    const fixture = projectMessageDrainFixture(kind);
+    assert.equal(
+      await fixture.runtime.drainProjectMessages(fixture.context),
+      1,
+    );
+    assert.deepEqual(fixture.delivered[0].options, options);
+    assert.deepEqual(fixture.removed, ["project-message-id"]);
+    assert.deepEqual(fixture.errors, []);
+  }
+});
+
+test("a malformed explicit message without routing identity stays pending while automatic results drain", async () => {
+  const invalidId = randomUUID();
+  const fixture = projectMessageDrainFixture(
+    undefined,
+    undefined,
+    false,
+    {},
+    {
+      id: invalidId,
+      reason: "malformed",
+    },
+  );
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 1);
+  assert.equal(fixture.reads, 1);
+  assert.equal(fixture.delivered.length, 1);
+  assert.deepEqual(fixture.removed, ["project-message-id"]);
+  assert.equal(fixture.removed.includes(invalidId), false);
+  assert.match(
+    String(fixture.errors[0]),
+    /Malformed explicit project message/u,
+  );
+});
+
+test("an oversized project message stays pending while automatic results drain", async () => {
+  const oversizedId = randomUUID();
+  const fixture = projectMessageDrainFixture(
+    undefined,
+    undefined,
+    false,
+    {},
+    { id: oversizedId, reason: "oversized" },
+  );
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 1);
+  assert.equal(fixture.reads, 1);
+  assert.equal(fixture.delivered.length, 1);
+  assert.deepEqual(fixture.removed, ["project-message-id"]);
+  assert.equal(fixture.removed.includes(oversizedId), false);
+  assert.equal(
+    String(fixture.errors[0]),
+    "Error: Oversized project message is pending and was not delivered",
+  );
 });

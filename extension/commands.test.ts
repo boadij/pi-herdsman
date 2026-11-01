@@ -31,12 +31,15 @@ import {
   readLiveProcessLock,
 } from "./lock.ts";
 import {
+  COORDINATOR_MESSAGE_PROTOCOL,
   claimChiefLease as claimChiefLeaseRaw,
   globalProjectAssignmentSnapshot,
   listPendingRetirements,
   listProjectAssignments,
   listProjectMessages,
   projectAssignmentPath,
+  chiefMessageQuarantined,
+  listChiefMessagePaths,
   listCoordinationMessagePaths,
   managerDescriptorPath,
   claimManagerLease,
@@ -1804,6 +1807,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     writePeerLeadRecordRaw(peerRuntime(), {
       version: 2,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       sessionKind: "ordinary",
       piSessionId: targetId,
       paneId: "other-manager-pane",
@@ -1976,6 +1980,7 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
       assert.equal(assignmentSnapshot.get(lead.sessionId)?.length ?? 0, 0);
     }
     const sender = fixtures[0]!;
+    setEnvironment(leads[0]!);
     await sender.pi.tools
       .find((tool) => tool.name === "list_peers")!
       .execute("list", {}, undefined, undefined, sender.context);
@@ -8590,6 +8595,7 @@ async function managerDelegateAssignmentTest(
         role: "lead",
         instanceId: randomUUID(),
         piSessionId: childSession,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         updatedAt: Date.now(),
       });
       return respond({
@@ -9849,6 +9855,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
     build: OTHER_HERDSMAN_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     role: "manager",
     instanceId: randomUUID(),
     piSessionId: incompatibleManagerSession,
@@ -10104,6 +10111,16 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     await manager.events.get("session_start")![0](undefined, managerCtx);
     await manager.commandOptions.get("manager").handler("", managerCtx);
+    const managerCoordination = readLeadCoordinationState(
+      supervisionRuntime(),
+      LEAD_SESSION_ID,
+    );
+    assert.ok(managerCoordination);
+    writeLeadCoordinationState(supervisionRuntime(), {
+      ...managerCoordination,
+      build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+    });
     const managerStaff = manager.tools.find(
       (tool) => tool.name === "list_staff",
     )!;
@@ -10256,6 +10273,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
       build: OTHER_HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "lead",
       instanceId: randomUUID(),
       piSessionId: assignedLeadSession,
@@ -10264,6 +10282,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
       build: OTHER_HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "lead",
       instanceId: randomUUID(),
       piSessionId: ordinaryLeadSession,
@@ -10283,6 +10302,13 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       "active",
       "an independently verified incompatible Lead remains active work",
     );
+    const assignedIncompatibleReport = incompatibleWork.details.reports.find(
+      (report: any) => report.compatibility === "incompatible",
+    );
+    assert.equal(assignedIncompatibleReport.branch, "assigned-branch");
+    assert.deepEqual(assignedIncompatibleReport.available_tools, [
+      "message_staff",
+    ]);
     await assert.rejects(
       manager.tools
         .find((tool) => tool.name === "stop_lead")!
@@ -10295,27 +10321,26 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         ),
       (error: any) => error.detail.category === "incompatible_build",
     );
-    await assert.rejects(
-      manager.tools
-        .find((tool) => tool.name === "message_staff")!
-        .execute(
-          "message",
-          { branch: "assigned-branch", message: "hello" },
-          undefined,
-          undefined,
-          managerCtx,
-        ),
-      (error: any) => {
-        assert.equal(error.detail.category, "incompatible_build");
-        assert.match(error.message, /assigned-branch/);
-        assert.doesNotMatch(
-          JSON.stringify(error),
-          new RegExp(assignedLeadSession),
-        );
-        assert.doesNotMatch(error.message, new RegExp(assignedLeadSession));
-        return true;
-      },
+    await manager.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        { branch: "assigned-branch", message: "hello across builds" },
+        undefined,
+        undefined,
+        managerCtx,
+      );
+    const assignedMessage = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      assignedLeadSession,
+    )
+      .map((path) => readChiefMessage(path))
+      .find((record) => record.kind === "manager_message");
+    assert.equal(
+      assignedMessage?.messageProtocol,
+      COORDINATOR_MESSAGE_PROTOCOL,
     );
+    assert.equal(assignedMessage?.branch, "assigned-branch");
     await manager.commandOptions.get("manager").handler("", managerCtx);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -10455,7 +10480,8 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       );
       assert.equal(incompatibleEntry.compatibility, "incompatible");
       assert.equal(incompatibleEntry.build.sha256, OTHER_HERDSMAN_BUILD.sha256);
-      assert.deepEqual(incompatibleEntry.available_tools, []);
+      assert.equal(typeof incompatibleEntry.target, "string");
+      assert.deepEqual(incompatibleEntry.available_tools, ["message_staff"]);
       assert.equal(
         listed.details.reports.some(
           (report: any) =>
@@ -10473,10 +10499,6 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       );
       for (const [toolName, params] of [
         ["inspect_staff", { action: "inspect", target: incompatibleTarget }],
-        [
-          "message_staff",
-          { target: incompatibleTarget, message: "unauthorized" },
-        ],
         ["read_staff_transcript", { target: incompatibleTarget }],
       ] as const) {
         await assert.rejects(
@@ -10492,6 +10514,33 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
           /not found|not eligible|not a current direct report|build mismatch/iu,
         );
       }
+      await chief.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          {
+            target: incompatibleTarget,
+            message:
+              "A protocol-compatible direct Manager can receive messages only",
+          },
+          undefined,
+          undefined,
+          chiefCtx,
+        );
+      const incompatibleManagerMessage = listCoordinationMessagePaths(
+        supervisionRuntime(),
+        incompatibleManagerSession,
+      )
+        .map((path) => readChiefMessage(path))
+        .find((record) => record.kind === "chief_message");
+      assert.equal(
+        incompatibleManagerMessage?.messageProtocol,
+        COORDINATOR_MESSAGE_PROTOCOL,
+      );
+      assert.equal(
+        incompatibleManagerMessage?.build?.sha256,
+        HERDSMAN_BUILD.sha256,
+      );
       const descriptorPath = managerDescriptorPath(
         supervisionRuntime(),
         incompatibleWorkspace,
@@ -10507,6 +10556,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         role: "manager",
         instanceId: randomUUID(),
         piSessionId: incompatibleManagerSession,
@@ -10583,6 +10633,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         build: OTHER_HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         role: "manager",
         instanceId: randomUUID(),
         piSessionId: incompatibleManagerSession,
@@ -10616,6 +10667,10 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
 
 test("ordinary Lead uplink reaches its Manager while assigned branch targeting fails closed on incomplete topology", async (t) => {
   setLeadEnvironment();
+  const previousManagerDiagnostics =
+    process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
+  const managerNotices: string[] = [];
   const socketPath = join(tmpdir(), `manager-lead-inbox-${randomUUID()}.sock`);
   const repoA = realFs.mkdtempSync(
     join(tmpdir(), "manager-lead-repository-a-"),
@@ -10749,6 +10804,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     });
     registerExtension!(manager.pi as never);
     const managerCtx = fakeContext(manager.entries) as any;
+    managerCtx.ui.notify = (message: string) => managerNotices.push(message);
     managerCtx.isIdle = () => false;
     await manager.events.get("session_start")![0](undefined, managerCtx);
     await manager.commandOptions.get("manager").handler("", managerCtx);
@@ -10758,8 +10814,10 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       args: string[],
       options: { cwd?: string } | undefined,
     ) =>
-      command === "git" && args[0] === "rev-parse" && options?.cwd === repoA
-        ? { stdout: repoA, stderr: "", code: 0 }
+      command === "git" &&
+      args[0] === "rev-parse" &&
+      (options?.cwd === repoA || options?.cwd === "/tmp")
+        ? { stdout: options.cwd, stderr: "", code: 0 }
         : originalManagerExec(command, args, options);
 
     useLeadIdentity();
@@ -10813,16 +10871,70 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     assert.equal("chiefSessionId" in uplink.details, false);
     useManagerIdentity();
     managerCtx.isIdle = () => true;
+    const queuedUplink = listChiefMessagePaths(
+      supervisionRuntime(),
+      LEAD_SESSION_ID,
+    )
+      .map(readChiefMessage)
+      .find(({ id }) => id === uplink.details.id);
+    const currentManager = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    );
+    assert.ok(currentManager);
+    assert.deepEqual(
+      queuedUplink && {
+        kind: queuedUplink.kind,
+        messageProtocol: queuedUplink.messageProtocol,
+        fromSessionId: queuedUplink.fromSessionId,
+        toSessionId: queuedUplink.toSessionId,
+        leaseId: queuedUplink.leaseId,
+      },
+      {
+        kind: "lead_message",
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+        fromSessionId: leadSession,
+        toSessionId: LEAD_SESSION_ID,
+        leaseId: currentManager.leaseId,
+      },
+      "uplink must be durably queued to this Manager with its current lease and protocol",
+    );
+    const delivered = () =>
+      manager!.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-lead_message" &&
+          message?.details?.id === uplink.details.id &&
+          message?.details?.fromSessionId === leadSession &&
+          message?.details?.toSessionId === LEAD_SESSION_ID,
+      );
+    const queued = () =>
+      listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+        (path) => readChiefMessage(path).id === uplink.details.id,
+      );
+    const quarantined = () =>
+      chiefMessageQuarantined(
+        supervisionRuntime(),
+        LEAD_SESSION_ID,
+        uplink.details.id,
+      );
     await t.waitFor(() =>
       assert.ok(
-        manager!.sentMessageCalls.some(
-          ({ message }: any) =>
-            message?.customType === "pi-herdsman-lead_message" &&
-            message?.details?.id === uplink.details.id &&
-            message?.details?.fromSessionId === leadSession &&
-            message?.details?.toSessionId === LEAD_SESSION_ID,
-        ),
+        delivered() || !queued() || quarantined(),
+        `uplink disposition: ${JSON.stringify({
+          delivered: delivered(),
+          queued: queued(),
+          quarantined: quarantined(),
+          managerNotices,
+        })}`,
       ),
+    );
+    assert.ok(
+      delivered(),
+      `Manager did not deliver uplink: ${JSON.stringify({
+        queued: queued(),
+        quarantined: quarantined(),
+        managerNotices,
+      })}`,
     );
     const incoming = manager.sentMessageCalls.find(
       ({ message }: any) => message?.details?.id === uplink.details.id,
@@ -11059,6 +11171,8 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     });
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
+      build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager",
       instanceId: randomUUID(),
       piSessionId: competingSession,
@@ -11182,6 +11296,10 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
+    if (previousManagerDiagnostics === undefined)
+      delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+    else
+      process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousManagerDiagnostics;
     setLeadEnvironment();
     realFs.rmSync(repoA, { recursive: true, force: true });
   }
@@ -11222,6 +11340,7 @@ test("ordinary Lead receives Chief messages using its verified local repository 
     cwd: "/tmp",
   };
   const chiefLease = claimChiefLease({
+    build: OTHER_HERDSMAN_BUILD,
     piSessionId: chiefId,
     paneId: chiefAgent.pane_id,
     tabId: chiefAgent.tab_id,
@@ -11229,6 +11348,8 @@ test("ordinary Lead receives Chief messages using its verified local repository 
   });
   const incoming = {
     version: 2 as const,
+    build: OTHER_HERDSMAN_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     id: randomUUID(),
     leaseId: chiefLease.descriptor.leaseId,
     kind: "chief_message" as const,
@@ -11309,6 +11430,43 @@ test("ordinary Lead receives Chief messages using its verified local repository 
         [],
       ),
     );
+    const strictAssignment = {
+      ...incoming,
+      id: randomUUID(),
+      kind: "project_assignment" as const,
+      text: "Cross-build project assignments remain strict",
+      branch: "cross-build-control",
+    };
+    writeChiefMessage(strictAssignment, supervisionRuntime());
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+        "a protocol-compatible ordinary message does not relax assignment control",
+      ),
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }: any) => message?.details?.id === strictAssignment.id,
+      ),
+      false,
+    );
+    const legacyCrossBuild: any = {
+      ...incoming,
+      id: randomUUID(),
+      text: "Legacy messages remain same-build only",
+    };
+    delete legacyCrossBuild.messageProtocol;
+    const deliveredBeforeLegacy = pi.sentMessageCalls.length;
+    writeChiefMessage(legacyCrossBuild, supervisionRuntime());
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession),
+        [],
+        "an unversioned cross-build ordinary message is rejected",
+      ),
+    );
+    assert.equal(pi.sentMessageCalls.length, deliveredBeforeLegacy);
     await assert.rejects(
       worktreeGroupScope(pi.pi, context, workspaceId),
       /Herdr project topology changed/,
@@ -11338,7 +11496,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
   const managerPane = "manager-inbox-pane";
   const managerTab = "manager-inbox-tab";
   const managerLease = claimManagerLease({
-    build: HERDSMAN_BUILD,
+    build: OTHER_HERDSMAN_BUILD,
     piSessionId: managerSession,
     paneId: managerPane,
     tabId: managerTab,
@@ -11347,6 +11505,8 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
+    build: OTHER_HERDSMAN_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     role: "manager",
     instanceId: randomUUID(),
     piSessionId: managerSession,
@@ -11358,6 +11518,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
   );
   writePeerLeadRecord(peerRuntime(), {
     version: 1,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     role: "manager",
     piSessionId: managerSession,
     paneId: managerPane,
@@ -11436,6 +11597,8 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     await pi.events.get("session_start")![0](undefined, context);
     const incoming = {
       version: 2 as const,
+      build: OTHER_HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       id: randomUUID(),
       leaseId: managerLease.descriptor.leaseId,
       kind: "manager_message" as const,
@@ -11994,6 +12157,7 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
   const senderRecord = {
     version: 2 as const,
     build: HERDSMAN_BUILD,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     role: "lead" as const,
     piSessionId: senderId,
     paneId: "sender-pane",
@@ -12024,6 +12188,7 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
         managed: false,
       },
       text: "queued peer",
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       createdAt: Date.now(),
     };
     writeCoordinationMessage(record, runtime);
@@ -12115,10 +12280,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
       (
         error: Error & { category?: string; detail?: { category?: string } },
       ) => {
-        assert.equal(
-          error.category ?? error.detail?.category,
-          "incompatible_build",
-        );
+        assert.match(error.message, /protocol/i);
         return true;
       },
     );
@@ -12126,6 +12288,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     writePeerLeadRecord(runtime, {
       ...targetRecord,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     });
     const queued = await peer.execute(
       "message",
@@ -12380,6 +12543,7 @@ test("remote ordinary-Lead inbox delivery is role-authorized and still requires 
     id: randomUUID(),
     leaseId: randomUUID(),
     kind: "peer_message" as const,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     fromSessionId: randomUUID(),
     toSessionId: recipientId,
     leadSessionId: "",
@@ -12482,6 +12646,7 @@ test("peer delivery rejects same-generation recipient provenance changes before 
   const message = {
     version: 2 as const,
     build: HERDSMAN_BUILD,
+    messageProtocol: 1,
     id: randomUUID(),
     leaseId: randomUUID(),
     kind: "peer_message" as const,
@@ -12935,6 +13100,8 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
   try {
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
+      build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       role: "manager",
       instanceId: randomUUID(),
       piSessionId: senderId,
@@ -12944,6 +13111,7 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
     await pi.commandOptions.get("chief").handler("", context);
     const record = {
       version: 2,
+      build: HERDSMAN_BUILD,
       id: randomUUID(),
       leaseId: lease.descriptor.leaseId,
       kind: "manager_message",
@@ -19851,12 +20019,14 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     tabId: managerTabId,
     workspaceId: WORKSPACE,
     repoKey,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
     role: "manager",
     instanceId: randomUUID(),
     piSessionId: managerId,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     updatedAt: Date.now(),
   });
   const managerAgent = {
@@ -22064,4 +22234,96 @@ test("current project handoff publishes despite unrelated global authority conte
     cancelSignal = undefined;
   }
   assert.equal(existsSync(cancelledLockPath), false);
+});
+
+test("assigned Lead supervisor messages persist protocol 1 without tagging automatic results", async (t) => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const {
+    listProjectMessages,
+    projectMessageBytes,
+    readProjectAssignment,
+    readProjectMessage,
+    listProjectMessageHeaders,
+    writeProjectAssignment,
+    writeProjectMessage,
+  } = await import("./supervision.ts");
+  const runtime = supervisionRuntime(
+    `/tmp/project-message-protocol-${randomUUID()}.sock`,
+  );
+  t.after(() => rmSync(runtime.root, { recursive: true, force: true }));
+  const assignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: "message-protocol",
+    branch: "assigned-lead",
+    text: "assigned task",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const transitions = createLeadRoleTransitions(
+    { controllerRole: "lead" } as any,
+    {
+      supervisionRuntime: () => runtime,
+      readProjectAssignment,
+      projectAssignmentPath,
+      acquireProcessLock,
+      delay: (ms: number, value: unknown, options: { signal?: AbortSignal }) =>
+        import("node:timers/promises").then(({ setTimeout }) =>
+          setTimeout(ms, value, options),
+        ),
+      prepareCoordinationInput: async (_ctx: unknown, text: string) => ({
+        text,
+        resultBindings: [],
+      }),
+      projectMessageBytes,
+      writeProjectMessage,
+      listProjectMessageHeaders,
+      readProjectMessage,
+    } as any,
+  );
+  const ctx: any = fakeContext();
+  ctx.sessionManager.getSessionId = () => assignment.id;
+
+  await transitions.publishProjectMessage(
+    ctx,
+    assignment,
+    "explicit supervisor message",
+    [],
+    undefined,
+    undefined,
+    "supervisor_message",
+  );
+  await transitions.publishProjectMessage(ctx, assignment, "automatic result");
+  await transitions.publishProjectMessage(
+    ctx,
+    assignment,
+    "execution failure",
+    [],
+    undefined,
+    undefined,
+    "execution_failure",
+  );
+
+  const messages = listProjectMessages(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  const byText = new Map(
+    messages.map(({ text, kind, messageProtocol }) => [
+      text,
+      { kind, messageProtocol },
+    ]),
+  );
+  assert.deepEqual(byText.get("explicit supervisor message"), {
+    kind: "supervisor_message",
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+  });
+  assert.deepEqual(byText.get("automatic result"), {
+    kind: undefined,
+    messageProtocol: undefined,
+  });
+  assert.deepEqual(byText.get("execution failure"), {
+    kind: "execution_failure",
+    messageProtocol: undefined,
+  });
 });

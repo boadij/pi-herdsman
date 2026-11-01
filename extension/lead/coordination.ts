@@ -9,6 +9,7 @@ import type {
   ProjectAssignment,
   ProjectMessage,
   ProjectMessageHeader,
+  ProjectMessageHeaderIssue,
   ChiefMessageRecord,
   ChiefMessageKind,
   PeerLeadRecord,
@@ -19,6 +20,7 @@ import type {
 import {
   projectMessageEnvelope,
   leadSupervisorState as resolveLeadSupervisorState,
+  COORDINATOR_MESSAGE_PROTOCOL,
   COORDINATION_INBOX_SCAN_LIMIT,
   listPendingRetirements,
   removePendingRetirement,
@@ -38,6 +40,7 @@ import {
   samePeerLeadAuthority,
   canMessagePeer,
   isRemoteOrdinaryLead,
+  supportsCoordinatorMessaging,
   supervisorStateMessage,
 } from "../supervision.ts";
 
@@ -52,12 +55,7 @@ import {
 } from "../storage.ts";
 import { canonicalRefsForSemanticResult } from "../agent-controller.ts";
 import type { HerdrRecord, HerdrSessionSnapshot } from "../herdr.ts";
-import {
-  formatRuntimeBuild,
-  isRuntimeBuild,
-  sameRuntimeBuild,
-  type RuntimeBuild,
-} from "../compatibility.ts";
+import { sameRuntimeBuild, type RuntimeBuild } from "../compatibility.ts";
 import type { PeerCorrespondence } from "../peer-correspondence.ts";
 import {
   rememberCoordinatorTarget,
@@ -145,7 +143,6 @@ export type LeadCoordinationBaseHost = {
   contentText: typeof import("@earendil-works/pi-ai").contentText;
   supervisorStateType: string;
   sameManagerDescriptor: typeof import("../supervision.ts").sameManagerDescriptor;
-  requireCompatibleBuild: typeof import("../compatibility.ts").requireCompatibleBuild;
   sameRuntimeBuild: typeof import("../compatibility.ts").sameRuntimeBuild;
   samePeerLeadGeneration: typeof import("../supervision.ts").samePeerLeadGeneration;
   writeCoordinationMessage: typeof import("../supervision.ts").writeCoordinationMessage;
@@ -287,7 +284,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     currentChiefAuthority,
     currentSupervisor,
     sameManagerDescriptor,
-    requireCompatibleBuild,
     sameRuntimeBuild,
     samePeerLeadGeneration,
     writeCoordinationMessage,
@@ -304,6 +300,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   } = host;
   const reportedProjectMessageCleanupErrors = new Set<string>();
   const reportedProjectMessageReadErrors = new Set<string>();
+  const reportedProjectMessageHeaderErrors = new Set<string>();
   const reportedRetirementErrors = new Set<string>();
   const retirementCursors = new Map<string, string>();
   const readLeadSessionIdsFromHost = (
@@ -371,6 +368,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         role: activeRole() === "manager" ? "manager" : "lead",
         instanceId: host.leadInstanceId(),
         piSessionId:
@@ -488,6 +486,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const record: PeerLeadRecord = {
         version: 2,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         role: activeRole() === "manager" ? "manager" : "lead",
         sessionKind: kind,
         piSessionId: sessionId,
@@ -600,7 +599,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     return peerPresencePublication;
   };
 
-  const assertCurrentLeadCoordination = (ctx: ExtensionContext): void => {
+  const assertCurrentLeadCoordination = (ctx: ExtensionContext) => {
     if (!leadCoordinationHealthy) {
       throw new Error("Lead coordination state is unavailable");
     }
@@ -618,6 +617,23 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         (activeRole() === "manager" ? "manager" : "lead")
     )
       throw new Error("Lead coordination state changed; retry the action");
+    return state;
+  };
+  const assertCurrentPeerCoordination = (
+    ctx: ExtensionContext,
+    sender: PeerLeadRecord,
+  ): void => {
+    if (!sender.build || !sameRuntimeBuild(sender.build, HERDSMAN_BUILD))
+      throw new Error("Local peer build identity changed; retry the action");
+    const state = assertCurrentLeadCoordination(ctx);
+    if (
+      state.messageProtocol !== sender.messageProtocol ||
+      !supportsCoordinatorMessaging(state.messageProtocol) ||
+      !supportsCoordinatorMessaging(sender.messageProtocol)
+    )
+      throw new Error(
+        "Local peer messaging protocol changed; retry the action",
+      );
   };
 
   const leadSupervisorState = (ctx: ExtensionContext): Promise<string> =>
@@ -744,8 +760,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (
       leadRuntime.chiefMode !== "inactive" ||
       record.kind !== "peer_message" ||
-      !record.build ||
-      !sameRuntimeBuild(record.build, HERDSMAN_BUILD) ||
+      !supportsCoordinatorMessaging(record.messageProtocol) ||
       record.toSessionId !== ctx.sessionManager.getSessionId() ||
       record.fromSessionId === record.toSessionId ||
       record.leadSessionId !== record.fromSessionId
@@ -762,6 +777,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (
       !target ||
       (target.role ?? "lead") !== activeRole() ||
+      !supportsCoordinatorMessaging(target.messageProtocol) ||
       target.piSessionId !== record.toSessionId
     )
       return false;
@@ -819,6 +835,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       leadRuntime.roleSuspended
     )
       throw new Error("Peer is unavailable in this role");
+    assertCurrentPeerCoordination(ctx, expectedSender);
     if (
       leadRuntime.controllerRole === "manager" &&
       (!leadRuntime.managerLease ||
@@ -853,6 +870,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error(
         "Peer sender or target changed before the message was queued",
       );
+    if (
+      !supportsCoordinatorMessaging(sender.messageProtocol) ||
+      !supportsCoordinatorMessaging(target.messageProtocol)
+    )
+      throw new Error(
+        "Peer messaging protocol 1 is required for both participants",
+      );
     const contextSnapshot =
       (sender.role ?? "lead") === "manager" &&
       (target.role ?? "lead") === "manager"
@@ -882,21 +906,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error(
         "Peer is unavailable or outside the permitted project scope. Run `list_peers` again.",
       );
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      sender.build,
-      "peer_message",
-      `local peer presence ${sender.piSessionId}`,
-    );
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      target.build,
-      "peer_message",
-      `peer ${target.piSessionId}`,
-    );
     const record: ChiefMessageRecord = {
       version: 2,
       build: HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       id: recordId,
       leaseId: sender.claim.id,
       kind: "peer_message",
@@ -941,9 +954,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             createHash("sha256").update(peer.socket).digest("hex")
         );
       };
+      if (!currentSender || !currentTarget)
+        throw new Error(
+          "Peer sender or target changed before the message was queued",
+        );
+      assertCurrentPeerCoordination(ctx, currentSender);
       if (
-        !currentSender ||
-        !currentTarget ||
+        !supportsCoordinatorMessaging(currentSender.messageProtocol) ||
+        !supportsCoordinatorMessaging(currentTarget.messageProtocol) ||
         !samePeerLeadAuthority(currentSender, sender) ||
         !samePeerLeadAuthority(currentTarget, target) ||
         !stillCurrent(sender, senderContext) ||
@@ -970,6 +988,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     runtimeOverride?: ReturnType<typeof supervisionRuntime>,
     expectedSupervisor?: { piSessionId: string; leaseId: string },
     resultBindings: readonly ResultBinding[] = [],
+    messageProtocol?: number,
   ): ChiefMessageRecord => {
     assertCurrentLeadCoordination(ctx);
     if (
@@ -979,8 +998,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           leadRuntime.managerLease.descriptor.leaseId)
     )
       throw new Error("Manager lease is no longer active");
-    const chief = await currentSupervisor(ctx);
+    const messaging = supportsCoordinatorMessaging(messageProtocol);
+    const chief = await currentSupervisor(
+      ctx,
+      messaging ? "identity-only" : undefined,
+    );
     if (!chief) throw new Error("No active supervisor is available");
+    if (messaging && !supportsCoordinatorMessaging(chief.messageProtocol))
+      throw new Error("Supervisor does not advertise messaging protocol 1");
     if (
       expectedSupervisor &&
       (chief.piSessionId !== expectedSupervisor.piSessionId ||
@@ -993,6 +1018,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const record: ChiefMessageRecord = {
       version: 2,
       build: HERDSMAN_BUILD,
+      ...(messaging ? { messageProtocol: COORDINATOR_MESSAGE_PROTOCOL } : {}),
       id: recordId ?? randomUUID(),
       leaseId: chief.leaseId,
       kind,
@@ -1005,7 +1031,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     };
     // Revalidate the descriptor and its live pane immediately before the
     // filesystem write. The earlier check only discovered a target.
-    const freshChief = await currentSupervisor(ctx);
+    const freshChief = await currentSupervisor(
+      ctx,
+      messaging ? "identity-only" : undefined,
+    );
     assertCurrentLeadCoordination(ctx);
     if (
       leadRuntime.controllerRole === "manager" &&
@@ -1017,6 +1046,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (
       !freshChief ||
       freshChief.leaseId !== chief.leaseId ||
+      (messaging &&
+        (!supportsCoordinatorMessaging(freshChief.messageProtocol) ||
+          freshChief.piSessionId !== chief.piSessionId)) ||
       (expectedSupervisor &&
         (freshChief.piSessionId !== expectedSupervisor.piSessionId ||
           freshChief.leaseId !== expectedSupervisor.leaseId)) ||
@@ -1098,12 +1130,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       | "machine_list_failed"
       | "herdr_not_reachable"
       | "probe_failed"
-      | "build_mismatch"
-      | "build_unverified"
+      | "protocol_mismatch"
+      | "protocol_unverified"
       | "eligibility_unverified";
     peer?: string;
-    local_build?: string;
-    remote_build?: string;
   };
   const maxRemoteDiagnostics = 20;
   const remotePeerRoutes = new Map<
@@ -1112,7 +1142,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       machine: SavedPeerMachine;
       dataRoot: string;
       claimId: string;
-      build?: unknown;
       role: "manager" | "lead";
     }
   >();
@@ -1252,11 +1281,16 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           details: { id: published.id, branch: assignment.branch },
         };
       }
-      const chief = await currentSupervisor(ctx);
+      const chief = await currentSupervisor(ctx, "identity-only");
       if (!chief)
         throw structuredError(
           "target_not_found",
           "No active supervisor is available",
+        );
+      if (!supportsCoordinatorMessaging(chief.messageProtocol))
+        throw structuredError(
+          "target_not_found",
+          "Supervisor does not advertise messaging protocol 1",
         );
       const recordId = randomUUID();
       const createdAt = Date.now();
@@ -1269,6 +1303,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         (candidate, resultBindings) => ({
           version: 2,
           build: HERDSMAN_BUILD,
+          messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
           id: recordId,
           leaseId: chief.leaseId,
           kind: activeRole() === "manager" ? "manager_message" : "lead_message",
@@ -1291,6 +1326,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         undefined,
         undefined,
         prepared.resultBindings,
+        COORDINATOR_MESSAGE_PROTOCOL,
       );
     } catch (error) {
       try {
@@ -1401,6 +1437,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           assignmentSnapshot,
           (assignmentSnapshot?.get(self)?.length ?? 0) > 0,
         ));
+      if (!supportsCoordinatorMessaging(own?.messageProtocol))
+        throw new Error("Local peer messaging protocol 1 is not advertised");
       if (!ownContext)
         throw new Error(
           "Peer eligibility could not be verified; retry list_peers.",
@@ -1439,7 +1477,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       for (const record of listPeerLeadRecords(peerRuntime())) {
         if (
           (record.role ?? "lead") !== activeRole() ||
-          record.piSessionId === self
+          record.piSessionId === self ||
+          !supportsCoordinatorMessaging(record.messageProtocol)
         )
           continue;
         const candidateManaged =
@@ -1494,8 +1533,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           ? `${characters.slice(0, 79).join("")}…`
           : text;
       };
-      const diagnosticBuild = (build: RuntimeBuild): string =>
-        diagnosticLabel(formatRuntimeBuild(build), "unknown");
       const localPeerSessions = new Set(peers.map((peer) => peer.session));
       const discoveredRemotePeerRoutes = new Map(remotePeerRoutes);
       const previousAmbiguousSessions = new Set(ambiguousRemoteSessions);
@@ -1548,6 +1585,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             const snapshot = await probePeerEndpoint(machine, signal);
             if (signal?.aborted) break;
             identityEstablished = true;
+            const bridgeProtocolSupported = supportsCoordinatorMessaging(
+              snapshot.messageProtocol,
+            );
+            if (!bridgeProtocolSupported)
+              addRemoteDiagnostic({
+                machine: diagnosticLabel(machine.label, "machine"),
+                reason:
+                  snapshot.messageProtocol === undefined
+                    ? "protocol_unverified"
+                    : "protocol_mismatch",
+              });
             const ordinaryLeadScanIncomplete =
               activeRole() === "lead" &&
               snapshot.ordinaryLeadsComplete !== true;
@@ -1564,7 +1612,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 (!ordinaryLeadScanIncomplete || route.role !== "lead")
               )
                 discoveredRemotePeerRoutes.delete(session);
-            if (ordinaryLeadScanIncomplete)
+            if (ordinaryLeadScanIncomplete && bridgeProtocolSupported)
               for (const [session, route] of remotePeerRoutes) {
                 if (route.machine.id !== machine.id || route.role !== "lead")
                   continue;
@@ -1576,6 +1624,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             for (const remote of snapshot.peers) {
               const remoteRole = activeRole();
               if (
+                !bridgeProtocolSupported ||
                 remote.role !== remoteRole ||
                 (remoteRole === "lead" &&
                   (snapshot.ordinaryLeadsComplete !== true ||
@@ -1590,21 +1639,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 remote.name,
                 remoteRole === "lead" ? "Lead peer" : "Manager peer",
               );
-              if (!isRuntimeBuild(remote.build)) {
+              if (!supportsCoordinatorMessaging(remote.messageProtocol)) {
                 addRemoteDiagnostic({
                   machine: diagnosticLabel(machine.label, "machine"),
-                  reason: "build_unverified",
+                  reason:
+                    remote.messageProtocol === undefined
+                      ? "protocol_unverified"
+                      : "protocol_mismatch",
                   peer: peerHint,
-                });
-                continue;
-              }
-              if (!sameRuntimeBuild(HERDSMAN_BUILD, remote.build)) {
-                addRemoteDiagnostic({
-                  machine: diagnosticLabel(machine.label, "machine"),
-                  reason: "build_mismatch",
-                  peer: peerHint,
-                  local_build: diagnosticBuild(HERDSMAN_BUILD),
-                  remote_build: diagnosticBuild(remote.build),
                 });
                 continue;
               }
@@ -1618,7 +1660,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 machine,
                 dataRoot: snapshot.dataRoot,
                 claimId: remote.claim.id,
-                build: remote.build,
                 role: remoteRole,
               });
               peers.push({
@@ -1690,6 +1731,26 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     removeRemotePeerOutbound(outbound.id);
                     continue;
                   }
+                  const correspondenceRole = (
+                    JSON.parse(outbound.envelope) as {
+                      correspondence?: { role?: unknown };
+                    }
+                  ).correspondence?.role;
+                  const retryRecipient = snapshot.peers.find(
+                    (peer) =>
+                      peer.role ===
+                        (correspondenceRole === undefined
+                          ? "manager"
+                          : correspondenceRole) &&
+                      peer.piSessionId === outbound.recipientSession,
+                  );
+                  if (
+                    !supportsCoordinatorMessaging(snapshot.messageProtocol) ||
+                    !supportsCoordinatorMessaging(
+                      retryRecipient?.messageProtocol,
+                    )
+                  )
+                    continue;
                   if (retry.kind !== "retry") continue;
                   if (retry.envelope !== envelope) {
                     envelope = retry.envelope;
@@ -1725,6 +1786,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     ((candidate.role ?? "manager") !== "lead" ||
                       (snapshot.ordinaryLeadsComplete === true &&
                         peer.sessionKind === "ordinary")) &&
+                    supportsCoordinatorMessaging(peer.messageProtocol) &&
                     peer.piSessionId === candidate.recipientSession,
                 );
                 if (!remote) continue;
@@ -1745,6 +1807,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                       candidate.recipientSession ||
                     (correspondence.role ?? "manager") !==
                       (candidate.role ?? "manager")
+                  )
+                    continue;
+                  if (
+                    !supportsCoordinatorMessaging(snapshot.messageProtocol) ||
+                    !supportsCoordinatorMessaging(remote.messageProtocol)
                   )
                     continue;
                   if (remote.claim.id !== correspondence.recipientGeneration) {
@@ -1932,6 +1999,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     const record: ChiefMessageRecord = {
                       version: 2,
                       build: HERDSMAN_BUILD,
+                      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
                       id: reply.id,
                       leaseId: correspondence.recipientGeneration,
                       kind: "peer_message",
@@ -2004,15 +2072,22 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             if (identityEstablished) {
               appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
             } else {
+              const protocolUnverified =
+                error instanceof Error &&
+                error.message ===
+                  "Peer endpoint omitted coordinator message protocol";
               machineDiscoveryIncomplete = true;
               addRemoteDiagnostic({
                 machine: diagnosticLabel(machine.label, "machine"),
-                reason: "probe_failed",
+                reason: protocolUnverified
+                  ? "protocol_unverified"
+                  : "probe_failed",
               });
               for (const [session, route] of discoveredRemotePeerRoutes)
                 if (route.machine.id === machine.id)
                   discoveredRemotePeerRoutes.delete(session);
               for (const [session, route] of remotePeerRoutes) {
+                if (protocolUnverified) break;
                 if (route.machine.id !== machine.id) continue;
                 const current = discoveredRemotePeerRoutes.get(session);
                 if (current) {
@@ -2155,6 +2230,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       );
     const recipientSession = resolvedTarget.sessionId;
     const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
+    if (sender && !supportsCoordinatorMessaging(sender.messageProtocol))
+      throw new Error("Local peer does not advertise messaging protocol 1");
     const remoteRoute = remotePeerRoutes.get(recipientSession);
     const returnCorrespondences =
       sender &&
@@ -2208,6 +2285,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       (candidate, resultBindings) => ({
         version: 2,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         id: recordId,
         leaseId: sender.claim.id,
         kind: "peer_message",
@@ -2300,6 +2378,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     }
     if (remoteRoute) {
       const current = await probePeerEndpoint(remoteRoute.machine, signal);
+      if (!supportsCoordinatorMessaging(current.messageProtocol))
+        throw new Error(
+          "Remote peer endpoint does not support messaging protocol 1",
+        );
       const currentTarget = current.peers.find(
         (peer) =>
           peer.role === remoteRoute.role &&
@@ -2311,15 +2393,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       );
       if (!currentTarget || current.dataRoot !== remoteRoute.dataRoot)
         throw new Error("Remote Manager changed; run `list_peers` again.");
-      requireCompatibleBuild(
-        HERDSMAN_BUILD,
-        currentTarget.build as RuntimeBuild,
-        "peer_message",
-        `remote ${remoteRoute.role} ${params.target}`,
-      );
+      if (!supportsCoordinatorMessaging(currentTarget.messageProtocol))
+        throw new Error("Remote peer does not advertise messaging protocol 1");
       const record: ChiefMessageRecord = {
         version: 2,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         id: recordId,
         leaseId: sender.claim.id,
         kind: "peer_message",
@@ -2363,17 +2442,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           import("../supervision.ts").GlobalProjectAssignment[]
         >,
       ) => {
+        assertCurrentPeerCoordination(ctx, sender);
+        const currentSender = readPeerLeadRecord(
+          peerRuntime(),
+          sender.piSessionId,
+        );
+        if (
+          !currentSender ||
+          !supportsCoordinatorMessaging(currentSender.messageProtocol) ||
+          !samePeerLeadAuthority(currentSender, sender)
+        )
+          throw new Error("Peer sender authority changed");
         if (remoteRoute.role === "lead") {
-          const currentSender = readPeerLeadRecord(
-            peerRuntime(),
-            sender.piSessionId,
-          );
-          if (
-            !currentSender ||
-            !samePeerLeadAuthority(currentSender, sender) ||
-            !assignments ||
-            !isRemoteOrdinaryLead(currentSender, assignments)
-          )
+          if (!assignments || !isRemoteOrdinaryLead(currentSender, assignments))
             throw new Error("Remote Lead sender authority changed");
         }
         const correspondence =
@@ -2656,6 +2737,29 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       }
     };
+    const reportProjectMessageHeaderIssue = (
+      id: string,
+      reason: ProjectMessageHeaderIssue["reason"],
+    ): void => {
+      if (reportedProjectMessageHeaderErrors.has(id)) return;
+      try {
+        appendDurableError(
+          pi,
+          ctx,
+          "pi_herdsman_state_error",
+          new Error(
+            reason === "unsupported_protocol"
+              ? "Explicit project message is pending because messaging protocol 1 is missing or unsupported"
+              : reason === "oversized"
+                ? "Oversized project message is pending and was not delivered"
+                : "Malformed explicit project message is pending and was not delivered",
+          ),
+        );
+        reportedProjectMessageHeaderErrors.add(id);
+      } catch {
+        // Keep the message pending if the diagnostic cannot be persisted.
+      }
+    };
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       let pending: ProjectMessageHeader[];
       try {
@@ -2663,6 +2767,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           runtime,
           manager.repoKey,
           assignment.branch,
+          (issue) => reportProjectMessageHeaderIssue(issue.id, issue.reason),
         );
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
@@ -2670,6 +2775,20 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       }
       for (const record of pending) {
         if (record.fromSessionId !== assignment.id) continue;
+        const isSupervisorMessage =
+          (record as unknown as { kind?: string }).kind ===
+          "supervisor_message";
+        const reportUnsupportedProtocol = () =>
+          reportProjectMessageHeaderIssue(record.id, "unsupported_protocol");
+        if (
+          isSupervisorMessage &&
+          !supportsCoordinatorMessaging(record.messageProtocol)
+        ) {
+          reportUnsupportedProtocol();
+          continue;
+        }
+        if (isSupervisorMessage)
+          reportedProjectMessageHeaderErrors.delete(record.id);
         if (hasProjectMessageReceipt(record)) {
           consumeProjectMessage(record);
           continue;
@@ -2704,6 +2823,25 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           }
           continue;
         }
+        const messageIsExplicitSupervisor =
+          (message as unknown as { kind?: string }).kind ===
+          "supervisor_message";
+        if (
+          messageIsExplicitSupervisor &&
+          (message.fromSessionId !== assignment.id ||
+            message.repoKey !== manager.repoKey ||
+            message.branch !== assignment.branch)
+        )
+          continue;
+        if (
+          messageIsExplicitSupervisor &&
+          !supportsCoordinatorMessaging(message.messageProtocol)
+        ) {
+          reportUnsupportedProtocol();
+          continue;
+        }
+        if (messageIsExplicitSupervisor)
+          reportedProjectMessageHeaderErrors.delete(record.id);
         importResultBindings(
           pi,
           ctx,

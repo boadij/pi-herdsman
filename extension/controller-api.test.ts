@@ -39,7 +39,10 @@ import {
   assignmentLockPath,
   claimProcessLock,
 } from "./lock.ts";
-import { projectAssignmentAuthorityLockPath } from "./supervision.ts";
+import {
+  COORDINATOR_MESSAGE_PROTOCOL,
+  projectAssignmentAuthorityLockPath,
+} from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -268,6 +271,7 @@ test(
       paneId: "chief-pane",
       tabId: "chief-tab",
       workspaceId: WORKSPACE,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     });
     const manager = claimManagerLease({
       piSessionId: managerId,
@@ -275,6 +279,7 @@ test(
       tabId: "manager-tab",
       workspaceId: WORKSPACE,
       repoKey: realpathSync(tmpdir()),
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     });
     const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
     const descriptor = readFileSync(descriptorPath, "utf8");
@@ -376,6 +381,7 @@ test(
         role: "manager",
         instanceId: randomUUID(),
         piSessionId: managerId,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         updatedAt: Date.now(),
       });
       await pi.events.get("session_start")![0](undefined, ctx);
@@ -424,6 +430,7 @@ test(
         leadSessionId: leadId,
         branch: "smoke/routing",
         text: "change direction now",
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         createdAt: Date.now(),
       } as const;
       const managerMessagePath = writeChiefMessage(managerMessage, runtime);
@@ -492,12 +499,15 @@ test(
         );
       }
       const secondId = randomUUID();
+      manager.release();
+      managerReleased = true;
       const second = claimManagerLease({
         piSessionId: secondId,
         paneId: "second-manager-pane",
         tabId: "second-manager-tab",
         workspaceId: "second-manager-workspace",
         repoKey: realpathSync(tmpdir()),
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       });
       agents.push({
         agent_session: {
@@ -516,6 +526,7 @@ test(
           role: "manager",
           instanceId: randomUUID(),
           piSessionId: secondId,
+          messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
           updatedAt: Date.now(),
         });
         const secondMessage = {
@@ -561,9 +572,18 @@ test(
       } finally {
         second.release();
       }
+      const replacementManager = claimManagerLease({
+        piSessionId: managerId,
+        paneId: "manager-pane",
+        tabId: "manager-tab",
+        workspaceId: WORKSPACE,
+        repoKey: realpathSync(tmpdir()),
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
+      });
       const fallbackMessage = {
         ...managerMessage,
         id: randomUUID(),
+        leaseId: replacementManager.descriptor.leaseId,
         text: "retry after Pi pre-run failure",
         createdAt: Date.now(),
       };
@@ -757,6 +777,7 @@ test(
       const inconclusive = {
         ...managerMessage,
         id: randomUUID(),
+        leaseId: replacementManager.descriptor.leaseId,
         text: inconclusiveText,
       };
       managerIdentityUnavailable = true;
@@ -789,15 +810,6 @@ test(
       await waitForStage(t, "recovered identity message acknowledgment", () =>
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
-      manager.release();
-      managerReleased = true;
-      const replacementManager = claimManagerLease({
-        piSessionId: managerId,
-        paneId: "manager-pane",
-        tabId: "manager-tab",
-        workspaceId: WORKSPACE,
-        repoKey: realpathSync(tmpdir()),
-      });
       const replacedText = "reject replaced Manager generation";
       writeChiefMessage(
         { ...managerMessage, id: randomUUID(), text: replacedText },
@@ -1458,6 +1470,7 @@ test("project Lead observes Manager availability across turnover without exposin
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
     repoKey,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
   });
   let managerReleased = false;
   let replacement: ReturnType<typeof claimManagerLease> | undefined;
@@ -1466,6 +1479,7 @@ test("project Lead observes Manager availability across turnover without exposin
     role: "manager",
     instanceId: randomUUID(),
     piSessionId: managerId,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     updatedAt: Date.now(),
   });
   const agents: any[] = [
@@ -1595,6 +1609,7 @@ test("project Lead observes Manager availability across turnover without exposin
       role: undefined,
       instanceId: randomUUID(),
       piSessionId: managerId,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       updatedAt: Date.now(),
     });
     assert.equal((await observe())?.message, undefined);
@@ -1627,6 +1642,7 @@ test("project Lead observes Manager availability across turnover without exposin
       role: "manager",
       instanceId: randomUUID(),
       piSessionId: managerId,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       updatedAt: Date.now(),
     });
 
@@ -1662,6 +1678,7 @@ test("project Lead observes Manager availability across turnover without exposin
       tabId: "manager-replacement-tab",
       workspaceId: WORKSPACE,
       repoKey,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     });
     agents.push({
       agent_session: {
@@ -1679,6 +1696,7 @@ test("project Lead observes Manager availability across turnover without exposin
       role: "manager",
       instanceId: randomUUID(),
       piSessionId: replacementId,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
       updatedAt: Date.now(),
     });
     assert.equal((await observe())?.message, undefined);
@@ -1800,6 +1818,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     paneId: "chief-pane",
     tabId: "chief-tab",
     workspaceId: WORKSPACE,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
   });
   const agents = [
     [chiefId, "chief-pane", "chief-tab", WORKSPACE],
@@ -1926,21 +1945,23 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       tabId: "chief-tab",
       workspaceId: WORKSPACE,
       build: OTHER_HERDSMAN_BUILD,
+      messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     });
-    const incompatibleBuild = await supervisorMessage.execute(
+    const crossBuildMessage = await supervisorMessage.execute(
       "message",
       { message: "MISMATCH_MUST_NOT_PUBLISH" },
       undefined,
       undefined,
       ctx,
     );
-    assert.equal(incompatibleBuild.isError, true);
-    assert.match(incompatibleBuild.content[0].text, /build mismatch/u);
+    assert.notEqual(crossBuildMessage.isError, true);
+    const crossBuildRecord = listChiefMessagePaths(runtime, chiefId)
+      .map((path) => readChiefMessage(path))
+      .find((record) => record.text === "MISMATCH_MUST_NOT_PUBLISH");
     assert.equal(
-      incompatibleBuild.details.error.category,
-      "incompatible_build",
+      crossBuildRecord?.messageProtocol,
+      COORDINATOR_MESSAGE_PROTOCOL,
     );
-    assert.deepEqual(listChiefMessagePaths(runtime, chiefId), []);
     chief.release();
     chief = claimChiefLease({
       piSessionId: chiefId,
@@ -2243,6 +2264,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     role: "lead",
     instanceId: randomUUID(),
     piSessionId: senderId,
+    messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
     updatedAt: Date.now(),
   });
   const exec = (_command: string, args: string[]) => {
@@ -2308,6 +2330,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
         id: randomUUID(),
         leaseId: descriptor.leaseId,
         kind: "lead_message",
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         fromSessionId: senderId,
         toSessionId: sessionId,
         leadSessionId: senderId,
@@ -4479,6 +4502,12 @@ async function runManagerStartupScenario(
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: mode === "conflict" ? "manager" : "lead",
+          ...(mode === "success" ||
+          mode === "active-live" ||
+          mode === "active-live-verification-failure" ||
+          mode.startsWith("staff-message-")
+            ? { messageProtocol: COORDINATOR_MESSAGE_PROTOCOL }
+            : {}),
           ...(mode === "incompatible-build"
             ? { build: OTHER_HERDSMAN_BUILD }
             : {}),
@@ -5180,6 +5209,7 @@ async function runManagerStartupScenario(
           role: "lead",
           instanceId: randomUUID(),
           piSessionId: staleId,
+          messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
           ...(mode === "active-live-mismatch"
             ? { build: OTHER_HERDSMAN_BUILD }
             : {}),
@@ -6803,6 +6833,7 @@ async function runManagerStartupScenario(
       writeLeadCoordinationState(supervisionRuntime(), {
         ...state,
         build: OTHER_HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         updatedAt: Date.now(),
       });
       await assert.rejects(
@@ -6841,6 +6872,7 @@ async function runManagerStartupScenario(
       writeLeadCoordinationState(supervisionRuntime(), {
         ...state,
         build: HERDSMAN_BUILD,
+        messageProtocol: COORDINATOR_MESSAGE_PROTOCOL,
         updatedAt: Date.now(),
       });
       await staffMessage.execute(

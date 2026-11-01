@@ -74,12 +74,15 @@ not assignment ownership. An assigned report's branch is the handle for its
 live Lead actions.
 
 When a live staff session is independently identified but its validated
-Herdsman build differs from the local build, `list_staff` includes an
-observation with `compatibility: "incompatible"`, its validated build, and an
-empty `available_tools` list. Such rows are not eligible for staff actions.
-The result warns that the affected Pi session must reload a matching
-Herdsman build. The warning clears after a successful fresh observation
-verifies matching builds; uncertain identity or conflicting build evidence
+Herdsman build differs from the local build, `list_staff` may include an
+observation with `compatibility: "incompatible"` and its validated build. A
+verified direct report may expose `message_staff` as its sole available staff
+action when both current sessions advertise coordinator messaging protocol 1.
+This is provisional messaging access, not an authority token; the message still
+revalidates current identity, direct-report role and scope, assignment, and
+generation. A different build alone does not reject the message. Inspection
+and project controls remain build-strict, so the build-mismatch warning still
+applies to those operations. Uncertain identity or conflicting build evidence
 does not produce a confidently identified mismatch row.
 
 Do not call `list_staff` merely to poll progress.
@@ -142,8 +145,10 @@ Retention validates authority and evidence and fails explicitly when either is
 unavailable; it is never silently treated as an ordinary message. Retention
 and message delivery are one logical operation, but if persistence succeeds
 and delivery fails, the outcome reports that partial success rather than
-claiming the handoff completed. Initial `delegate_work.files` are required
-as well. See [Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
+claiming the handoff completed. Retention also requires an exact-build match;
+an incompatible target is rejected before its assignment requirements are
+mutated. Initial `delegate_work.files` are required as well. See
+[Handoffs and files](../guides/handoffs.md#required-assignment-evidence).
 
 ### Manage assignment required evidence
 

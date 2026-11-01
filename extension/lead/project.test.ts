@@ -5,7 +5,15 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { sameDirectory } from "../herdr.ts";
-import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
+import {
+  AGENT_ID,
+  LEAD_SESSION_ID,
+  WORKSPACE,
+  fakeContext,
+  realFs,
+} from "../support.ts";
+import { requireCompatibleBuild, runtimeBuild } from "../compatibility.ts";
+import { rememberCoordinatorTarget } from "../coordinator-target.ts";
 
 const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
@@ -189,6 +197,323 @@ function baselineLifecycle(options: {
       ),
   };
 }
+
+function staffMessageFixture(
+  options: { assigned?: boolean; availableActions?: string[] } = {},
+) {
+  const localBuild = runtimeBuild("local", join(process.cwd(), "package.json"));
+  const remoteBuild = {
+    version: "remote",
+    sha256: "b".repeat(64),
+  };
+  const assignment = options.assigned
+    ? {
+        version: 2 as const,
+        id: AGENT_ID,
+        repoKey: "staff-repo",
+        branch: "feature/staff-message",
+        text: "assigned work",
+      }
+    : undefined;
+  const manager = {
+    piSessionId: LEAD_SESSION_ID,
+    repoKey: "staff-repo",
+    workspaceId: WORKSPACE,
+    leaseId: "manager-lease",
+    messageProtocol: 1,
+  };
+  let currentManager = manager;
+  let currentReport: any = {
+    role: "lead" as const,
+    session: AGENT_ID,
+    instanceId: "recipient-instance",
+    paneId: "recipient-pane",
+    tabId: "recipient-tab",
+    displayName: "recipient",
+    workspaceId: WORKSPACE,
+    runtimeState: "active" as const,
+    build: remoteBuild,
+    reason: "incompatible_build" as const,
+    availableActions: options.availableActions ?? ["message"],
+    ...(assignment ? { branch: assignment.branch } : {}),
+  };
+  const incompatible = currentReport;
+  const targetState = {
+    piSessionId: AGENT_ID,
+    role: "lead",
+    instanceId: incompatible.instanceId,
+    build: remoteBuild,
+    messageProtocol: 1,
+  };
+  const messages: any[] = [];
+  const assignmentWrites: any[] = [];
+  let inputRecord: any;
+  let afterPrepare: (() => void | Promise<void>) | undefined;
+  const ctx = fakeContext() as any;
+  const entries = ctx.sessionManager.getEntries();
+  const pi = {
+    appendEntry: (customType: string, data: unknown) =>
+      entries.push({ type: "custom", customType, data }),
+  };
+  const runtime = createLeadProjectRuntime({
+    activeRole: () => "manager",
+    leadRuntime: { roleSuspended: false },
+    currentManager: async () => currentManager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.piSessionId === right.piSessionId &&
+      left.leaseId === right.leaseId &&
+      left.repoKey === right.repoKey,
+    currentChiefAuthority: async () => undefined,
+    HERDSMAN_BUILD: localBuild,
+    requireCompatibleBuild,
+    directReports: async (
+      _ctx: unknown,
+      _inventory: unknown,
+      _agents: unknown,
+      reports: any[] = [],
+    ) => {
+      reports.push(currentReport);
+      return [];
+    },
+    loadSupervisionSnapshot: async () => ({
+      leads: [],
+      work: assignment
+        ? [
+            {
+              branch: assignment.branch,
+              session: assignment.id,
+              status: "active",
+            },
+          ]
+        : [],
+      incompatible: [incompatible],
+    }),
+    findProjectAssignmentBySession: () => (assignment ? [assignment] : []),
+    readProjectAssignment: (
+      _runtime: unknown,
+      _repoKey: string,
+      branch: string,
+    ) => (assignment?.branch === branch ? assignment : undefined),
+    supervisionRuntime: () => ({}),
+    readLeadCoordinationState: () => targetState,
+    writeChiefMessage: (record: unknown) => messages.push(record),
+    prepareCoordinationInput: async (
+      _ctx: unknown,
+      text: string,
+      _files: unknown,
+      _operation: string,
+      _heading: string,
+      recordForInput: (text: string, bindings: unknown[]) => unknown,
+    ) => {
+      inputRecord = recordForInput(text, []);
+      await afterPrepare?.();
+      return { text, resultBindings: [] };
+    },
+    resolveMessageFiles: () => [],
+    truncateModelText: (text: string) => ({
+      content: text,
+      truncated: false,
+    }),
+    writeProjectAssignment: (_runtime: unknown, next: unknown) =>
+      assignmentWrites.push(next),
+    withProjectAssignmentLock: async (
+      _repoKey: string,
+      _branch: string,
+      operation: () => unknown,
+    ) => operation(),
+    worktreeGroupScope: async () => ({
+      repoKey: manager.repoKey,
+      primaryWorkspaceId: manager.workspaceId,
+    }),
+    pi,
+  } as any);
+  return {
+    runtime,
+    ctx,
+    pi,
+    localBuild,
+    remoteBuild,
+    assignment,
+    messages,
+    assignmentWrites,
+    get inputRecord() {
+      return inputRecord;
+    },
+    setReport: (report: unknown) => {
+      currentReport = report;
+    },
+    setManager: (next: typeof manager) => {
+      currentManager = next;
+    },
+    setAfterPrepare: (callback: () => void | Promise<void>) => {
+      afterPrepare = callback;
+    },
+    target: rememberCoordinatorTarget(pi as any, ctx, "lead", AGENT_ID),
+  };
+}
+
+test("message_staff sends protocol-1 cross-build messages only to verified message-only reports", async () => {
+  const fixture = staffMessageFixture();
+  await fixture.runtime.executeStaff(
+    "message_staff",
+    {
+      action: "message",
+      target: fixture.target,
+      message: "Cross-build finding",
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(fixture.inputRecord.messageProtocol, 1);
+  assert.equal(fixture.messages.length, 1);
+  assert.equal(fixture.messages[0].messageProtocol, 1);
+  assert.equal(fixture.messages[0].toSessionId, AGENT_ID);
+  assert.equal(fixture.messages[0].branch, undefined);
+});
+
+test("message_staff refuses cross-build reports with any action beyond message", async () => {
+  const fixture = staffMessageFixture({
+    availableActions: ["inspect", "message"],
+  });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "message_staff",
+      {
+        action: "message",
+        target: fixture.target,
+        message: "Cross-build finding",
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+  );
+  assert.deepEqual(fixture.messages, []);
+});
+
+test("message_staff retain rejects cross-build assigned Leads before assignment mutation", async () => {
+  const fixture = staffMessageFixture({ assigned: true });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "message_staff",
+      {
+        action: "message",
+        branch: fixture.assignment!.branch,
+        message: "Retain this evidence",
+        retain: true,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+    /build mismatch/u,
+  );
+  assert.deepEqual(fixture.assignmentWrites, []);
+  assert.deepEqual(fixture.messages, []);
+});
+
+test("message_staff revalidates the same recipient and supervisor after preparation", async () => {
+  for (const change of ["recipient", "supervisor"] as const) {
+    const fixture = staffMessageFixture();
+    fixture.setAfterPrepare(() => {
+      if (change === "recipient")
+        fixture.setReport({
+          role: "lead",
+          session: AGENT_ID,
+          instanceId: "recipient-instance",
+          paneId: "replacement-pane",
+          tabId: "recipient-tab",
+          displayName: "recipient",
+          workspaceId: WORKSPACE,
+          runtimeState: "active",
+          build: fixture.remoteBuild,
+          reason: "incompatible_build",
+          availableActions: ["message"],
+        });
+      else
+        fixture.setManager({
+          piSessionId: LEAD_SESSION_ID,
+          repoKey: "staff-repo",
+          workspaceId: WORKSPACE,
+          leaseId: "replacement-manager-lease",
+          messageProtocol: 1,
+        });
+    });
+    await assert.rejects(
+      fixture.runtime.executeStaff(
+        "message_staff",
+        {
+          action: "message",
+          target: fixture.target,
+          message: "Cross-build finding",
+        },
+        undefined,
+        undefined,
+        fixture.ctx,
+      ),
+    );
+    assert.deepEqual(fixture.messages, []);
+  }
+});
+
+test("message_staff keeps exact branch targeting for assigned cross-build Leads", async () => {
+  const fixture = staffMessageFixture({ assigned: true });
+  await fixture.runtime.executeStaff(
+    "message_staff",
+    {
+      action: "message",
+      branch: fixture.assignment!.branch,
+      message: "Assigned Lead finding",
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(fixture.messages.length, 1);
+  assert.equal(fixture.messages[0].toSessionId, AGENT_ID);
+  assert.equal(fixture.messages[0].branch, fixture.assignment!.branch);
+  assert.equal(fixture.messages[0].messageProtocol, 1);
+});
+
+test("list_staff exposes verified incompatible messages with session or branch targeting", async () => {
+  for (const assigned of [false, true]) {
+    const fixture = staffMessageFixture({ assigned });
+    const output = await fixture.runtime.executeStaff(
+      "list_staff",
+      { action: "list" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    const report = output.details.reports.find(
+      (item: any) => item.role === "lead" && item.display_name === "recipient",
+    );
+    assert.deepEqual(report.available_tools, ["message_staff"]);
+    if (assigned) {
+      assert.equal(report.branch, fixture.assignment!.branch);
+      assert.equal(report.target, undefined);
+    } else {
+      assert.match(report.target, /^lead:/u);
+    }
+  }
+});
+
+test("message_staff does not relax the incompatible assigned-Lead stop rejection", async () => {
+  const fixture = staffMessageFixture({ assigned: true });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "message_staff",
+      { action: "stop", branch: fixture.assignment!.branch },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+    /build mismatch/u,
+  );
+  assert.deepEqual(fixture.messages, []);
+});
 
 test("Manager required-evidence removal is exact, assignment-scoped, and fail-closed", async () => {
   const manager = {

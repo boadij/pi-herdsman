@@ -3417,13 +3417,15 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
         { machine: "base\n\u0000 host", reason: "herdr_not_reachable" },
         { machine: "probe", reason: "probe_failed" },
         {
-          machine: "build",
+          machine: "protocol",
           peer: "worker".repeat(40),
-          reason: "build_mismatch",
-          local_build: `v0.34.1 · ${"a".repeat(12)}`,
-          remote_build: `v0.34.0 · ${"b".repeat(12)}`,
+          reason: "protocol_mismatch",
         },
-        { machine: "unverified", reason: "build_unverified", peer: "peer" },
+        {
+          machine: "unverified",
+          reason: "protocol_unverified",
+          peer: "peer",
+        },
         { machine: "leads", reason: "eligibility_unverified" },
       ],
     },
@@ -3449,15 +3451,15 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
     "Saved Herdr machines could not be listed",
     "Herdr reachability not confirmed",
     "Remote peer probe failed",
-    "Peer build mismatch",
-    "Peer build could not be verified",
+    "Coordinator messaging protocol unsupported",
+    "Coordinator messaging protocol could not be verified",
     "Ordinary-Lead eligibility could not be verified",
-    "local  v0.34.1 · aaaaaaaaaaaa",
-    "remote v0.34.0 · bbbbbbbbbbbb",
-    "Reload the outdated Pi session.",
+    "Use a remote Herdr and peer with the same supported messaging protocol.",
+    "Check that the remote Herdr bridge and peer advertise protocol support.",
     "Check the remote assignment scan before relying on Lead results.",
   ])
     assert.ok(expanded.includes(text), `missing diagnostic text: ${text}`);
+  assert.doesNotMatch(expanded, /build mismatch|outdated Pi session/u);
   assert.match(expanded, /base host · Herdr reachability not confirmed/);
   assert.doesNotMatch(
     expanded,
@@ -3482,7 +3484,7 @@ test("remote diagnostic rendering caps entries and counts omitted warnings", () 
       peers: [],
       remote_diagnostics: Array.from({ length: 25 }, (_, index) => ({
         machine: `machine-${index}`,
-        reason: "build_unverified",
+        reason: "protocol_unverified",
         peer: `peer-${index}`,
       })),
       remote_diagnostics_omitted: 5,
@@ -3505,7 +3507,11 @@ test("remote diagnostic rendering caps entries and counts omitted warnings", () 
     ),
   );
   assert.equal(
-    (expanded.match(/Peer build could not be verified/gu) ?? []).length,
+    (
+      expanded.match(
+        /Coordinator messaging protocol could not be verified/gu,
+      ) ?? []
+    ).length,
     20,
   );
   assert.match(expanded, /10 additional diagnostics omitted/u);
@@ -7136,6 +7142,57 @@ test("incompatible staff rows are bounded, counted, and focusable", () => {
   const context = formatSupervisionContext(snapshot, { status: "fresh" });
   assert.match(context, /observed; no available staff tools/);
   assert.match(context, /incompatible \(observed; no available staff tools\)/);
+});
+
+test("incompatible staff projection preserves message-only actions", () => {
+  const snapshot = {
+    managers: [],
+    incompatible: [
+      {
+        role: "lead" as const,
+        session: "messageable-incompatible-lead",
+        instanceId: "messageable-instance",
+        displayName: "Messageable Lead",
+        workspaceId: "workspace-a",
+        paneId: "pane-a",
+        tabId: "tab-a",
+        runtimeState: "idle" as const,
+        build: { version: "0.31.1", sha256: "a".repeat(64) },
+        reason: "incompatible_build" as const,
+        availableActions: ["message"],
+      },
+      {
+        role: "lead" as const,
+        session: "unmessageable-incompatible-lead",
+        instanceId: "unmessageable-instance",
+        displayName: "Unmessageable Lead",
+        workspaceId: "workspace-b",
+        paneId: "pane-b",
+        tabId: "tab-b",
+        runtimeState: "idle" as const,
+        build: { version: "0.31.1", sha256: "b".repeat(64) },
+        reason: "incompatible_build" as const,
+        availableActions: [],
+      },
+    ],
+  } as unknown as Parameters<typeof supervisionPresentationReports>[0];
+  const reports = supervisionPresentationReports(snapshot);
+  assert.deepEqual(
+    reports.map((report) => report.availableActions),
+    [["message"], []],
+  );
+
+  const context = formatSupervisionContext(snapshot, { status: "fresh" });
+  assert.match(
+    context,
+    /incompatible \(observed; build mismatch; message only\)/,
+  );
+  assert.match(context, /available_tools: message_staff/);
+  assert.match(context, /available_tools: \n/);
+  assert.deepEqual(context.match(/^  available_tools:.*$/gmu), [
+    "  available_tools: message_staff",
+    "  available_tools: ",
+  ]);
 });
 
 test("incompatible Lead nested under a Manager remains focusable", () => {

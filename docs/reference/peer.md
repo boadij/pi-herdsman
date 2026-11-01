@@ -141,10 +141,8 @@ array and do not hide peers discovered successfully elsewhere:
   "remote_diagnostics": [
     {
       "machine": "base",
-      "reason": "build_mismatch",
-      "peer": "worker",
-      "local_build": "v0.34.1 · 0123456789ab",
-      "remote_build": "v0.34.0 · fedcba987654"
+      "reason": "protocol_mismatch",
+      "peer": "worker"
     }
   ]
 }
@@ -156,25 +154,30 @@ Each diagnostic has one of these reasons:
 - `herdr_not_reachable`: Herdr did not confirm reachability for the saved
   machine; this does not establish that its physical host is offline.
 - `probe_failed`: the remote peer probe failed before identity was established.
-- `build_mismatch`: an observed peer has valid build evidence that differs from
-  this runtime. The affected peer is excluded from `peers`.
-- `build_unverified`: an observed peer has missing or invalid build evidence
-  and is excluded from `peers`.
+- `protocol_mismatch`: the remote bridge or observed peer does not advertise
+  coordinator messaging protocol 1; the affected peer is excluded from `peers`.
+- `protocol_unverified`: protocol support could not be verified for the remote
+  bridge or observed peer; the affected peer is excluded from `peers`.
 - `eligibility_unverified`: a remote ordinary-Lead assignment scan was
   incomplete. That machine contributes no Lead results; this does not assert
   that it has no eligible Leads.
 
 `machine` and optional `peer` values are bounded display hints, not target
-handles. Build fields appear only for validated build mismatches. Diagnostics
-contain no connection targets, credentials, or raw transport errors; they are
-observations, never authorization records. A complete scan with no eligible
-peers is a normal empty result and needs no diagnostic. A listing, reachability,
-probe, or eligibility diagnostic means discovery is incomplete even when other
-peers were found; build diagnostics report observed peers that were excluded.
+handles. Diagnostics contain no connection targets, credentials, or raw
+transport errors; they are observations, never authorization records. A
+complete scan with no eligible peers is a normal empty result and needs no
+diagnostic. A listing, reachability, probe, or eligibility diagnostic means
+discovery is incomplete even when other peers were found; protocol diagnostics
+report observed peers that were excluded.
 `remote_diagnostics` contains at most 20 entries. If more were observed,
 `remote_diagnostics_omitted` gives the exact additional count; total warnings
 are the array length plus that count. Expanded Pi output also reports any
 diagnostics it omits from display.
+
+Peer messages may cross Herdsman builds only when both current peers explicitly
+advertise coordinator messaging protocol 1. A different build alone does not
+reject a message; same-role identity, generation, assignment, scope, and
+delivery authorization are still revalidated.
 
 ```json
 {

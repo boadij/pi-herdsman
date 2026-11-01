@@ -41,6 +41,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type {
   CoordinationMessageKind,
+  IncompatibleStaff,
   ProjectWorkSnapshot,
   SupervisionSnapshot,
   SupervisionPresentationSnapshot,
@@ -747,6 +748,12 @@ export type SupervisedLeadSnapshot = Readonly<{
   }>;
 }>;
 
+function messageOnlyStaffActions(
+  actions: readonly string[] | undefined,
+): readonly string[] {
+  return actions?.length === 1 && actions[0] === "message" ? ["message"] : [];
+}
+
 function managerPresentationSnapshot(
   manager: SupervisedManager,
 ): SupervisedLeadSnapshot {
@@ -798,7 +805,7 @@ export function supervisionPresentationReports(
         paneId: staff.paneId,
         tabId: staff.tabId,
         runtimeState: staff.runtimeState,
-        availableActions: [],
+        availableActions: messageOnlyStaffActions(staff.availableActions),
         compatibility: "incompatible" as const,
         build: staff.build,
       })),
@@ -815,7 +822,7 @@ export function supervisionPresentationReports(
       paneId: staff.paneId,
       tabId: staff.tabId,
       runtimeState: staff.runtimeState,
-      availableActions: [],
+      availableActions: messageOnlyStaffActions(staff.availableActions),
       compatibility: "incompatible" as const,
       build: staff.build,
     })),
@@ -1657,14 +1664,23 @@ export function formatSupervisionContext(
         `  target: ${supervisionValue(options.targets.get(lead.lead))}`,
       );
     if (displayed.compatibility === "incompatible") {
+      const availableActions = messageOnlyStaffActions(
+        displayed.availableActions,
+      );
       lines.push(
-        "  compatibility: incompatible (observed; no available staff tools)",
+        availableActions.length
+          ? "  compatibility: incompatible (observed; build mismatch; message only)"
+          : "  compatibility: incompatible (observed; no available staff tools)",
       );
       if (displayed.build)
         lines.push(
           `  build: ${supervisionValue(formatRuntimeBuild(displayed.build))}`,
         );
-      lines.push("  available_tools: ");
+      lines.push(
+        `  available_tools: ${availableActions
+          .map((action) => supervisionValue(staffToolName(action)))
+          .join(", ")}`,
+      );
       sections.push(lines.join("\n"));
       continue;
     }
@@ -1910,10 +1926,13 @@ const remoteDiagnosticMessages: Record<string, [string, string]> = {
     "Remote peer probe failed",
     "Check Herdr machine status and the remote Pi session.",
   ],
-  build_mismatch: ["Peer build mismatch", "Reload the outdated Pi session."],
-  build_unverified: [
-    "Peer build could not be verified",
-    "Reload the remote Pi session to publish build identity.",
+  protocol_mismatch: [
+    "Coordinator messaging protocol unsupported",
+    "Use a remote Herdr and peer with the same supported messaging protocol.",
+  ],
+  protocol_unverified: [
+    "Coordinator messaging protocol could not be verified",
+    "Check that the remote Herdr bridge and peer advertise protocol support.",
   ],
   eligibility_unverified: [
     "Ordinary-Lead eligibility could not be verified",
