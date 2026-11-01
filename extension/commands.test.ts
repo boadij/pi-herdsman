@@ -14480,6 +14480,84 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
   );
 });
 
+test("owned-Agent focus works before supervision is available and expires with its generation", async () => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const state = {
+    chiefMode: "inactive",
+    sessionGeneration: 1,
+    chiefModeGeneration: 1,
+  };
+  const runtime = createLeadSupervisionRuntime({
+    state,
+    activeRole: () => "manager",
+    herdrSessionSnapshot: async () => {
+      throw new Error("supervision unavailable");
+    },
+  } as any);
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  let widget: any;
+  ctx.ui.setWidget = (_key: string, factory: any) => {
+    if (typeof factory === "function")
+      widget = factory(
+        { requestRender: () => undefined },
+        { fg: (_: string, value: string) => value },
+      );
+  };
+  const focused: string[] = [];
+  let focusCurrent: (() => boolean) | undefined;
+  runtime.startPeriodic(ctx);
+  runtime.registerWidget(ctx, "manager", {
+    getSnapshot: () => ({
+      agents: [
+        {
+          label: "owned",
+          definition: "scout",
+          state: "working",
+          sessionId: "owned-session",
+          paneId: "owned-pane",
+        },
+      ],
+      stale: false,
+      unavailable: false,
+    }),
+    onFocus: async (intent, isCurrent) => {
+      if (intent.kind === "session") focused.push(intent.sessionId);
+      focusCurrent = isCurrent;
+    },
+  });
+  try {
+    await runtime.refresh(ctx);
+    assert.equal(runtime.status(ctx), "unavailable");
+    const rows = widget.render(120);
+    assert.match(rows.join("\n"), /unavailable/);
+    const row = rows.findIndex((line: string) => line.includes("owned"));
+    assert.ok(row > 0);
+    const click = () =>
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 8,
+        y: row,
+        width: 120,
+      });
+    click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(focused, ["owned-session"]);
+    assert.equal(runtime.status(ctx), "unavailable");
+    assert.equal(focusCurrent?.(), true);
+    state.sessionGeneration++;
+    assert.equal(focusCurrent?.(), false);
+    click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(focused, ["owned-session"]);
+  } finally {
+    runtime.stopPeriodic();
+    runtime.removeWidget(ctx);
+  }
+});
+
 test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   const { managerSupervisionItems, supervisionPresentationReports } =

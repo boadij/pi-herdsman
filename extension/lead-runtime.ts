@@ -5764,6 +5764,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       ownedAgents = owned;
       try {
         const widgetGeneration = ++supervisionWidgetGeneration;
+        const expectedGeneration = generation(ctx);
         widgetFocusInFlight = false;
         ctx.ui.setWidget("pi-herdsman-staff", (tui: any, theme: any) => {
           renderWidget = () => tui.requestRender();
@@ -5842,18 +5843,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               getSnapshot: owned.getSnapshot,
               getFrame: () => animationFrame,
               onFocus: (intent) => {
-                if (
-                  widgetFocusInFlight ||
-                  widgetGeneration !== supervisionWidgetGeneration ||
-                  uiContext !== ctx ||
-                  generation(ctx) !== generationId
-                )
-                  return;
-                widgetFocusInFlight = true;
                 const isCurrent = () =>
                   widgetGeneration === supervisionWidgetGeneration &&
                   uiContext === ctx &&
-                  generation(ctx) === generationId;
+                  generation(ctx) === expectedGeneration;
+                if (widgetFocusInFlight || !isCurrent()) return;
+                widgetFocusInFlight = true;
                 void owned
                   .onFocus(intent, isCurrent)
                   .catch((error) => {
