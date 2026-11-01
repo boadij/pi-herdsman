@@ -3,6 +3,8 @@
 > **Session identity update:** [ADR 0029](0029-use-immutable-managed-lead-session-identity.md) supersedes all
 > takeover and in-place ordinary-continuation decisions in this record.
 > Other decisions remain subject to their noted supersessions.
+> Clarification: profiles can also configure direct Agent delegation policy;
+> this does not change role authority or Agent ownership.
 
 ## Status
 
@@ -23,8 +25,8 @@ role/authority state. A session's ordinary tool baseline is retained
 independently of the currently projected profile so a restrictive profile
 does not replace that baseline.
 
-Execution profiles own only runtime execution instructions and ordinary tool
-projection. Lead invariants remain runtime-owned. Pi's native active-tool and
+Execution profiles own runtime execution instructions, ordinary tool
+projection, and direct Agent delegation policy. Lead invariants remain runtime-owned. Pi's native active-tool and
 structured-prompt-section APIs project the selected profile into the running
 Lead session.
 

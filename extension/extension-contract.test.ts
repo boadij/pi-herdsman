@@ -3954,7 +3954,94 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   }
 });
 
-test("role discovery failure preserves the valid Lead Agent roster", async () => {
+test("Lead empty allowlist hides fresh delegation and the Agent roster", async () => {
+  setLeadEnvironment();
+  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  realFs.mkdirSync(roleDirectory, { recursive: true });
+  const role = join(roleDirectory, "flexible-lead.md");
+  writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+    assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
+    const event: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    const snapshot = event.systemPromptOptions.sections.agent_definitions;
+    assert.deepEqual(
+      JSON.parse(
+        snapshot.split("\n\nThis is the session-start definition snapshot.")[0],
+      ),
+      [],
+    );
+    const listed = await pi.tools
+      .find((tool) => tool.name === "list_agents")!
+      .execute("list", {}, undefined, undefined, context);
+    assert.deepEqual(
+      listed.details.agent_definitions,
+      [],
+      JSON.stringify(listed.details),
+    );
+    const denied = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "denied",
+        { definition: "scout", task: "must not start" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.match(denied.details.error.message, /not allowed/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(role, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("ordinary Lead exposes only allowlisted Agents", async () => {
+  setLeadEnvironment();
+  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  realFs.mkdirSync(roleDirectory, { recursive: true });
+  const role = join(roleDirectory, "flexible-lead.md");
+  writeFileSync(role, "---\nname: flexible-lead\nagents: [agent]\n---\n");
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const listed = await pi.tools
+      .find((tool) => tool.name === "list_agents")!
+      .execute("list", {}, undefined, undefined, context);
+    assert.deepEqual(
+      listed.details.agent_definitions.map(
+        (definition: { name: string }) => definition.name,
+      ),
+      ["agent"],
+    );
+    const denied = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "denied",
+        { definition: "child", task: "must not start" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.match(denied.details.error.message, /not allowed/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(role, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("role discovery failure denies the Lead Agent roster", async () => {
   setLeadEnvironment();
   const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
   realFs.mkdirSync(roleDirectory, { recursive: true });
@@ -3978,7 +4065,7 @@ test("role discovery failure preserves the valid Lead Agent roster", async () =>
     const roster = JSON.parse(
       snapshot.split("\n\nThis is the session-start definition snapshot.")[0],
     );
-    assert.ok(roster.some(({ name }: { name: string }) => name === "scout"));
+    assert.deepEqual(roster, []);
     assert.equal(
       event.systemPromptOptions.sections.pi_herdsman_lead_execution,
       undefined,
@@ -4540,7 +4627,8 @@ test("native managed-Agent restore quarantines the exact session", async () => {
     assert.deepEqual(pi.pi.getActiveTools(), []);
 
     const nextContext = fakeContext([]) as any;
-    nextContext.sessionManager.getSessionId = () => randomUUID();
+    const nextSessionId = randomUUID();
+    nextContext.sessionManager.getSessionId = () => nextSessionId;
     await pi.events.get("session_start")![0](undefined, nextContext);
     assert.notDeepEqual(pi.pi.getActiveTools(), []);
     assert.ok(pi.pi.getActiveTools().includes("list_agents"));
@@ -4668,6 +4756,10 @@ test("native managed-Agent restore quarantines malformed and conflicting exact-s
 
 test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
   setLeadEnvironment();
+  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  realFs.mkdirSync(roleDirectory, { recursive: true });
+  const role = join(roleDirectory, "managed-lead.md");
+  writeFileSync(role, "---\nname: managed-lead\nagents: [agent]\n---\n");
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `managed-prompt-${randomUUID()}.sock`,
@@ -4682,6 +4774,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     repoKey,
     branch,
     text: "managed prompt assigned fixture",
+    checkoutPath: "/tmp",
   });
   const pi = fakePi({
     exec: (_command, args) =>
@@ -4701,7 +4794,16 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
             stderr: "",
             code: 0,
           }
-        : { stdout: "{}", stderr: "", code: 0 },
+        : isApiSnapshot(args)
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
@@ -4711,6 +4813,16 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
   };
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    const listed = await pi.tools
+      .find((tool) => tool.name === "list_agents")!
+      .execute("list", {}, undefined, undefined, context);
+    assert.deepEqual(
+      listed.details.agent_definitions.map(
+        (definition: { name: string }) => definition.name,
+      ),
+      ["agent"],
+      JSON.stringify(listed.details),
+    );
     const event = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -4736,6 +4848,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     removeProjectAssignment(runtime, repoKey, branch);
+    realFs.rmSync(role, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }

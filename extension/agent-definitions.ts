@@ -107,10 +107,7 @@ const RUNTIME_LEAD_FIELDS = new Set([
   "bodyMode",
   "tools",
   "excludeTools",
-]);
-const SUPERVISOR_AGENT_FIELDS = new Set([
-  MANAGER_DEFINITION_NAME,
-  CHIEF_DEFINITION_NAME,
+  "agents",
 ]);
 
 export type FrontmatterValue =
@@ -431,12 +428,9 @@ function validateEffectiveAgentReferences(
         throw new Error(
           `agent ${definition.name} references missing agent definition ${reference}`,
         );
-  for (const definition of definitions)
-    if (SUPERVISOR_AGENT_FIELDS.has(definition.name))
-      validateSupervisorAgentDefinitionReferences(definition, definitions);
 }
 
-export function validateSupervisorAgentDefinitionReferences(
+export function validateRoleAgentDefinitionReferences(
   definition: AgentDefinition,
   definitions: readonly AgentDefinition[],
 ): void {
@@ -461,7 +455,7 @@ function validateManagedLeadLayer(definition: AgentDefinition): void {
     throw new Error(
       `${definition.path} managed Lead field systemPromptMode: must be append`,
     );
-  for (const field of ["enabled", "agents", "permission"] as const)
+  for (const field of ["enabled", "permission"] as const)
     if (definition.frontmatter[field] !== undefined)
       throw new Error(
         `${definition.path} managed Lead field ${field}: is not supported`,
@@ -470,11 +464,8 @@ function validateManagedLeadLayer(definition: AgentDefinition): void {
 
 function validateRuntimeRoleLayer(definition: AgentDefinition): void {
   if (!isRuntimeRoleDefinition(definition.name)) return;
-  const allowed = SUPERVISOR_AGENT_FIELDS.has(definition.name)
-    ? new Set([...RUNTIME_LEAD_FIELDS, "agents"])
-    : RUNTIME_LEAD_FIELDS;
   for (const field of Object.keys(definition.frontmatter))
-    if (!allowed.has(field))
+    if (!RUNTIME_LEAD_FIELDS.has(field))
       throw new Error(
         `${definition.path} ${definition.name} field ${field}: is not supported`,
       );
@@ -577,14 +568,11 @@ export function discoverRoleDefinition(
     (candidate) => candidate.name === name,
   );
   if (!definition) throw new Error(`role definition ${name} not found`);
-  if (
-    SUPERVISOR_AGENT_FIELDS.has(name) &&
-    definition.frontmatter.agents?.length
-  )
-    validateEffectiveAgentReferences([
-      ...discoverAgentDefinitions(options),
+  if (definition.frontmatter.agents?.length)
+    validateRoleAgentDefinitionReferences(
       definition,
-    ]);
+      discoverAgentDefinitions(options),
+    );
   return definition;
 }
 

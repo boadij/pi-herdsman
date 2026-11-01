@@ -6,10 +6,13 @@ Delegation is bounded, direct, and ownership-local.
 
 ## Lead
 
-An eligible root Pi session may delegate directly. A Lead may use any
-available effective Agent definition. Manager and Chief may use only the
-definitions listed in their effective `agents` profile; an omitted or empty
-list disables fresh direct delegation. This `agents` policy is independent of
+An eligible root Pi session may delegate directly. A Lead with an omitted
+`agents` field may use any available effective Agent definition; an explicit
+list restricts it to those names, and an empty list disables fresh delegation.
+Manager and Chief may use only the definitions listed in their effective
+`agents` profile; an omitted or empty list disables fresh direct delegation.
+Fresh delegation includes both new assignments and continuations. This policy
+applies to direct children only and is independent of
 ordinary `tools` and does not grant staff authority. The exact session that
 starts an Agent owns it; supervising another session does not confer ownership
 of that session's Agents. Existing owners can continue managing their own work
