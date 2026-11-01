@@ -34,6 +34,7 @@ import {
   supervisionRuntime,
   globalProjectAssignmentSnapshot,
   findProjectAssignmentBySession,
+  readLeadCoordinationStateForObservation,
   withProjectAssignmentAuthority,
   readPeerLeadRecord,
   samePeerLeadGeneration,
@@ -56,8 +57,16 @@ import {
   isResultBinding,
 } from "../storage.ts";
 import { canonicalRefsForSemanticResult } from "../agent-controller.ts";
-import type { HerdrRecord, HerdrSessionSnapshot } from "../herdr.ts";
-import { sameRuntimeBuild, type RuntimeBuild } from "../compatibility.ts";
+import {
+  sameDirectory,
+  type HerdrRecord,
+  type HerdrSessionSnapshot,
+} from "../herdr.ts";
+import {
+  isRuntimeBuild,
+  sameRuntimeBuild,
+  type RuntimeBuild,
+} from "../compatibility.ts";
 import type { PeerCorrespondence } from "../peer-correspondence.ts";
 import {
   rememberCoordinatorTarget,
@@ -117,7 +126,7 @@ export type LeadCoordinationBaseHost = {
     error: unknown,
   ): void;
   peerRuntime: PeerRuntime;
-  listPeerLeadRecords: typeof import("../supervision.ts").listPeerLeadRecords;
+  listPeerLeadRecordsForDiscovery: typeof import("../supervision.ts").listPeerLeadRecordsForDiscovery;
   removePeerLeadRecord: typeof import("../supervision.ts").removePeerLeadRecord;
   acquireProcessLock: typeof import("../lock.ts").acquireProcessLock;
   peerLeadLockPath: typeof import("../supervision.ts").peerLeadLockPath;
@@ -129,6 +138,16 @@ export type LeadCoordinationBaseHost = {
     signal?: AbortSignal,
     workspaces?: readonly HerdrRecord[],
   ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
+  liveAgent(
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ): Promise<HerdrRecord[]>;
+  liveAgent(
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ): Promise<HerdrRecord[]>;
   basename: typeof import("node:path").basename;
   readPeerLeadRecord: typeof import("../supervision.ts").readPeerLeadRecord;
   samePeerLeadRecord: typeof import("../supervision.ts").samePeerLeadRecord;
@@ -263,7 +282,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     removePeerLeadRecord,
     acquireProcessLock,
     peerLeadLockPath,
-    listPeerLeadRecords,
+    listPeerLeadRecordsForDiscovery,
     publishProjectMessage,
     resolveMessageFiles,
     buildSessionProjection,
@@ -1488,7 +1507,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         reason: "protocol_mismatch" | "protocol_unverified";
         required_protocol: 1;
       }[] = [];
-      for (const record of listPeerLeadRecords(peerRuntime())) {
+      for (const record of listPeerLeadRecordsForDiscovery(peerRuntime())) {
         if (
           (record.role ?? "lead") !== activeRole() ||
           record.piSessionId === self
@@ -2764,18 +2783,156 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       }
     };
+    const verifiedProjectMessageSource = async (
+      candidate: Pick<
+        ProjectMessageHeaderIssue,
+        "sourceSessionId" | "repoKey" | "branch" | "messageProtocol"
+      >,
+      assignment: ProjectAssignment,
+    ): Promise<boolean> => {
+      const sourceSessionId = candidate.sourceSessionId;
+      if (
+        !sourceSessionId ||
+        sourceSessionId !== assignment.id ||
+        candidate.repoKey !== assignment.repoKey ||
+        candidate.branch !== assignment.branch ||
+        candidate.repoKey !== manager.repoKey
+      )
+        return false;
+      try {
+        const sources = findProjectAssignmentBySession(
+          runtime,
+          manager.repoKey,
+          sourceSessionId,
+        );
+        const currentAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          assignment.branch,
+        );
+        const sourceState = readLeadCoordinationStateForObservation(
+          runtime,
+          sourceSessionId,
+        );
+        const live = await host.liveAgent(
+          ctx,
+          sourceSessionId,
+          currentAssignment?.piSessionFile,
+        );
+        const peers = listPeerLeadRecordsForDiscovery(peerRuntime()).filter(
+          (peer) => peer.piSessionId === sourceSessionId,
+        );
+        const liveAgent = live[0];
+        const peer = peers[0];
+        if (
+          !sourceState ||
+          !liveAgent ||
+          !peer ||
+          !currentAssignment?.piSessionFile ||
+          !currentAssignment.checkoutPath ||
+          typeof liveAgent.cwd !== "string" ||
+          !sameDirectory(liveAgent.cwd, currentAssignment.checkoutPath)
+        )
+          return false;
+        const currentLive = await host.liveAgent(
+          ctx,
+          sourceSessionId,
+          currentAssignment.piSessionFile,
+        );
+        const currentPeerRecords = listPeerLeadRecordsForDiscovery(
+          peerRuntime(),
+        ).filter((record) => record.piSessionId === sourceSessionId);
+        const currentSourceState = readLeadCoordinationStateForObservation(
+          runtime,
+          sourceSessionId,
+        );
+        const latestAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          assignment.branch,
+        );
+        const currentLiveAgent = currentLive[0];
+        const currentPeer = currentPeerRecords[0];
+        return (
+          sources.length === 1 &&
+          sources[0]?.id === assignment.id &&
+          sources[0]?.branch === assignment.branch &&
+          currentAssignment?.id === assignment.id &&
+          currentAssignment?.branch === assignment.branch &&
+          sourceState !== undefined &&
+          sourceState.piSessionId === sourceSessionId &&
+          (sourceState.role ?? "lead") === "lead" &&
+          sourceState.messageProtocol === candidate.messageProtocol &&
+          live.length === 1 &&
+          !!liveAgent &&
+          !!currentAssignment?.piSessionFile &&
+          !!currentAssignment.checkoutPath &&
+          typeof liveAgent.cwd === "string" &&
+          sameDirectory(liveAgent.cwd, currentAssignment.checkoutPath) &&
+          peers.length === 1 &&
+          !!peer &&
+          isRuntimeBuild(peer.build) &&
+          isRuntimeBuild(sourceState.build) &&
+          sameRuntimeBuild(peer.build, sourceState.build) &&
+          (peer.role ?? "lead") === "lead" &&
+          peer.sessionKind === "managed" &&
+          peer.group?.repoKey === assignment.repoKey &&
+          peer.messageProtocol === candidate.messageProtocol &&
+          peer.paneId === liveAgent.pane_id &&
+          peer.tabId === liveAgent.tab_id &&
+          peer.workspaceId === liveAgent.workspace_id &&
+          currentLive.length === 1 &&
+          !!currentLiveAgent &&
+          currentLiveAgent.pane_id === liveAgent.pane_id &&
+          currentLiveAgent.tab_id === liveAgent.tab_id &&
+          currentLiveAgent.workspace_id === liveAgent.workspace_id &&
+          currentLiveAgent.cwd === liveAgent.cwd &&
+          currentPeerRecords.length === 1 &&
+          !!currentPeer &&
+          currentPeer.claim.id === peer.claim.id &&
+          currentPeer.messageProtocol === peer.messageProtocol &&
+          currentPeer.group?.repoKey === peer.group?.repoKey &&
+          currentPeer.paneId === peer.paneId &&
+          currentPeer.tabId === peer.tabId &&
+          currentPeer.workspaceId === peer.workspaceId &&
+          latestAssignment?.id === assignment.id &&
+          latestAssignment.checkoutPath === assignment.checkoutPath &&
+          currentSourceState?.instanceId === sourceState.instanceId &&
+          currentSourceState !== undefined &&
+          currentSourceState.piSessionId === sourceSessionId &&
+          (currentSourceState.role ?? "lead") === "lead" &&
+          currentSourceState.messageProtocol === sourceState.messageProtocol &&
+          isRuntimeBuild(currentSourceState.build) &&
+          isRuntimeBuild(sourceState.build) &&
+          sameRuntimeBuild(currentSourceState.build, sourceState.build)
+        );
+      } catch {
+        return false;
+      }
+    };
     const reportProjectMessageHeaderIssue = (
       id: string,
       reason: ProjectMessageHeaderIssue["reason"],
+      verifiedProtocolSource = false,
     ): void => {
       if (reportedProjectMessageHeaderErrors.has(id)) return;
       try {
+        const verifiedProtocolIssue =
+          verifiedProtocolSource &&
+          (reason === "protocol_mismatch" || reason === "protocol_unverified");
+        if (verifiedProtocolIssue)
+          reportProtocolDiagnostic(
+            ctx.sessionManager.getSessionId(),
+            id,
+            reason,
+            "assigned project message",
+          );
         appendDurableError(
           pi,
           ctx,
           "pi_herdsman_state_error",
           new Error(
-            reason === "protocol_mismatch" || reason === "protocol_unverified"
+            verifiedProtocolIssue
               ? "Explicit project message is pending because messaging protocol 1 is missing or unsupported"
               : reason === "oversized"
                 ? "Oversized project message is pending and was not delivered"
@@ -2789,42 +2946,50 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     };
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       let pending: ProjectMessageHeader[];
+      const invalidHeaders: ProjectMessageHeaderIssue[] = [];
       try {
         pending = listProjectMessageHeaders(
           runtime,
           manager.repoKey,
           assignment.branch,
-          (issue) => reportProjectMessageHeaderIssue(issue.id, issue.reason),
+          (issue) => invalidHeaders.push(issue),
         );
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         return 0;
       }
+      for (const issue of invalidHeaders)
+        reportProjectMessageHeaderIssue(
+          issue.id,
+          issue.reason,
+          await verifiedProjectMessageSource(issue, assignment),
+        );
       for (const record of pending) {
         if (record.fromSessionId !== assignment.id) continue;
         const isSupervisorMessage =
           (record as unknown as { kind?: string }).kind ===
           "supervisor_message";
-        const reportUnsupportedProtocol = () =>
+        const reportUnsupportedProtocol = async () =>
           reportProjectMessageHeaderIssue(
             record.id,
             record.messageProtocol === undefined
               ? "protocol_unverified"
               : "protocol_mismatch",
+            await verifiedProjectMessageSource(
+              {
+                sourceSessionId: record.fromSessionId,
+                repoKey: record.repoKey,
+                branch: record.branch,
+                messageProtocol: record.messageProtocol,
+              },
+              assignment,
+            ),
           );
         if (
           isSupervisorMessage &&
           !supportsCoordinatorMessaging(record.messageProtocol)
         ) {
-          reportProtocolDiagnostic(
-            ctx.sessionManager.getSessionId(),
-            record.id,
-            record.messageProtocol === undefined
-              ? "protocol_unverified"
-              : "protocol_mismatch",
-            "assigned project message",
-          );
-          reportUnsupportedProtocol();
+          await reportUnsupportedProtocol();
           continue;
         }
         if (isSupervisorMessage)

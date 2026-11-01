@@ -50,6 +50,7 @@ import {
   readProjectAssignment,
   readManagerDescriptor,
   peerLeadLockPath,
+  peerLeadRecordPath,
   peerRuntime,
   readPeerLeadRecord,
   removePeerLeadRecord,
@@ -1850,6 +1851,22 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
         peerRuntime(),
         targetId,
         readChiefMessage(queued[0]).id,
+      );
+      const unsupportedRecord = readPeerLeadRecord(peerRuntime(), targetId)!;
+      writeFileSync(
+        peerLeadRecordPath(peerRuntime(), targetId),
+        JSON.stringify({ ...unsupportedRecord, messageProtocol: 2 }),
+      );
+      const unsupported = JSON.parse(
+        (await peers.execute("list", {}, undefined, undefined, context))
+          .content[0].text,
+      );
+      assert.deepEqual(unsupported.local_diagnostics, [
+        { reason: "protocol_mismatch", required_protocol: 1 },
+      ]);
+      assert.equal(
+        unsupported.peers.some((peer: { target?: string }) => peer.target),
+        false,
       );
     } finally {
       targetLease.release();
@@ -10328,6 +10345,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       (report: any) => report.compatibility === "incompatible",
     );
     assert.equal(assignedIncompatibleReport.branch, "assigned-branch");
+    assert.equal(assignedIncompatibleReport.protocol_diagnostic, undefined);
     assert.deepEqual(assignedIncompatibleReport.available_tools, [
       "message_staff",
     ]);

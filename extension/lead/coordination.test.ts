@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -12,14 +18,27 @@ import {
 } from "../support.ts";
 import {
   canMessagePeer,
+  leadCoordinationStatePath,
+  listProjectAssignments,
+  listProjectMessageHeaders,
+  readProjectAssignment,
+  readLeadCoordinationStateForObservation,
   takeProtocolDiagnostics,
   samePeerLeadAuthority,
   samePeerLeadGeneration,
   type ProjectMessageHeaderIssue,
+  writeProjectAssignment,
 } from "../supervision.ts";
 import { sameRuntimeBuild } from "../compatibility.ts";
 import { supervisionRuntime } from "../supervision.ts";
 import { projectAssignmentPath } from "../supervision.ts";
+import {
+  listPeerLeadRecordsForDiscovery,
+  peerLeadLockPath,
+  peerLeadRecordPath,
+  peerRuntime,
+} from "../supervision.ts";
+import { acquireProcessLock } from "../lock.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
 
 test("scoped peer presence writes its worktree group", async () => {
@@ -705,6 +724,9 @@ function projectMessageDrainFixture(
   existingReceipt = false,
   messageOverrides: Record<string, unknown> = {},
   invalidHeaderIssue?: ProjectMessageHeaderIssue,
+  useRealHeaderReader = false,
+  persistSourceIdentity = true,
+  persistLiveEvidence = true,
 ) {
   process.env.PI_CODING_AGENT_DIR ??= testTmpRoot;
   const manager = {
@@ -715,10 +737,16 @@ function projectMessageDrainFixture(
   };
   const assignment = {
     version: 2,
-    id: "assigned-lead",
+    id: useRealHeaderReader ? randomUUID() : "assigned-lead",
     repoKey: manager.repoKey,
     branch: "assigned-branch",
     text: "assigned task",
+    ...(useRealHeaderReader
+      ? {
+          checkoutPath: tmpdir(),
+          piSessionFile: join(tmpdir(), `${randomUUID()}.jsonl`),
+        }
+      : {}),
   };
   const probeRuntime = supervisionRuntime(
     `/tmp/project-message-drain-${randomUUID()}.sock`,
@@ -728,15 +756,71 @@ function projectMessageDrainFixture(
     manager.repoKey,
     assignment.branch,
   );
+  if (useRealHeaderReader) {
+    writeProjectAssignment(probeRuntime, assignment as any);
+    if (persistSourceIdentity) {
+      const sourceStatePath = leadCoordinationStatePath(
+        probeRuntime,
+        assignment.id,
+      );
+      mkdirSync(dirname(sourceStatePath), { recursive: true });
+      writeFileSync(
+        sourceStatePath,
+        JSON.stringify({
+          version: 1,
+          build: OTHER_HERDSMAN_BUILD,
+          role: "lead",
+          instanceId: randomUUID(),
+          piSessionId: assignment.id,
+          updatedAt: 50,
+          messageProtocol: 2,
+        }),
+      );
+    }
+  }
+  const sourcePeers = peerRuntime();
+  const sourcePresenceLease =
+    useRealHeaderReader && persistLiveEvidence
+      ? acquireProcessLock(peerLeadLockPath(sourcePeers, assignment.id), {
+          name: "project-message source test presence",
+        })
+      : undefined;
+  if (sourcePresenceLease) {
+    const peerPath = peerLeadRecordPath(sourcePeers, assignment.id);
+    writeFileSync(
+      peerPath,
+      JSON.stringify({
+        version: 2,
+        build: OTHER_HERDSMAN_BUILD,
+        messageProtocol: 2,
+        role: "lead",
+        sessionKind: "managed",
+        piSessionId: assignment.id,
+        paneId: "source-pane",
+        tabId: "source-tab",
+        workspaceId: "source-workspace",
+        socket: "source-socket",
+        group: {
+          repoKey: assignment.repoKey,
+          primaryWorkspaceId: "source-workspace",
+        },
+        claim: sourcePresenceLease.claim,
+        updatedAt: 50,
+      }),
+    );
+  }
   const messageDirectory = join(
     dirname(assignmentFile),
     `${basename(assignmentFile, ".json")}.messages`,
   );
   mkdirSync(messageDirectory, { recursive: true });
-  writeFileSync(join(messageDirectory, `${randomUUID()}.json`), "{}");
+  const persistedHeaderPath = join(messageDirectory, `${randomUUID()}.json`);
+  writeFileSync(persistedHeaderPath, "{}");
   const header: any = {
     version: 2,
-    id: "project-message-id",
+    id: useRealHeaderReader
+      ? basename(persistedHeaderPath, ".json")
+      : "project-message-id",
     repoKey: manager.repoKey,
     branch: assignment.branch,
     fromSessionId: assignment.id,
@@ -755,6 +839,8 @@ function projectMessageDrainFixture(
     header.messageProtocol = protocol;
     message.messageProtocol = protocol;
   }
+  if (useRealHeaderReader)
+    writeFileSync(persistedHeaderPath, JSON.stringify(message));
   const entries: any[] = existingReceipt
     ? [
         {
@@ -796,22 +882,54 @@ function projectMessageDrainFixture(
       processRole: "lead",
       controllerScope: { kind: "root" },
       activeRole: () => "manager",
+      sameRuntimeBuild,
       supervisionRuntime: () => probeRuntime,
+      peerRuntime: () => sourcePeers,
+      listPeerLeadRecordsForDiscovery,
+      liveAgent: async (
+        _ctx: unknown,
+        sessionId: string,
+        sessionPath?: string,
+      ) =>
+        persistLiveEvidence &&
+        sessionId === assignment.id &&
+        sessionPath === assignment.piSessionFile
+          ? [
+              {
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: assignment.id,
+                },
+                pane_id: "source-pane",
+                tab_id: "source-tab",
+                workspace_id: "source-workspace",
+                cwd: assignment.checkoutPath,
+              },
+            ]
+          : [],
       currentManager: async () => manager,
       sameManagerDescriptor: (left: any, right: any) =>
         left?.piSessionId === right?.piSessionId &&
         left?.leaseId === right?.leaseId,
-      listProjectAssignments: () => [assignment],
-      listProjectMessageHeaders: (
-        _runtime: unknown,
-        _repoKey: string,
-        _branch: string,
-        onInvalid?: (issue: ProjectMessageHeaderIssue) => void,
-      ) => {
-        if (invalidHeaderIssue) onInvalid?.(invalidHeaderIssue);
-        return [header];
-      },
-      readProjectAssignment: () => assignment,
+      listProjectAssignments: useRealHeaderReader
+        ? listProjectAssignments
+        : () => [assignment],
+      listProjectMessageHeaders: useRealHeaderReader
+        ? listProjectMessageHeaders
+        : (
+            _runtime: unknown,
+            _repoKey: string,
+            _branch: string,
+            onInvalid?: (issue: ProjectMessageHeaderIssue) => void,
+          ) => {
+            if (invalidHeaderIssue) onInvalid?.(invalidHeaderIssue);
+            return [header];
+          },
+      readProjectAssignment: useRealHeaderReader
+        ? readProjectAssignment
+        : () => assignment,
       readProjectMessage: () => {
         reads++;
         return message;
@@ -834,6 +952,15 @@ function projectMessageDrainFixture(
   return {
     runtime,
     context,
+    probeRuntime,
+    sourcePeers,
+    assignment,
+    sourceSessionId: assignment.id,
+    recordId: header.id,
+    headerPath: persistedHeaderPath,
+    releaseSourcePresence: () => {
+      sourcePresenceLease?.release();
+    },
     imported,
     delivered,
     removed,
@@ -844,7 +971,7 @@ function projectMessageDrainFixture(
   };
 }
 
-test("explicit assigned-Lead messages stay pending without protocol 1, even with a receipt", async () => {
+test("project messages without verified source evidence stay pending without protocol attribution", async () => {
   for (const protocol of [undefined, 2]) {
     const fixture = projectMessageDrainFixture(
       "supervisor_message",
@@ -859,18 +986,124 @@ test("explicit assigned-Lead messages stay pending without protocol 1, even with
     assert.deepEqual(fixture.imported, []);
     assert.deepEqual(fixture.delivered, []);
     assert.deepEqual(fixture.removed, []);
-    assert.match(String(fixture.errors[0]), /messaging protocol 1/u);
+    assert.match(
+      String(fixture.errors[0]),
+      /Malformed explicit project message/u,
+    );
     const diagnostics = takeProtocolDiagnostics(
       fixture.context.sessionManager.getSessionId(),
     );
-    assert.equal(diagnostics.length, 1);
-    assert.match(
-      diagnostics[0],
-      protocol === undefined ? /protocol_unverified/u : /protocol_mismatch/u,
-    );
-    assert.match(diagnostics[0], /assigned project message/u);
-    assert.doesNotMatch(diagnostics[0], /project-message-id|text|attachment/u);
+    assert.deepEqual(diagnostics, []);
   }
+});
+
+test("real project header validation reports unsupported protocol without delivery", async () => {
+  const fixture = projectMessageDrainFixture(
+    "supervisor_message",
+    2,
+    false,
+    {
+      text: "private supervisor text",
+      resultBindings: [
+        { ref: "private attachment ref", canonicalRef: "result:secret" },
+      ],
+    },
+    undefined,
+    true,
+  );
+  assert.equal(
+    listProjectAssignments(fixture.probeRuntime, fixture.assignment.repoKey)
+      .length,
+    1,
+  );
+  assert.equal(
+    readLeadCoordinationStateForObservation(
+      fixture.probeRuntime,
+      fixture.sourceSessionId,
+    )?.messageProtocol,
+    2,
+  );
+  assert.equal(
+    listPeerLeadRecordsForDiscovery(fixture.sourcePeers).some(
+      (peer) => peer.piSessionId === fixture.sourceSessionId,
+    ),
+    true,
+  );
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.equal(fixture.reads, 0);
+  assert.deepEqual(fixture.imported, []);
+  assert.deepEqual(fixture.delivered, []);
+  assert.deepEqual(fixture.removed, []);
+  assert.equal(existsSync(fixture.headerPath), true);
+  const diagnostics = takeProtocolDiagnostics(
+    fixture.context.sessionManager.getSessionId(),
+  );
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]!, /protocol_mismatch/u);
+  assert.match(diagnostics[0]!, /assigned project message/u);
+  assert.match(diagnostics[0]!, /Required protocol: 1/u);
+  assert.doesNotMatch(
+    diagnostics[0]!,
+    new RegExp(
+      `private supervisor text|private attachment|result:secret|${fixture.recordId}`,
+      "u",
+    ),
+  );
+  assert.match(String(fixture.errors[0]), /messaging protocol 1/u);
+  fixture.releaseSourcePresence();
+});
+
+test("forged protocol-2 project header stays generic without verified source attribution", async () => {
+  const fixture = projectMessageDrainFixture(
+    "supervisor_message",
+    2,
+    false,
+    {
+      text: "forged private supervisor text",
+      resultBindings: [
+        { ref: "forged private attachment", canonicalRef: "result:forged" },
+      ],
+    },
+    undefined,
+    true,
+    true,
+    false,
+  );
+  assert.equal(
+    readLeadCoordinationStateForObservation(
+      fixture.probeRuntime,
+      fixture.sourceSessionId,
+    )?.messageProtocol,
+    2,
+  );
+  assert.equal(
+    listPeerLeadRecordsForDiscovery(fixture.sourcePeers).some(
+      (peer) => peer.piSessionId === fixture.sourceSessionId,
+    ),
+    false,
+  );
+  assert.equal(await fixture.runtime.drainProjectMessages(fixture.context), 0);
+  assert.equal(fixture.reads, 0);
+  assert.deepEqual(fixture.imported, []);
+  assert.deepEqual(fixture.delivered, []);
+  assert.deepEqual(fixture.removed, []);
+  assert.equal(existsSync(fixture.headerPath), true);
+  assert.deepEqual(
+    takeProtocolDiagnostics(fixture.context.sessionManager.getSessionId()),
+    [],
+  );
+  assert.match(
+    String(fixture.errors[0]),
+    /Malformed explicit project message/u,
+  );
+  assert.doesNotMatch(
+    String(fixture.errors[0]),
+    new RegExp(
+      `${fixture.sourceSessionId}|forged private supervisor text|result:forged`,
+      "u",
+    ),
+  );
+  fixture.releaseSourcePresence();
 });
 
 test("protocol-1 assigned-Lead messages deliver and consume under current assignment", async () => {

@@ -100,6 +100,17 @@ function validOptionalMessageProtocol(
   );
 }
 
+function validObservedMessageProtocol(
+  record: Record<string, unknown>,
+): boolean {
+  return (
+    !Object.hasOwn(record, "messageProtocol") ||
+    supportsCoordinatorMessaging(record.messageProtocol) ||
+    (Number.isSafeInteger(record.messageProtocol) &&
+      (record.messageProtocol as number) > 0)
+  );
+}
+
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
 export type SessionRole = "lead" | "manager" | "chief";
@@ -1725,7 +1736,10 @@ export function peerLeadLockPath(
   return `${peerLeadRecordPath(runtime, piSessionId)}.lock`;
 }
 
-function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
+function validPeerLeadRecord(
+  value: unknown,
+  observeUnsupportedProtocol = false,
+): value is PeerLeadRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   const metadata = ["name", "cwd", "repo", "branch", "workspaceLabel"];
@@ -1760,7 +1774,9 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 2 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
-    validOptionalMessageProtocol(record) &&
+    (observeUnsupportedProtocol
+      ? validObservedMessageProtocol(record)
+      : validOptionalMessageProtocol(record)) &&
     (record.role === undefined ||
       record.role === "lead" ||
       record.role === "manager") &&
@@ -1938,6 +1954,40 @@ export function listPeerLeadRecords(
           return [];
         const record = readPeerLeadRecord(runtime, value.piSessionId);
         return record ? [record] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+/** Lists structurally valid live peers for diagnostics, not authorization. */
+export function listPeerLeadRecordsForDiscovery(
+  runtime: PeerRuntime = peerRuntime(),
+): PeerLeadRecord[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(runtime.peers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error("Unable to scan peer lead records", { cause: error });
+  }
+  return entries
+    .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
+    .sort()
+    .flatMap((entry) => {
+      try {
+        const path = join(runtime.peers, entry);
+        if (statSync(path).size > PEER_LEAD_RECORD_MAX_BYTES) return [];
+        const value = JSON.parse(readFileSync(path, "utf8"));
+        if (
+          !validPeerLeadRecord(value, true) ||
+          peerLeadRecordFilename(value.piSessionId) !== entry
+        )
+          return [];
+        const claim = livePeerClaim(runtime, value.piSessionId);
+        if (claim.pid !== value.claim.pid || claim.id !== value.claim.id)
+          return [];
+        return [value as PeerLeadRecord];
       } catch {
         return [];
       }
@@ -3141,6 +3191,11 @@ export type ProjectMessageHeaderIssue = Readonly<{
   id: string;
   reason:
     "malformed" | "oversized" | "protocol_mismatch" | "protocol_unverified";
+  /** Internal candidates used only to verify diagnostic attribution. */
+  sourceSessionId?: string;
+  repoKey?: string;
+  branch?: string;
+  messageProtocol?: unknown;
 }>;
 type StoredProjectMessage = ProjectMessageHeader;
 
@@ -3350,6 +3405,9 @@ function invalidExplicitProjectMessageHeader(
       return undefined;
     const record = value as Record<string, unknown>;
     if (record.kind !== "supervisor_message") return undefined;
+    const sourceSessionId = validSession(record.fromSessionId)
+      ? record.fromSessionId
+      : undefined;
     return {
       id,
       reason: supportsCoordinatorMessaging(record.messageProtocol)
@@ -3357,6 +3415,12 @@ function invalidExplicitProjectMessageHeader(
         : record.messageProtocol === undefined
           ? "protocol_unverified"
           : "protocol_mismatch",
+      ...(sourceSessionId ? { sourceSessionId } : {}),
+      ...(validNativeIdentity(record.repoKey)
+        ? { repoKey: record.repoKey }
+        : {}),
+      ...(validNativeIdentity(record.branch) ? { branch: record.branch } : {}),
+      messageProtocol: record.messageProtocol,
     };
   } catch {
     return undefined;
@@ -4003,7 +4067,10 @@ export function leadCoordinationStatePath(
     createHash("sha256").update(piSessionId).digest("hex") + ".json",
   );
 }
-function validLeadState(value: unknown): value is CoordinatorState {
+function validLeadState(
+  value: unknown,
+  observeUnsupportedProtocol = false,
+): value is CoordinatorState {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
@@ -4021,7 +4088,9 @@ function validLeadState(value: unknown): value is CoordinatorState {
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
-    validOptionalMessageProtocol(r) &&
+    (observeUnsupportedProtocol
+      ? validObservedMessageProtocol(r)
+      : validOptionalMessageProtocol(r)) &&
     (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
@@ -4047,6 +4116,35 @@ export function readLeadCoordinationState(
         : value;
     if (
       !validLeadState(currentState) ||
+      currentState.piSessionId !== piSessionId
+    )
+      throw new Error("invalid lead state");
+    return currentState;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Unable to read lead coordination state", { cause: e });
+  }
+}
+
+/** Reads structurally valid state for projection; never establishes authorization. */
+export function readLeadCoordinationStateForObservation(
+  runtime: SupervisionRuntime,
+  piSessionId: string,
+): LeadCoordinationState | undefined {
+  const path = leadCoordinationStatePath(runtime, piSessionId);
+  try {
+    const text = readFileSync(path, "utf8");
+    if (Buffer.byteLength(text, "utf8") > LEAD_STATE_MAX_BYTES)
+      throw new Error("lead state too large");
+    const value: unknown = JSON.parse(text);
+    const currentState =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).filter(([key]) => key !== "pendingAsk"),
+          )
+        : value;
+    if (
+      !validLeadState(currentState, true) ||
       currentState.piSessionId !== piSessionId
     )
       throw new Error("invalid lead state");
@@ -4188,10 +4286,14 @@ export function projectSupervision(options: {
         tabId: agent.tabId,
         runtimeState: agent.runtimeState ?? "unknown",
         build: state.build,
-        protocolDiagnostic:
-          state.messageProtocol === undefined
-            ? "protocol_unverified"
-            : "protocol_mismatch",
+        ...(!supportsCoordinatorMessaging(state.messageProtocol)
+          ? {
+              protocolDiagnostic:
+                state.messageProtocol === undefined
+                  ? ("protocol_unverified" as const)
+                  : ("protocol_mismatch" as const),
+            }
+          : {}),
         reason: "incompatible_build",
       });
       continue;

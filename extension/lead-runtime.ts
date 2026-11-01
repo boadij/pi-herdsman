@@ -663,6 +663,7 @@ type LeadSupervisionHost = {
   ): Promise<void>;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  readLeadCoordinationStateForObservation: typeof import("./supervision.ts").readLeadCoordinationStateForObservation;
   remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
   runHerdr: typeof runHerdr;
   sameChiefDescriptor: typeof import("./supervision.ts").sameChiefDescriptor;
@@ -1754,6 +1755,11 @@ export function registerLeadRuntime(
         signal,
       ),
     ...options.coordinationHost,
+    liveAgent: (
+      ctx: ExtensionContext,
+      sessionId: string,
+      sessionPath?: string,
+    ) => identityRuntime.liveAgent(ctx, sessionId, sessionPath),
     workspaceId: () => options.roleTransitionHost.workspaceId(),
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
@@ -4074,7 +4080,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       : undefined;
     const coordinationStates = agents.flatMap((agent) => {
       try {
-        const state = host.readLeadCoordinationState(
+        const state = host.readLeadCoordinationStateForObservation(
           host.supervisionRuntime(),
           agent.sessionId,
         );

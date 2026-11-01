@@ -73,6 +73,7 @@ const {
   drainCoordinationInbox,
   listCoordinationMessagePaths,
   listPeerLeadRecords,
+  listPeerLeadRecordsForDiscovery,
   peerLeadLockPath,
   peerLeadRecordPath,
   peerRuntime,
@@ -91,6 +92,7 @@ const {
   quarantineChiefMessage,
   readChiefMessage,
   readLeadCoordinationState,
+  readLeadCoordinationStateForObservation,
   readChiefDescriptor,
   supportsCoordinatorMessaging,
   reportProtocolDiagnostic,
@@ -799,6 +801,22 @@ test("peer lead presence requires a live generation and excludes corruption", ()
   }
 });
 
+test("peer discovery observes positive unsupported protocols without authorizing them", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "peer-protocol-two");
+  try {
+    const path = writePeerLeadRecord(runtime, fixture.record as any);
+    const unsupported = { ...fixture.record, messageProtocol: 2 };
+    writeFileSync(path, JSON.stringify(unsupported));
+    assert.deepEqual(listPeerLeadRecords(runtime), []);
+    assert.deepEqual(listPeerLeadRecordsForDiscovery(runtime), [unsupported]);
+    assert.throws(() => readPeerLeadRecord(runtime, "peer-protocol-two"));
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).messageProtocol, 2);
+  } finally {
+    fixture.release();
+  }
+});
+
 test("peer lead presence rejects a changed or missing process-lock generation", () => {
   const runtime = peerRuntime(socket());
   const fixture = peerRecord(runtime, "lead-generation");
@@ -1369,6 +1387,25 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   );
 });
 
+test("coordination observation recognizes protocol 2 while authorization reads stay strict", () => {
+  const runtime = supervisionRuntime(socket());
+  const value = { ...state("lead"), messageProtocol: 2 };
+  const path = leadCoordinationStatePath(runtime, "lead");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value));
+  assert.throws(() => readLeadCoordinationState(runtime, "lead"));
+  assert.deepEqual(
+    readLeadCoordinationStateForObservation(runtime, "lead"),
+    value,
+  );
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "2"]) {
+    writeFileSync(path, JSON.stringify({ ...value, messageProtocol: invalid }));
+    assert.throws(() =>
+      readLeadCoordinationStateForObservation(runtime, "lead"),
+    );
+  }
+});
+
 test("lead coordination reader ignores only the retired pendingAsk field", () => {
   const runtime = supervisionRuntime(socket());
   const current = state("legacy-lead");
@@ -1677,6 +1714,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
   const incompatibleState = state(incompatibleId, {
     role: "lead",
     build: differentSha,
+    messageProtocol: 1,
   });
   const snapshot = projectSupervision({
     agents: [
@@ -1711,6 +1749,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
     snapshot.incompatible?.map((report) => report.session),
     [incompatibleId],
   );
+  assert.equal(snapshot.incompatible?.[0]?.protocolDiagnostic, undefined);
   assert.deepEqual(
     snapshot.incompatible?.[0] && {
       instanceId: snapshot.incompatible[0].instanceId,
@@ -1726,6 +1765,36 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
     },
   );
   assert.equal(snapshot.incompatible?.[0]?.build.sha256, differentSha.sha256);
+});
+
+test("staff discovery diagnoses protocol 2 without creating an actionable target", () => {
+  const sessionId = id();
+  const differentSha = { version: BUILD.version, sha256: "c".repeat(64) };
+  const snapshot = projectSupervision({
+    agents: [
+      {
+        sessionId,
+        sessionKind: "id",
+        workspaceId: "workspace-v2",
+        paneId: "pane-v2",
+        tabId: "tab-v2",
+      },
+    ],
+    managedAgents: [],
+    coordinationStates: [
+      state(sessionId, {
+        role: "lead",
+        build: differentSha,
+        messageProtocol: 2,
+      }),
+    ],
+    localBuild: BUILD,
+  });
+  const report = snapshot.incompatible?.[0];
+  assert.equal(report?.protocolDiagnostic, "protocol_mismatch");
+  assert.equal("availableActions" in (report ?? {}), false);
+  assert.equal("target" in (report ?? {}), false);
+  assert.deepEqual(snapshot.leads, []);
 });
 
 test("Lead without legacy coordination build is not actionable when build verification is requested", () => {
