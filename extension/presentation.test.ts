@@ -7050,7 +7050,11 @@ test("Manager Git stats anchor right without aligning elapsed or context", () =>
   const snapshot = {
     project: "pi-herdsman",
     work: [
-      { branch: "feat/long-name", session: "lead-long", status: "active" as const },
+      {
+        branch: "feat/long-name",
+        session: "lead-long",
+        status: "active" as const,
+      },
       { branch: "fix/x", session: "lead-short", status: "active" as const },
     ],
     leads: [
@@ -7093,7 +7097,9 @@ test("Manager Git stats anchor right without aligning elapsed or context", () =>
   assert.match(second!, /fix\/x.*20m.*7% {2,}~\+273 -38\*$/);
   assert.equal(visibleWidth(first!), width);
   assert.equal(visibleWidth(second!), width);
-  const withoutGit = renderSupervisionLeads(snapshot, width, { role: "manager" });
+  const withoutGit = renderSupervisionLeads(snapshot, width, {
+    role: "manager",
+  });
   assert.ok(visibleWidth(withoutGit[1]!) < width);
   for (let w = 1; w <= width; w++)
     assert.ok(widget.render(w).every((row) => visibleWidth(row) <= w));

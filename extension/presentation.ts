@@ -1436,10 +1436,10 @@ function renderSupervisionRows(
           )
           .join("");
         const padding = right
-          ? " ".repeat(Math.max(0, width - visibleWidth(left) - visibleWidth(right)))
-          : "";
+          ? Math.max(0, width - visibleWidth(left) - visibleWidth(right))
+          : 0;
         return {
-          text: safeLine(`${left}${padding}${right}`, width),
+          text: safeLine(`${left}${" ".repeat(padding)}${right}`, width),
           ...(canFocusLead && clickRegion
             ? {
                 label: item.work.branch,
