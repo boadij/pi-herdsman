@@ -35,7 +35,18 @@ import {
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const worktreePi = join(repoRoot, "node_modules", ".bin", "pi");
+const worktreePi = join(
+  repoRoot,
+  "node_modules",
+  "@earendil-works",
+  "pi-coding-agent",
+  "dist",
+  "bundle",
+  "cli.js",
+);
+export function worktreePiCommand(args) {
+  return [process.execPath, worktreePi, ...args];
+}
 const scenarioNames = [
   "core",
   "continuation",
@@ -3386,7 +3397,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-export async function preflight(pkg) {
+export async function preflight(pkg, runCommand = run) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -3395,9 +3406,10 @@ export async function preflight(pkg) {
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
+  const [piExecutable, ...piArgs] = worktreePiCommand(["--version"]);
   const [{ stdout: piVersion }, { stdout: herdrVersion }] = await Promise.all([
-    run(worktreePi, ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
-    run("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    runCommand(piExecutable, piArgs, { timeout: OBSERVATION_TIMEOUT_MS }),
+    runCommand("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
   const actualPiVersion = piVersion.trim();
   requireTestedBaseline("Pi", actualPiVersion, piBaseline);
@@ -3817,11 +3829,10 @@ async function startCandidate(ctx) {
       : {}),
     model: ctx.model,
   });
-  let candidateCommand = [
-    worktreePi,
+  let candidateCommand = worktreePiCommand([
     ...args,
     ...(prompt === undefined ? [] : [prompt]),
-  ];
+  ]);
   if (ctx.scenario === "manager-bootstrap") {
     const diagnosticDir = join(ctx.paths.root, "manager-bootstrap-diagnostics");
     await mkdir(diagnosticDir, { recursive: true });
@@ -6634,12 +6645,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "pane",
       "run",
       ctx.rootPaneId,
-      rootCandidateCommand([
-        worktreePi,
-        ...args,
-        "--session",
-        ctx.crashRecovery.ownerSessionPath,
-      ]),
+      rootCandidateCommand(
+        worktreePiCommand([
+          ...args,
+          "--session",
+          ctx.crashRecovery.ownerSessionPath,
+        ]),
+      ),
     ],
     { env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName) },
   );

@@ -8,6 +8,7 @@ import {
   managerHandoffSupervisorToolAvailable,
 } from "../scripts/smoke-faux.mjs";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -80,6 +81,7 @@ import {
   parseHerdrOutput,
   parseSmokeArgs,
   preflight,
+  worktreePiCommand,
   retainCoreObservation,
   formatSmokeFailure,
   managerBootstrapDelegationProjection,
@@ -160,22 +162,34 @@ test("preflight uses worktree Pi instead of a conflicting PATH executable", asyn
   const dir = await mkdtemp(join(tmpdir(), "smoke-path-"));
   const originalPath = process.env.PATH;
   try {
-    await writeFile(join(dir, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
-    await writeFile(join(dir, "herdr"), "#!/bin/sh\necho 1.0.0\n", {
-      mode: 0o755,
-    });
+    if (process.platform === "win32")
+      await copyFile(process.execPath, join(dir, "pi.exe"));
+    else
+      await writeFile(join(dir, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
     const pi = resolve(
       dirname(fileURLToPath(import.meta.url)),
-      "../node_modules/.bin/pi",
+      "../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
     );
-    const version = execFileSync(pi, ["--version"], {
+    const version = execFileSync(process.execPath, [pi, "--version"], {
       encoding: "utf8",
     }).trim();
     process.env.PATH = `${dir}${delimiter}${originalPath ?? ""}`;
-    const result = await preflight({
-      engines: { node: ">=0.0.0" },
-      piHerdsman: { runtime: { pi: "0.0.0", herdr: { version: "0.0.0" } } },
-    });
+    const candidate = worktreePiCommand(["candidate-argument"]);
+    assert.deepEqual(candidate, [process.execPath, pi, "candidate-argument"]);
+    const result = await preflight(
+      {
+        engines: { node: ">=0.0.0" },
+        piHerdsman: { runtime: { pi: "0.0.0", herdr: { version: "0.0.0" } } },
+      },
+      async (file: string, args: string[]) => {
+        if (file === "herdr") return { stdout: "1.0.0" };
+        assert.deepEqual(
+          [file, ...args],
+          [...candidate.slice(0, 2), "--version"],
+        );
+        return { stdout: execFileSync(file, args, { encoding: "utf8" }) };
+      },
+    );
     assert.equal(result.piVersion, version);
   } finally {
     if (originalPath === undefined) delete process.env.PATH;
