@@ -382,7 +382,7 @@ type LeadRuntimeOptions = {
     AgentControllerOptions,
     "scope" | "build" | "onWorkChanged" | "onWorktreeRemoved"
   >;
-  identityHost: LeadIdentityHost;
+  identityHost: Omit<LeadIdentityHost, "leadController">;
   roleTransitionHost: LeadRuntimeHost;
   coordinationHost: LeadCoordinationBaseHost;
   projectHost: Omit<
