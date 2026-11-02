@@ -253,6 +253,7 @@ export const {
   readRequest,
   readResult,
   readAgentState,
+  readAgentStartupOutcome,
   readAgentBootstrap,
   removeAgentBootstrap,
   writeAgentBootstrap,
@@ -266,6 +267,7 @@ export const {
   writeRequest: writeRequestRecord,
   writeResult: writeResultRecord,
   writeAgentState,
+  writeAgentStartupOutcome,
 } = await import("./mailbox.ts");
 
 /** Test settlements copy the ownership scope from the persisted generation state. */
@@ -1842,6 +1844,16 @@ export function delegatedLifecycleExecutor(
         live.set(label, state);
         tabByPane.set(paneId, tabForPane);
         writeAgentState(agentMailboxPath(workspaceId, label), state);
+        writeAgentStartupOutcome(agentMailboxPath(workspaceId, label), {
+          version: 5,
+          build: HERDSMAN_BUILD,
+          runId,
+          ownerSessionId,
+          workspaceId,
+          agentLabel: label,
+          paneId,
+          status: "ready",
+        });
         consumeMailboxRequest(agentMailboxPath(workspaceId, label), (request) =>
           acceptMailboxRequest(agentMailboxPath(workspaceId, label), request),
         );
@@ -3033,6 +3045,16 @@ export function startupExecutor(
         agentDefinition: "agent",
         cwd: testCwd,
         updatedAt: Date.now(),
+      });
+      writeAgentStartupOutcome(mailbox, {
+        version: 5,
+        build: HERDSMAN_BUILD,
+        runId,
+        ownerSessionId,
+        workspaceId: WORKSPACE,
+        agentLabel: label,
+        paneId: activePaneId,
+        status: "ready",
       });
       return {
         stdout: JSON.stringify({

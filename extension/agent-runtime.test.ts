@@ -59,6 +59,8 @@ import support, {
   readRequest,
   readResult,
   readAgentState,
+  readAgentStartupOutcome,
+  writeAgentStartupOutcome,
   realFs,
   recoveryIdentity,
   removeAsk,
@@ -6643,7 +6645,107 @@ test("agent persists one identity entry before mailbox initialization", async ()
     { type: "session_info", name: "agent · registered-agent" },
   ]);
   assert.ok(readAgentState(mailbox));
+  assert.equal(readAgentStartupOutcome(mailbox)?.status, "ready");
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("agent reports failure after state publication and stops initialization", async () => {
+  const mailbox = setAgentEnvironment();
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  const original = new Error("metadata setup failed: sensitive-token");
+  Object.defineProperty(context, "model", {
+    get() {
+      throw original;
+    },
+  });
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.ok(readAgentState(mailbox));
+    const outcome = readAgentStartupOutcome(mailbox);
+    assert.equal(outcome?.status, "failed");
+    if (outcome?.status === "failed")
+      assert.equal(outcome.error, "Managed Agent initialization failed");
+    if (outcome?.status === "failed") assert.equal(outcome.stage, "metadata");
+    assert.ok(notices.some((message) => message.includes(original.message)));
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("failed startup outcome publication preserves the original initialization failure", async () => {
+  const mailbox = setAgentEnvironment();
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  const original = new Error("metadata setup failed");
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  Object.defineProperty(context, "model", {
+    get() {
+      realFs.mkdirSync(join(mailbox, "startup.json"));
+      throw original;
+    },
+  });
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.ok(readAgentState(mailbox));
+    assert.ok(notices.some((message) => message.includes(original.message)));
+    assert.equal(
+      agent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_state_error",
+      ).length,
+      2,
+    );
+    assert.ok(
+      agent.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_state_error" &&
+          JSON.stringify(entry).includes(original.message),
+      ),
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(join(mailbox, "startup.json"), {
+      recursive: true,
+      force: true,
+    });
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("conflicting state preserves the other generation's startup outcome", async () => {
+  const mailbox = setAgentEnvironment();
+  const state = { ...managedState("registered-agent"), runId: randomUUID() };
+  writeAgentState(mailbox, state);
+  const outcome = {
+    version: 5 as const,
+    build: HERDSMAN_BUILD,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "ready" as const,
+  };
+  writeAgentStartupOutcome(mailbox, outcome);
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  try {
+    await agent.events.get("session_start")![0](
+      undefined,
+      fakeAgentContext(agent.entries),
+    );
+    assert.deepEqual(readAgentStartupOutcome(mailbox), outcome);
+    assert.deepEqual(readAgentState(mailbox), state);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("agent rejects a conflicting persisted session identity", async () => {

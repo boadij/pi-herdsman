@@ -115,7 +115,7 @@ Preparation must be safe to abandon if launch fails; durable parent-side
 finalization belongs in the optional commit callback.
 
 For each prepared participant, the child receives an `initialize` event before
-Herdsman writes its normal `state.json` readiness record. Exactly one matching
+Herdsman writes its normal `state.json` identity record. Exactly one matching
 child extension must synchronously call `accept(initialize)` during event
 dispatch; Herdsman invokes and awaits that initializer before readiness. The
 participant owns payload serialization, compatibility, and interpretation.
@@ -128,6 +128,11 @@ startup rollback applies. After normal child readiness and identity/integration
 validation, Herdsman awaits parent commit callbacks before it delivers the
 first assignment. Bootstrap storage is transient and removed before readiness.
 With no participant data, delegation follows its ordinary startup path.
+
+The child publishes a transient startup outcome after initialization and request
+observation are complete. The parent requires a matching ready outcome and
+valid state before submitting an assignment; the assignment still requires its
+own acknowledgement. Startup outcomes do not establish continuing liveness.
 
 ## `continue_agent`
 

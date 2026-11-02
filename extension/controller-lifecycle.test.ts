@@ -184,6 +184,7 @@ import {
   readUnacknowledgedRequest,
   readResult,
   readAgentState,
+  readAgentStartupOutcome,
   MANAGED_AGENT_BOOTSTRAP_EVENT,
   readAgentBootstrap,
   removeAgentBootstrap,
@@ -209,6 +210,7 @@ import {
   writeRequest,
   writeResult,
   writeAgentState,
+  writeAgentStartupOutcome,
   testTmpRoot,
 } from "./support.ts";
 
@@ -7407,7 +7409,7 @@ test("managed project delegation references supported evidence larger than the i
   writeProjectAssignment(runtime, assignment);
   let accepted: RequestRecord | undefined;
   const label = `er-${randomUUID().slice(0, 8)}`;
-  const finalPaneId = "pane-" + "p".repeat(46_000);
+  const finalPaneId = "pane-" + "p".repeat(1_000);
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -7539,7 +7541,7 @@ test("managed project delegation references supported evidence larger than the i
       {
         definition: "agent",
         label,
-        task: "use the current retained plan",
+        task: "use the current retained plan " + "p".repeat(45_000),
         files: [smallExplicitPath, collisionPath],
       },
       undefined,
@@ -10981,9 +10983,10 @@ test("session assignment reports a pane mismatch from the agent state producer",
       ownedSessionContext(DEFAULT_PI_SESSION_ID, label),
     );
     assert.equal(result.details.ok, false);
-    assert.match(result.details.error.message, /paneId/);
-    assert.match(result.details.error.message, /agent-pane/);
-    assert.match(result.details.error.message, /helper-pane/);
+    assert.match(
+      result.details.error.message,
+      /startup identity did not match/,
+    );
   } finally {
     lead.events.get("session_shutdown")?.[0]();
     agent.events.get("session_shutdown")?.[0]();
@@ -14026,7 +14029,7 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
       realFs.existsSync(startup.mailbox)
         ? realFs.readdirSync(startup.mailbox)
         : [],
-      ["state.json"],
+      ["startup.json", "state.json"],
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -14282,7 +14285,7 @@ test("assignment launch handles delayed official Pi session identity", async () 
   }
 });
 
-test("managed startup accepts matching mailbox state after five seconds", async (t) => {
+test("managed startup accepts matching outcome after five seconds", async (t) => {
   setLeadEnvironment();
   const label = "delayed-mailbox-startup";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
@@ -14294,13 +14297,15 @@ test("managed startup accepts matching mailbox state after five seconds", async 
       const result = await startup.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         delayedState = readAgentState(startup.mailbox);
+        const delayedOutcome = readAgentStartupOutcome(startup.mailbox);
         assert.ok(delayedState);
+        assert.ok(delayedOutcome);
         realFs.rmSync(startup.mailbox, { recursive: true, force: true });
         if (!abort.signal.aborted)
-          restoreTimer = setTimeout(
-            () => writeAgentState(startup.mailbox, delayedState!),
-            6_000,
-          );
+          restoreTimer = setTimeout(() => {
+            writeAgentState(startup.mailbox, delayedState!);
+            writeAgentStartupOutcome(startup.mailbox, delayedOutcome);
+          }, 6_000);
       }
       return result;
     },
@@ -14329,6 +14334,52 @@ test("managed startup accepts matching mailbox state after five seconds", async 
     if (restoreTimer) clearTimeout(restoreTimer);
     if (pending) await pending.catch(() => {});
     startup.stopMailboxConsumer();
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("managed startup reports the validated child initialization stage", async () => {
+  setLeadEnvironment();
+  const label = "failed-child-stage";
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const outcome = readAgentStartupOutcome(startup.mailbox);
+        assert.ok(outcome);
+        writeAgentStartupOutcome(startup.mailbox, {
+          ...outcome,
+          status: "failed",
+          error: "Managed Agent initialization failed",
+          stage: "bootstrap",
+        });
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
+  try {
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "fail child initialization" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(result.details.error.details.stage, "bootstrap");
+    assert.match(
+      result.details.error.message,
+      /Managed Agent initialization failed/,
+    );
+    assert.doesNotMatch(
+      result.details.error.message,
+      /sensitive|custom-validator/,
+    );
+  } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
