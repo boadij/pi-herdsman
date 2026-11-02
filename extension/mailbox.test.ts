@@ -42,6 +42,9 @@ import {
   observeMailbox,
   writeResult,
   waitForState,
+  waitForStartupOutcome,
+  writeAgentStartupOutcome,
+  readAgentStartupOutcome,
   writeRequest,
   writeAsk,
   writeAgentState,
@@ -73,6 +76,63 @@ const state: ManagedAgentState = {
   cwd: "/tmp",
   updatedAt: Date.now(),
 };
+test("startup outcome is strict, transient, and independently awaited", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-startup-"));
+  try {
+    const ready = {
+      version: 5 as const,
+      build: state.build!,
+      runId: state.runId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      status: "ready" as const,
+    };
+    writeAgentState(directory, state);
+    await assert.rejects(waitForStartupOutcome(directory, { timeoutMs: 5 }), {
+      name: "TimeoutError",
+    });
+    const signal = AbortSignal.abort();
+    await assert.rejects(
+      waitForStartupOutcome(directory, { timeoutMs: 100, signal }),
+      { name: "AbortError" },
+    );
+    writeAgentStartupOutcome(directory, ready);
+    assert.deepEqual(
+      await waitForStartupOutcome(directory, { timeoutMs: 100 }),
+      ready,
+    );
+    assert.throws(() =>
+      writeAgentStartupOutcome(directory, {
+        ...ready,
+        error: "unexpected",
+      } as never),
+    );
+    assert.throws(() =>
+      writeAgentStartupOutcome(directory, {
+        ...ready,
+        status: "failed",
+        error: "x".repeat(257),
+      }),
+    );
+    writeAgentStartupOutcome(directory, {
+      ...ready,
+      status: "failed",
+      error: "failed",
+    });
+    assert.equal(readAgentStartupOutcome(directory)?.status, "failed");
+    writeFileSync(join(directory, "startup.json"), "{");
+    await assert.rejects(
+      waitForStartupOutcome(directory, { timeoutMs: 100 }),
+      SyntaxError,
+    );
+    resetAgentMailbox(directory);
+    assert.equal(readAgentStartupOutcome(directory), undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 test("V5 markers require canonical UUIDs and never contain task text", () => {
   const id = "44444444-4444-4444-8444-444444444444";
   assert.equal(controlMarker(id), `__PI_HERDSMAN_AGENT_V5__:${id}`);

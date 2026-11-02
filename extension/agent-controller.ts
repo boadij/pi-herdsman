@@ -44,6 +44,7 @@ import {
   mailboxRecordBytes,
   resetAgentMailbox,
   waitForState,
+  waitForStartupOutcome,
   unacknowledgedRequestExists,
   type AskRecord,
   type ResultRecord,
@@ -7900,19 +7901,15 @@ export function createAgentController(
             env,
             signal,
           });
-          const state = await waitForState(
-            mailbox,
-            (s) => s.runId === runId && s.ownerSessionId === owner,
-            { timeoutMs: 30_000, signal },
-          ).catch(() => undefined);
-          if (state)
-            requireCompatibleBuild(
-              options.build,
-              state.build,
-              p.action,
-              `Agent ${label} in pane ${started.paneId}`,
-            );
-          if (!state) {
+          const outcome = await waitForStartupOutcome(mailbox, {
+            timeoutMs: 30_000,
+            signal,
+          }).catch((error: unknown) => {
+            if (error instanceof DOMException && error.name === "TimeoutError")
+              return undefined;
+            throw error;
+          });
+          if (!outcome) {
             let startupDiagnostic: string | undefined;
             let startupProcess: Record<string, unknown> | undefined;
             try {
@@ -7973,7 +7970,7 @@ export function createAgentController(
             }
             fail(
               "pane_not_ready",
-              "Agent did not initialize its mailbox",
+              "Agent did not report a startup outcome",
               p.action,
               startupDiagnostic || startupProcess
                 ? {
@@ -7985,6 +7982,56 @@ export function createAgentController(
                 : {},
             );
           }
+          if (
+            outcome.runId !== runId ||
+            outcome.ownerSessionId !== owner ||
+            outcome.workspaceId !== workspaceId ||
+            outcome.agentLabel !== label ||
+            outcome.paneId !== started.paneId
+          )
+            fail(
+              "target_not_found",
+              "Managed Agent startup identity did not match",
+              p.action,
+            );
+          requireCompatibleBuild(
+            options.build,
+            outcome.build,
+            p.action,
+            `Agent ${label} startup`,
+          );
+          if (outcome.status === "failed")
+            fail(
+              "pane_not_ready",
+              `Managed Agent initialization failed: ${outcome.error}`,
+              p.action,
+              { details: { stage: "child_initialization" } },
+            );
+          const state = readAgentState(mailbox);
+          if (!state)
+            fail(
+              "internal_failure",
+              "Agent reported ready without managed state",
+              p.action,
+            );
+          if (
+            state.runId !== runId ||
+            state.ownerSessionId !== owner ||
+            state.workspaceId !== workspaceId ||
+            state.agentLabel !== label ||
+            state.paneId !== started.paneId
+          )
+            fail(
+              "target_not_found",
+              "Managed Agent state identity did not match startup",
+              p.action,
+            );
+          requireCompatibleBuild(
+            options.build,
+            state.build,
+            p.action,
+            `Agent ${label} in pane ${started.paneId}`,
+          );
           const expectedHerdrAgent = herdrAgentAlias(
             workspaceId,
             label,

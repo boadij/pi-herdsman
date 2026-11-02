@@ -61,6 +61,12 @@ export interface ManagedAgentState {
   };
   updatedAt: number;
 }
+export type ManagedAgentStartupOutcome = Pick<
+  ManagedAgentState,
+  "runId" | "ownerSessionId" | "workspaceId" | "agentLabel" | "paneId"
+> & { version: 5; build: RuntimeBuild } & (
+    { status: "ready" } | { status: "failed"; error: string }
+  );
 export interface ResultPersistenceError {
   code: "write_failure";
   message: string;
@@ -167,6 +173,7 @@ export class MailboxClaimOccupiedError extends Error {
 }
 const LIMITS = {
   bootstrap: MANAGED_AGENT_BOOTSTRAP_LIMIT_BYTES,
+  startup: 2 * 1024,
   state: 64 * 1024,
   request: MAILBOX_PROTOCOL_LIMIT_BYTES,
   ask: MAILBOX_PROTOCOL_LIMIT_BYTES,
@@ -354,6 +361,44 @@ function validate(
   if (Buffer.byteLength(text, "utf8") > LIMITS[kind])
     throw new Error("Mailbox record is too large");
   const v = value as Record<string, any>;
+  if (kind === "startup") {
+    const allowed = [
+      "version",
+      "build",
+      "runId",
+      "ownerSessionId",
+      "workspaceId",
+      "agentLabel",
+      "paneId",
+      "status",
+      "error",
+    ];
+    if (Object.keys(v).some((key) => !allowed.includes(key)))
+      throw new Error("Unknown mailbox field");
+    if (!isRuntimeBuild(v.build))
+      throw new Error("Invalid runtime build identity");
+    for (const field of [
+      "runId",
+      "ownerSessionId",
+      "workspaceId",
+      "agentLabel",
+      "paneId",
+    ])
+      if (typeof v[field] !== "string" || !v[field].trim())
+        throw new Error(`Invalid mailbox field: ${field}`);
+    if (!UUID.test(v.runId)) throw new Error("Invalid mailbox UUID");
+    if (
+      v.status === "ready"
+        ? "error" in v
+        : v.status !== "failed" ||
+          typeof v.error !== "string" ||
+          !v.error.trim() ||
+          v.error.length > 256 ||
+          /[\r\n]/.test(v.error)
+    )
+      throw new Error("Invalid startup outcome");
+    return;
+  }
   if (kind === "bootstrap") {
     const allowed = [
       "version",
@@ -841,9 +886,15 @@ function validate(
     }
   }
 }
-function atomic(path: string, value: unknown, kind: keyof typeof LIMITS): void {
+function atomic(
+  path: string,
+  value: unknown,
+  kind: keyof typeof LIMITS,
+  createDirectory = true,
+): void {
   validate(value, kind);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (createDirectory)
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   chmodSync(dirname(path), 0o700);
   const temporary = join(
     dirname(path),
@@ -904,6 +955,7 @@ export function resetAgentMailbox(path: string): void {
   ensure(path);
   for (const name of [
     "state.json",
+    "startup.json",
     "ask.json",
     "bootstrap.json",
     ...readdirSync(path).filter((x: string) =>
@@ -916,6 +968,22 @@ export function resetAgentMailbox(path: string): void {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
   }
+}
+export function writeAgentStartupOutcome(
+  path: string,
+  outcome: ManagedAgentStartupOutcome,
+): void {
+  atomic(file(path, "startup.json"), outcome, "startup", false);
+}
+export function readAgentStartupOutcome(
+  path: string,
+): ManagedAgentStartupOutcome | undefined {
+  const outcome = read<ManagedAgentStartupOutcome>(
+    file(path, "startup.json"),
+    "startup",
+  );
+  if (outcome) validate(outcome, "startup");
+  return outcome;
 }
 export function writeAgentBootstrap(
   path: string,
@@ -1138,15 +1206,15 @@ export function parseControlMarker(text: string): string | undefined {
   const id = text.slice(PREFIX.length);
   return UUID.test(id) && id.length === 36 ? id : undefined;
 }
-export function waitForState(
-  path: string,
-  predicate: (state: ManagedAgentState) => boolean,
+function waitForMailbox<T>(
+  readMatching: () => T | undefined,
   options: { timeoutMs: number; signal?: AbortSignal },
-): Promise<ManagedAgentState> {
+  description: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     let done = false;
     let abortListener: (() => void) | undefined;
-    const finish = (error?: Error, state?: ManagedAgentState) => {
+    const finish = (error?: Error, state?: T) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
@@ -1157,23 +1225,53 @@ export function waitForState(
     };
     const check = () => {
       try {
-        const state = readAgentState(path);
-        if (state && predicate(state)) finish(undefined, state);
+        const state = readMatching();
+        if (state) finish(undefined, state);
       } catch (e) {
         finish(e as Error);
       }
     };
     const timer = setTimeout(
-      () => finish(new Error("Timed out waiting for agent state")),
+      () =>
+        finish(
+          new DOMException(
+            `Timed out waiting for ${description}`,
+            "TimeoutError",
+          ),
+        ),
       options.timeoutMs,
     );
     const interval = setInterval(check, 250);
     if (options.signal?.aborted) {
-      finish(new Error("Aborted"));
+      finish(new DOMException("Aborted", "AbortError"));
       return;
     }
-    abortListener = () => finish(new Error("Aborted"));
+    abortListener = () => finish(new DOMException("Aborted", "AbortError"));
     options.signal?.addEventListener("abort", abortListener, { once: true });
     check();
   });
+}
+export function waitForState(
+  path: string,
+  predicate: (state: ManagedAgentState) => boolean,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<ManagedAgentState> {
+  return waitForMailbox(
+    () => {
+      const state = readAgentState(path);
+      return state && predicate(state) ? state : undefined;
+    },
+    options,
+    "agent state",
+  );
+}
+export function waitForStartupOutcome(
+  path: string,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<ManagedAgentStartupOutcome> {
+  return waitForMailbox(
+    () => readAgentStartupOutcome(path),
+    options,
+    "agent startup outcome",
+  );
 }

@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -26,6 +26,7 @@ import {
   writeResult,
   writeAsk,
   writeAgentState,
+  writeAgentStartupOutcome,
   readAgentBootstrap,
   removeAgentBootstrap,
   unacknowledgedRequestExists,
@@ -3680,19 +3681,20 @@ export function registerManagedAgentSessionStartHandler(
   },
 ): void {
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-    options.statusRuntime.prepareSession(ctx);
-    options.startControllerSession();
-    options.resetRequestPump();
-    options.resetLeafStatus();
-    options.captureOwnTools(undefined);
-    if (options.delegationEnabled) options.clearControllerRuntimes();
-    execution.initialized = false;
-    options.setControllerReady(false);
-    execution.assignment = undefined;
-    execution.agentStartedAt = undefined;
-    const metadataSignal = options.beginMetadataSession();
-    if (options.delegationEnabled) await options.prepareDelegatingRoster(ctx);
+    let verified: ManagedAgentState | undefined;
     try {
+      options.statusRuntime.prepareSession(ctx);
+      options.startControllerSession();
+      options.resetRequestPump();
+      options.resetLeafStatus();
+      options.captureOwnTools(undefined);
+      if (options.delegationEnabled) options.clearControllerRuntimes();
+      execution.initialized = false;
+      options.setControllerReady(false);
+      execution.assignment = undefined;
+      execution.agentStartedAt = undefined;
+      const metadataSignal = options.beginMetadataSession();
+      if (options.delegationEnabled) await options.prepareDelegatingRoster(ctx);
       if (options.delegationEnabled) options.statusRuntime.start(ctx);
       let forceActivityTouch = false;
       execution.agentContext = ctx;
@@ -3701,6 +3703,7 @@ export function registerManagedAgentSessionStartHandler(
       if (!options.delegationEnabled)
         options.captureOwnTools(options.getActiveTools());
       options.ensureAgentIdentity(ctx);
+      verified = candidate;
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       const existing = readAgentState(mailbox);
       if (existing && !options.sameIdentity(existing, candidate))
@@ -3873,7 +3876,69 @@ export function registerManagedAgentSessionStartHandler(
         },
         true,
       );
+      const releaseStartup = options.claimAssignmentLock(
+        mailbox,
+        "session_start",
+        {
+          label: candidate.agentLabel,
+          paneId: candidate.paneId,
+        },
+      );
+      try {
+        const current = readAgentState(mailbox);
+        if (!current || !options.sameIdentity(current, candidate))
+          throw new Error(
+            "agent session identity changed before startup outcome",
+          );
+        writeAgentStartupOutcome(mailbox, {
+          version: 5,
+          build: options.build,
+          runId: candidate.runId,
+          ownerSessionId: candidate.ownerSessionId,
+          workspaceId: candidate.workspaceId,
+          agentLabel: candidate.agentLabel,
+          paneId: candidate.paneId,
+          status: "ready",
+        });
+      } finally {
+        releaseStartup();
+      }
     } catch (error) {
+      if (verified) {
+        try {
+          const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+          const release = options.claimAssignmentLock(
+            mailbox,
+            "session_start",
+            {
+              label: verified.agentLabel,
+              paneId: verified.paneId,
+            },
+          );
+          try {
+            const existing = readAgentState(mailbox);
+            if (
+              existsSync(mailbox) &&
+              (!existing || options.sameIdentity(existing, verified))
+            )
+              writeAgentStartupOutcome(mailbox, {
+                version: 5,
+                build: options.build,
+                runId: verified.runId,
+                ownerSessionId: verified.ownerSessionId,
+                workspaceId: verified.workspaceId,
+                agentLabel: verified.agentLabel,
+                paneId: verified.paneId,
+                status: "failed",
+                error: "Managed Agent initialization failed",
+              });
+          } finally {
+            release();
+          }
+        } catch (publicationError) {
+          options.appendError(ctx, publicationError);
+        }
+      }
       execution.initialized = false;
       options.resetRequestPump();
       options.statusRuntime.clear();

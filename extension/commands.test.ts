@@ -646,6 +646,7 @@ import support, {
   agentMailboxPath,
   writeResult,
   writeAgentState,
+  writeAgentStartupOutcome,
 } from "./support.ts";
 import {
   createLeadToolState,
@@ -22114,6 +22115,16 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
             piSessionFile: sessionPath,
             cwd: requestedCwd,
             updatedAt: Date.now(),
+          });
+          writeAgentStartupOutcome(mailbox, {
+            version: 5,
+            build: HERDSMAN_BUILD,
+            runId: startedRunId,
+            ownerSessionId: startedOwnerSessionId,
+            workspaceId: WORKSPACE,
+            agentLabel: label,
+            paneId: "startup-pane",
+            status: "ready",
           });
           return {
             stdout: JSON.stringify({

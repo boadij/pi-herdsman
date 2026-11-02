@@ -67,6 +67,7 @@ import support, {
   writeRequest,
   writeResult,
   writeAgentState,
+  writeAgentStartupOutcome,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
@@ -838,6 +839,16 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         cwd: "/tmp",
         updatedAt: Date.now(),
       });
+      writeAgentStartupOutcome(mailbox, {
+        version: 5,
+        build: HERDSMAN_BUILD,
+        runId,
+        ownerSessionId,
+        workspaceId: WORKSPACE,
+        agentLabel: label,
+        paneId: "pane-start",
+        status: "ready",
+      });
       return {
         stdout: JSON.stringify({
           id: AGENT_ID,
@@ -1396,6 +1407,16 @@ test("assignment rollback retains primary failure and actionable cleanup details
         piSessionFile: "/tmp/registered-agent.jsonl",
         cwd: "/tmp",
         updatedAt: Date.now(),
+      });
+      writeAgentStartupOutcome(mailbox, {
+        version: 5,
+        build: HERDSMAN_BUILD,
+        runId,
+        ownerSessionId,
+        workspaceId: WORKSPACE,
+        agentLabel: label,
+        paneId: "detail-pane",
+        status: "ready",
       });
       return {
         stdout: JSON.stringify({
