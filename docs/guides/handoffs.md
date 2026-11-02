@@ -34,8 +34,12 @@ task remains its operative instruction; inherited tasks provide context, not
 additional authority.
 
 The Manager alone controls each assignment's requirements; sibling Lead
-assignments do not automatically inherit one another's evidence. Root Lead delegation
-accepts `files` for the current handoff, without a retention parameter.
+assignments do not automatically inherit one another's evidence. An active,
+verified Manager may read published results rooted in its current project
+assignments and retained evidence accepted by them, including evidence under
+verified nested-Agent ancestry. This access does not change Agent ownership,
+source provenance, or assignment requirements. Root Lead delegation accepts
+`files` for the current handoff, without a retention parameter.
 Leads can forward findings directly for immediate correction; when findings
 should become continuing assignment requirements, send the relevant files or
 result references through `message_supervisor.files` for Manager evaluation.
@@ -97,7 +101,13 @@ fails explicitly. Explicit current attachments must fit complete-content deliver
 limits; they are not replaced with path-only references. Earlier retained evidence is
 identified by a stable semantic `evidence:` reference. The authorized
 recipient can use `read_evidence` to retrieve bounded content for references
-in its accepted evidence set. Retained evidence remains available throughout
+in its accepted evidence set. A verified Manager can read project-assignment
+requirements and published results rooted in its current assignments, but a
+recipient in another ownership root gains access only when the Manager
+explicitly selects the evidence through `files`. If retained text is made a
+requirement of a new assignment, it is snapshotted under that destination
+assignment; the source snapshot remains unchanged. Immediate handoffs do not
+change retention or ownership. Retained evidence remains available throughout
 eligible descendant assignments. Agents should inspect evidence relevant to
 their task and decisions; they are not expected to read every historical entry.
 Agent results preserve their existing semantic

@@ -73,6 +73,9 @@ import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
   createAgentController,
+  openOwnedAssignmentSession,
+  ownedAssignmentChildren,
+  resolveAssignmentSession,
   sessionAgentIdentity,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
@@ -1792,6 +1795,7 @@ export function registerLeadRuntime(
   };
   const coordinationRuntime = createLeadCoordinationRuntime({
     ...coordinationServices,
+    managerEvidence: (ctx, refs) => managerEvidence(ctx, refs),
     pi,
     leadRuntime: options.leadRuntime,
     processRole: "lead",
@@ -2465,9 +2469,168 @@ export function registerLeadRuntime(
     | undefined;
   let statusWorktreeScopeRequest:
     { sessionId: string; workspaceId: string } | undefined;
+  const managerEvidence = async (
+    ctx: ExtensionContext,
+    refs: readonly string[],
+  ) => {
+    const state = options.leadRuntime;
+    if (!state || activeLeadRole(state) !== "manager") return undefined;
+    if (state.roleSuspended)
+      throw new Error("Manager authority is unavailable");
+    const manager = await roleTransitions.currentManager(ctx);
+    const group = await roleTransitions.currentWorktreeScope(ctx);
+    if (!manager || !group || group.repoKey !== manager.repoKey)
+      throw new Error("Manager authority is unavailable");
+    const assignments = options.coordinationHost.listProjectAssignments(
+      options.coordinationHost.supervisionRuntime(),
+      manager.repoKey,
+    );
+    // Assignment ids are exact assigned Lead session ids. Agents delegated by
+    // that Lead publish under that Lead rootSessionId, not an assignment UUID.
+    const roots = new Set(assignments.map((assignment) => assignment.id));
+    if (roots.size !== assignments.length)
+      throw new Error("Ambiguous project assignments");
+    // Nested Agent evidence is usable only after every ownership edge has been
+    // independently verified in read-only mode. Never repair legacy metadata here.
+    const collectRetained = () => {
+      const retained = assignments.flatMap((assignment) =>
+        (assignment.requiredEvidence ?? []).filter(
+          (entry) =>
+            !("result" in entry) && !!entry.ref && refs.includes(entry.ref),
+        ),
+      );
+      const seen = new Set<string>();
+      const visit = (owner: any, projectAssignmentId: string) => {
+        const ownerId = owner.getSessionId();
+        for (const child of ownedAssignmentChildren(
+          owner.getBranch(),
+          ownerId,
+        )) {
+          const visitKey = `${projectAssignmentId}\0${child.id}`;
+          if (seen.has(visitKey)) continue;
+          seen.add(visitKey);
+          const edgeContext = {
+            ...ctx,
+            sessionManager: owner,
+          } as ExtensionContext;
+          const resolved = resolveAssignmentSession(edgeContext, child.id, {
+            readOnlyEvidence: true,
+          });
+          if (resolved.id !== child.id)
+            throw new Error("Invalid nested assignment");
+          for (const item of resolved.evidence?.localEvidence ?? [])
+            if (
+              !("result" in item) &&
+              resolved.evidence?.projectAssignmentId === projectAssignmentId &&
+              resolved.evidence.evidenceAssignmentId ===
+                item.sourceAssignmentId &&
+              item.ref &&
+              refs.includes(item.ref)
+            )
+              retained.push(item);
+          const nested = openOwnedAssignmentSession(child);
+          if (!nested) throw new Error("Nested assignment session unavailable");
+          visit(nested, projectAssignmentId);
+        }
+      };
+      const rootEvidenceRefs = new Set(
+        assignments.flatMap((assignment) =>
+          (assignment.requiredEvidence ?? []).flatMap((item) =>
+            "result" in item || !item.ref ? [] : [item.ref],
+          ),
+        ),
+      );
+      if (
+        refs.some(
+          (ref) => ref.startsWith("evidence:") && !rootEvidenceRefs.has(ref),
+        )
+      )
+        for (const assignment of assignments) {
+          if (!assignment.piSessionFile) continue;
+          const lead = projectHost.SessionManager.open(
+            assignment.piSessionFile,
+          );
+          if (lead.getSessionId() !== assignment.id)
+            throw new Error("Project assignment session identity mismatch");
+          visit(lead, assignment.id);
+        }
+      return retained;
+    };
+    const retained = collectRetained();
+    const snapshot = JSON.stringify(assignments);
+    const verifyProvenance = () => {
+      if (JSON.stringify(collectRetained()) !== JSON.stringify(retained))
+        throw new Error("Manager evidence provenance changed");
+    };
+    const verify = () => {
+      const lease = state.managerLease;
+      const runtime = options.roleTransitionHost.supervisionRuntime();
+      const status = options.roleTransitionHost.readManagerDescriptorStatus(
+        runtime,
+        manager.workspaceId,
+      );
+      if (
+        activeLeadRole(state) !== "manager" ||
+        state.roleSuspended ||
+        !lease ||
+        ctx.sessionManager.getSessionId() !== manager.piSessionId ||
+        !options.projectHost.sameManagerDescriptor(lease.descriptor, manager) ||
+        !status?.live ||
+        !options.projectHost.sameManagerDescriptor(
+          status.descriptor,
+          manager,
+        ) ||
+        JSON.stringify(
+          options.coordinationHost.listProjectAssignments(
+            runtime,
+            manager.repoKey,
+          ),
+        ) !== snapshot
+      )
+        throw new Error("Manager evidence authority changed");
+      verifyManagerCoordinationAuthority(
+        manager,
+        options.roleTransitionHost.readLeadCoordinationState(
+          runtime,
+          manager.piSessionId,
+        ),
+        options.roleTransitionHost.build,
+        options.roleTransitionHost.requireCompatibleBuild,
+      );
+    };
+    return {
+      roots,
+      retained,
+      verify,
+      verifyProvenance,
+      revalidate: async (operation: () => Promise<void> | void) => {
+        const current = await roleTransitions.currentManager(ctx);
+        const currentGroup = await roleTransitions.currentWorktreeScope(ctx);
+        if (
+          activeLeadRole(state) !== "manager" ||
+          state.roleSuspended ||
+          !current ||
+          !currentGroup ||
+          currentGroup.repoKey !== manager.repoKey ||
+          !options.projectHost.sameManagerDescriptor(current, manager) ||
+          JSON.stringify(
+            options.coordinationHost.listProjectAssignments(
+              options.coordinationHost.supervisionRuntime(),
+              manager.repoKey,
+            ),
+          ) !== snapshot
+        )
+          throw new Error("Manager evidence authority changed");
+        verifyProvenance();
+        verify();
+        await operation();
+      },
+    };
+  };
   const controller = createAgentController(pi, {
     ...options.controllerServices,
     scope: { kind: "root" },
+    managerEvidence,
     persistClosedDescendants: async (ctx, closures, selected) => {
       const persisted = await projectRuntime.persistNestedStopClosures(ctx, [
         ...closures,
@@ -2845,6 +3008,7 @@ export function registerLeadRuntime(
   };
   projectRuntime = createLeadProjectRuntime({
     ...projectServices,
+    managerEvidence,
     currentProjectAssignment: (ctx: ExtensionContext) =>
       roleTransitions.currentProjectAssignment(ctx),
     stopOwnedAgentsForSession: (

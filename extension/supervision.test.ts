@@ -2883,6 +2883,17 @@ test("project assignments are scoped by repository and branch, strict, and remov
     branch: "herdsman/test",
     text: "task",
   };
+  assert.throws(
+    () =>
+      writeProjectAssignment(runtime, assignment, () => {
+        throw new Error("stale evidence authority");
+      }),
+    /stale evidence authority/,
+  );
+  assert.equal(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+    undefined,
+  );
   writeProjectAssignment(runtime, assignment);
   const path = projectAssignmentPath(
     runtime,
