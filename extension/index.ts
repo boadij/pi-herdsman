@@ -1585,8 +1585,7 @@ function registerExtensionImpl(
     let ownTools: string[] | undefined;
     const ownToolsSnapshot = (): { ownTools?: string[] } =>
       ownTools ? { ownTools } : {};
-    type MenuItem = SelectItem & { help?: string };
-    type ModelMenuItem = MenuItem & { searchText: string };
+    type MenuItem = SelectItem & { help?: string; searchText?: string };
     const selectMenu = async (
       ctx: ExtensionContext,
       title: string,
@@ -1602,172 +1601,110 @@ function registerExtensionImpl(
         return index >= 0 ? items[index]?.value : undefined;
       }
       return (await ctx.ui.custom(
-        (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
-          const maxPrimaryColumnWidth = Math.max(
-            12,
-            ...items.map((item) => visibleWidth(item.label) + 2),
-          );
-          const list = new SelectList(items, 8, getSelectListTheme(), {
-            minPrimaryColumnWidth: 12,
-            maxPrimaryColumnWidth,
-          });
-          const hasHelp = items.some((item) =>
-            collapseDisplayText(item.help, 160),
-          );
-          const helpArea = hasHelp ? new Container() : undefined;
+        (tui: any, theme: any, keybindings: any, done: (value: unknown) => void) => {
+          const input = new Input();
+          const listContainer = new Container();
+          const helpArea = items.some((item) => collapseDisplayText(item.help, 160))
+            ? new Container()
+            : undefined;
           const helpText = new TuiText("", 1, 0);
           const emptyHelp = new Spacer(1);
           const updateHelp = (item: SelectItem | null): void => {
             if (!helpArea) return;
-            const text = collapseDisplayText(
-              (item as MenuItem | null)?.help,
-              160,
-            );
+            const help = collapseDisplayText((item as MenuItem | null)?.help, 160);
             helpArea.clear();
-            if (text) {
-              helpText.setText(theme.fg("dim", text));
+            if (help) {
+              helpText.setText(theme.fg("dim", help));
               helpArea.addChild(helpText);
             } else {
               helpArea.addChild(emptyHelp);
             }
           };
-          const index = items.findIndex((item) => item.value === selectedValue);
-          if (index >= 0) list.setSelectedIndex(index);
-          updateHelp(items[index >= 0 ? index : 0] ?? null);
-          list.onSelect = (item) => done(item.value);
-          list.onCancel = () => done(undefined);
-          list.onSelectionChange = updateHelp;
-          const container = new Container();
-          populateMenuFrame(
-            container,
-            theme,
-            title,
-            list,
-            "↑↓ navigate · Enter select · Esc close",
-            helpArea,
+          const maxPrimaryColumnWidth = Math.max(
+            12,
+            ...items.map((item) => visibleWidth(item.label) + 2),
           );
-          return {
-            render: (width: number) => container.render(width),
-            invalidate: () => container.invalidate(),
-            handleInput: (data: string) => {
-              list.handleInput(data);
-              tui.requestRender();
-            },
-          };
-        },
-      )) as string | undefined;
-    };
-    const selectModelMenu = async (
-      ctx: ExtensionContext,
-      items: readonly ModelMenuItem[],
-      selectedValue?: string,
-    ): Promise<string | undefined> => {
-      if (ctx.mode !== "tui")
-        return selectMenu(ctx, "Model", items, selectedValue);
-      return (await ctx.ui.custom(
-        (
-          tui: any,
-          theme: any,
-          keybindings: any,
-          done: (value: unknown) => void,
-        ) => {
-          const input = new Input();
-          const listContainer = new Container();
+          let filtered: MenuItem[] = [...items];
           let list: SelectList | undefined;
-          let filtered: ModelMenuItem[] = [...items];
           let previousQuery = input.getValue();
           const rebuildList = (): void => {
             const query = input.getValue();
-            const filtering = query.split(/[\s/]+/u).some(Boolean);
-            filtered = filtering
-              ? fuzzyFilter([...items], query, (item) => item.searchText)
+            filtered = query.trim()
+              ? fuzzyFilter([...items], query, (item) =>
+                  [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+                )
               : [...items];
             listContainer.clear();
             if (!filtered.length) {
               list = undefined;
               listContainer.addChild(
-                new TuiText(theme.fg("muted", "No matching models"), 1, 0),
+                new TuiText(theme.fg("muted", "No matching options"), 1, 0),
               );
+              updateHelp(null);
               return;
             }
-            list = new SelectList(filtered, 10, getSelectListTheme());
-            const index = filtering
+            list = new SelectList(filtered, 8, getSelectListTheme(), {
+              minPrimaryColumnWidth: 12,
+              maxPrimaryColumnWidth,
+            });
+            const index = query.trim()
               ? 0
               : filtered.findIndex((item) => item.value === selectedValue);
             list.setSelectedIndex(index >= 0 ? index : 0);
             list.onSelect = (item) => done(item.value);
             list.onCancel = () => done(undefined);
+            list.onSelectionChange = updateHelp;
             listContainer.addChild(list);
+            updateHelp(list.getSelectedItem());
           };
           input.onSubmit = () => {
-            const item = list?.getSelectedItem();
-            if (item) done(item.value);
+            const selected = list?.getSelectedItem();
+            if (selected) done(selected.value);
           };
           input.onEscape = () => done(undefined);
           rebuildList();
-          const container = new Container();
           const body = new Container();
           body.addChild(input);
           body.addChild(listContainer);
+          const container = new Container();
           populateMenuFrame(
-            container,
-            theme,
-            "Model",
-            body,
+            container, theme, title, body,
             "Type to filter · ↑↓ navigate · Enter select · Esc back",
+            helpArea,
           );
           return {
-            get focused() {
-              return input.focused;
-            },
-            set focused(value: boolean) {
-              input.focused = value;
-            },
+            get focused() { return input.focused; },
+            set focused(value: boolean) { input.focused = value; },
             render: (width: number) => container.render(width),
             invalidate: () => container.invalidate(),
             handleInput: (data: string) => {
-              if (keybindings.matches(data, "tui.select.up")) {
+              if (
+                keybindings.matches(data, "tui.select.up") ||
+                keybindings.matches(data, "tui.select.down")
+              ) {
                 const selected = list?.getSelectedItem();
                 if (selected && list) {
                   const index = filtered.findIndex(
                     (item) => item.value === selected.value,
                   );
-                  list.setSelectedIndex(
-                    index <= 0 ? filtered.length - 1 : index - 1,
-                  );
+                  const next = keybindings.matches(data, "tui.select.up")
+                    ? index <= 0 ? filtered.length - 1 : index - 1
+                    : index < 0 || index === filtered.length - 1 ? 0 : index + 1;
+                  list.setSelectedIndex(next);
+                  updateHelp(list.getSelectedItem());
                 }
-                tui.requestRender();
-                return;
-              }
-              if (keybindings.matches(data, "tui.select.down")) {
-                const selected = list?.getSelectedItem();
-                if (selected && list) {
-                  const index = filtered.findIndex(
-                    (item) => item.value === selected.value,
-                  );
-                  list.setSelectedIndex(
-                    index < 0 || index === filtered.length - 1 ? 0 : index + 1,
-                  );
-                }
-                tui.requestRender();
-                return;
-              }
-              if (keybindings.matches(data, "tui.select.confirm")) {
+              } else if (keybindings.matches(data, "tui.select.confirm")) {
                 const selected = list?.getSelectedItem();
                 if (selected) done(selected.value);
-                tui.requestRender();
-                return;
-              }
-              if (keybindings.matches(data, "tui.select.cancel")) {
+              } else if (keybindings.matches(data, "tui.select.cancel")) {
                 done(undefined);
-                tui.requestRender();
-                return;
-              }
-              input.handleInput(data);
-              const query = input.getValue();
-              if (query !== previousQuery) {
-                previousQuery = query;
-                rebuildList();
+              } else {
+                input.handleInput(data);
+                const query = input.getValue();
+                if (query !== previousQuery) {
+                  previousQuery = query;
+                  rebuildList();
+                }
               }
               tui.requestRender();
             },
