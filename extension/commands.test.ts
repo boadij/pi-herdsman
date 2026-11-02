@@ -15143,7 +15143,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   writeFileSync(join(assignedCheckout, "file.txt"), "base\nchanged\n");
   runGit(["add", "file.txt"], assignedCheckout);
   runGit(["commit", "-m", "assigned change"], assignedCheckout);
-  writeFileSync(join(managerCheckout, "manager-only.txt"), "manager change\n");
+  writeFileSync(
+    join(managerCheckout, "manager-only.txt"),
+    "manager change\n".repeat(10),
+  );
   runGit(["add", "manager-only.txt"], managerCheckout);
   runGit(["commit", "-m", "manager change"], managerCheckout);
   writeFileSync(join(assignedCheckout, "ignored.txt"), "ignored\n");
@@ -15471,10 +15474,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     ),
   );
   assert.ok(
-    !gitCalls.some(
+    gitCalls.some(
       (call) => call.cwd === managerCheckout && call.args.includes("--verify"),
     ),
-    "pinned baselines do not require resolving the moving Manager HEAD",
+    "resolve Manager HEAD for the merge base",
   );
   assert.ok(
     gitCalls.some(
@@ -15501,7 +15504,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         call.args.includes("--numstat") &&
         call.args.includes(baselineSha),
     ),
-    "diff must compare the pinned assignment baseline to worktree contents",
+    "diff compares the merge base to worktree contents",
   );
   for (const call of gitCalls.filter(
     (call) => call.args.includes("status") || call.args.includes("diff"),
@@ -15524,7 +15527,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.match(
     widget.render(120).join("\n"),
     /~\+1 -0/,
-    "legacy assignments use a visibly approximate merge-base fallback",
+    "all comparisons are visibly approximate",
   );
   assert.equal(
     currentSnapshot.work[0].gitBaselineSha,
@@ -15532,6 +15535,84 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "sampling never persists an inferred legacy baseline",
   );
   currentSnapshot.work[0].gitBaselineSha = baselineSha;
+
+  runGit(["merge", "--no-edit", "manager"], assignedCheckout);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /~\+1 -0/,
+    "merging Manager updates excludes their unrelated changes",
+  );
+
+  runGit(["mv", "manager-only.txt", "renamed.txt"], assignedCheckout);
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /~\+1 -0\*/,
+    "pure rename does not fabricate full-file line counts",
+  );
+  writeFileSync(
+    join(assignedCheckout, "renamed.txt"),
+    `${"manager change\n".repeat(10)}extra\n`,
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(
+    widget.render(120).join("\n"),
+    /~\+2 -0\*/,
+    "modified rename counts its actual content change",
+  );
+  runGit(["reset", "--hard", "HEAD"], assignedCheckout);
+
+  const leadBeforeCrissCross = assignedHead;
+  const tree = runGit(["rev-parse", "HEAD^{tree}"], assignedCheckout);
+  const a = runGit(
+    ["commit-tree", tree, "-p", baselineSha, "-m", "side a"],
+    assignedCheckout,
+  );
+  const b = runGit(
+    ["commit-tree", tree, "-p", baselineSha, "-m", "side b"],
+    assignedCheckout,
+  );
+  const left = runGit(
+    ["commit-tree", tree, "-p", a, "-p", b, "-m", "merge a"],
+    assignedCheckout,
+  );
+  const right = runGit(
+    ["commit-tree", tree, "-p", b, "-p", a, "-m", "merge b"],
+    assignedCheckout,
+  );
+  runGit(["reset", "--hard", left], managerCheckout);
+  runGit(["reset", "--hard", right], assignedCheckout);
+  assignedHead = right;
+  assert.equal(
+    runGit(["merge-base", "--all", left, right], assignedCheckout).split("\n")
+      .length,
+    2,
+  );
+  writeFileSync(join(assignedCheckout, "ambiguous-untracked.txt"), "dirty\n");
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const ambiguousRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(ambiguousRow, /\*/);
+  assert.doesNotMatch(ambiguousRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+  rmSync(join(assignedCheckout, "ambiguous-untracked.txt"));
+  runGit(["reset", "--hard", managerHead], managerCheckout);
+  runGit(["reset", "--hard", leadBeforeCrissCross], assignedCheckout);
+  assignedHead = leadBeforeCrissCross;
 
   runGit(["switch", "--orphan", "feat/unrelated"], assignedCheckout);
   writeFileSync(
@@ -15565,13 +15646,6 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   sampleRefresh = true;
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.ok(
-    gitCalls.some(
-      (call) =>
-        call.cwd === assignedCheckout && call.args.includes(baselineSha),
-    ),
-    "sampler compares unrelated switched-branch contents to the pinned baseline",
-  );
   const unrelatedRow = widget
     .render(120)
     .find((line: string) => line.includes("feat/assigned"))!;
@@ -15582,8 +15656,8 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   );
   assert.doesNotMatch(
     unrelatedRow,
-    /\+1 -0/,
-    "pinned baseline diff works even when branch history is unrelated",
+    /(?:\+\d+ -\d+|\d+f|±0)/,
+    "unrelated history has no numeric totals",
   );
   assert.match(unrelatedRow, /● feat\/assigned/);
   assert.doesNotMatch(unrelatedRow, /unknown|stale/);
@@ -15634,7 +15708,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.match(
     widget.render(120).join("\n"),
     /\+2 -0\*/,
-    "unstaged tracked edits are measured against the pinned baseline",
+    "unstaged tracked edits are measured against the merge base",
   );
   runGit(["add", "file.txt"], assignedCheckout);
   testNow += 30_001;
@@ -15786,7 +15860,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.setStatusWidgetMaxRows(12);
   assert.match(
     widget.render(120).find((line: string) => line.includes("feat/seventh")),
-    /\+1 -0/,
+    /~±0/,
   );
   assert.ok(
     !gitCalls
@@ -15798,7 +15872,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
 
   diffMode = "binary";
   writeFileSync(untrackedFile, "dirty again\n");
-  assignedHead = "c".repeat(40);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);
@@ -15809,7 +15883,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.match(assignedRow, /1f\*/);
 
   diffMode = "malformed";
-  assignedHead = "d".repeat(40);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);
@@ -15821,7 +15895,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   assert.doesNotMatch(assignedRow, /(?:\+\d+ -\d+|\d+f|±0)/);
 
   diffMode = "deferred";
-  assignedHead = "e".repeat(40);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);
@@ -15982,7 +16056,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.removeWidget(ctx);
 
   diffMode = "cancelDeferred";
-  assignedHead = "f".repeat(40);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);

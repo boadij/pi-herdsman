@@ -4759,7 +4759,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     checkoutPath: string;
     branch: string;
     managerCheckoutPath: string;
-    baselineSha?: string;
     summary: GitChangeSummary;
   };
   const gitSummaries = new Map<string, CachedGitSummary>();
@@ -4934,43 +4933,34 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             let additions: number | undefined;
             let deletions: number | undefined;
             let changedFiles: number | undefined;
-            const baselineSha = work.gitBaselineSha;
             let comparisonSha: string | undefined;
-            let approximate = false;
-            if (baselineSha !== undefined) {
-              if (/^[0-9a-f]{40,64}$/iu.test(baselineSha))
-                comparisonSha = baselineSha;
-            } else {
-              try {
-                managerHead ??= (
-                  await git(managerCheckoutPath, [
-                    "rev-parse",
-                    "--verify",
-                    "HEAD",
+            try {
+              managerHead ??= (
+                await git(managerCheckoutPath, [
+                  "rev-parse",
+                  "--verify",
+                  "HEAD^{commit}",
+                ])
+              ).trim();
+              if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(managerHead)) {
+                const bases = (
+                  await git(checkoutPath, [
+                    "merge-base",
+                    "--all",
+                    managerHead,
+                    leadHead,
                   ])
-                ).trim();
-                if (/^[0-9a-f]{40,64}$/iu.test(managerHead)) {
-                  const bases = (
-                    await git(checkoutPath, [
-                      "merge-base",
-                      "--all",
-                      managerHead,
-                      leadHead,
-                    ])
-                  )
-                    .trim()
-                    .split(/\s+/u);
-                  if (
-                    bases.length === 1 &&
-                    /^[0-9a-f]{40,64}$/iu.test(bases[0]!)
-                  ) {
-                    comparisonSha = bases[0];
-                    approximate = true;
-                  }
-                }
-              } catch {
-                // A valid status observation remains useful without a numeric fallback.
+                )
+                  .trim()
+                  .split(/\s+/u);
+                if (
+                  bases.length === 1 &&
+                  /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
+                )
+                  comparisonSha = bases[0];
               }
+            } catch {
+              // Status remains useful without a numeric comparison.
             }
             if (comparisonSha) {
               try {
@@ -4979,33 +4969,40 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   "diff",
                   "--numstat",
                   "-z",
-                  "--no-renames",
+                  "--find-renames",
                   comparisonSha,
                   "--",
                 ]);
                 const records = output.split("\0");
+                let valid = output === "" || output.endsWith("\0");
+                if (valid) records.pop();
                 let added = 0,
                   deleted = 0,
-                  files = 0,
-                  valid = !output || output.endsWith("\0");
-                for (const record of records) {
-                  if (!record) continue;
-                  const fields = record.split("\t", 3);
-                  if (fields.length !== 3 || !fields[2]) {
+                  files = 0;
+                for (let i = 0; valid && i < records.length;) {
+                  const match = /^(\d+|-)\t(\d+|-)\t(.*)$/su.exec(
+                    records[i++]!,
+                  );
+                  if (!match) {
                     valid = false;
                     break;
                   }
+                  const [, a, d, path] = match;
+                  if (!path && (!records[i++] || !records[i++])) {
+                    valid = false;
+                    break;
+                  }
+                  if (a === "-" && d === "-") {
+                    files++;
+                    continue;
+                  }
+                  if (!/^\d+$/u.test(a!) || !/^\d+$/u.test(d!)) {
+                    valid = false;
+                    break;
+                  }
+                  added += Number(a);
+                  deleted += Number(d);
                   files++;
-                  if (fields[0] === "-" && fields[1] === "-") continue;
-                  if (
-                    !/^\d+$/u.test(fields[0]!) ||
-                    !/^\d+$/u.test(fields[1]!)
-                  ) {
-                    valid = false;
-                    break;
-                  }
-                  added += Number(fields[0]);
-                  deleted += Number(fields[1]);
                   if (
                     !Number.isSafeInteger(added) ||
                     !Number.isSafeInteger(deleted)
@@ -5028,16 +5025,13 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               checkoutPath,
               branch: work.branch,
               managerCheckoutPath,
-              baselineSha,
               summary: {
                 dirty,
                 additions,
                 deletions,
                 changedFiles,
                 checkedOutBranch,
-                ...(comparisonSha && baselineSha === undefined
-                  ? { approximate }
-                  : {}),
+                approximate: true,
               },
             });
           } catch {
@@ -6080,7 +6074,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 !cached ||
                 cached.generation !== generation(ctx) ||
                 cached.branch !== work.branch ||
-                cached.baselineSha !== work.gitBaselineSha ||
                 !work.checkoutPath ||
                 cached.checkoutPath !== work.checkoutPath ||
                 cached.managerCheckoutPath !==

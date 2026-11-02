@@ -71,14 +71,12 @@ Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
 Manager's optional worktree statistics compare tracked working-tree contents
-with the assignment's stable Git baseline, including committed, staged, and
+with the unique merge base of the local Manager and Lead revisions, including committed, staged, and
 unstaged changes without double-counting. Untracked files are excluded from
 numeric totals but make the row dirty (`*`); binary-only changes can appear as
 a changed-file count such as `2f`, and `±0` means no net tracked differences.
-Baselines captured for new assignments stay fixed when Manager's `main`
-advances, although merging upstream changes into a Lead checkout can contribute
-to its net diff. Older assignments without a stored baseline use an approximate
-merge-base estimate shown with `~`; it is not saved. If the Lead checks out a
+`~` marks a best-effort local PR-style estimate, not an exact GitHub result;
+unavailable or ambiguous ancestry suppresses numeric totals. If the Lead checks out a
 different branch, `↪ branch` shows the actual branch while the original
 assignment handle remains the row's focus target. These are advisory net
 worktree measurements, not cumulative Lead-authored effort or proof of
