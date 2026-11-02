@@ -1091,7 +1091,6 @@ export type GitChangeSummary = Readonly<{
   deletions?: number;
   changedFiles?: number;
   checkedOutBranch?: string;
-  approximate?: boolean;
 }>;
 
 type SupervisionRow = {
@@ -1317,14 +1316,13 @@ function renderSupervisionRows(
                 ? `${git.changedFiles}f`
                 : "±0"
             : "";
-        const displayedDiff = diff && git?.approximate ? `~${diff}` : diff;
         const changedBranch =
           git?.checkedOutBranch !== undefined &&
           git.checkedOutBranch !== item.work.branch;
         const optionsToFit = [
           ...(context ? [{ value: context, kind: "context" }] : []),
           ...(git?.dirty ? [{ value: "*", kind: "dirty" }] : []),
-          ...(displayedDiff ? [{ value: displayedDiff, kind: "stats" }] : []),
+          ...(diff ? [{ value: diff, kind: "stats" }] : []),
           ...(changedBranch
             ? [
                 {
@@ -1429,11 +1427,16 @@ function renderSupervisionRows(
         const left = `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, detailColor, suffix)}${leftTelemetry.map((option) => themed(options.theme, "muted", `  ${option.value}`)).join("")}`;
         const right = gitTelemetry
           .map((option) =>
-            themed(
-              options.theme,
-              option.kind === "dirty" ? "warning" : "muted",
-              option.value,
-            ),
+            option.kind === "stats" &&
+            git?.additions !== undefined &&
+            git.deletions !== undefined &&
+            git.additions + git.deletions > 0
+              ? `${themed(options.theme, git.additions > 0 ? "success" : "muted", `+${git.additions}`)} ${themed(options.theme, git.deletions > 0 ? "error" : "muted", `-${git.deletions}`)}`
+              : themed(
+                  options.theme,
+                  option.kind === "dirty" ? "warning" : "muted",
+                  option.value,
+                ),
           )
           .join("");
         const padding = right
