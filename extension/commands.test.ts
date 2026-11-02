@@ -73,6 +73,16 @@ import {
 } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
 
+const tuiMenuKeybindings = {
+  matches: (data: string, key: string) =>
+    ({
+      "tui.select.up": "\u001b[A",
+      "tui.select.down": "\u001b[B",
+      "tui.select.confirm": "\r",
+      "tui.select.cancel": "\u001b",
+    })[key] === data,
+};
+
 test("Manager Required evidence route removes persisted evidence and cancellation preserves it", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   setLeadEnvironment();
@@ -483,7 +493,7 @@ test("registered Manager command removes persisted required evidence through the
           fg: (_color: string, value: string) => value,
           bold: (value: string) => value,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       const inspect = async () => {
@@ -16909,16 +16919,6 @@ test("Herdsman Agents row opens the focused Running, Layout, Stop all menu", asy
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
-
-const tuiMenuKeybindings = {
-  matches: (data: string, key: string) =>
-    ({
-      "tui.select.up": "\u001b[A",
-      "tui.select.down": "\u001b[B",
-      "tui.select.confirm": "\r",
-      "tui.select.cancel": "\u001b",
-    })[key] === data,
-};
 
 test("Herdsman menu filters Settings and handles empty results", async () => {
   setLeadEnvironment();
