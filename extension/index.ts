@@ -1729,7 +1729,6 @@ function registerExtensionImpl(
       presentStopSummary,
       version: HERDSMAN_VERSION,
       selectMenu,
-      selectModelMenu,
       readConfig,
       readEffectiveConfig,
       readProjectOverrides,
