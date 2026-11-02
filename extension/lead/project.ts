@@ -19,6 +19,7 @@ import {
   migrateProjectAssignmentEvidence,
   readManagerDescriptor,
   writeProjectAssignmentAfter,
+  withProjectAssignmentAuthority,
   staffToolName,
 } from "../supervision.ts";
 import { OperationError } from "../errors.ts";
@@ -37,6 +38,7 @@ import {
 import { persistRequiredTextFiles } from "../core.ts";
 import {
   persistRequiredEvidenceSnapshot,
+  readRequiredEvidenceSnapshot,
   type RequiredEvidence,
 } from "../storage.ts";
 import {
@@ -64,7 +66,62 @@ import { randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
+export type ManagerEvidence = (
+  ctx: ExtensionContext,
+  refs: readonly string[],
+) => Promise<
+  | {
+      roots: ReadonlySet<string>;
+      retained: RequiredEvidence[];
+      revalidate(operation: () => Promise<void> | void): Promise<void>;
+      verify(): void;
+      verifyProvenance(): void;
+    }
+  | undefined
+>;
+
+export function hasManagerEvidenceSelectors(refs: readonly string[]): boolean {
+  return refs.some(
+    (ref) => ref.startsWith("result:") || ref.startsWith("evidence:"),
+  );
+}
+
+function requiredFiles(
+  id: string,
+  files: MessageFileInput[],
+  retained: readonly RequiredEvidence[],
+  cwd: string,
+  operation: string,
+): RequiredEvidence[] {
+  return files.flatMap<RequiredEvidence>((file) => {
+    if (typeof file === "string")
+      return persistRequiredTextFiles(id, [file], cwd, operation);
+    if ("kind" in file && file.kind === "retainedEvidence") {
+      const source = retained.find(
+        (entry) => !("result" in entry) && entry.ref === file.ref,
+      );
+      if (!source || "result" in source)
+        throw new Error("Retained evidence source is unavailable");
+      return [
+        persistRequiredEvidenceSnapshot(
+          id,
+          source.name,
+          readRequiredEvidenceSnapshot(source.sourceAssignmentId, source),
+        ),
+      ];
+    }
+    return [
+      {
+        id: randomUUID(),
+        name: file.ref,
+        result: file as import("../storage.ts").ResultBinding,
+      },
+    ];
+  });
+}
+
 export type LeadProjectHost = {
+  managerEvidence?: ManagerEvidence;
   activeRole(): SessionRole;
   HERDSMAN_EXTENSION_PATH: string;
   leadRuntime: {
@@ -2851,6 +2908,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
     let assignment: ProjectAssignment;
+    const evidenceScope =
+      operation.action === "resume"
+        ? undefined
+        : hasManagerEvidenceSelectors(operation.files ?? [])
+          ? await host.managerEvidence?.(ctx, operation.files ?? [])
+          : undefined;
     if (operation.action === "resume") assignment = currentAssignment!;
     else {
       const limits = await messageLimits(ctx);
@@ -2858,19 +2921,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ctx,
         operation.files,
         "delegate_work",
+        evidenceScope?.retained,
+        evidenceScope?.roots,
       );
       const projectBrief = persistRequiredEvidenceSnapshot(
         id,
         "project-brief.md",
         operation.task,
       );
-      const attachedEvidence: RequiredEvidence[] = [];
-      for (const file of suppliedFiles)
-        attachedEvidence.push(
-          ...(typeof file === "string"
-            ? persistRequiredTextFiles(id, [file], ctx.cwd, "delegate_work")
-            : [{ id: randomUUID(), name: file.ref, result: file }]),
-        );
+      const attachedEvidence = requiredFiles(
+        id,
+        suppliedFiles,
+        evidenceScope?.retained ?? [],
+        ctx.cwd,
+        "delegate_work",
+      );
       const requiredEvidence = [projectBrief, ...attachedEvidence];
       const prepared = prepareMessageInput(
         operation.task,
@@ -3158,6 +3223,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             if (competingClaim)
               throw new Error(
                 `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
+              );
+            if (evidenceScope)
+              return evidenceScope.revalidate(() =>
+                writeProjectAssignment(
+                  runtime,
+                  assignment,
+                  evidenceScope.verify,
+                ),
               );
             writeProjectAssignment(runtime, assignment);
           },
@@ -4103,6 +4176,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     )
       throw new Error("Lead assignment changed before the message was queued");
     let retainedFiles: RequiredEvidence[] = [];
+    let evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
+      ? await host.managerEvidence?.(ctx, params.files ?? [])
+      : undefined;
     if (params.retain === true) {
       if (activeRole() !== "manager" || !initialAssignment)
         throw new Error(
@@ -4112,6 +4188,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ctx,
         params.files,
         `staff.${params.action}`,
+        evidenceScope?.retained,
+        evidenceScope?.roots,
       );
       await updateAssignmentEvidence(
         _id,
@@ -4119,6 +4197,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           branch: initialAssignment.branch,
           add: params.files,
           resolvedAdd: supplied,
+          evidenceScope,
           text: params.message,
           expectedAssignment: selectedAssignment,
         },
@@ -4129,6 +4208,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           retainedFiles = files;
         },
       );
+      evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
+        ? await host.managerEvidence?.(ctx, params.files ?? [])
+        : undefined;
     }
     try {
       const prepared = await prepareCoordinationInput(
@@ -4138,7 +4220,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? retainedFiles.flatMap((file) =>
               "result" in file ? [file.result] : [file.path],
             )
-          : resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
+          : resolveMessageFiles(
+              ctx,
+              params.files,
+              `staff.${params.action}`,
+              evidenceScope?.retained,
+              evidenceScope?.roots,
+            ),
         `staff.${params.action}`,
         "Message",
         (candidate, resultBindings) => ({
@@ -4219,7 +4307,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         createdAt,
       };
       const runtime = supervisionRuntime();
-      writeChiefMessage(record, runtime);
+      if (evidenceScope)
+        await evidenceScope.revalidate(() =>
+          withProjectAssignmentAuthority(() => {
+            evidenceScope.verify();
+            writeChiefMessage(record, runtime);
+          }),
+        );
+      else writeChiefMessage(record, runtime);
       return result({
         ok: true,
         action: params.action,
@@ -4244,6 +4339,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       branch: string;
       add?: string[];
       resolvedAdd?: MessageFileInput[];
+      evidenceScope?: Awaited<ReturnType<ManagerEvidence>>;
       text?: string;
       remove?: string[];
       localOnly?: boolean;
@@ -4290,16 +4386,27 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
 
     const operation = "required_evidence";
-    const additions: RequiredEvidence[] = [];
+    const evidenceScope =
+      params.evidenceScope ??
+      (hasManagerEvidenceSelectors(params.add ?? [])
+        ? await host.managerEvidence?.(ctx, params.add ?? [])
+        : undefined);
     const resolved =
       params.resolvedAdd ??
-      host.resolveMessageFiles(ctx, params.add, operation);
-    for (const file of resolved)
-      additions.push(
-        ...(typeof file === "string"
-          ? persistRequiredTextFiles(assignment.id, [file], ctx.cwd, operation)
-          : [{ id: randomUUID(), name: file.ref, result: file }]),
+      host.resolveMessageFiles(
+        ctx,
+        params.add,
+        operation,
+        evidenceScope?.retained,
+        evidenceScope?.roots,
       );
+    const additions = requiredFiles(
+      assignment.id,
+      resolved,
+      evidenceScope?.retained ?? [],
+      ctx.cwd,
+      operation,
+    );
     const suppliedAdditions = [...additions];
     if (params.text !== undefined) {
       if (!params.text.trim())
@@ -4447,6 +4554,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ? { currentEvidenceIds }
             : { currentEvidenceIds: undefined }),
         };
+        if (evidenceScope) await evidenceScope.revalidate(() => {});
         if (runtime?.assignments)
           await writeProjectAssignmentAfter(
             runtime,
@@ -4454,6 +4562,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             written,
             ctx.signal,
             () => {
+              evidenceScope?.verify();
+              evidenceScope?.verifyProvenance();
               const currentLease = host.managerLease();
               const liveManager = readManagerDescriptor(
                 runtime,

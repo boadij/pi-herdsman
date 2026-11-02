@@ -681,6 +681,7 @@ export function resolveMessageFiles(
   files: readonly string[] | undefined,
   operation: string,
   acceptedEvidence: readonly RequiredEvidence[] = [],
+  allowedRoots: ReadonlySet<string> = new Set(),
 ): MessageFileInput[] {
   if (!files?.length) return [];
   return files.map((file) => {
@@ -761,7 +762,11 @@ export function resolveMessageFiles(
     if (published && published !== "reserved") {
       const rootSessionId =
         process.env.PI_HERDSMAN_ROOT_SESSION_ID || requesterSessionId;
-      if (published.rootSessionId === rootSessionId || acceptedResults.length)
+      if (
+        published.rootSessionId === rootSessionId ||
+        acceptedResults.length ||
+        allowedRoots.has(published.rootSessionId)
+      )
         refs.add(published.canonicalRef);
     }
     if (
@@ -2291,6 +2296,8 @@ export function resolveAssignmentSession(
       manager: SessionManager,
     ) => boolean | undefined;
     isContextRetired?: (manager: SessionManager) => boolean;
+    /** Verify retained evidence without legacy identity allocation or session writes. */
+    readOnlyEvidence?: boolean;
   } = {},
 ): ResolvedAssignmentSession {
   const value = raw.trim();
@@ -2799,12 +2806,21 @@ export function resolveAssignmentSession(
           ])
             if ("path" in item && item.ref !== undefined)
               verifySemanticEvidenceReservation(item.id, item.ref);
-          upgradedInheritedEvidence = record.inheritedEvidence.map(
-            upgradeAndVerifyRequiredEvidence,
-          );
-          upgradedLocalEvidence = record.localEvidence.map(
-            upgradeAndVerifyRequiredEvidence,
-          );
+          const verifyEvidence = (item: RequiredEvidence): RequiredEvidence => {
+            if ("result" in item) return item;
+            if (options.readOnlyEvidence && !item.ref)
+              throw new Error(
+                "legacy evidence has no verified semantic reference",
+              );
+            if (options.readOnlyEvidence) {
+              verifySemanticEvidenceReservation(item.id, item.ref!);
+              return item;
+            }
+            return upgradeAndVerifyRequiredEvidence(item);
+          };
+          upgradedInheritedEvidence =
+            record.inheritedEvidence.map(verifyEvidence);
+          upgradedLocalEvidence = record.localEvidence.map(verifyEvidence);
         } catch {
           fail(
             "invalid_request",
@@ -2823,7 +2839,10 @@ export function resolveAssignmentSession(
             ? { currentEvidenceIds: [...record.currentEvidenceIds] }
             : {}),
         };
-        if (!isDeepStrictEqual(upgradedRecord, record))
+        if (
+          !options.readOnlyEvidence &&
+          !isDeepStrictEqual(upgradedRecord, record)
+        )
           manager.appendCustomEntry(
             "pi-herdsman-agent-required-evidence",
             upgradedRecord,
@@ -3716,8 +3735,18 @@ export function listedAgentRecord(
   };
 }
 
+export type ManagerEvidenceScope = {
+  roots: ReadonlySet<string>;
+  retained: RequiredEvidence[];
+  revalidate(operation: () => Promise<void> | void): Promise<void>;
+};
+
 export type AgentControllerOptions = {
   scope: ControllerScope | undefined;
+  managerEvidence?(
+    ctx: ExtensionContext,
+    refs: readonly string[],
+  ): Promise<ManagerEvidenceScope | undefined>;
   managedAgentRootSessionId?(ctx: ExtensionContext): string;
   /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
   rootDelegationPolicy?(): RootDelegationPolicy;
@@ -4850,11 +4879,6 @@ export function createAgentController(
       }
     }
   };
-  const resolveFiles = (
-    context: ExtensionContext,
-    files: readonly string[] | undefined,
-    operation: string,
-  ) => resolveMessageFiles(context, files, operation);
   const controlAction = async (
     context: ExtensionContext,
     params: Extract<
@@ -5005,9 +5029,19 @@ export function createAgentController(
     }
     const kind = operation;
     const limits = readConfig();
+    const manager = await options.managerEvidence?.(
+      context,
+      params.files ?? [],
+    );
     const input = prepareMessageInput(
       params.message,
-      resolveFiles(context, params.files, operation),
+      resolveMessageFiles(
+        context,
+        params.files,
+        operation,
+        manager?.retained,
+        manager?.roots,
+      ),
       context.cwd,
       operation,
       operation === "reply"
@@ -5050,6 +5084,9 @@ export function createAgentController(
       requestId,
       operation,
       input.resultBindings,
+      manager
+        ? { beforeWrite: (publish) => manager.revalidate(publish) }
+        : undefined,
     );
     return {
       ok: true,
@@ -7100,6 +7137,10 @@ export function createAgentController(
             );
         }
         const projectAssignment = projectEvidence?.assignment;
+        const managerEvidence =
+          scope.kind === "root"
+            ? await options.managerEvidence?.(ctx, p.files ?? [])
+            : undefined;
         const evidenceProjectAssignmentId =
           projectAssignmentId ?? projectAssignment?.id;
         let requiredEvidence = continuationEvidence
@@ -7356,7 +7397,13 @@ export function createAgentController(
         const explicitFiles = (
           p.retain === true
             ? retainedSelections
-            : resolveMessageFiles(ctx, p.files, p.action, requiredEvidence)
+            : resolveMessageFiles(
+                ctx,
+                p.files,
+                p.action,
+                [...requiredEvidence, ...(managerEvidence?.retained ?? [])],
+                managerEvidence?.roots,
+              )
         ).map((file) => {
           if (typeof file !== "string") return file;
           try {
@@ -8297,6 +8344,8 @@ export function createAgentController(
                     throw new Error(
                       "Project assignment authority is no longer current; retry delegation",
                     );
+                  if (managerEvidence)
+                    await managerEvidence.revalidate(publish);
                   return;
                 }
                 await projectEvidence.revalidate(async () => {
@@ -8611,24 +8660,30 @@ export function createAgentController(
         ) => {
           try {
             const scope = await options.projectEvidence?.(ctx);
+            const manager = await options.managerEvidence?.(ctx, [params.ref]);
             const {
               evidencePageContent,
               readEvidencePage,
               authorizedScopedResult,
             } = await import("./managed-agent-runtime.ts");
-            const accepted = scope?.assignment.requiredEvidence ?? [];
+            const accepted = [
+              ...(scope?.assignment.requiredEvidence ?? []),
+              ...(manager?.retained ?? []),
+            ];
             const scoped = authorizedScopedResult(
               params.ref,
               ctx.sessionManager.getSessionId(),
               accepted,
               ctx.sessionManager.getBranch(),
               ctx.sessionManager.getSessionId(),
+              manager?.roots,
             );
             let page;
             const read = () => {
               page = readEvidencePage(accepted, params.ref, params, scoped);
             };
-            if (scope) await scope.revalidate(read);
+            if (manager) await manager.revalidate(read);
+            else if (scope) await scope.revalidate(read);
             else read();
             if (!page) throw new Error();
             return {

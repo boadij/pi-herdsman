@@ -4418,6 +4418,81 @@ test("read-time conflicting published result mappings fail closed", () => {
   }
 });
 
+test("assigned Lead roots authorize published results only from that Lead root", () => {
+  const canonicalRef = resultRef(randomUUID());
+  const assignedLeadSessionId = randomUUID();
+  const requester = randomUUID();
+  const semantic = `result:project-${randomUUID().slice(0, 8)}#1`;
+  const label = semantic.slice("result:".length, semantic.indexOf("#"));
+  const artifact = persistPeerResultArtifact(
+    canonicalRef,
+    "project evidence\n",
+  );
+  publishScopedResult(label, 1, canonicalRef, assignedLeadSessionId);
+  try {
+    assert.equal(
+      authorizedScopedResult(semantic, requester, [], [], requester),
+      undefined,
+    );
+    assert.equal(
+      authorizedScopedResult(
+        semantic,
+        requester,
+        [],
+        [],
+        requester,
+        new Set([randomUUID()]),
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      authorizedScopedResult(
+        semantic,
+        requester,
+        [],
+        [],
+        requester,
+        new Set([assignedLeadSessionId]),
+      ),
+      { ref: semantic, canonicalRef },
+    );
+    assert.equal(
+      authorizedScopedResult(
+        semantic,
+        requester,
+        [],
+        [],
+        requester,
+        new Set([randomUUID()]),
+      ),
+      undefined,
+    );
+    assert.equal(
+      authorizedScopedResult(
+        semantic,
+        requester,
+        [
+          {
+            id: randomUUID(),
+            name: "conflict",
+            result: { ref: semantic, canonicalRef: resultRef(randomUUID()) },
+          },
+        ],
+        [],
+        requester,
+        new Set([assignedLeadSessionId]),
+      ),
+      undefined,
+    );
+  } finally {
+    realFs.rmSync(join(herdsmanDataRoot(), "result-ref-reservations", label), {
+      recursive: true,
+      force: true,
+    });
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
 test("copied branch result bindings do not authorize foreign-root reads", () => {
   const canonicalRef = resultRef(randomUUID());
   const foreignSessionId = randomUUID();
@@ -4499,6 +4574,25 @@ test("files reject copied foreign-session results and accept same-root publicati
     process.env.PI_HERDSMAN_ROOT_SESSION_ID = foreignSessionId;
     publishScopedResult(label, 1, canonicalRef, LEAD_SESSION_ID);
     assert.throws(() => resolveMessageFiles(context, [semantic], "files"));
+    assert.throws(() =>
+      resolveMessageFiles(
+        context,
+        [semantic],
+        "files",
+        [],
+        new Set([randomUUID()]),
+      ),
+    );
+    assert.deepEqual(
+      resolveMessageFiles(
+        context,
+        [semantic],
+        "files",
+        [],
+        new Set([LEAD_SESSION_ID]),
+      ),
+      [{ ref: semantic, canonicalRef }],
+    );
     context.sessionManager = {
       ...context.sessionManager,
       getSessionId: () => LEAD_SESSION_ID,

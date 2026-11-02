@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -31,6 +32,7 @@ import {
   readRequiredEvidenceSnapshot,
   resultPath,
   resultRef,
+  herdsmanDataRoot,
 } from "./storage.ts";
 import {
   listProjectAssignments,
@@ -9483,6 +9485,420 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
     );
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
+  }
+});
+
+test("Manager read_evidence reads only retained project evidence", async () => {
+  setLeadEnvironment();
+  const repoKey = realpathSync(process.cwd());
+  process.env.HERDR_PANE_ID = "root-pane";
+  process.env.HERDR_TAB_ID = "root-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-evidence-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  const branch = `manager-evidence-${randomUUID()}`;
+  const managerSessionFile = join(
+    tmpdir(),
+    `pi-herdsman-manager-${randomUUID()}.jsonl`,
+  );
+  const assignmentId = randomUUID();
+  const retained = persistRequiredEvidenceSnapshot(
+    assignmentId,
+    "retained.txt",
+    "retained evidence",
+  );
+  const unreferenced = persistRequiredEvidenceSnapshot(
+    assignmentId,
+    "unreferenced.txt",
+    "must not be disclosed",
+  );
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: assignmentId,
+    repoKey,
+    branch,
+    text: "current assignment",
+    requiredEvidence: [retained],
+  });
+  const managerAgent: any = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: managerSessionFile,
+    },
+    pane_id: "root-pane",
+    tab_id: "root-tab",
+    workspace_id: WORKSPACE,
+  };
+  const exec = async (command: string, args: string[]) => {
+    if (command === "git") return { stdout: repoKey, stderr: "", code: 0 };
+    let result: unknown = {};
+    if (args[0] === "workspace" && args[1] === "get")
+      result = { workspace: { workspace_id: WORKSPACE, worktree: null } };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: repoKey,
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [],
+      };
+    else if (isAgentList(args)) result = { agents: [managerAgent] };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: managerAgent };
+    else if (isApiSnapshot(args))
+      result = {
+        snapshot: { agents: [managerAgent], panes: [], workspaces: [] },
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakePi({
+    exec,
+    persistMessages: true,
+    allTools: [{ name: "read_evidence" }],
+  });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(pi.entries) as any;
+  seedSessionKind(ctx, "ordinary");
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionFile: () => managerSessionFile,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const reader = pi.tools.find((tool) => tool.name === "read_evidence");
+    assert.ok(reader);
+    const allowed = await reader.execute(
+      "retained",
+      { ref: retained.ref },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(JSON.stringify(allowed), /retained evidence/);
+    const before = JSON.stringify(
+      readProjectAssignment(runtime, repoKey, branch),
+    );
+    await assert.rejects(
+      reader.execute(
+        "unreferenced",
+        { ref: unreferenced.ref },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /Evidence reference unavailable or invalid/,
+    );
+    assert.equal(
+      JSON.stringify(readProjectAssignment(runtime, repoKey, branch)),
+      before,
+      "denial does not rewrite assignment metadata",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("Manager read_evidence follows retained evidence in a saved child session", async () => {
+  setLeadEnvironment();
+  const repoKey = realpathSync(process.cwd());
+  process.env.HERDR_PANE_ID = "root-pane";
+  process.env.HERDR_TAB_ID = "root-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-nested-evidence-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  const branch = `manager-nested-evidence-${randomUUID()}`;
+  const managerSessionFile = join(
+    tmpdir(),
+    `pi-herdsman-manager-${randomUUID()}.jsonl`,
+  );
+  const childSessionFile = join(
+    tmpdir(),
+    `pi-herdsman-child-${randomUUID()}.jsonl`,
+  );
+  const childSessionId = randomUUID();
+  const childLabel = `evidence-child-${randomUUID().slice(0, 8)}`;
+  const childDefinition = "scout";
+  const assignmentId = randomUUID();
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const retained = persistRequiredEvidenceSnapshot(
+    assignmentId,
+    "nested-retained.txt",
+    "nested retained evidence",
+  );
+  const assignmentEvidence = persistRequiredEvidenceSnapshot(
+    assignmentId,
+    "assignment.txt",
+    "assignment evidence",
+  );
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: assignmentId,
+    repoKey,
+    branch,
+    text: "current assignment",
+    requiredEvidence: [assignmentEvidence],
+  });
+  const managerAgent: any = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: managerSessionFile,
+    },
+    pane_id: "root-pane",
+    tab_id: "root-tab",
+    workspace_id: WORKSPACE,
+  };
+  const exec = async (command: string, args: string[]) => {
+    if (command === "git") return { stdout: repoKey, stderr: "", code: 0 };
+    let result: unknown = {};
+    if (args[0] === "workspace" && args[1] === "get")
+      result = { workspace: { workspace_id: WORKSPACE, worktree: null } };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: repoKey,
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [],
+      };
+    else if (isAgentList(args)) result = { agents: [managerAgent] };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: managerAgent };
+    else if (isApiSnapshot(args))
+      result = {
+        snapshot: { agents: [managerAgent], panes: [], workspaces: [] },
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakePi({
+    exec,
+    persistMessages: true,
+    allTools: [{ name: "read_evidence" }],
+  });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(pi.entries) as any;
+  seedSessionKind(ctx, "ordinary");
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionFile: () => managerSessionFile,
+  };
+  const childEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: childSessionId,
+        definition: childDefinition,
+        label: childLabel,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-required-evidence",
+      data: {
+        version: 1,
+        sessionId: childSessionId,
+        requestId,
+        runId,
+        ownerSessionId: LEAD_SESSION_ID,
+        workspaceId: WORKSPACE,
+        agentLabel: childLabel,
+        paneId: "child-pane",
+        projectAssignmentId: assignmentId,
+        evidenceAssignmentId: requestId,
+        inheritedEvidence: [],
+        localEvidence: [retained],
+      },
+    },
+  ];
+  writeValidPiSessionFile({
+    id: childSessionId,
+    path: childSessionFile,
+    cwd: repoKey,
+    entries: childEntries,
+  });
+  nativeSessions.set(childSessionId, {
+    id: childSessionId,
+    path: realpathSync(childSessionFile),
+    cwd: repoKey,
+    entries: childEntries,
+  });
+  const managerOwnerId = ctx.sessionManager.getSessionId();
+  const managerBranch = ctx.sessionManager.getBranch() as any[];
+  const childResultEdge = {
+    type: "custom",
+    customType: "pi-herdsman-agent-result",
+    details: {
+      ownerSessionId: managerOwnerId,
+      piSessionId: childSessionId,
+      piSessionFile: childSessionFile,
+      runId,
+      requestId,
+      agentLabel: childLabel,
+      agentDefinition: childDefinition,
+      workspaceId: WORKSPACE,
+      paneId: "child-pane",
+      status: "completed",
+    },
+  };
+  managerBranch.push(childResultEdge);
+  assert.equal(managerOwnerId, LEAD_SESSION_ID);
+  assert.ok(
+    managerBranch.includes(childResultEdge),
+    "child result edge is in the immediate Manager owner's branch",
+  );
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const reader = pi.tools.find((tool) => tool.name === "read_evidence");
+    assert.ok(reader);
+    const allowed = await reader.execute(
+      "nested retained",
+      { ref: retained.ref },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(JSON.stringify(allowed), /nested retained evidence/);
+
+    const reservations = () => {
+      const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
+      const files: [string, string][] = [];
+      const visit = (directory: string) => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const path = join(directory, entry.name);
+          if (entry.isDirectory()) visit(path);
+          else if (entry.isFile())
+            files.push([path.slice(root.length), readFileSync(path, "utf8")]);
+        }
+      };
+      try {
+        visit(root);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      return files.sort(([a], [b]) => a.localeCompare(b));
+    };
+    const localEvidenceRecord = childEntries[1]!.data as Record<string, any>;
+    const legacy = { ...retained, id: randomUUID() };
+    delete (legacy as any).ref;
+    const deniedAttempts = [
+      {
+        label: "legacy evidence without a prior semantic reservation",
+        ref: retained.ref,
+        localEvidence: [legacy],
+        edge: {},
+      },
+      {
+        label: "stale ancestry edge",
+        ref: retained.ref,
+        localEvidence: [retained],
+        edge: { runId: randomUUID() },
+      },
+      {
+        label: "conflicting ancestry owner",
+        ref: retained.ref,
+        localEvidence: [retained],
+        edge: { ownerSessionId: randomUUID() },
+      },
+      {
+        label: "missing ownership edge",
+        ref: retained.ref,
+        localEvidence: [retained],
+        missingEdge: true,
+      },
+    ];
+    for (const attempt of deniedAttempts) {
+      localEvidenceRecord.localEvidence = attempt.localEvidence;
+      writeValidPiSessionFile({
+        id: childSessionId,
+        path: childSessionFile,
+        cwd: repoKey,
+        entries: childEntries,
+      });
+      nativeSessions.get(childSessionId)!.entries = childEntries;
+      const edgeIndex = managerBranch.indexOf(childResultEdge);
+      if (attempt.missingEdge) managerBranch.splice(edgeIndex, 1);
+      else {
+        childResultEdge.details = {
+          ...childResultEdge.details,
+          ...attempt.edge,
+        };
+        if (!managerBranch.includes(childResultEdge))
+          managerBranch.push(childResultEdge);
+      }
+      const before = JSON.stringify({
+        managerEntries: pi.entries,
+        managerBranch,
+        childEntries,
+        childSession: readFileSync(childSessionFile, "utf8"),
+        reservations: reservations(),
+      });
+      await assert.rejects(
+        reader.execute(
+          attempt.label,
+          { ref: attempt.ref },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        /Evidence reference unavailable or invalid/,
+        attempt.label,
+      );
+      assert.equal(
+        JSON.stringify({
+          managerEntries: pi.entries,
+          managerBranch,
+          childEntries,
+          childSession: readFileSync(childSessionFile, "utf8"),
+          reservations: reservations(),
+        }),
+        before,
+        `${attempt.label}: denial does not write sessions or allocate reservations`,
+      );
+      childResultEdge.details = {
+        ownerSessionId: managerOwnerId,
+        piSessionId: childSessionId,
+        piSessionFile: childSessionFile,
+        runId,
+        requestId,
+        agentLabel: childLabel,
+        agentDefinition: childDefinition,
+        workspaceId: WORKSPACE,
+        paneId: "child-pane",
+        status: "completed",
+      };
+      if (!managerBranch.includes(childResultEdge))
+        managerBranch.splice(edgeIndex, 0, childResultEdge);
+      localEvidenceRecord.localEvidence = [retained];
+    }
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    nativeSessions.delete(childSessionId);
+    realFs.rmSync(childSessionFile, { force: true });
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 
