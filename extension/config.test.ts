@@ -7,6 +7,7 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 let deleteBeforeRead = false;
 let failConfigRename = false;
+let configUnlinkError: NodeJS.ErrnoException | undefined;
 let configPath: string | undefined;
 const testAgentDir =
   process.env.PI_CODING_AGENT_DIR ?? "/tmp/pi-herdsman-config-test";
@@ -55,7 +56,16 @@ mock.module("node:fs", {
     readdirSync: realFs.readdirSync,
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
-    unlinkSync: realFs.unlinkSync,
+    unlinkSync: (path: string) => {
+      if (
+        configUnlinkError &&
+        configPath &&
+        dirname(path) === dirname(configPath) &&
+        basename(path).startsWith(`.${basename(configPath)}.`)
+      )
+        throw configUnlinkError;
+      return realFs.unlinkSync(path);
+    },
     utimesSync: realFs.utimesSync,
     watch: realFs.watch,
     writeFileSync: realFs.writeFileSync,
@@ -557,6 +567,32 @@ test("failed atomic replacement preserves the old config and cleans its temporar
       .filter((entry) => entry.startsWith(".config.json.")),
     [],
   );
+});
+
+test("config temporary cleanup preserves primary errors and reports standalone failures", () => {
+  const cleanup = Object.assign(new Error("injected unlink failure"), {
+    code: "EIO",
+  });
+  try {
+    configUnlinkError = cleanup;
+    failConfigRename = true;
+    assert.throws(
+      () => updateConfig("spawnPlacement", "tab"),
+      /injected config rename failure/,
+    );
+    assert.throws(
+      () => updateConfig("spawnPlacement", "tab"),
+      (error) => error === cleanup,
+    );
+    configUnlinkError = Object.assign(new Error("missing"), { code: "ENOENT" });
+    assert.doesNotThrow(() => updateConfig("spawnPlacement", "split"));
+  } finally {
+    configUnlinkError = undefined;
+    for (const entry of realFs.readdirSync(herdsmanDataRoot())) {
+      if (entry.startsWith(".config.json.") && entry.endsWith(".tmp"))
+        realFs.unlinkSync(join(herdsmanDataRoot(), entry));
+    }
+  }
 });
 
 test("config updates honor the shared process lock", () => {
