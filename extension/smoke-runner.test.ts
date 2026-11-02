@@ -5842,9 +5842,12 @@ test("core observation waits for every persisted session PID or fails closed", a
     ],
     sessionIds: new Set(["root", "child"]),
   };
-  const ordinaryReadiness =
-    ctx.assistantResult && 2 >= 2 && Boolean(ctx.rootProcess);
-  assert.equal(ordinaryReadiness, true);
+  for (const paneCount of [1, 2]) {
+    assert.equal(
+      coreObservationReady({ ...ctx, simulated: false, paneCount }),
+      paneCount === 2,
+    );
+  }
   assert.equal(
     coreObservationReady({
       ...ctx,
