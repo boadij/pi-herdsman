@@ -9,13 +9,101 @@ import {
   isPreservePaneStop,
   isTabClose,
   readAgentState,
+  writeAgentState,
   realFs,
   registerExtension,
   resetAgentMailbox,
   seedLeadRole,
   setLeadEnvironment,
   startupExecutor,
+  readAgentStartupOutcome,
+  writeAgentStartupOutcome,
 } from "./support.ts";
+
+for (const scenario of [
+  "failed",
+  "conflicting",
+  "conflicting-state",
+  "missing-state",
+] as const) {
+  test(`startup ${scenario} rejects without dispatch and rolls back`, async () => {
+    setLeadEnvironment();
+    const label = `startup-${scenario}`;
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const pi = fakePi({
+      exec: async (command, args, options) => {
+        const result = await startup.exec(command, args, options);
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+          const outcome = readAgentStartupOutcome(startup.mailbox)!;
+          if (scenario === "failed")
+            writeAgentStartupOutcome(startup.mailbox, {
+              ...outcome,
+              status: "failed",
+              error: "bootstrap failed",
+              stage: "bootstrap",
+            });
+          if (scenario === "conflicting")
+            writeAgentStartupOutcome(startup.mailbox, {
+              ...outcome,
+              paneId: "other-pane",
+            });
+          if (scenario === "conflicting-state")
+            writeAgentState(startup.mailbox, {
+              ...readAgentState(startup.mailbox)!,
+              runId: "11111111-1111-4111-8111-111111111111",
+            });
+          if (scenario === "missing-state")
+            realFs.unlinkSync(`${startup.mailbox}/state.json`);
+        }
+        return result;
+      },
+    });
+    registerExtension!(pi.pi as never);
+    seedLeadRole(fakeContext(pi.entries));
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
+    try {
+      const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+      const result = await delegate.execute(
+        "id",
+        { definition: "agent", label, task: "test" },
+        undefined,
+        undefined,
+        fakeContext(pi.entries),
+      );
+      assert.equal(
+        result.details.error.category,
+        "rollback_failure",
+        JSON.stringify(result.details),
+      );
+      assert.equal(
+        result.details.error.primary.category,
+        scenario === "failed"
+          ? "pane_not_ready"
+          : scenario === "missing-state"
+            ? "internal_failure"
+            : "target_not_found",
+      );
+      assert.ok(result.details.error.cleanup.message);
+      if (scenario === "failed")
+        assert.match(result.details.error.primary.message, /bootstrap failed/);
+      assert.equal(
+        realFs.existsSync(startup.mailbox) &&
+          realFs
+            .readdirSync(startup.mailbox)
+            .some((name) => name.startsWith("request-")),
+        false,
+      );
+      assert.equal(result.details.error.rollbackOccurred, true);
+    } finally {
+      startup.stopMailboxConsumer();
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(startup.mailbox);
+    }
+  });
+}
 
 test(
   "pane-not-ready failure retains bounded startup diagnostic and rolls back",
@@ -206,7 +294,7 @@ test(
       assert.equal(result.details.error.category, "pane_not_ready");
       assert.equal(
         result.details.error.message,
-        "Agent did not initialize its mailbox",
+        "Agent did not report a startup outcome",
       );
       assert.equal(
         result.details.error.details.startupDiagnostic,
