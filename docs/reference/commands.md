@@ -38,6 +38,13 @@ version. Its seven destinations are `Execution`, `Agents`, `Project manager`,
 `Session stats`, `Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
 metadata; the TUI updates contextual help for the selected row.
 
+In the TUI, every Herdsman selection menu supports fuzzy filtering. Type to
+narrow the current menu by label, visible setting value, or additional search
+terms (including provider/model names). Use Up/Down to navigate, Enter to select,
+and Escape to return. Clearing the query restores the full list. Filtering is
+local to the open menu, not a search across nested settings. Outside the TUI,
+Herdsman retains Pi's native selection prompt.
+
 `Execution` shows the current ordinary Lead mode (`flexible` or `orchestrate`).
 Selecting it opens the same selector as `/lead`. A dedicated Managed Lead
 shows `managed`, `managed · unavailable`, or `managed · retired` according to
