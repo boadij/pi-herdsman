@@ -1677,6 +1677,7 @@ function registerExtensionImpl(
           rebuildList();
           const body = new Container();
           body.addChild(input);
+          body.addChild(new Spacer(1));
           body.addChild(listContainer);
           const container = new Container();
           populateMenuFrame(
