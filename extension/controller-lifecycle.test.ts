@@ -14339,6 +14339,52 @@ test("managed startup accepts matching outcome after five seconds", async (t) =>
   }
 });
 
+test("managed startup reports the validated child initialization stage", async () => {
+  setLeadEnvironment();
+  const label = "failed-child-stage";
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const outcome = readAgentStartupOutcome(startup.mailbox);
+        assert.ok(outcome);
+        writeAgentStartupOutcome(startup.mailbox, {
+          ...outcome,
+          status: "failed",
+          error: "Managed Agent initialization failed",
+          stage: "bootstrap",
+        });
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
+  try {
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "fail child initialization" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(result.details.error.details.stage, "bootstrap");
+    assert.match(
+      result.details.error.message,
+      /Managed Agent initialization failed/,
+    );
+    assert.doesNotMatch(
+      result.details.error.message,
+      /sensitive|custom-validator/,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
 async function exerciseStartupLock(t: TestContext, failObservation = false) {
   setLeadEnvironment();
   const label = failObservation

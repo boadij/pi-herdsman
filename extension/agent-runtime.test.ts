@@ -6669,6 +6669,7 @@ test("agent reports failure after state publication and stops initialization", a
     assert.equal(outcome?.status, "failed");
     if (outcome?.status === "failed")
       assert.equal(outcome.error, "Managed Agent initialization failed");
+    if (outcome?.status === "failed") assert.equal(outcome.stage, "metadata");
     assert.ok(notices.some((message) => message.includes(original.message)));
   } finally {
     agent.events.get("session_shutdown")?.[0]();

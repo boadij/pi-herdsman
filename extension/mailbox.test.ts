@@ -114,14 +114,29 @@ test("startup outcome is strict, transient, and independently awaited", async ()
         ...ready,
         status: "failed",
         error: "x".repeat(257),
+        stage: "metadata",
       }),
+    );
+    assert.throws(() =>
+      writeAgentStartupOutcome(directory, {
+        ...ready,
+        status: "failed",
+        error: "failed",
+        stage: "custom-validator",
+      } as never),
     );
     writeAgentStartupOutcome(directory, {
       ...ready,
       status: "failed",
       error: "failed",
+      stage: "metadata",
     });
-    assert.equal(readAgentStartupOutcome(directory)?.status, "failed");
+    assert.deepEqual(readAgentStartupOutcome(directory), {
+      ...ready,
+      status: "failed",
+      error: "failed",
+      stage: "metadata",
+    });
     writeFileSync(join(directory, "startup.json"), "{");
     await assert.rejects(
       waitForStartupOutcome(directory, { timeoutMs: 100 }),

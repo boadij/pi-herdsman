@@ -40,6 +40,7 @@ for (const scenario of [
               ...outcome,
               status: "failed",
               error: "bootstrap failed",
+              stage: "bootstrap",
             });
           if (scenario === "conflicting")
             writeAgentStartupOutcome(startup.mailbox, {

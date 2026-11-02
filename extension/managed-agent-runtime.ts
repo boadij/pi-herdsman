@@ -32,6 +32,7 @@ import {
   unacknowledgedRequestExists,
   type AskRecord,
   type ManagedAgentState,
+  type ManagedAgentStartupStage,
   type ResultRecord,
   type ResultPersistenceError,
   type RequestRecord,
@@ -3682,6 +3683,7 @@ export function registerManagedAgentSessionStartHandler(
 ): void {
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     let verified: ManagedAgentState | undefined;
+    let startupStage: ManagedAgentStartupStage = "definition";
     try {
       options.statusRuntime.prepareSession(ctx);
       options.startControllerSession();
@@ -3755,7 +3757,9 @@ export function registerManagedAgentSessionStartHandler(
         }
       }
       if (!existing) {
+        startupStage = "definition";
         validateManagedAgentDefinition(await options.getAgentDefinitions(ctx));
+        startupStage = "bootstrap";
         const bootstrap = readAgentBootstrap(mailbox);
         if (bootstrap) {
           if (
@@ -3806,6 +3810,7 @@ export function registerManagedAgentSessionStartHandler(
           removeAgentBootstrap(mailbox);
         }
       }
+      startupStage = "mailbox_state";
       const release = options.claimAssignmentLock(mailbox, "session_start", {
         label: execution.assignment.agentLabel,
         paneId: execution.assignment.paneId,
@@ -3836,6 +3841,7 @@ export function registerManagedAgentSessionStartHandler(
         release();
       }
       if (options.delegationEnabled) {
+        startupStage = "controller_recovery";
         managedAgentControllerIdentity(ctx);
         await options.recoverControllerRuntimes(ctx, metadataSignal);
         options.setControllerReady(true);
@@ -3852,6 +3858,7 @@ export function registerManagedAgentSessionStartHandler(
         ctx,
         definition === label ? label : `${definition} · ${label}`,
       );
+      startupStage = "request_observer";
       execution.stopRequestObserver = observeMailbox(
         mailbox,
         (name) => /^request-.*\.json$/.test(name),
@@ -3861,6 +3868,7 @@ export function registerManagedAgentSessionStartHandler(
       options.pumpRequest(ctx);
       if (!options.delegationEnabled && ctx.mode === "tui" && ctx.hasUI)
         options.startLeafStatus(ctx);
+      startupStage = "metadata";
       const model = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : undefined;
@@ -3931,6 +3939,7 @@ export function registerManagedAgentSessionStartHandler(
                 paneId: verified.paneId,
                 status: "failed",
                 error: "Managed Agent initialization failed",
+                stage: startupStage,
               });
           } finally {
             release();

@@ -8005,7 +8005,7 @@ export function createAgentController(
               "pane_not_ready",
               `Managed Agent initialization failed: ${outcome.error}`,
               p.action,
-              { details: { stage: "child_initialization" } },
+              { details: { stage: outcome.stage } },
             );
           const state = readAgentState(mailbox);
           if (!state)

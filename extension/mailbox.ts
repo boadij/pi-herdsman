@@ -65,8 +65,16 @@ export type ManagedAgentStartupOutcome = Pick<
   ManagedAgentState,
   "runId" | "ownerSessionId" | "workspaceId" | "agentLabel" | "paneId"
 > & { version: 5; build: RuntimeBuild } & (
-    { status: "ready" } | { status: "failed"; error: string }
+    | { status: "ready" }
+    | { status: "failed"; error: string; stage: ManagedAgentStartupStage }
   );
+export type ManagedAgentStartupStage =
+  | "definition"
+  | "bootstrap"
+  | "mailbox_state"
+  | "controller_recovery"
+  | "request_observer"
+  | "metadata";
 export interface ResultPersistenceError {
   code: "write_failure";
   message: string;
@@ -372,6 +380,7 @@ function validate(
       "paneId",
       "status",
       "error",
+      "stage",
     ];
     if (Object.keys(v).some((key) => !allowed.includes(key)))
       throw new Error("Unknown mailbox field");
@@ -389,12 +398,20 @@ function validate(
     if (!UUID.test(v.runId)) throw new Error("Invalid mailbox UUID");
     if (
       v.status === "ready"
-        ? "error" in v
+        ? "error" in v || "stage" in v
         : v.status !== "failed" ||
           typeof v.error !== "string" ||
           !v.error.trim() ||
           v.error.length > 256 ||
-          /[\r\n]/.test(v.error)
+          /[\r\n]/.test(v.error) ||
+          ![
+            "definition",
+            "bootstrap",
+            "mailbox_state",
+            "controller_recovery",
+            "request_observer",
+            "metadata",
+          ].includes(v.stage)
     )
       throw new Error("Invalid startup outcome");
     return;
