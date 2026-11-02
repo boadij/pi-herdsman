@@ -53,7 +53,10 @@ import {
   persistPeerResultArtifact,
   isResultBinding,
 } from "../storage.ts";
-import { canonicalRefsForSemanticResult } from "../agent-controller.ts";
+import {
+  canonicalRefsForSemanticResult,
+  type VerifiedRootOwner,
+} from "../agent-controller.ts";
 import type { HerdrRecord, HerdrSessionSnapshot } from "../herdr.ts";
 import {
   formatRuntimeBuild,
@@ -188,7 +191,7 @@ type LeadCoordinationHost = LeadCoordinationBaseHost & {
   currentSupervisor: LeadRoleTransitionRuntime["currentSupervisor"];
 };
 
-export function readLeadSessionIds(
+export function readRootOwners(
   inventory: HerdrSessionSnapshot,
   mailboxes: ReturnType<typeof import("../mailbox.ts").listAgentStates>,
   workspaceId: string,
@@ -200,11 +203,35 @@ export function readLeadSessionIds(
     isPiAgent: (agent: HerdrRecord) => boolean;
     supervisionRuntime: () => unknown;
     readLeadCoordinationState: typeof import("../supervision.ts").readLeadCoordinationState;
+    readManagerDescriptor: typeof import("../supervision.ts").readManagerDescriptor;
+    readChiefDescriptor: typeof import("../supervision.ts").readChiefDescriptor;
+    chiefLeaseIsHeld: typeof import("../supervision.ts").chiefLeaseIsHeld;
   },
-): string[] {
+): VerifiedRootOwner[] {
   const panes = inventory.panes;
   if (!Array.isArray(panes)) return [];
-  const leadSessionIds: string[] = [];
+  const rootOwners: VerifiedRootOwner[] = [];
+  let runtime: ReturnType<
+    typeof import("../supervision.ts").supervisionRuntime
+  >;
+  try {
+    runtime = dependencies.supervisionRuntime() as typeof runtime;
+  } catch {
+    return [];
+  }
+  let chief: ReturnType<typeof dependencies.readChiefDescriptor> | undefined;
+  let manager: ReturnType<typeof dependencies.readManagerDescriptor>;
+  try {
+    if (dependencies.chiefLeaseIsHeld(runtime))
+      chief = dependencies.readChiefDescriptor(runtime.descriptor);
+  } catch {
+    /* Unavailable authority remains unknown. */
+  }
+  try {
+    manager = dependencies.readManagerDescriptor(runtime, workspaceId);
+  } catch {
+    /* Unavailable authority remains unknown. */
+  }
   const ownerSessionIds = new Set(
     mailboxes.map(({ state }) => state.ownerSessionId),
   );
@@ -233,18 +260,39 @@ export function readLeadSessionIds(
       ownerPanes[0]?.agent !== "pi"
     )
       continue;
+    const matchesPhysicalOwner = (descriptor: {
+      piSessionId: string;
+      paneId: string;
+      workspaceId: string;
+      tabId?: string;
+    }) =>
+      descriptor.piSessionId === ownerSessionId &&
+      descriptor.paneId === ownerAgent.pane_id &&
+      descriptor.workspaceId === workspaceId &&
+      (descriptor.tabId === undefined ||
+        descriptor.tabId === ownerAgent.tab_id);
+    if (chief?.piSessionId === ownerSessionId) {
+      if (matchesPhysicalOwner(chief))
+        rootOwners.push({ sessionId: ownerSessionId, role: "chief" });
+      continue;
+    }
     try {
       const state = dependencies.readLeadCoordinationState(
-        dependencies.supervisionRuntime(),
+        runtime,
         ownerSessionId,
       );
+      if (manager?.piSessionId === ownerSessionId) {
+        if (matchesPhysicalOwner(manager) && state?.role === "manager")
+          rootOwners.push({ sessionId: ownerSessionId, role: "manager" });
+        continue;
+      }
       if (state && (state.role ?? "lead") === "lead")
-        leadSessionIds.push(ownerSessionId);
+        rootOwners.push({ sessionId: ownerSessionId, role: "lead" });
     } catch {
       // Missing or invalid Lead authority stays unknown.
     }
   }
-  return leadSessionIds;
+  return rootOwners;
 }
 
 export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
@@ -310,11 +358,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   const reportedProjectMessageReadErrors = new Set<string>();
   const reportedRetirementErrors = new Set<string>();
   const retirementCursors = new Map<string, string>();
-  const readLeadSessionIdsFromHost = (
-    inventory: HerdrSessionSnapshot,
-    mailboxes: ReturnType<typeof import("../mailbox.ts").listAgentStates>,
-    workspaceId: string,
-  ): string[] => readLeadSessionIds(inventory, mailboxes, workspaceId, host);
   const prepareCoordinationInput = async (
     ctx: ExtensionContext,
     text: string,
@@ -2822,7 +2865,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     enterCoordinationPublication,
     drainRetirementNotices,
     drainProjectMessages,
-    readLeadSessionIds: readLeadSessionIdsFromHost,
     supervisorMessage: executeSupervisorMessage,
     peerMessage: executePeerMessage,
     latestCustomMessageText,

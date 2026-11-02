@@ -277,7 +277,7 @@ import {
   createLeadRoleTransitions,
   resolveLeadControllerRole,
 } from "./lead-runtime.ts";
-import { readLeadSessionIds } from "./lead/coordination.ts";
+import { readRootOwners } from "./lead/coordination.ts";
 
 import {
   populateMenuFrame,
@@ -944,19 +944,16 @@ function registerExtensionImpl(
     isContextRetired: (manager) => retiredManagedSession(manager),
     snapshotDependencies: {
       runtimeForLabel: () => undefined,
-      readLeadSessionIds: (inventory, mailboxes, workspaceId) =>
-        processRole === "managed-agent"
-          ? readLeadSessionIds(inventory, mailboxes, workspaceId, {
-              matchesExpectedSession,
-              isPiAgent,
-              supervisionRuntime,
-              readLeadCoordinationState,
-            })
-          : leadRuntimes.coordinationRuntime!.readLeadSessionIds(
-              inventory,
-              mailboxes,
-              workspaceId,
-            ),
+      readRootOwners: (inventory, mailboxes, workspaceId) =>
+        readRootOwners(inventory, mailboxes, workspaceId, {
+          matchesExpectedSession,
+          isPiAgent,
+          supervisionRuntime,
+          readLeadCoordinationState,
+          readManagerDescriptor,
+          readChiefDescriptor,
+          chiefLeaseIsHeld,
+        }),
       staleAfterMs: STALE_AFTER_MS,
     },
     managedProjectEvidence: async (ctx, workspaceId, projectAssignmentId) => {

@@ -265,8 +265,8 @@ Example:
 
 The breadcrumb uses validated definition/agent ancestry. Its root uses the
 verified current owner role (for example, `lead`, `manager`, or `chief`); when
-role evidence is unavailable, it uses a neutral owner/controller label rather
-than guessing.
+role evidence is unavailable or ambiguous, managed-Agent ancestry shows `?`
+rather than guessing. Other owner/controller displays may use a neutral label.
 
 Delegating-agent and leaf panes can append a compact summary of their current
 Pi active tools as muted bracketed metadata after the current identity.

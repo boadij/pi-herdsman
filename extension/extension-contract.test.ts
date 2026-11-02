@@ -7291,200 +7291,238 @@ test("presentation event bursts coalesce to one controller snapshot refresh", as
 });
 
 for (const delegationEnabled of [false, true]) {
-  test(`${delegationEnabled ? "delegating" : "leaf"} status proves its Lead boundary from coordination state without opening transcripts`, async (t) => {
-    const label = delegationEnabled
-      ? "status-delegating-agent"
-      : "status-lead-boundary";
-    const mailbox = setAgentEnvironment(
-      label,
-      delegationEnabled ? ["child"] : undefined,
-    );
-    process.env.HERDR_SOCKET_PATH = join(
-      tmpdir(),
-      `status-lead-boundary-${randomUUID()}.sock`,
-    );
-    const ownerSessionId = LEAD_SESSION_ID;
-    process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
-    process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
-    const leadPaneId = "status-boundary-lead-pane";
-    const agentSessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-    const agentPaneId = "status-boundary-agent-pane";
-    const agentSessionFile = join(
-      tmpdir(),
-      `status-boundary-${randomUUID()}.jsonl`,
-    );
-    process.env.HERDR_PANE_ID = agentPaneId;
-    process.env.HERDR_TAB_ID = "status-boundary-tab";
-    writeAgentState(
-      mailbox,
-      managedState(label, undefined, {
-        paneId: agentPaneId,
-        tabId: "status-boundary-tab",
-        piSessionId: agentSessionId,
-        piSessionFile: agentSessionFile,
-      }),
-    );
-    const identity = {
-      agent: "pi",
-      agent_session: {
-        source: "herdr:pi",
+  for (const role of ["lead", "manager", "chief"] as const) {
+    test(`${delegationEnabled ? "delegating" : "leaf"} status proves its ${role} boundary without opening transcripts`, async (t) => {
+      const label = delegationEnabled
+        ? "status-delegating-agent"
+        : "status-lead-boundary";
+      const mailbox = setAgentEnvironment(
+        label,
+        delegationEnabled ? ["child"] : undefined,
+      );
+      process.env.HERDR_SOCKET_PATH = join(
+        tmpdir(),
+        `status-lead-boundary-${randomUUID()}.sock`,
+      );
+      const ownerSessionId = LEAD_SESSION_ID;
+      process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
+      process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
+      const leadPaneId = "status-boundary-lead-pane";
+      const rootIdentity = {
+        build: HERDSMAN_BUILD,
+        piSessionId: ownerSessionId,
+        paneId: leadPaneId,
+        tabId: "status-boundary-lead-tab",
+        workspaceId: WORKSPACE,
+      };
+      const lease =
+        role === "chief"
+          ? claimChiefLease(rootIdentity)
+          : role === "manager"
+            ? claimManagerLease({ ...rootIdentity, repoKey: "repo-key" })
+            : undefined;
+      const agentSessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const agentPaneId = "status-boundary-agent-pane";
+      const agentSessionFile = join(
+        tmpdir(),
+        `status-boundary-${randomUUID()}.jsonl`,
+      );
+      process.env.HERDR_PANE_ID = agentPaneId;
+      process.env.HERDR_TAB_ID = "status-boundary-tab";
+      writeAgentState(
+        mailbox,
+        managedState(label, undefined, {
+          paneId: agentPaneId,
+          tabId: "status-boundary-tab",
+          piSessionId: agentSessionId,
+          piSessionFile: agentSessionFile,
+        }),
+      );
+      const identity = {
         agent: "pi",
-        kind: "id",
-        value: agentSessionId,
-      },
-      workspace_id: WORKSPACE,
-      pane_id: agentPaneId,
-      tab_id: "status-boundary-tab",
-      cwd: "/tmp",
-      agent_status: "idle",
-    };
-    const lead = {
-      agent: "pi",
-      agent_session: {
-        source: "herdr:pi",
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: agentSessionId,
+        },
+        workspace_id: WORKSPACE,
+        pane_id: agentPaneId,
+        tab_id: "status-boundary-tab",
+        cwd: "/tmp",
+        agent_status: "idle",
+      };
+      const lead = {
         agent: "pi",
-        kind: "id",
-        value: ownerSessionId,
-      },
-      workspace_id: WORKSPACE,
-      pane_id: leadPaneId,
-      tab_id: "status-boundary-lead-tab",
-      cwd: "/tmp",
-      agent_status: "idle",
-    };
-    const entries = delegationEnabled
-      ? [
-          {
-            type: "custom",
-            customType: "pi-herdsman-agent-definition",
-            data: { sessionId: agentSessionId, definition: "agent", label },
-          },
-        ]
-      : [];
-    const pi = fakePi({
-      entries,
-      exec: (_command, args) =>
-        isApiSnapshot(args)
-          ? {
-              stdout: JSON.stringify({
-                id: AGENT_ID,
-                result: {
-                  snapshot: {
-                    workspaces: [],
-                    agents: [identity, lead],
-                    panes: [
-                      {
-                        pane_id: agentPaneId,
-                        workspace_id: WORKSPACE,
-                        agent: "pi",
-                      },
-                      {
-                        pane_id: leadPaneId,
-                        workspace_id: WORKSPACE,
-                        agent: "pi",
-                      },
-                    ],
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: ownerSessionId,
+        },
+        workspace_id: WORKSPACE,
+        pane_id: leadPaneId,
+        tab_id: "status-boundary-lead-tab",
+        cwd: "/tmp",
+        agent_status: "idle",
+      };
+      const entries = delegationEnabled
+        ? [
+            {
+              type: "custom",
+              customType: "pi-herdsman-agent-definition",
+              data: { sessionId: agentSessionId, definition: "agent", label },
+            },
+          ]
+        : [];
+      const pi = fakePi({
+        entries,
+        exec: (_command, args) =>
+          isApiSnapshot(args)
+            ? {
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: {
+                    snapshot: {
+                      workspaces: [],
+                      agents: [identity, lead],
+                      panes: [
+                        {
+                          pane_id: agentPaneId,
+                          workspace_id: WORKSPACE,
+                          agent: "pi",
+                        },
+                        {
+                          pane_id: leadPaneId,
+                          workspace_id: WORKSPACE,
+                          agent: "pi",
+                        },
+                      ],
+                    },
                   },
-                },
-              }),
-              stderr: "",
-              code: 0,
-            }
-          : { stdout: "{}", stderr: "", code: 0 },
-    });
-    const context = fakeAgentContext(entries) as any;
-    context.sessionManager.getSessionFile = () => agentSessionFile;
-    context.mode = "tui";
-    context.hasUI = true;
-    let widget: any;
-    let registrations = 0;
-    context.ui.setWidget = (_key: string, content: any) => {
-      if (typeof content === "function") {
-        registrations++;
-        widget = content(
-          { requestRender: () => undefined },
-          {
-            fg: (_color: string, value: string) => value,
-            bold: (value: string) => value,
-          },
+                }),
+                stderr: "",
+                code: 0,
+              }
+            : { stdout: "{}", stderr: "", code: 0 },
+      });
+      const context = fakeAgentContext(entries) as any;
+      context.sessionManager.getSessionFile = () => agentSessionFile;
+      context.mode = "tui";
+      context.hasUI = true;
+      let widget: any;
+      let registrations = 0;
+      context.ui.setWidget = (_key: string, content: any) => {
+        if (typeof content === "function") {
+          registrations++;
+          widget = content(
+            { requestRender: () => undefined },
+            {
+              fg: (_color: string, value: string) => value,
+              bold: (value: string) => value,
+            },
+          );
+        }
+      };
+      const { SessionManager } =
+        await import("@earendil-works/pi-coding-agent");
+      const sessionManager = SessionManager as any;
+      const originalOpen = sessionManager.open;
+      const originalSetInterval = globalThis.setInterval;
+      let openCalls = 0;
+      let refreshTimer: TimerHandler | undefined;
+      globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+        if (delay === 10_000) refreshTimer = callback;
+        return {} as ReturnType<typeof setInterval>;
+      }) as typeof setInterval;
+      t.after(() => {
+        globalThis.setInterval = originalSetInterval;
+        sessionManager.open = originalOpen;
+        lease?.release();
+        pi.events.get("session_shutdown")?.[0]();
+        invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);
+        resetAgentMailbox(mailbox);
+        delete process.env.HERDR_SOCKET_PATH;
+        setLeadEnvironment();
+      });
+      sessionManager.open = (...args: any[]) => {
+        openCalls++;
+        return originalOpen.apply(sessionManager, args);
+      };
+      if (role !== "chief")
+        writeLeadCoordinationState(supervisionRuntime(), {
+          version: 1,
+          role,
+          build: HERDSMAN_BUILD,
+          instanceId: randomUUID(),
+          piSessionId: ownerSessionId,
+          updatedAt: Date.now(),
+        });
+      assert.equal(readAgentState(mailbox)?.agentDefinition, undefined);
+      registerExtension!(pi.pi as never);
+      try {
+        for (const start of pi.events.get("session_start") ?? [])
+          await start(undefined, context);
+      } finally {
+        globalThis.setInterval = originalSetInterval;
+      }
+      assert.equal(registrations, 1);
+      await t.waitFor(() =>
+        assert.ok(
+          widget.render(120)[0].includes(`${role} → agent:${label}`),
+          widget.render(120)[0],
+        ),
+      );
+      if (!delegationEnabled) assert.equal(openCalls, 0);
+      const statusIdentity = `${delegationEnabled ? "unknown" : "agent"}:${label}`;
+      if (delegationEnabled) {
+        // Startup enriches legacy state; keep the periodic read's fallback observable.
+        const statusState = readAgentState(mailbox)!;
+        delete statusState.agentDefinition;
+        writeAgentState(mailbox, statusState);
+        assert.equal(readAgentState(mailbox)?.agentDefinition, undefined);
+        assert.equal(typeof refreshTimer, "function");
+        (refreshTimer as () => void)();
+        await t.waitFor(() =>
+          assert.ok(
+            widget.render(120)[0].includes(`${role} → ${statusIdentity}`),
+            widget.render(120)[0],
+          ),
         );
       }
-    };
-    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-    const sessionManager = SessionManager as any;
-    const originalOpen = sessionManager.open;
-    const originalSetInterval = globalThis.setInterval;
-    let openCalls = 0;
-    let refreshTimer: TimerHandler | undefined;
-    globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-      if (delay === 10_000) refreshTimer = callback;
-      return {} as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    t.after(() => {
-      globalThis.setInterval = originalSetInterval;
-      sessionManager.open = originalOpen;
-      pi.events.get("session_shutdown")?.[0]();
+      const beforeRefresh = openCalls;
+
+      if (role === "chief") {
+        writeLeadCoordinationState(supervisionRuntime(), {
+          version: 1,
+          build: HERDSMAN_BUILD,
+          instanceId: randomUUID(),
+          piSessionId: ownerSessionId,
+          updatedAt: Date.now(),
+        });
+        lead.tab_id = "different-tab";
+        assert.equal(typeof refreshTimer, "function");
+        (refreshTimer as () => void)();
+        await t.waitFor(() =>
+          assert.ok(
+            widget.render(120)[0].includes(`? → ${statusIdentity}`),
+            widget.render(120)[0],
+          ),
+        );
+      }
       invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);
-      resetAgentMailbox(mailbox);
-      delete process.env.HERDR_SOCKET_PATH;
-      setLeadEnvironment();
-    });
-    sessionManager.open = (...args: any[]) => {
-      openCalls++;
-      return originalOpen.apply(sessionManager, args);
-    };
-    writeLeadCoordinationState(supervisionRuntime(), {
-      version: 1,
-      build: HERDSMAN_BUILD,
-      instanceId: randomUUID(),
-      piSessionId: ownerSessionId,
-      updatedAt: Date.now(),
-    });
-    assert.equal(readAgentState(mailbox)?.agentDefinition, undefined);
-    registerExtension!(pi.pi as never);
-    try {
-      for (const start of pi.events.get("session_start") ?? [])
-        await start(undefined, context);
-    } finally {
-      globalThis.setInterval = originalSetInterval;
-    }
-    assert.equal(registrations, 1);
-    await t.waitFor(() =>
-      assert.ok(
-        widget.render(120)[0].includes(`lead → agent:${label}`),
-        widget.render(120)[0],
-      ),
-    );
-    if (!delegationEnabled) assert.equal(openCalls, 0);
-    const statusIdentity = `${delegationEnabled ? "unknown" : "agent"}:${label}`;
-    if (delegationEnabled) {
-      // Startup enriches legacy state; keep the periodic read's fallback observable.
-      const statusState = readAgentState(mailbox)!;
-      delete statusState.agentDefinition;
-      writeAgentState(mailbox, statusState);
-      assert.equal(readAgentState(mailbox)?.agentDefinition, undefined);
+      lease?.release();
       assert.equal(typeof refreshTimer, "function");
       (refreshTimer as () => void)();
       await t.waitFor(() =>
         assert.ok(
-          widget.render(120)[0].includes(`lead → ${statusIdentity}`),
+          widget.render(120)[0].includes(`? → ${statusIdentity}`),
           widget.render(120)[0],
         ),
       );
-    }
-    const beforeRefresh = openCalls;
-
-    invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);
-    assert.equal(typeof refreshTimer, "function");
-    (refreshTimer as () => void)();
-    await t.waitFor(() =>
-      assert.ok(
-        widget.render(120)[0].includes(`? → ${statusIdentity}`),
-        widget.render(120)[0],
-      ),
-    );
-    assert.equal(openCalls, beforeRefresh);
-  });
+      assert.equal(openCalls, beforeRefresh);
+    });
+  }
 }
 
 test("periodic health loss reminders do not open transcripts for missing mailbox definitions", async (t) => {

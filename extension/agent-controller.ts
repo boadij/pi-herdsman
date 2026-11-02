@@ -1564,11 +1564,16 @@ export function visibleAgentSnapshots(
   return visible;
 }
 
+export type VerifiedRootOwner = {
+  sessionId: string;
+  role: "lead" | "manager" | "chief";
+};
+
 export function statusBreadcrumb(
   snapshot: {
     agents: ManagedAgentSnapshot[];
     mailboxes: { state: ManagedAgentState }[];
-    leadSessionIds: string[];
+    rootOwners: VerifiedRootOwner[];
   },
   candidate: ManagedAgentState | undefined,
   identity: { definition?: string; label?: string },
@@ -1620,10 +1625,14 @@ export function statusBreadcrumb(
       )
     )
       return [{ text: "?" }, ...definitions.reverse()];
-    return snapshot.leadSessionIds.filter(
-      (sessionId) => sessionId === ownerSessionId,
-    ).length === 1
-      ? [{ text: "lead", sessionId: ownerSessionId }, ...definitions.reverse()]
+    const roots = snapshot.rootOwners.filter(
+      (root) => root.sessionId === ownerSessionId,
+    );
+    return roots.length === 1
+      ? [
+          { text: roots[0]!.role, sessionId: ownerSessionId },
+          ...definitions.reverse(),
+        ]
       : [{ text: "?" }, ...definitions.reverse()];
   }
 }
@@ -3374,7 +3383,7 @@ export type ManagedAgentSnapshotCollection = {
   mailboxes: ReturnType<typeof listAgentStates>;
   stateIssues: ReturnType<typeof scanAgentStates>["issues"];
   liveAgents: any[];
-  leadSessionIds: string[];
+  rootOwners: VerifiedRootOwner[];
 };
 
 export type ManagedAgentSnapshotView = ManagedAgentSnapshotCollection & {
@@ -3489,11 +3498,11 @@ export function assertManagedAgentCascadeSafe(
 
 export type AgentSnapshotDependencies = {
   runtimeForLabel(label: string): Runtime | undefined;
-  readLeadSessionIds(
+  readRootOwners(
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof listAgentStates>,
     workspaceId: string,
-  ): string[];
+  ): VerifiedRootOwner[];
   staleAfterMs: number;
 };
 
@@ -3502,7 +3511,7 @@ export async function managedAgentSnapshots(
   ctx: ExtensionContext,
   dependencies: AgentSnapshotDependencies,
   signal?: AbortSignal,
-  proveLead = false,
+  proveRoot = false,
   allWorkspaces = false,
   suppliedInventory?: HerdrSessionSnapshot,
   allowTranscriptDefinitionFallback = true,
@@ -3623,16 +3632,16 @@ export async function managedAgentSnapshots(
     };
     return { state, agentDefinition, lifecycleState, listed, presence };
   });
-  let leadSessionIds: string[] = [];
-  if (proveLead) {
+  let rootOwners: VerifiedRootOwner[] = [];
+  if (proveRoot) {
     try {
-      leadSessionIds = dependencies.readLeadSessionIds(
+      rootOwners = dependencies.readRootOwners(
         inventory,
         mailboxes,
         currentWorkspaceId,
       );
     } catch {
-      // Missing lead evidence must remain an unknown breadcrumb.
+      // Missing root evidence must remain an unknown breadcrumb.
     }
   }
   return {
@@ -3640,7 +3649,7 @@ export async function managedAgentSnapshots(
     mailboxes,
     stateIssues,
     liveAgents: inventory.agents,
-    leadSessionIds,
+    rootOwners,
   };
 }
 
@@ -3982,7 +3991,7 @@ export function createAgentController(
   const snapshot = (
     context: ExtensionContext,
     signal?: AbortSignal,
-    proveLead = false,
+    proveRoot = false,
     allWorkspaces = false,
     suppliedInventory?: HerdrSessionSnapshot,
     allowTranscriptDefinitionFallback = true,
@@ -3995,7 +4004,7 @@ export function createAgentController(
         runtimeForLabel: (label) => runtimes.get(label),
       },
       signal,
-      proveLead,
+      proveRoot,
       allWorkspaces,
       suppliedInventory,
       allowTranscriptDefinitionFallback,
@@ -4004,13 +4013,13 @@ export function createAgentController(
     context: ExtensionContext,
     scope = options.scope,
     signal?: AbortSignal,
-    proveLead = false,
+    proveRoot = false,
     allowTranscriptDefinitionFallback = true,
   ): Promise<ManagedAgentSnapshotView> => {
     const result = await snapshot(
       context,
       signal,
-      proveLead,
+      proveRoot,
       false,
       undefined,
       allowTranscriptDefinitionFallback,
@@ -7825,7 +7834,8 @@ export function createAgentController(
           } finally {
             resetRelease();
           }
-          let ownerDisplay = "lead";
+          let ownerDisplay =
+            scope.kind === "root" ? initiatingRootGeneration?.role : undefined;
           if (scope.kind === "managed-agent") {
             const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION;
             const parentLabel = process.env.PI_HERDSMAN_LABEL;
@@ -7835,6 +7845,8 @@ export function createAgentController(
               );
             ownerDisplay = displayIdentity(definition, parentLabel);
           }
+          if (!ownerDisplay)
+            throw new Error("Verified direct owner role is unavailable");
           if (p.action === "delegate") {
             const registrations = new Map<
               string,
