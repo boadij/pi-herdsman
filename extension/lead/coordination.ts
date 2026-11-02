@@ -71,7 +71,7 @@ import {
 } from "../coordinator-target.ts";
 
 import type { MessageFileInput } from "../core.ts";
-import type { ResultBinding } from "../mailbox.ts";
+import type { ResultBinding } from "../storage.ts";
 
 import { createHash, randomUUID } from "node:crypto";
 
