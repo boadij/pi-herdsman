@@ -605,6 +605,8 @@ function publishRecord(path: string, content: string): string {
   const directory = dirname(path);
   const temporary = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
   let fd: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     fd = openSync(temporary, "wx", 0o600);
     writeFileSync(fd, content, "utf8");
@@ -614,15 +616,19 @@ function publishRecord(path: string, content: string): string {
     renameSync(temporary, path);
     chmodSync(path, 0o600);
     fsyncDirectory(directory);
-    return path;
   } finally {
     if (fd !== undefined) closeSync(fd);
     try {
       unlinkSync(temporary);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
+  return path;
 }
 
 function writeOverflowBody(
@@ -922,6 +928,8 @@ function writeChiefMessageUnlocked(
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
   const content = `${JSON.stringify(stored)}\n`;
   let fd: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     fd = openSync(temporary, "wx", 0o600);
     writeFileSync(fd, content, "utf8");
@@ -968,9 +976,13 @@ function writeChiefMessageUnlocked(
     try {
       unlinkSync(temporary);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
   return path;
 }
 
@@ -1948,6 +1960,8 @@ function writeDescriptor(
   );
   const content = `${JSON.stringify(descriptor)}\n`;
   let fd: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     fd = openSync(temporary, "wx", 0o600);
     writeFileSync(fd, content, "utf8");
@@ -1963,9 +1977,13 @@ function writeDescriptor(
     try {
       unlinkSync(temporary);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
 }
 
 export function sameChiefDescriptor(
@@ -2488,6 +2506,8 @@ function writeProjectAssignmentUnlocked(
   chmodSync(directory, 0o700);
   const temporary = join(directory, `.${assignment.id}.${randomUUID()}.tmp`);
   let fd: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     fd = openSync(temporary, "wx", 0o600);
     writeFileSync(fd, content, "utf8");
@@ -2502,9 +2522,13 @@ function writeProjectAssignmentUnlocked(
     try {
       unlinkSync(temporary);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
 }
 
 function upgradeProjectAssignmentEvidence(
@@ -3164,6 +3188,8 @@ function writeProjectMessageUnlocked(
   }
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
   let fd: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     fd = openSync(temporary, "wx", 0o600);
     writeFileSync(fd, `${JSON.stringify(stored)}\n`, "utf8");
@@ -3197,9 +3223,13 @@ function writeProjectMessageUnlocked(
     try {
       unlinkSync(temporary);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
 }
 
 export function listProjectMessages(

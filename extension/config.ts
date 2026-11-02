@@ -477,6 +477,8 @@ function writeConfigAtomically(
     `.${basename(path)}.${randomUUID()}.tmp`,
   );
   let descriptor: number | undefined;
+  let cleanupError: unknown;
+  let cleanupFailed = false;
   try {
     descriptor = openSync(temporaryPath, "wx", 0o600);
     writeFileSync(descriptor, content, "utf8");
@@ -490,9 +492,13 @@ function writeConfigAtomically(
     try {
       unlinkSync(temporaryPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        cleanupFailed = true;
+        cleanupError = error;
+      }
     }
   }
+  if (cleanupFailed) throw cleanupError;
 }
 
 export function updateConfig<K extends ConfigKey>(

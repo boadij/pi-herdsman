@@ -4151,6 +4151,42 @@ test("project-message readiness probe is filename-based and fails open on uncert
   }
 });
 
+test("project message temporary cleanup preserves primary errors and reports standalone failures", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      "--input-type=module",
+      "--eval",
+      `
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import { mock } from "node:test";
+import { randomUUID } from "node:crypto";
+const { default: ignored, ...namedExports } = fs;
+let cleanupError;
+mock.module("node:fs", { namedExports: { ...namedExports, unlinkSync: (path) => {
+  if (cleanupError && typeof path === "string" && path.endsWith(".tmp")) throw cleanupError;
+  return fs.unlinkSync(path);
+} }, defaultExport: { ...fs } });
+const storage = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)});
+const runtime = storage.supervisionRuntime("/tmp/cleanup-" + randomUUID() + ".sock");
+const record = { version: 2, id: randomUUID(), repoKey: "cleanup", branch: "feature", fromSessionId: randomUUID(), text: "original", createdAt: 1 };
+try {
+  storage.writeProjectMessage(record, runtime);
+  cleanupError = Object.assign(new Error("injected unlink failure"), { code: "EIO" });
+  assert.throws(() => storage.writeProjectMessage({ ...record, text: "conflict" }, runtime), /identity conflicts/);
+  assert.throws(() => storage.writeProjectMessage(record, runtime), (error) => error === cleanupError);
+  cleanupError = Object.assign(new Error("missing"), { code: "ENOENT" });
+  assert.doesNotThrow(() => storage.writeProjectMessage(record, runtime));
+} finally { fs.rmSync(runtime.root, { recursive: true, force: true }); }
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test("project-message readiness probe fails open on read errors and tolerates disappearance", () => {
   const result = spawnSync(
     process.execPath,
