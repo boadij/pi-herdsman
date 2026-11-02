@@ -54,10 +54,28 @@ as:
    └─ worktree/silver-stone-21b7 · done
 ```
 
-The widget caps ordinary reports at six and shows omitted reports in an
-`… N more · /chief` or `… N more · /manager` row, according to the active
-role. The owned-Agent subtree follows the supervision rows, including any
-overflow row; it is not included in that cap.
+## Height limit
+
+The global `statusWidgetMaxRows` preference bounds the total ambient widget
+height, including the header and any overflow line. It defaults to 8 and
+accepts integers from 1 through 100; change it in Settings or the global
+[configuration](configuration.md). A limit of 1 shows only the header. When
+rows are omitted and at least two lines are available, the final line indicates
+that more content exists. The overflow line is not interactive.
+
+Manager and Chief widgets share this budget between supervision and owned-Agent
+rows. When truncation is necessary, a limit of 4 reserves the `Agents` heading
+when that section exists; limits of 5 or more also reserve its first Agent row
+when present. Limits of 2 or 3 favor the supervision prefix. If the complete
+view fits, it is shown unchanged. Larger limits can expose more reports and
+nested Chief work. Supervision-specific `… N more · /chief` or `… N more ·
+/manager` rows can still show precise omitted-entry counts.
+
+The limit changes presentation only: complete snapshots, ownership, focus
+authorization, refresh cadence, expanded overviews, and model-facing context
+are unaffected. Only displayed eligible rows can be clicked. A changed setting
+is picked up through the existing render and reconciliation lifecycle; it does
+not introduce immediate cross-process synchronization.
 
 Chief's header shows only nonzero categories (`manager`, `direct lead`), or
 `no reports`. Manager's header shows the project name and lists managed

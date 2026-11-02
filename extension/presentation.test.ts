@@ -6701,6 +6701,38 @@ test("supervision widget composes owned Agents with independent focus and freshn
   );
 });
 
+test("combined supervision widget safely renders at zero width", () => {
+  const widget = createSupervisionWidget(
+    () => [lead()],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    {
+      getSnapshot: () => ({
+        agents: [
+          {
+            label: "scout",
+            definition: "scout",
+            state: "working",
+            sessionId: "agent",
+          },
+        ],
+        stale: false,
+        unavailable: false,
+      }),
+      onFocus: () => assert.fail("zero-width rows must not be clickable"),
+    },
+    () => 2,
+  );
+  assert.deepEqual(widget.render(0), ["", ""]);
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 0 }),
+    undefined,
+  );
+});
+
 test("owned Agent composition preserves overflow and independent supervision freshness", () => {
   const reports = Array.from({ length: 7 }, (_, index) =>
     lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
@@ -6733,28 +6765,136 @@ test("owned Agent composition preserves overflow and independent supervision fre
     },
   );
   const rows = widget.render(80);
-  assert.match(rows[7]!, /^├─ … 1 more/);
-  assert.equal(rows[8], "└─ Agents · 1");
+  assert.match(rows[7]!, /^└─ … more/);
+  assert.equal(rows[5], "└─ Agents · 1");
   assert.equal(
-    widget.handleMouse({ type: "click", button: "left", x: 5, y: 9, width: 80 })
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 6, width: 80 })
       ?.handled,
     true,
   );
   assert.equal(focused, 1);
   frame++;
-  assert.notEqual(widget.render(80)[9], rows[9]);
+  assert.notEqual(widget.render(80)[6], rows[6]);
   snapshot.unavailable = true;
-  assert.match(widget.render(80)[8]!, /unavailable/);
+  assert.match(widget.render(80)[5]!, /unavailable/);
   assert.equal(
     widget.handleMouse({
       type: "click",
       button: "left",
       x: 5,
-      y: 9,
+      y: 6,
       width: 80,
     }),
     undefined,
   );
+});
+
+test("ambient budgets retain visible targets and the mixed Agent reserve", () => {
+  const reports = Array.from({ length: 12 }, (_, index) =>
+    lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
+  );
+  const snapshot = {
+    agents: [
+      {
+        label: "scout",
+        definition: "scout",
+        state: "done" as const,
+        sessionId: "agent",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  let limit = 8;
+  const focused: string[] = [];
+  const widget = createSupervisionWidget(
+    () => reports,
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => {
+      if (intent.kind === "session") focused.push(intent.sessionId);
+    },
+    undefined,
+    {
+      getSnapshot: () => snapshot,
+      onFocus: (intent) => {
+        if (intent.kind === "session") focused.push(intent.sessionId);
+      },
+    },
+    () => limit,
+  );
+  for (limit of [1, 2, 3, 4, 5, 8, 100]) {
+    const rows = widget.render(80);
+    assert.ok(rows.length <= limit);
+    if (limit < 15 && limit > 1) assert.match(rows.at(-1)!, /… more/);
+    assert.equal(
+      rows.some((row) => row.includes("Agents ·")),
+      limit >= 4,
+    );
+    if (limit >= 5) assert.ok(rows.some((row) => row.includes("scout")));
+    assert.equal(
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 5,
+        y: rows.length,
+        width: 80,
+      }),
+      undefined,
+    );
+    if (limit > 1 && limit < 15)
+      assert.equal(
+        widget.handleMouse({
+          type: "click",
+          button: "left",
+          x: 5,
+          y: rows.length - 1,
+          width: 80,
+        }),
+        undefined,
+      );
+    for (const width of [1, 4, 10])
+      assert.ok(
+        widget.render(width).every((row) => visibleWidth(row) <= width),
+      );
+  }
+  limit = 5;
+  const rows = widget.render(80);
+  const agentRow = rows.findIndex((row) => row.includes("scout"));
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 5,
+      y: agentRow,
+      width: 80,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, ["agent"]);
+});
+
+test("ordinary widget bounds rows without changing snapshot counts", () => {
+  let limit = 8;
+  const widget = new StatusWidget(undefined, undefined, undefined, () => limit);
+  widget.setSnapshot({
+    agents: Array.from({ length: 12 }, (_, index) => ({
+      label: `agent-${index}`,
+      definition: "scout",
+      state: "done" as const,
+      sessionId: `session-${index}`,
+    })),
+    stale: true,
+    unavailable: false,
+  });
+  for (limit of [1, 2, 5, 8, 100]) {
+    const rows = widget.render(80);
+    assert.ok(rows.length <= limit);
+    assert.match(rows[0]!, /stale/);
+    if (limit < 13 && limit > 1) assert.match(rows.at(-1)!, /… more/);
+  }
+  widget.dispose();
 });
 
 test("Chief tree connects nested Manager Leads without nesting direct Leads", () => {
@@ -6786,6 +6926,26 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
     ],
     leads: [lead({ lead: "direct", displayName: "unrelated-direct-lead" })],
   };
+  const manyChildren = {
+    managers: [manager("project", ["one", "two", "three", "four", "five"])],
+    leads: [],
+  };
+  const expanded = createSupervisionWidget(
+    () => manyChildren,
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => 100,
+  ).render(120);
+  assert.ok(expanded.some((row) => row.includes("five")));
+  assert.ok(
+    !renderSupervisionLeads(manyChildren, 120).some((row) =>
+      row.includes("four"),
+    ),
+  );
   assert.deepEqual(renderSupervisionLeads(snapshot, 120).slice(1), [
     "├─ ● project-a · 2 compatible leads",
     "│  ├─ ◉ child-a1 · 1 agent",

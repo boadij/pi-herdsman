@@ -1159,6 +1159,7 @@ function renderSupervisionRows(
   options: {
     status?: SupervisionContextStatus;
     ordinaryCap?: number;
+    childCap?: number;
     role?: "chief" | "manager";
     theme?: any;
     hasFollowingGroup?: boolean;
@@ -1482,7 +1483,9 @@ function renderSupervisionRows(
         ...(intent ? { intent } : {}),
         ...(intent ? { label: lead.displayName } : {}),
       };
-      const children = isIncompatible ? [] : (lead.leads ?? []).slice(0, 3);
+      const children = isIncompatible
+        ? []
+        : (lead.leads ?? []).slice(0, options.childCap ?? 3);
       const childIndent = branch === "└─" ? "   " : "│  ";
       return [
         row,
@@ -1799,6 +1802,29 @@ export function formatSupervisionContext(
   return [...included, closing].join("\n");
 }
 
+function boundedWidgetRows<T extends { text: string }>(
+  supervision: T[],
+  agents: T[],
+  maxRows: number,
+  width: number,
+): T[] {
+  if (supervision.length + agents.length <= maxRows)
+    return [...supervision, ...agents];
+  if (maxRows === 1) return supervision.slice(0, 1);
+  const capacity = maxRows - 2;
+  const reserve = agents.length
+    ? Math.min(agents.length, maxRows >= 5 ? 2 : maxRows >= 4 ? 1 : 0)
+    : 0;
+  const supervisionCount = Math.min(supervision.length - 1, capacity - reserve);
+  const agentCount = Math.min(agents.length, capacity - supervisionCount);
+  return [
+    supervision[0],
+    ...supervision.slice(1, 1 + supervisionCount),
+    ...agents.slice(0, agentCount),
+    { text: safeLine("└─ … more", width) } as T,
+  ];
+}
+
 /** Width-aware compact widget for the ambient status area. */
 export function createSupervisionWidget(
   getLeads: () =>
@@ -1813,6 +1839,7 @@ export function createSupervisionWidget(
     onFocus(intent: FocusIntent): void;
     getFrame?(): number;
   },
+  getMaxRows: () => number = () => 8,
 ): {
   render(width: number): string[];
   handleMouse(event: {
@@ -1838,56 +1865,36 @@ export function createSupervisionWidget(
         width,
         {
           status: getStatus(),
-          ordinaryCap: 6,
+          ordinaryCap: getMaxRows(),
+          childCap: getMaxRows(),
           role,
           theme,
           hasFollowingGroup: showAgents,
         },
         undefined,
         getGitSummary,
-      ).filter(({ text }) => text.length > 0);
-      hits = [];
-      rows.forEach((row, index) => {
-        if (!row.intent || !row.label) return;
-        if (row.clickRegion) {
-          hits.push({
-            row: index,
-            ...row.clickRegion,
-            intent: row.intent,
-            origin: "supervision",
-          });
-        } else if (identifyingLabelVisible(row.text, row.label, width)) {
-          hits.push({
-            row: index,
-            from: 0,
-            to: Math.min(width, visibleWidth(row.text)),
-            intent: row.intent,
-            origin: "supervision",
-          });
-        }
-      });
-      const output = rows.map(({ text }) => text);
+      ).filter(({ text }, index) => index === 0 || text.length > 0);
+      const agentRows: (SupervisionRow & { origin?: "agent" })[] = [];
       if (showAgents && snapshot) {
         const freshness = snapshot.unavailable
           ? "unavailable"
           : snapshot.stale
             ? "stale"
             : String(snapshot.agents.length);
-        output.push(safeLine(`└─ Agents · ${freshness}`, width));
-        const childWidth = Math.max(0, width - 3);
-        const agentRows = renderStatusRows(snapshot.agents, {
-          width: childWidth,
+        agentRows.push({ text: safeLine(`└─ Agents · ${freshness}`, width) });
+        const rendered = renderStatusRows(snapshot.agents, {
+          width: Math.max(0, width - 3),
           now: snapshot.stale ? snapshot.refreshedAt : Date.now(),
           animate: !snapshot.stale && !snapshot.unavailable,
           frame: ownedAgents?.getFrame?.() ?? 0,
           theme,
         });
-        agentRows.forEach((row, index) => {
+        for (const row of rendered) {
           const agent = snapshot.agents.find(
             ({ label, sessionId }) =>
               label === row.label && sessionId === row.sessionId,
           );
-          if (
+          const eligible =
             !snapshot.stale &&
             !snapshot.unavailable &&
             row.sessionId &&
@@ -1897,21 +1904,52 @@ export function createSupervisionWidget(
             agent &&
             agent.state !== "unknown" &&
             agent.state !== "lost" &&
-            agent.state !== "starting"
-          )
-            hits.push({
-              row: output.length + index,
-              from: 0,
-              to: Math.min(width, 3 + visibleWidth(row.text)),
-              intent: { kind: "session", sessionId: row.sessionId },
-              origin: "agent",
-            });
-        });
-        output.push(
-          ...agentRows.map(({ text }) => safeLine(`   ${text}`, width)),
-        );
+            agent.state !== "starting";
+          agentRows.push({
+            text: safeLine(`   ${row.text}`, width),
+            origin: "agent",
+            ...(eligible
+              ? {
+                  label: row.label,
+                  intent: {
+                    kind: "session" as const,
+                    sessionId: row.sessionId!,
+                  },
+                }
+              : {}),
+          });
+        }
       }
-      return output;
+      const visible = boundedWidgetRows<SupervisionRow & { origin?: "agent" }>(
+        rows,
+        agentRows,
+        getMaxRows(),
+        width,
+      );
+      hits = [];
+      visible.forEach((row, index) => {
+        if (!row.intent || !row.label) return;
+        if (row.clickRegion) {
+          hits.push({
+            row: index,
+            ...row.clickRegion,
+            intent: row.intent,
+            origin: row.origin ?? "supervision",
+          });
+        } else if (
+          row.origin === "agent" ||
+          identifyingLabelVisible(row.text, row.label, width)
+        ) {
+          hits.push({
+            row: index,
+            from: 0,
+            to: Math.min(width, visibleWidth(row.text)),
+            intent: row.intent,
+            origin: row.origin ?? "supervision",
+          });
+        }
+      });
+      return visible.map(({ text }) => text);
     },
     handleMouse(event) {
       if (
@@ -4511,12 +4549,15 @@ export class StatusWidget {
   private onFocus?: (intent: FocusIntent) => void;
   private renderedWidth = -1;
   private hits: HitRegion[] = [];
+  private getMaxRows: () => number;
   constructor(
     invalidateUI?: () => void,
     theme?: any,
     onFocus?: (intent: FocusIntent) => void,
+    getMaxRows: () => number = () => 8,
   ) {
     this.invalidateUI = invalidateUI;
+    this.getMaxRows = getMaxRows;
     this.onFocus = onFocus;
     this.theme = theme ?? {
       fg: (_color: string, text: string) => text,
@@ -4668,9 +4709,15 @@ export class StatusWidget {
       width: Math.max(0, width),
       theme: this.theme,
     });
-    out.push(...rows.map(({ text }) => text));
+    const visible = boundedWidgetRows<{ text: string }>(
+      [{ text: out[0] }],
+      rows,
+      this.getMaxRows(),
+      width,
+    );
     if (!s.stale && !s.unavailable)
       rows.forEach((row, index) => {
+        if (visible[index + 1] !== row) return;
         const agent = s.agents.find(
           ({ label, sessionId }) =>
             label === row.label && sessionId === row.sessionId,
@@ -4692,7 +4739,7 @@ export class StatusWidget {
           intent: { kind: "session", sessionId: row.sessionId },
         });
       });
-    return out;
+    return visible.map(({ text }) => text);
   }
   handleMouse(event: {
     type: string;
@@ -4727,7 +4774,8 @@ export function createStatusWidget(
   invalidate?: () => void,
   theme?: any,
   onFocus?: (intent: FocusIntent) => void,
+  getMaxRows?: () => number,
 ): StatusWidget {
-  return new StatusWidget(invalidate, theme, onFocus);
+  return new StatusWidget(invalidate, theme, onFocus, getMaxRows);
 }
 export { Text, truncateToWidth, visibleWidth };
