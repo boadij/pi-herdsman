@@ -49,11 +49,6 @@ type LeadCommandHost = {
     items: readonly (SelectItem & { help?: string })[],
     selectedValue?: string,
   ): Promise<string | undefined>;
-  selectModelMenu(
-    ctx: ExtensionContext,
-    items: readonly { value: string; label: string; searchText?: string }[],
-    selectedValue?: string,
-  ): Promise<string | undefined>;
   updateConfig(key: string, value: unknown): void;
   readConfig: typeof import("../config.ts").readConfig;
   readEffectiveConfig: typeof import("../config.ts").readEffectiveConfig;
@@ -516,8 +511,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
                 };
               });
-              const selectedModel = await host.selectModelMenu(
+              const selectedModel = await host.selectMenu(
                 ctx,
+                "Model",
                 [
                   {
                     value: "inherit",
