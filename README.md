@@ -122,6 +122,26 @@ See [Coordination](docs/concepts/coordination.md) for the mental model and
 [Project orchestration](docs/guides/project-orchestration.md) for the Manager
 workflow.
 
+## Project status & roadmap
+
+Pi Herdsman is actively evolving. Core orchestration workflows are available today,
+while other areas are being refined or expanded.
+
+| Area | Status | What to expect |
+| --- | --- | --- |
+| **Lead & Agent orchestration** | ✅ **Core complete** | Background and nested delegation, result handoffs, and peer communication. Ongoing reliability fixes. |
+| **Manager orchestration** | ✨ **Polishing** | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability. |
+| **Chief coordination** | 🚧 **In progress** | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed. |
+
+**On the roadmap:** [Coordination profiles](https://github.com/boadij/pi-herdsman/issues/734)
+(replacing the current role-definition terminology),
+[cross-build messaging](https://github.com/boadij/pi-herdsman/issues/688), and
+[portable project state](https://github.com/boadij/pi-herdsman/issues/755).
+
+**Early-stage project:** Core features are usable today, but pre-1.0 releases may
+introduce breaking changes as configuration and runtime conventions evolve.
+See the [changelog](CHANGELOG.md) for release changes and migration guidance.
+
 ## Choose your next step
 
 | Goal                                       | Start here                                                    |
