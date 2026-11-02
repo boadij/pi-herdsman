@@ -1821,7 +1821,7 @@ function boundedWidgetRows<T extends { text: string }>(
     supervision[0],
     ...supervision.slice(1, 1 + supervisionCount),
     ...agents.slice(0, agentCount),
-    { text: safeLine("└─ … more", width) } as T,
+    { text: safeLine("… more", width) } as T,
   ];
 }
 

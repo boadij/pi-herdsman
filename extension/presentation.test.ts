@@ -6765,7 +6765,7 @@ test("owned Agent composition preserves overflow and independent supervision fre
     },
   );
   const rows = widget.render(80);
-  assert.match(rows[7]!, /^└─ … more/);
+  assert.equal(rows[7], "… more");
   assert.equal(rows[5], "└─ Agents · 1");
   assert.equal(
     widget.handleMouse({ type: "click", button: "left", x: 5, y: 6, width: 80 })
@@ -6827,7 +6827,7 @@ test("ambient budgets retain visible targets and the mixed Agent reserve", () =>
   for (limit of [1, 2, 3, 4, 5, 8, 100]) {
     const rows = widget.render(80);
     assert.ok(rows.length <= limit);
-    if (limit < 15 && limit > 1) assert.match(rows.at(-1)!, /… more/);
+    if (limit < 15 && limit > 1) assert.equal(rows.at(-1), "… more");
     assert.equal(
       rows.some((row) => row.includes("Agents ·")),
       limit >= 4,
@@ -6941,6 +6941,19 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
     () => 100,
   ).render(120);
   assert.ok(expanded.some((row) => row.includes("five")));
+  const truncatedChiefChildren = createSupervisionWidget(
+    () => manyChildren,
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => 5,
+  ).render(120);
+  assert.equal(truncatedChiefChildren.at(-1), "… more");
+  assert.match(truncatedChiefChildren[2]!, /^   ├─/);
+  assert.doesNotMatch(truncatedChiefChildren.at(-1)!, /[└├│]/);
   assert.ok(
     !renderSupervisionLeads(manyChildren, 120).some((row) =>
       row.includes("four"),
