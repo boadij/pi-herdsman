@@ -325,6 +325,20 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const tools = new Map(pi.tools.map((tool) => [tool.name, tool]));
+  const workDelegate = tools.get("delegate_work")!;
+  const agentDelegate = tools.get("delegate_agent")!;
+  assert.match(
+    workDelegate.parameters.properties.branch.description,
+    /task-specific name following repository conventions/,
+  );
+  assert.match(
+    agentDelegate.description,
+    /most focused eligible Agent definition capable of completing the full task/,
+  );
+  assert.match(
+    agentDelegate.parameters.properties.label.description,
+    /task-specific logical Agent label/,
+  );
   for (const name of ["delegate_work", "resume_work", "integrate_branch"])
     assert.equal(pi.tools.filter((tool) => tool.name === name).length, 1);
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
