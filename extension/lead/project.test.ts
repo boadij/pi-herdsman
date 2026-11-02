@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { sameDirectory } from "../herdr.ts";
 import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
+import { rememberCoordinatorTarget } from "../coordinator-target.ts";
 
 const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
@@ -13,6 +14,73 @@ const { writeProjectAssignment } = await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
 const testSha = (letter: string) => letter.repeat(40);
+
+test("staff message rejects an identity change during attachment preparation", async () => {
+  const entries: unknown[] = [];
+  const ctx = fakeContext(entries) as any;
+  const pi = {
+    appendEntry: (customType: string, data: unknown) =>
+      entries.push({ type: "custom", customType, data }),
+  };
+  const session = randomUUID();
+  const target = rememberCoordinatorTarget(pi as any, ctx, "lead", session);
+  const authority = {
+    leaseId: "lease",
+    repoKey: "/repo",
+    piSessionId: randomUUID(),
+  };
+  let paneId = "original";
+  let release!: () => void;
+  let started!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const resume = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let writes = 0;
+  const runtime = createLeadProjectRuntime({
+    pi,
+    leadRuntime: {},
+    activeRole: () => "manager",
+    currentManager: async () => authority,
+    managerLease: () => ({ descriptor: authority }),
+    supervisionRuntime: () => ({}),
+    directReports: async () => [
+      {
+        lead: session,
+        paneId,
+        workspaceId: "workspace",
+        tabId: "tab",
+        instanceId: "instance",
+        relationship: "supervised",
+        availableActions: ["message"],
+      },
+    ],
+    findProjectAssignmentBySession: () => [],
+    resolveMessageFiles: () => ["attachment"],
+    prepareCoordinationInput: async () => {
+      started();
+      await resume;
+      return { text: "message", resultBindings: [] };
+    },
+    writeChiefMessage: () => {
+      writes++;
+    },
+  } as any);
+  const operation = runtime.executeStaff(
+    "message",
+    { action: "message", target, message: "message", files: ["attachment"] },
+    undefined,
+    undefined,
+    ctx,
+  );
+  await preparing;
+  paneId = "changed";
+  release();
+  await assert.rejects(operation, /changed before the message was queued/);
+  assert.equal(writes, 0);
+});
 
 function baselineLifecycle(options: {
   reused?: boolean;

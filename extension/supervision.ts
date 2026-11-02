@@ -3670,7 +3670,7 @@ export type OpenProjectWorkspace = Readonly<{
   linked: boolean;
 }>;
 export type ProjectWorkStatus = "active" | "paused" | "unknown" | "conflict";
-export type UnverifiedAssignedLead = Readonly<{
+export type UnverifiedLead = Readonly<{
   lead: string;
   status: "unknown" | "conflict";
   issue: string;
@@ -3720,7 +3720,7 @@ export function projectWorkSnapshot(options: {
     SupervisedLead,
     "lead" | "workspaceId" | "runtimeState"
   >[];
-  unverified?: readonly UnverifiedAssignedLead[];
+  unverified?: readonly UnverifiedLead[];
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
     const placement = options.placements?.get(assignment.id);
