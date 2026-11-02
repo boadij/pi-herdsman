@@ -2428,10 +2428,12 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
 export function writeProjectAssignment(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
+  verifyAuthority?: () => void,
 ): void {
-  withProjectAssignmentLock(() =>
-    writeProjectAssignmentUnlocked(runtime, assignment),
-  );
+  withProjectAssignmentLock(() => {
+    verifyAuthority?.();
+    writeProjectAssignmentUnlocked(runtime, assignment);
+  });
 }
 
 export function writeProjectAssignmentAfter(

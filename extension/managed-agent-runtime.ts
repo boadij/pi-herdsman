@@ -181,6 +181,7 @@ export function authorizedScopedResult(
   accepted: readonly RequiredEvidence[],
   branch: readonly unknown[],
   requesterSessionId: string,
+  allowedRoots: ReadonlySet<string> = new Set(),
 ): ResultBinding | undefined {
   if (!parseSemanticResultRef(ref)) return undefined;
   const branchMappings = verifiedBranchResultMappings(
@@ -211,7 +212,12 @@ export function authorizedScopedResult(
     !!published &&
     published !== "reserved" &&
     published.rootSessionId === rootSessionId;
-  if (!explicitlyAccepted && !owned && !verifiedBranch) return undefined;
+  const projectOwned =
+    !!published &&
+    published !== "reserved" &&
+    allowedRoots.has(published.rootSessionId);
+  if (!explicitlyAccepted && !owned && !verifiedBranch && !projectOwned)
+    return undefined;
   return { ref, canonicalRef };
 }
 

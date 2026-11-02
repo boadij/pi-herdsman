@@ -3,6 +3,10 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  hasManagerEvidenceSelectors,
+  type ManagerEvidence,
+} from "./project.ts";
 
 import type {
   ManagerDescriptor,
@@ -135,6 +139,7 @@ export type LeadCoordinationBaseHost = {
   invalidateLeadCoordinationState: typeof import("../supervision.ts").invalidateLeadCoordinationState;
   runHerdr: typeof import("../herdr.ts").runHerdr;
   resolveMessageFiles: typeof import("../agent-controller.ts").resolveMessageFiles;
+  managerEvidence?: ManagerEvidence;
   messageLimits(
     ctx: ExtensionContext,
   ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
@@ -807,6 +812,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     recordId = randomUUID(),
     createdAt = Date.now(),
     resultBindings: readonly ResultBinding[] = [],
+    verifyEvidence?: () => void,
   ): Promise<ChiefMessageRecord> => {
     if (
       controllerScope?.kind !== "root" ||
@@ -948,10 +954,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         throw new Error(
           "Peer assignment changed before the message was queued",
         );
+      verifyEvidence?.();
       writeCoordinationMessage(record, peerRuntime());
       return record;
     };
-    return senderContext.role === "manager" && targetContext.role === "manager"
+    return !verifyEvidence &&
+      senderContext.role === "manager" &&
+      targetContext.role === "manager"
       ? publish()
       : withProjectAssignmentAuthority(publish);
   };
@@ -965,6 +974,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     runtimeOverride?: ReturnType<typeof supervisionRuntime>,
     expectedSupervisor?: { piSessionId: string; leaseId: string },
     resultBindings: readonly ResultBinding[] = [],
+    verifyEvidence?: () => void,
   ): ChiefMessageRecord => {
     assertCurrentLeadCoordination(ctx);
     if (
@@ -1021,7 +1031,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         "Supervisor target changed before the message was queued",
       );
     const runtime = runtimeOverride ?? supervisionRuntime();
-    writeChiefMessage(record, runtime);
+    if (verifyEvidence)
+      withProjectAssignmentAuthority(() => {
+        verifyEvidence();
+        writeChiefMessage(record, runtime);
+      });
+    else writeChiefMessage(record, runtime);
     try {
       assertCurrentLeadCoordination(ctx);
     } catch (error) {
@@ -1255,10 +1270,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         );
       const recordId = randomUUID();
       const createdAt = Date.now();
+      const evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
+        ? await host.managerEvidence?.(ctx, params.files ?? [])
+        : undefined;
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
-        resolveMessageFiles(ctx, params.files, "message_supervisor"),
+        resolveMessageFiles(
+          ctx,
+          params.files,
+          "message_supervisor",
+          evidenceScope?.retained,
+          evidenceScope?.roots,
+        ),
         "message_supervisor",
         "Message",
         (candidate, resultBindings) => ({
@@ -1277,16 +1301,21 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           createdAt,
         }),
       );
-      record = await queueChiefRecord(
-        activeRole() === "manager" ? "manager_message" : "lead_message",
-        prepared.text,
-        ctx,
-        recordId,
-        createdAt,
-        undefined,
-        undefined,
-        prepared.resultBindings,
-      );
+      const queue = async () => {
+        record = await queueChiefRecord(
+          activeRole() === "manager" ? "manager_message" : "lead_message",
+          prepared.text,
+          ctx,
+          recordId,
+          createdAt,
+          undefined,
+          undefined,
+          prepared.resultBindings,
+          evidenceScope?.verify,
+        );
+      };
+      if (evidenceScope) await evidenceScope.revalidate(queue);
+      else await queue();
     } catch (error) {
       try {
         if (record)
@@ -2194,10 +2223,19 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error(
         "Peer is unavailable or outside the permitted project scope. Run `list_peers` again.",
       );
+    const evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
+      ? await host.managerEvidence?.(ctx, params.files ?? [])
+      : undefined;
     const prepared = await prepareCoordinationInput(
       ctx,
       params.message,
-      resolveMessageFiles(ctx, params.files, "peer.message"),
+      resolveMessageFiles(
+        ctx,
+        params.files,
+        "peer.message",
+        evidenceScope?.retained,
+        evidenceScope?.roots,
+      ),
       "peer.message",
       "Message",
       (candidate, resultBindings) => ({
@@ -2280,8 +2318,16 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           },
         );
       };
-      if (activeRole() === "lead") withProjectAssignmentAuthority(enqueueReply);
-      else enqueueReply();
+      const enqueue = () => {
+        if (activeRole() === "lead" || evidenceScope)
+          withProjectAssignmentAuthority((assignments) => {
+            evidenceScope?.verify();
+            enqueueReply(assignments);
+          });
+        else enqueueReply();
+      };
+      if (evidenceScope) await evidenceScope.revalidate(enqueue);
+      else enqueue();
       const recipientRole = correspondence.role ?? "manager";
       return {
         content: [
@@ -2415,10 +2461,18 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         });
         return envelope;
       };
-      const envelope =
-        remoteRoute.role === "lead"
-          ? withProjectAssignmentAuthority(commitOutbound)
-          : commitOutbound();
+      let envelope = "";
+      const commit = () => {
+        envelope =
+          remoteRoute.role === "lead" || evidenceScope
+            ? withProjectAssignmentAuthority((assignments) => {
+                evidenceScope?.verify();
+                return commitOutbound(assignments);
+              })
+            : commitOutbound();
+      };
+      if (evidenceScope) await evidenceScope.revalidate(commit);
+      else commit();
       const releaseOutbound = tryClaimRemotePeerOutbound(recordId);
       let accepted = false;
       if (releaseOutbound) {
@@ -2451,16 +2505,22 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         },
       };
     }
-    const record = await queuePeerRecord(
-      prepared.text,
-      target.piSessionId,
-      ctx,
-      sender,
-      target,
-      recordId,
-      createdAt,
-      prepared.resultBindings,
-    );
+    let record: Awaited<ReturnType<typeof queuePeerRecord>>;
+    const queue = async () => {
+      record = await queuePeerRecord(
+        prepared.text,
+        target!.piSessionId,
+        ctx,
+        sender!,
+        target!,
+        recordId,
+        createdAt,
+        prepared.resultBindings,
+        evidenceScope?.verify,
+      );
+    };
+    if (evidenceScope) await evidenceScope.revalidate(queue);
+    else await queue();
     return {
       content: [
         {
@@ -2472,7 +2532,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         ok: true,
         action: "message",
         target: params.target,
-        id: record.id,
+        id: record!.id,
       },
     };
   };

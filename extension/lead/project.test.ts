@@ -7,10 +7,15 @@ import { test } from "node:test";
 import { sameDirectory } from "../herdr.ts";
 import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
+import {
+  persistRequiredEvidenceSnapshot,
+  readRequiredEvidenceSnapshot,
+} from "../storage.ts";
 
 const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
-const { writeProjectAssignment } = await import("../supervision.ts");
+const { readProjectAssignment, writeProjectAssignment } =
+  await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
 const testSha = (letter: string) => letter.repeat(40);
@@ -82,6 +87,135 @@ test("staff message rejects an identity change during attachment preparation", a
   assert.equal(writes, 0);
 });
 
+test("staff handoff reports failure after required evidence retention commits", async () => {
+  const entries: unknown[] = [];
+  const ctx = fakeContext(entries) as any;
+  const pi = {
+    appendEntry: (customType: string, data: unknown) =>
+      entries.push({ type: "custom", customType, data }),
+  };
+  const session = randomUUID();
+  const manager = {
+    leaseId: "lease",
+    repoKey: "/repo",
+    workspaceId: "workspace",
+    piSessionId: randomUUID(),
+  };
+  const assignment = {
+    version: 2,
+    id: session,
+    repoKey: manager.repoKey,
+    branch: "feature/assigned",
+    text: "task",
+  };
+  const retained = persistRequiredEvidenceSnapshot(
+    assignment.id,
+    "proof.md",
+    "retained proof",
+  );
+  let currentAssignment = assignment;
+  let evidenceCalls = 0;
+  const runtime = createLeadProjectRuntime({
+    pi,
+    leadRuntime: { roleSuspended: false },
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: () => true,
+    supervisionRuntime: () => ({}),
+    loadSupervisionSnapshot: async () => ({
+      work: [
+        { branch: assignment.branch, session: assignment.id, status: "active" },
+      ],
+      incompatible: [],
+      leads: [
+        {
+          session,
+          paneId: "pane",
+          workspaceId: "workspace",
+          tabId: "tab",
+          instanceId: "instance",
+          relationship: "assigned",
+          branch: assignment.branch,
+          availableActions: ["message"],
+        },
+      ],
+    }),
+    directReports: async () => [
+      {
+        lead: session,
+        paneId: "pane",
+        workspaceId: "workspace",
+        tabId: "tab",
+        instanceId: "instance",
+        relationship: "assigned",
+        availableActions: ["message"],
+      },
+    ],
+    findProjectAssignmentBySession: () => [assignment],
+    readProjectAssignment: () => currentAssignment,
+    writeProjectAssignment: (_runtime: unknown, next: any) => {
+      currentAssignment = next;
+    },
+    worktreeGroupScope: async () => ({ repoKey: manager.repoKey }),
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => Promise<unknown>,
+    ) => operation(),
+    managerEvidence: async () => {
+      if (++evidenceCalls > 1) throw new Error("Manager authorization changed");
+      return {
+        roots: new Set([assignment.id]),
+        retained: [retained],
+        verify: () => {},
+        verifyProvenance: () => {},
+        revalidate: async (operation: () => unknown) => operation(),
+      };
+    },
+    resolveMessageFiles: () => [
+      {
+        kind: "retainedEvidence",
+        ref: retained.ref,
+        name: retained.name,
+        path: retained.path,
+        sha256: retained.sha256,
+      },
+    ],
+    prepareCoordinationInput: async () => {
+      throw new Error("handoff preparation should not run");
+    },
+    writeChiefMessage: () => {
+      throw new Error("handoff should not be written");
+    },
+  } as any);
+
+  await assert.rejects(
+    runtime.executeStaff(
+      "message",
+      {
+        action: "message",
+        branch: assignment.branch,
+        message: "Please review",
+        files: [retained.ref],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    ),
+    /Required evidence was retained, but the staff handoff failed: Manager authorization changed/,
+  );
+  assert.equal(evidenceCalls, 2);
+  assert.ok(
+    currentAssignment.requiredEvidence?.some(
+      (item: any) =>
+        item.name === retained.name &&
+        item.sourceAssignmentId === assignment.id,
+    ),
+  );
+});
+
 function baselineLifecycle(options: {
   reused?: boolean;
   resume?: boolean;
@@ -89,6 +223,9 @@ function baselineLifecycle(options: {
   worktreeHead?: string;
   mergeBases?: string[];
   savedBaseline?: string;
+  retained?: ReturnType<typeof persistRequiredEvidenceSnapshot>;
+  rejectEvidence?: boolean;
+  rejectAtPublication?: boolean;
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -207,7 +344,34 @@ function baselineLifecycle(options: {
       mailbox: { bytes: 1000 },
     }),
     prepareMessageInput: (text: string) => ({ text, resultBindings: [] }),
-    resolveMessageFiles: () => [],
+    managerEvidence: options.retained
+      ? async () => ({
+          roots: new Set(["source"]),
+          retained: [options.retained],
+          verify: () => {
+            if (options.rejectAtPublication)
+              throw new Error("evidence authority changed at publication");
+          },
+          verifyProvenance: () => {},
+          revalidate: async (operation: () => unknown) => {
+            if (options.rejectEvidence)
+              throw new Error("evidence authority changed");
+            await operation();
+          },
+        })
+      : undefined,
+    resolveMessageFiles: () =>
+      options.retained
+        ? [
+            {
+              kind: "retainedEvidence",
+              ref: options.retained.ref,
+              name: options.retained.name,
+              path: options.retained.path,
+              sha256: options.retained.sha256,
+            },
+          ]
+        : [],
     persistRequiredEvidenceSnapshot: () => ({
       id: "brief",
       name: "project-brief.md",
@@ -223,7 +387,12 @@ function baselineLifecycle(options: {
       _branch: string,
       operation: () => unknown,
     ) => operation(),
-    writeProjectAssignment: (_runtime: unknown, assignment: any) => {
+    writeProjectAssignment: (
+      _runtime: unknown,
+      assignment: any,
+      verify?: () => void,
+    ) => {
+      verify?.();
       published = assignment;
     },
     appendDurableError: () => {},
@@ -251,12 +420,155 @@ function baselineLifecycle(options: {
       runtime.activateProjectLead(
         options.resume
           ? { action: "resume", branch }
-          : { action: "delegate", task: "work", branch },
+          : {
+              action: "delegate",
+              task: "work",
+              branch,
+              ...(options.retained ? { files: [options.retained.ref!] } : {}),
+            },
         ctx,
         signal,
       ),
   };
 }
+
+test("delegation copies retained evidence under the destination and rejects stale authority", async () => {
+  const source = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "source.md",
+    "selected content",
+  );
+  const accepted = baselineLifecycle({
+    retained: source,
+    managerHead: testSha("a"),
+    worktreeHead: testSha("b"),
+  });
+  await assert.rejects(accepted.activate(), new RegExp(lifecycleStop));
+  const copy = accepted.published.requiredEvidence.find(
+    (entry: any) => entry.name === source.name,
+  );
+  assert.ok(copy);
+  assert.equal(copy.sourceAssignmentId, accepted.published.id);
+  assert.notEqual(copy.ref, source.ref);
+  assert.equal(
+    readRequiredEvidenceSnapshot(copy.sourceAssignmentId, copy),
+    "selected content",
+  );
+  assert.equal(
+    readRequiredEvidenceSnapshot(source.sourceAssignmentId, source),
+    "selected content",
+  );
+  const denied = baselineLifecycle({
+    retained: source,
+    rejectEvidence: true,
+    managerHead: testSha("a"),
+    worktreeHead: testSha("b"),
+  });
+  await assert.rejects(denied.activate(), /evidence authority changed/);
+  assert.equal(denied.published, undefined);
+  const stale = baselineLifecycle({
+    retained: source,
+    rejectAtPublication: true,
+    managerHead: testSha("a"),
+    worktreeHead: testSha("b"),
+  });
+  await assert.rejects(
+    stale.activate(),
+    /evidence authority changed at publication/,
+  );
+  assert.equal(stale.published, undefined);
+});
+
+test("nested retained provenance is rechecked at the synchronous assignment publication guard", async () => {
+  const repoKey = realFs.realpathSync(process.cwd());
+  const assignments = join(tmpdir(), `provenance-assignments-${randomUUID()}`);
+  const root = join(assignments, "root");
+  mkdirSync(root, { recursive: true });
+  const assignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey,
+    branch: "feature/provenance",
+    text: "work",
+  };
+  const runtimeDir = { root, assignments } as any;
+  writeProjectAssignment(runtimeDir, assignment);
+  const manager = {
+    piSessionId: randomUUID(),
+    repoKey,
+    workspaceId: WORKSPACE,
+    leaseId: randomUUID(),
+  } as any;
+  const retained = persistRequiredEvidenceSnapshot(
+    randomUUID(),
+    "source.md",
+    "selected content",
+  );
+  let current = assignment;
+  let nestedProvenance = "nested-parent-original";
+  const runtime = createLeadProjectRuntime({
+    leadRuntime: { roleSuspended: false } as any,
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.piSessionId === right.piSessionId && left.leaseId === right.leaseId,
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: WORKSPACE,
+    }),
+    supervisionRuntime: () => runtimeDir,
+    readProjectAssignment: () => current,
+    listProjectAssignments: () => [current],
+    managerEvidence: async () => ({
+      roots: new Set([assignment.id]),
+      retained: [retained],
+      verify: () => {},
+      verifyProvenance: () => {
+        if (nestedProvenance !== "nested-parent-original")
+          throw new Error("Manager evidence provenance changed");
+      },
+      revalidate: async (operation: () => unknown) => {
+        await operation();
+        nestedProvenance = "nested-parent-replaced";
+      },
+    }),
+    resolveMessageFiles: () => [
+      {
+        kind: "retainedEvidence",
+        ref: retained.ref,
+        name: retained.name,
+        path: retained.path,
+        sha256: retained.sha256,
+      },
+    ],
+    persistRequiredTextFiles: () => [],
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => unknown,
+    ) => operation(),
+    writeProjectAssignment: (_runtime: unknown, next: any) => {
+      current = next;
+    },
+  } as any);
+
+  await assert.rejects(
+    runtime.updateAssignmentEvidence(
+      "update",
+      { branch: assignment.branch, add: [retained.ref] },
+      undefined,
+      undefined,
+      fakeContext() as any,
+    ),
+    /Manager evidence provenance changed/,
+  );
+  assert.deepEqual(current, assignment);
+  assert.deepEqual(
+    readProjectAssignment(runtimeDir, repoKey, assignment.branch),
+    assignment,
+  );
+});
 
 test("Manager required-evidence removal is exact, assignment-scoped, and fail-closed", async () => {
   const manager = {

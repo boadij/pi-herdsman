@@ -130,7 +130,12 @@ steering does not abort the current operation or interrupt an in-flight tool
 call. Authorized Manager messages to ordinary Leads use the same cooperative
 steering behavior, whether the Lead is active or idle.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
-result refs already supplied as evidence. Supported UTF-8 text must fit both
+result refs already supplied as evidence. An active verified Manager may select
+published results and accepted retained evidence from its current project
+assignments, including verified nested-Agent evidence, even when they are not
+bound in its own session; `files` explicitly delivers the selected evidence to
+this recipient and does not grant access to other project evidence. Supported
+UTF-8 text must fit both
 configured per-file and complete-message limits or the handoff fails. The
 compact coordination record carries the prepared message body separately when
 needed, along with hidden semantic-result bindings for the recipient to

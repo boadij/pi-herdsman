@@ -407,8 +407,12 @@ observation path. Transcript is read-only and does not change agent state.
 
 `read_evidence` is available to managed Agents and root controllers. It reads
 exact accepted assignment evidence and completed results published to the
-requester's verified ownership tree; a reference itself grants no
-authorization. Cross-tree results require an explicit `files` transfer. `ref` is required. `offset` is
+requester's verified ownership tree. An active verified Manager can also read
+published results rooted in its current project assignments and retained
+evidence accepted by those assignments, including verified nested-Agent
+evidence. A reference itself grants no authorization, and access does not
+expand Agent ownership or project authority. Cross-root delivery still requires
+an explicit `files` transfer. `ref` is required. `offset` is
 an optional 1-based line number (default `1`), `limit` is an optional positive
 line count (default `200`, maximum `200`), and `byteOffset` is an optional
 non-negative byte offset within the selected line (default `0`), for resuming a
