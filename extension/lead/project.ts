@@ -4208,11 +4208,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           retainedFiles = files;
         },
       );
-      evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
-        ? await host.managerEvidence?.(ctx, params.files ?? [])
-        : undefined;
     }
     try {
+      if (params.retain === true)
+        evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
+          ? await host.managerEvidence?.(ctx, params.files ?? [])
+          : undefined;
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,

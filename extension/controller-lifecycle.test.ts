@@ -32,6 +32,7 @@ import {
   readRequiredEvidenceSnapshot,
   resultPath,
   resultRef,
+  publishScopedResult,
   herdsmanDataRoot,
 } from "./storage.ts";
 import {
@@ -9625,6 +9626,10 @@ test("Manager read_evidence follows retained evidence in a saved child session",
     tmpdir(),
     `pi-herdsman-manager-${randomUUID()}.jsonl`,
   );
+  const leadSessionFile = join(
+    tmpdir(),
+    `pi-herdsman-lead-${randomUUID()}.jsonl`,
+  );
   const childSessionFile = join(
     tmpdir(),
     `pi-herdsman-child-${randomUUID()}.jsonl`,
@@ -9636,7 +9641,7 @@ test("Manager read_evidence follows retained evidence in a saved child session",
   const requestId = randomUUID();
   const runId = randomUUID();
   const retained = persistRequiredEvidenceSnapshot(
-    assignmentId,
+    requestId,
     "nested-retained.txt",
     "nested retained evidence",
   );
@@ -9645,13 +9650,30 @@ test("Manager read_evidence follows retained evidence in a saved child session",
     "assignment.txt",
     "assignment evidence",
   );
+  const resultAgentLabel = `reviewer-${randomUUID().slice(0, 8)}`;
+  const publishedResultRef = `result:${resultAgentLabel}#1`;
+  const canonicalResultRef = resultRef(randomUUID());
+  const resultArtifactPath = resultPath(
+    canonicalResultRef.slice("result:".length),
+  );
+  realFs.mkdirSync(dirname(resultArtifactPath), { recursive: true });
+  realFs.writeFileSync(resultArtifactPath, "published Lead result");
+  publishScopedResult(resultAgentLabel, 1, canonicalResultRef, assignmentId);
   writeProjectAssignment(runtime, {
     version: 2,
     id: assignmentId,
+    piSessionFile: leadSessionFile,
     repoKey,
     branch,
     text: "current assignment",
-    requiredEvidence: [assignmentEvidence],
+    requiredEvidence: [
+      assignmentEvidence,
+      {
+        id: randomUUID(),
+        name: publishedResultRef,
+        result: { ref: publishedResultRef, canonicalRef: canonicalResultRef },
+      },
+    ],
   });
   const managerAgent: any = {
     agent_session: {
@@ -9721,7 +9743,7 @@ test("Manager read_evidence follows retained evidence in a saved child session",
         sessionId: childSessionId,
         requestId,
         runId,
-        ownerSessionId: LEAD_SESSION_ID,
+        ownerSessionId: assignmentId,
         workspaceId: WORKSPACE,
         agentLabel: childLabel,
         paneId: "child-pane",
@@ -9740,12 +9762,11 @@ test("Manager read_evidence follows retained evidence in a saved child session",
   });
   nativeSessions.set(childSessionId, {
     id: childSessionId,
-    path: realpathSync(childSessionFile),
+    path: childSessionFile,
     cwd: repoKey,
     entries: childEntries,
   });
-  const managerOwnerId = ctx.sessionManager.getSessionId();
-  const managerBranch = ctx.sessionManager.getBranch() as any[];
+  const managerOwnerId = assignmentId;
   const childResultEdge = {
     type: "custom",
     customType: "pi-herdsman-agent-result",
@@ -9762,11 +9783,27 @@ test("Manager read_evidence follows retained evidence in a saved child session",
       status: "completed",
     },
   };
-  managerBranch.push(childResultEdge);
-  assert.equal(managerOwnerId, LEAD_SESSION_ID);
+  const leadEntries = [childResultEdge];
+  writeValidPiSessionFile({
+    id: assignmentId,
+    path: leadSessionFile,
+    cwd: repoKey,
+    entries: leadEntries,
+  });
+  nativeSessions.set(assignmentId, {
+    id: assignmentId,
+    path: leadSessionFile,
+    cwd: repoKey,
+    entries: leadEntries,
+  });
+  const leadBranch = leadEntries as any[];
+  const childEvidence = childEntries[1]!.data as Record<string, any>;
+  assert.equal(childEvidence.projectAssignmentId, assignmentId);
+  assert.equal(childEvidence.evidenceAssignmentId, requestId);
+  assert.equal(childEvidence.localEvidence[0].sourceAssignmentId, requestId);
   assert.ok(
-    managerBranch.includes(childResultEdge),
-    "child result edge is in the immediate Manager owner's branch",
+    leadBranch.includes(childResultEdge),
+    "child result edge is in the assigned Lead's branch",
   );
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
@@ -9781,6 +9818,33 @@ test("Manager read_evidence follows retained evidence in a saved child session",
       ctx,
     );
     assert.match(JSON.stringify(allowed), /nested retained evidence/);
+
+    const unavailableChildEdge = {
+      type: "custom",
+      customType: "pi-herdsman-agent-result",
+      details: {
+        ownerSessionId: assignmentId,
+        piSessionId: randomUUID(),
+        piSessionFile: join(tmpdir(), `missing-agent-${randomUUID()}.jsonl`),
+        runId: randomUUID(),
+        requestId: randomUUID(),
+        agentLabel: `missing-${randomUUID().slice(0, 8)}`,
+        agentDefinition: "scout",
+        workspaceId: WORKSPACE,
+        paneId: "missing-pane",
+        status: "completed",
+      },
+    };
+    leadBranch.push(unavailableChildEdge);
+    const published = await reader.execute(
+      "published result only",
+      { ref: publishedResultRef },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(JSON.stringify(published), /published Lead result/);
+    leadBranch.splice(leadBranch.indexOf(unavailableChildEdge), 1);
 
     const reservations = () => {
       const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
@@ -9838,19 +9902,19 @@ test("Manager read_evidence follows retained evidence in a saved child session",
         entries: childEntries,
       });
       nativeSessions.get(childSessionId)!.entries = childEntries;
-      const edgeIndex = managerBranch.indexOf(childResultEdge);
-      if (attempt.missingEdge) managerBranch.splice(edgeIndex, 1);
+      const edgeIndex = leadBranch.indexOf(childResultEdge);
+      if (attempt.missingEdge) leadBranch.splice(edgeIndex, 1);
       else {
         childResultEdge.details = {
           ...childResultEdge.details,
           ...attempt.edge,
         };
-        if (!managerBranch.includes(childResultEdge))
-          managerBranch.push(childResultEdge);
+        if (!leadBranch.includes(childResultEdge))
+          leadBranch.push(childResultEdge);
       }
       const before = JSON.stringify({
         managerEntries: pi.entries,
-        managerBranch,
+        leadBranch,
         childEntries,
         childSession: readFileSync(childSessionFile, "utf8"),
         reservations: reservations(),
@@ -9869,7 +9933,7 @@ test("Manager read_evidence follows retained evidence in a saved child session",
       assert.equal(
         JSON.stringify({
           managerEntries: pi.entries,
-          managerBranch,
+          leadBranch,
           childEntries,
           childSession: readFileSync(childSessionFile, "utf8"),
           reservations: reservations(),
@@ -9889,8 +9953,8 @@ test("Manager read_evidence follows retained evidence in a saved child session",
         paneId: "child-pane",
         status: "completed",
       };
-      if (!managerBranch.includes(childResultEdge))
-        managerBranch.splice(edgeIndex, 0, childResultEdge);
+      if (!leadBranch.includes(childResultEdge))
+        leadBranch.splice(edgeIndex, 0, childResultEdge);
       localEvidenceRecord.localEvidence = [retained];
     }
   } finally {
@@ -9898,6 +9962,18 @@ test("Manager read_evidence follows retained evidence in a saved child session",
     removeProjectAssignment(runtime, repoKey, branch);
     nativeSessions.delete(childSessionId);
     realFs.rmSync(childSessionFile, { force: true });
+    nativeSessions.delete(assignmentId);
+    realFs.rmSync(leadSessionFile, { force: true });
+    realFs.rmSync(resultArtifactPath, { force: true });
+    realFs.rmSync(
+      join(
+        herdsmanDataRoot(),
+        "result-ref-reservations",
+        resultAgentLabel,
+        "1",
+      ),
+      { force: true },
+    );
     delete process.env.HERDR_SOCKET_PATH;
   }
 });

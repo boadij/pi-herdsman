@@ -87,6 +87,135 @@ test("staff message rejects an identity change during attachment preparation", a
   assert.equal(writes, 0);
 });
 
+test("staff handoff reports failure after required evidence retention commits", async () => {
+  const entries: unknown[] = [];
+  const ctx = fakeContext(entries) as any;
+  const pi = {
+    appendEntry: (customType: string, data: unknown) =>
+      entries.push({ type: "custom", customType, data }),
+  };
+  const session = randomUUID();
+  const manager = {
+    leaseId: "lease",
+    repoKey: "/repo",
+    workspaceId: "workspace",
+    piSessionId: randomUUID(),
+  };
+  const assignment = {
+    version: 2,
+    id: session,
+    repoKey: manager.repoKey,
+    branch: "feature/assigned",
+    text: "task",
+  };
+  const retained = persistRequiredEvidenceSnapshot(
+    assignment.id,
+    "proof.md",
+    "retained proof",
+  );
+  let currentAssignment = assignment;
+  let evidenceCalls = 0;
+  const runtime = createLeadProjectRuntime({
+    pi,
+    leadRuntime: { roleSuspended: false },
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: () => true,
+    supervisionRuntime: () => ({}),
+    loadSupervisionSnapshot: async () => ({
+      work: [
+        { branch: assignment.branch, session: assignment.id, status: "active" },
+      ],
+      incompatible: [],
+      leads: [
+        {
+          session,
+          paneId: "pane",
+          workspaceId: "workspace",
+          tabId: "tab",
+          instanceId: "instance",
+          relationship: "assigned",
+          branch: assignment.branch,
+          availableActions: ["message"],
+        },
+      ],
+    }),
+    directReports: async () => [
+      {
+        lead: session,
+        paneId: "pane",
+        workspaceId: "workspace",
+        tabId: "tab",
+        instanceId: "instance",
+        relationship: "assigned",
+        availableActions: ["message"],
+      },
+    ],
+    findProjectAssignmentBySession: () => [assignment],
+    readProjectAssignment: () => currentAssignment,
+    writeProjectAssignment: (_runtime: unknown, next: any) => {
+      currentAssignment = next;
+    },
+    worktreeGroupScope: async () => ({ repoKey: manager.repoKey }),
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => Promise<unknown>,
+    ) => operation(),
+    managerEvidence: async () => {
+      if (++evidenceCalls > 1) throw new Error("Manager authorization changed");
+      return {
+        roots: new Set([assignment.id]),
+        retained: [retained],
+        verify: () => {},
+        verifyProvenance: () => {},
+        revalidate: async (operation: () => unknown) => operation(),
+      };
+    },
+    resolveMessageFiles: () => [
+      {
+        kind: "retainedEvidence",
+        ref: retained.ref,
+        name: retained.name,
+        path: retained.path,
+        sha256: retained.sha256,
+      },
+    ],
+    prepareCoordinationInput: async () => {
+      throw new Error("handoff preparation should not run");
+    },
+    writeChiefMessage: () => {
+      throw new Error("handoff should not be written");
+    },
+  } as any);
+
+  await assert.rejects(
+    runtime.executeStaff(
+      "message",
+      {
+        action: "message",
+        branch: assignment.branch,
+        message: "Please review",
+        files: [retained.ref],
+        retain: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    ),
+    /Required evidence was retained, but the staff handoff failed: Manager authorization changed/,
+  );
+  assert.equal(evidenceCalls, 2);
+  assert.ok(
+    currentAssignment.requiredEvidence?.some(
+      (item: any) =>
+        item.name === retained.name &&
+        item.sourceAssignmentId === assignment.id,
+    ),
+  );
+});
+
 function baselineLifecycle(options: {
   reused?: boolean;
   resume?: boolean;

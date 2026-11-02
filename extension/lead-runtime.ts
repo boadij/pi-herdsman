@@ -2500,13 +2500,13 @@ export function registerLeadRuntime(
         ),
       );
       const seen = new Set<string>();
-      const visit = (owner: any, sourceAssignmentId: string) => {
+      const visit = (owner: any, projectAssignmentId: string) => {
         const ownerId = owner.getSessionId();
         for (const child of ownedAssignmentChildren(
           owner.getBranch(),
           ownerId,
         )) {
-          const visitKey = `${sourceAssignmentId}\0${child.id}`;
+          const visitKey = `${projectAssignmentId}\0${child.id}`;
           if (seen.has(visitKey)) continue;
           seen.add(visitKey);
           const edgeContext = {
@@ -2518,29 +2518,42 @@ export function registerLeadRuntime(
           });
           if (resolved.id !== child.id)
             throw new Error("Invalid nested assignment");
-          for (const item of [
-            ...(resolved.evidence?.inheritedEvidence ?? []),
-            ...(resolved.evidence?.localEvidence ?? []),
-          ])
+          for (const item of resolved.evidence?.localEvidence ?? [])
             if (
               !("result" in item) &&
-              item.sourceAssignmentId === sourceAssignmentId &&
+              resolved.evidence?.projectAssignmentId === projectAssignmentId &&
+              resolved.evidence.evidenceAssignmentId ===
+                item.sourceAssignmentId &&
               item.ref &&
               refs.includes(item.ref)
             )
               retained.push(item);
           const nested = openOwnedAssignmentSession(child);
           if (!nested) throw new Error("Nested assignment session unavailable");
-          visit(nested, sourceAssignmentId);
+          visit(nested, projectAssignmentId);
         }
       };
-      for (const assignment of assignments)
-        if (
-          (assignment.requiredEvidence ?? []).some(
-            (item) => !("result" in item),
-          )
+      const rootEvidenceRefs = new Set(
+        assignments.flatMap((assignment) =>
+          (assignment.requiredEvidence ?? []).flatMap((item) =>
+            "result" in item || !item.ref ? [] : [item.ref],
+          ),
+        ),
+      );
+      if (
+        refs.some(
+          (ref) => ref.startsWith("evidence:") && !rootEvidenceRefs.has(ref),
         )
-          visit(ctx.sessionManager, assignment.id);
+      )
+        for (const assignment of assignments) {
+          if (!assignment.piSessionFile) continue;
+          const lead = projectHost.SessionManager.open(
+            assignment.piSessionFile,
+          );
+          if (lead.getSessionId() !== assignment.id)
+            throw new Error("Project assignment session identity mismatch");
+          visit(lead, assignment.id);
+        }
       return retained;
     };
     const retained = collectRetained();
