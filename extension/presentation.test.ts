@@ -7261,13 +7261,12 @@ test("Manager Git stats anchor right without aligning elapsed or context", () =>
             deletions: 38,
             changedFiles: 2,
             dirty: true,
-            approximate: true,
           },
   );
   const width = 80;
   const [, first, second] = widget.render(width);
   assert.match(first!, /feat\/long-name.*8m.*10% {2,}\+245 -52\*$/);
-  assert.match(second!, /fix\/x.*20m.*7% {2,}~\+273 -38\*$/);
+  assert.match(second!, /fix\/x.*20m.*7% {2,}\+273 -38\*$/);
   assert.equal(visibleWidth(first!), width);
   assert.equal(visibleWidth(second!), width);
   const withoutGit = renderSupervisionLeads(snapshot, width, {
@@ -7324,6 +7323,60 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   assert.match(successfulZeroWidget.render(100)[1]!, /±0\*/);
   assert.equal(visibleWidth(successfulZeroWidget.render(100)[1]!), 100);
 
+  for (const [additions, deletions, changedFiles, expected] of [
+    [
+      12,
+      3,
+      2,
+      [
+        ["success", "+12"],
+        ["error", "-3"],
+      ],
+    ],
+    [
+      0,
+      3,
+      2,
+      [
+        ["muted", "+0"],
+        ["error", "-3"],
+      ],
+    ],
+    [
+      12,
+      0,
+      2,
+      [
+        ["success", "+12"],
+        ["muted", "-0"],
+      ],
+    ],
+    [0, 0, 0, [["muted", "±0"]]],
+    [0, 0, 2, [["muted", "2f"]]],
+  ] as const) {
+    const colors: Array<[string, string]> = [];
+    const theme = {
+      fg: (role: string, value: string) => {
+        colors.push([role, value]);
+        return `\x1b[31m${value}\x1b[0m`;
+      },
+    };
+    const styled = createSupervisionWidget(
+      () => snapshot,
+      () => "fresh",
+      "manager",
+      theme,
+      undefined,
+      () => ({ dirty: true, additions, deletions, changedFiles }),
+    ).render(100)[1]!;
+    for (const [role, value] of expected)
+      assert.ok(colors.some(([r, v]) => r === role && v === value));
+    assert.ok(
+      colors.some(([role, value]) => role === "warning" && value === "*"),
+    );
+    assert.equal(visibleWidth(styled), 100);
+  }
+
   for (let width = 1; width <= 100; width++)
     assert.ok(widget.render(width).every((row) => visibleWidth(row) <= width));
 
@@ -7375,7 +7428,6 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     deletions: 3,
     changedFiles: 2,
     checkedOutBranch: "fix/recovery",
-    approximate: true,
   };
   const switchedFocused: unknown[] = [];
   const switchedWidget = createSupervisionWidget(
@@ -7388,7 +7440,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   );
   const switchedRow = switchedWidget.render(120)[1]!;
   assert.match(switchedRow, /feat\/git ↪ fix\/recovery/);
-  assert.match(switchedRow, /~\+12 -3\*/);
+  assert.match(switchedRow, /\+12 -3\*/);
   const compactSwitchedWidget = createSupervisionWidget(
     () => snapshot,
     () => "fresh",
@@ -7424,7 +7476,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   ]);
   assert.match(
     switchedWidget.render(47)[1]!,
-    /feat\/git ↪ fix\/recovery {2,}~\+12 -3\*/,
+    /feat\/git ↪ fix\/recovery {2,}\+12 -3\*/,
   );
   assert.ok(
     Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>
@@ -7460,7 +7512,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     undefined,
     () => switchedSummary,
   ).render(120);
-  assert.doesNotMatch(switchedChief.join("\n"), /fix\/recovery|~\+12 -3|↪|\*/);
+  assert.doesNotMatch(switchedChief.join("\n"), /fix\/recovery|\+12 -3|↪|\*/);
   const ordinary = renderSupervisionLeads(snapshot, 100, { role: "manager" });
   assert.doesNotMatch(ordinary.join("\n"), /\+12 -3|\*/);
 });

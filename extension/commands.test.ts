@@ -15524,11 +15524,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   sampleRefresh = true;
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.match(
-    widget.render(120).join("\n"),
-    /~\+1 -0/,
-    "all comparisons are visibly approximate",
-  );
+  assert.match(widget.render(120).join("\n"), /\+1 -0/);
   assert.equal(
     currentSnapshot.work[0].gitBaselineSha,
     undefined,
@@ -15544,7 +15540,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.match(
     widget.render(120).join("\n"),
-    /~\+1 -0/,
+    /\+1 -0/,
     "merging Manager updates excludes their unrelated changes",
   );
 
@@ -15555,7 +15551,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.match(
     widget.render(120).join("\n"),
-    /~\+1 -0\*/,
+    /\+1 -0\*/,
     "pure rename does not fabricate full-file line counts",
   );
   writeFileSync(
@@ -15568,7 +15564,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.match(
     widget.render(120).join("\n"),
-    /~\+2 -0\*/,
+    /\+2 -0\*/,
     "modified rename counts its actual content change",
   );
   runGit(["reset", "--hard", "HEAD"], assignedCheckout);
@@ -15860,7 +15856,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.setStatusWidgetMaxRows(12);
   assert.match(
     widget.render(120).find((line: string) => line.includes("feat/seventh")),
-    /~±0/,
+    /±0/,
   );
   assert.ok(
     !gitCalls

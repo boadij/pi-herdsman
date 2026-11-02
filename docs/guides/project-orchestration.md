@@ -75,8 +75,9 @@ with the unique merge base of the local Manager and Lead revisions, including co
 unstaged changes without double-counting. Untracked files are excluded from
 numeric totals but make the row dirty (`*`); binary-only changes can appear as
 a changed-file count such as `2f`, and `±0` means no net tracked differences.
-`~` marks a best-effort local PR-style estimate, not an exact GitHub result;
-unavailable or ambiguous ancestry suppresses numeric totals. If the Lead checks out a
+Additions use the theme's success color and deletions its error color, with
+zero values muted. These local PR-style comparisons may differ from GitHub's PR
+diff when bases differ; unavailable or ambiguous ancestry suppresses numeric totals. If the Lead checks out a
 different branch, `↪ branch` shows the actual branch while the original
 assignment handle remains the row's focus target. These are advisory net
 worktree measurements, not cumulative Lead-authored effort or proof of

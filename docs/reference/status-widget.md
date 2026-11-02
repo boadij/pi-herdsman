@@ -141,8 +141,9 @@ revalidated for control actions.
 
 Eligible Manager work rows can show net tracked textual additions and
 deletions from the unique merge base of the local Manager and Lead revisions to
-the Lead's current worktree contents. `~` marks a local PR-style estimate, not
-an exact GitHub result.
+the Lead's current worktree contents. Additions use the theme's success color
+and deletions its error color; zero values remain muted. These local PR-style
+comparisons are advisory and may differ from GitHub's PR diff when bases differ.
 The comparison includes committed, staged, and unstaged tracked changes without
 double-counting them; untracked files do not contribute numeric totals. `*`
 means the assigned checkout is dirty, including untracked changes. Thus `±0*`

@@ -5031,7 +5031,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 deletions,
                 changedFiles,
                 checkedOutBranch,
-                approximate: true,
               },
             });
           } catch {
