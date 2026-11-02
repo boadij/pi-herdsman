@@ -1170,6 +1170,26 @@ test("startup timeout budget reserves the full bounded diagnostic window", () =>
 
 test("runHerdr enforces stdout success envelopes and preserves diagnostics", async () => {
   const ctx = { cwd: "/tmp" } as any;
+  await assert.rejects(
+    runHerdr(
+      {
+        exec: async () => ({
+          code: 1,
+          killed: true,
+          truncated: true,
+          stdout: '{"id":1,"result":',
+          stderr: "",
+        }),
+      } as any,
+      ctx,
+      ["agent", "list"],
+    ),
+    (failure: any) => {
+      assert.match(failure.message, /subprocess capture limit/);
+      assert.equal(failure.detail.details.truncated, true);
+      return true;
+    },
+  );
   assert.equal(
     await runHerdr(
       { exec: async () => ({ code: 0, stdout: "", stderr: "" }) } as any,

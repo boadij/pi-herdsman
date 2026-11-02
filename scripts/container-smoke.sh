@@ -56,6 +56,7 @@ exit 42
 SH
 chmod 0644 "$interrupt_fixture/interrupt-npm"
 
+echo 'stage: build'
 docker build --platform linux/amd64 -t "$image" .
 
 default_ids="$(
@@ -157,6 +158,7 @@ wait_after_restart() {
 }
 
 # A fresh home must seed and load entirely offline, then remain unchanged on restarts/recreation.
+echo 'stage: offline seed, restart, and recreation'
 start_offline "$offline_home" "$offline_ssh"
 verify_seeded_package
 initial_seed_state="$(seed_state)"
@@ -190,6 +192,7 @@ docker exec --user herdsman "$name" sh -c \
 docker rm -f "$name" >/dev/null
 
 # Startup honors the configured Pi agent directory, including on restart.
+echo 'stage: custom agent directory'
 docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null 2>&1 || true
 start_offline "$damaged_home" "$damaged_ssh" "$image" /home/herdsman/custom-agent
 docker exec --user herdsman "$name" sh -c '
@@ -204,6 +207,7 @@ docker rm -f "$name" >/dev/null
 docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null
 
 # Failed and interrupted npm operations leave the original managed root untouched.
+echo 'stage: failed and interrupted npm operations'
 for mode in failure interrupt; do
   docker volume rm "$interrupted_home" "$interrupted_ssh" >/dev/null 2>&1 || true
   docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
@@ -247,6 +251,7 @@ for mode in failure interrupt; do
 done
 
 # Migrate an object-form legacy declaration while preserving settings and another npm version.
+echo 'stage: migration'
 docker run --rm --network none \
   --user herdsman -e HOME=/home/herdsman \
   --entrypoint /bin/sh \
@@ -273,6 +278,7 @@ docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
 docker rm -f "$name" >/dev/null
 
 # If both sources exist, remove only the legacy entry and keep the selected npm copy untouched.
+echo 'stage: existing npm selection'
 start_offline "$offline_home" "$offline_ssh"
 docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
   const fs=require("node:fs"); const file=process.env.HOME+"/.pi/agent/settings.json"; const settings=JSON.parse(fs.readFileSync(file,"utf8")); settings.packages=[{source:"npm:pi-herdsman",extensions:["./dist/index.js"]},"/opt/pi-herdsman",{source:"npm:unrelated-fixture",extensions:[]}]; settings.userSetting="preserve"; fs.writeFileSync(file,JSON.stringify(settings,null,2)+"\n");
@@ -287,6 +293,7 @@ docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
 docker rm -f "$name" >/dev/null
 
 # A configured but damaged npm copy must fail closed rather than restoring the image seed.
+echo 'stage: damaged package'
 docker run --rm --network none \
   --user herdsman -e HOME=/home/herdsman \
   --entrypoint /bin/sh \
@@ -314,6 +321,7 @@ docker run --rm --network none --entrypoint /bin/sh \
   -c 'test ! -e /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/dist/index.js'
 
 # Symlinked selected packages or required paths must not escape the managed tree.
+echo 'stage: symlink containment'
 for target in package index dist bridge manifest npm node_modules; do
   docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null 2>&1 || true
   docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
@@ -349,6 +357,7 @@ for target in package index dist bridge manifest npm node_modules; do
 done
 
 # Even a valid selected package with migrated settings cannot prove marker ownership.
+echo 'stage: stale marker'
 docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
   --entrypoint /bin/sh -v "$offline_home:/home/herdsman" "$image" -c '
     printf "completed-looking marker\n" > ~/.pi/agent/.pi-herdsman-seed-attempt.json
@@ -399,24 +408,28 @@ remote() {
 }
 
 verify_runtime() {
-  remote "test \"\$(pi --version)\" = '$expected_pi'; \
+  remote "set -e; echo 'stage: runtime Pi'; test \"\$(pi --version)\" = '$expected_pi'; \
     test \"\$(readlink -f \"\$(command -v pi)\")\" = /opt/pi/pi; \
-    ! npm list -g --depth=0 2>/dev/null | grep -q '@earendil-works/pi-coding-agent'; \
-    test \"\$(npm config get update-notifier)\" = false; \
-    command -v node >/dev/null; node --version | grep -q '^v26\\.'; \
-    command -v herdr >/dev/null; test \"\$(herdr --version | awk '{ print \$NF }')\" = '$expected_herdr'; \
+    npm_root=\"\$(npm root -g)\"; mkdir -p \"\$npm_root\"; \
+    npm_global=\"\$(npm list -g --depth=0 2>/dev/null)\"; \
+    if printf '%s\n' \"\$npm_global\" | grep -q '@earendil-works/pi-coding-agent'; then exit 1; fi; \
+    echo 'stage: runtime npm'; test \"\$(npm config get update-notifier)\" = false; \
+    echo 'stage: runtime Node'; command -v node >/dev/null; node --version | grep -q '^v26\\.'; \
+    echo 'stage: runtime Herdr'; command -v herdr >/dev/null; test \"\$(herdr --version | awk '{ print \$NF }')\" = '$expected_herdr'; \
     command -v mise >/dev/null; mise --version >/dev/null; \
     command -v rg >/dev/null; command -v fd >/dev/null; \
     command -v jq >/dev/null; command -v gh >/dev/null; \
     command -v python3 >/dev/null; command -v git >/dev/null; \
-    test -r /AGENTS.md; \
+    echo 'stage: runtime environment'; test -r /AGENTS.md; \
     grep -q '^# Pi Herdsman container environment$' /AGENTS.md; \
     node -e 'const s=JSON.parse(require(\"fs\").readFileSync(process.env.HOME+\"/.pi/agent/settings.json\"));if(!s.packages.some(p=>p===\"npm:pi-herdsman\"||p?.source===\"npm:pi-herdsman\")||s.packages.some(p=>p===\"/opt/pi-herdsman\"||p?.source===\"/opt/pi-herdsman\"))process.exit(1)'; \
     test -f ~/.pi/agent/extensions/herdr-agent-state.ts; \
-    pi --offline --help >/tmp/pi-help 2>&1; \
-    ! grep -q 'Failed to load extension' /tmp/pi-help"
+    echo 'stage: runtime offline Pi'; pi --offline --help >/tmp/pi-help 2>&1; \
+    echo 'stage: runtime extension load check'; \
+    if grep -q 'Failed to load extension' /tmp/pi-help; then exit 1; fi"
 }
 
+echo 'stage: SSH and runtime checks'
 docker run -d \
   --name "$name" \
   -v "$home:/home/herdsman" \
@@ -545,14 +558,19 @@ if ssh -F /dev/null -p "$port" -o BatchMode=yes \
 fi
 
 host_fingerprint="$(docker exec "$name" ssh-keygen -lf /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub)"
-remote 'mkdir -p ~/persist-package && printf "%s\n" "{\"name\":\"persist-package\",\"version\":\"1.0.0\"}" > ~/persist-package/package.json && pi install ~/persist-package && mkdir -p ~/.local/bin && printf "%s\n" "#!/bin/sh" "printf persisted" > ~/.local/bin/persist-tool && chmod +x ~/.local/bin/persist-tool'
+echo 'stage: persistence and host fingerprint'
+remote 'mkdir -p ~/persist-package && printf "%s\n" "{\"name\":\"persist-package\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"./index.js\"]}}" > ~/persist-package/package.json && printf "%s\n" "export default function () {}" > ~/persist-package/index.js && pi install ~/persist-package && mkdir -p ~/.local/bin && printf "%s\n" "#!/bin/sh" "printf persisted" > ~/.local/bin/persist-tool && chmod +x ~/.local/bin/persist-tool'
 
 docker rm -f "$name" >/dev/null
 start
+echo 'stage: runtime after persistence restart'
 verify_runtime
+echo 'stage: persisted package and tool'
 remote 'grep -q persist-package ~/.pi/agent/settings.json && test "$(persist-tool)" = persisted'
+echo 'stage: host fingerprint comparison'
 test "$host_fingerprint" = "$(docker exec "$name" ssh-keygen -lf /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub)"
 
+echo 'stage: authorized keys symlink protection'
 docker exec "$name" sh -c 'printf root-owned-sentinel > /home/herdsman/root-owned-target; chmod 0644 /home/herdsman/root-owned-target'
 test "$(docker exec "$name" stat -c %u /home/herdsman/root-owned-target)" = 0
 target_before="$(docker exec "$name" stat -c '%u:%a' /home/herdsman/root-owned-target):$(docker exec "$name" cat /home/herdsman/root-owned-target)"

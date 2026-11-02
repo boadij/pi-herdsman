@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
 import packageMetadata from "../package.json" with { type: "json" };
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
   convertToLlm,
@@ -319,6 +320,49 @@ const MANAGER_STAFF_TOOL_CASES = [
     ["branch"],
   ],
 ] as const;
+
+test("Pi validates Herdsman coordination schemas", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const validate = (name: string, args: Record<string, unknown>) => {
+    const tool = pi.tools.find((tool) => tool.name === name);
+    assert.ok(tool, `missing ${name}`);
+    return validateToolArguments(tool, {
+      type: "toolCall",
+      id: "schema-check",
+      name,
+      arguments: args,
+    });
+  };
+  try {
+    assert.deepEqual(
+      validate("message_staff", {
+        target: "lead:0123456789",
+        message: "hello",
+        retain: "true",
+        files: null,
+      }),
+      { target: "lead:0123456789", message: "hello", retain: true },
+    );
+    assert.throws(
+      () => validate("message_staff", { target: "invalid", message: "hello" }),
+      /Validation failed/,
+    );
+    assert.throws(
+      () =>
+        validate("delegate_work", { task: "implement", extra: "unexpected" }),
+      /Validation failed/,
+    );
+    assert.throws(
+      () =>
+        validate("message_staff", { target: "lead:0123456789", message: "" }),
+      /Validation failed/,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
 
 test("semantic coordination tools expose exact strict object contracts", () => {
   setLeadEnvironment();
