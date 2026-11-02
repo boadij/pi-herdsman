@@ -299,7 +299,10 @@ export type MessagePreparationOptions = {
     text: string,
     resultBindings: readonly ResultBinding[],
   ) => number;
-  verifiedEvidence?: readonly Pick<RequiredEvidence, "path" | "sha256">[];
+  verifiedEvidence?: readonly Pick<
+    Extract<RequiredEvidence, { path: string }>,
+    "path" | "sha256"
+  >[];
   requireInline?: boolean;
   fileOrder?: "filesFirst" | "textFirst";
 };
