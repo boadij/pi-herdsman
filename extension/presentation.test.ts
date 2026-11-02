@@ -7218,6 +7218,66 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
 });
 
+test("Manager Git stats anchor right without aligning elapsed or context", () => {
+  const now = Date.now();
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [
+      {
+        branch: "feat/long-name",
+        session: "lead-long",
+        status: "active" as const,
+      },
+      { branch: "fix/x", session: "lead-short", status: "active" as const },
+    ],
+    leads: [
+      lead({
+        lead: "lead-long",
+        branch: "feat/long-name",
+        runtimeState: "working",
+        herdRunStartedAt: now - 8 * 60_000,
+        contextPercent: 10,
+      }),
+      lead({
+        lead: "lead-short",
+        branch: "fix/x",
+        runtimeState: "working",
+        herdRunStartedAt: now - 20 * 60_000,
+        contextPercent: 7,
+      }),
+    ],
+  };
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    (work) =>
+      work.branch === "feat/long-name"
+        ? { additions: 245, deletions: 52, changedFiles: 3, dirty: true }
+        : {
+            additions: 273,
+            deletions: 38,
+            changedFiles: 2,
+            dirty: true,
+            approximate: true,
+          },
+  );
+  const width = 80;
+  const [, first, second] = widget.render(width);
+  assert.match(first!, /feat\/long-name.*8m.*10% {2,}\+245 -52\*$/);
+  assert.match(second!, /fix\/x.*20m.*7% {2,}~\+273 -38\*$/);
+  assert.equal(visibleWidth(first!), width);
+  assert.equal(visibleWidth(second!), width);
+  const withoutGit = renderSupervisionLeads(snapshot, width, {
+    role: "manager",
+  });
+  assert.ok(visibleWidth(withoutGit[1]!) < width);
+  for (let w = 1; w <= width; w++)
+    assert.ok(widget.render(w).every((row) => visibleWidth(row) <= w));
+});
+
 test("Manager Git summaries fit per row and keep suffixes outside branch navigation", () => {
   const snapshot = {
     project: "pi-herdsman",
@@ -7251,6 +7311,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   );
   const dirtyOnly = dirtyOnlyWidget.render(100)[1]!;
   assert.match(dirtyOnly, /\*/);
+  assert.equal(visibleWidth(dirtyOnly), 100);
   assert.doesNotMatch(dirtyOnly, /±0|\+\d+ -\d+|\d+f/);
   const successfulZeroWidget = createSupervisionWidget(
     () => snapshot,
@@ -7261,6 +7322,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     () => ({ dirty: true, additions: 0, deletions: 0, changedFiles: 0 }),
   );
   assert.match(successfulZeroWidget.render(100)[1]!, /±0\*/);
+  assert.equal(visibleWidth(successfulZeroWidget.render(100)[1]!), 100);
 
   for (let width = 1; width <= 100; width++)
     assert.ok(widget.render(width).every((row) => visibleWidth(row) <= width));
@@ -7287,6 +7349,16 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     undefined,
   );
   assert.deepEqual(focused, []);
+  assert.equal(
+    clickableWidget.handleMouse({
+      type: "click",
+      button: "left",
+      width: 100,
+      x: suffixX - 1,
+      y: 1,
+    }),
+    undefined,
+  );
   const branchX = visibleWidth(row.slice(0, row.indexOf("feat/git")));
   clickableWidget.handleMouse({
     type: "click",
@@ -7352,7 +7424,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   ]);
   assert.match(
     switchedWidget.render(47)[1]!,
-    /feat\/git ↪ fix\/recovery  ~\+12 -3\*/,
+    /feat\/git ↪ fix\/recovery {2,}~\+12 -3\*/,
   );
   assert.ok(
     Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>

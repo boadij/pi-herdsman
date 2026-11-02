@@ -1389,6 +1389,12 @@ function renderSupervisionRows(
               : 2),
           0,
         );
+        const leftTelemetry = outputTelemetry.filter(
+          (option) => option.kind === "elapsed" || option.kind === "context",
+        );
+        const gitTelemetry = outputTelemetry.filter(
+          (option) => option.kind === "stats" || option.kind === "dirty",
+        );
         const markerColor =
           lead?.compatibility === "incompatible"
             ? "warning"
@@ -1420,11 +1426,21 @@ function renderSupervisionRows(
             : undefined;
         const canFocusLead =
           status === "fresh" && item.work.status === "active" && lead;
+        const left = `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, detailColor, suffix)}${leftTelemetry.map((option) => themed(options.theme, "muted", `  ${option.value}`)).join("")}`;
+        const right = gitTelemetry
+          .map((option) =>
+            themed(
+              options.theme,
+              option.kind === "dirty" ? "warning" : "muted",
+              option.value,
+            ),
+          )
+          .join("");
+        const padding = right
+          ? Math.max(0, width - visibleWidth(left) - visibleWidth(right))
+          : 0;
         return {
-          text: safeLine(
-            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, detailColor, suffix)}${outputTelemetry.map((option, optionIndex) => themed(options.theme, option.kind === "dirty" ? "warning" : "muted", `${option.kind === "dirty" && outputTelemetry[optionIndex - 1]?.kind === "stats" ? "" : "  "}${option.value}`)).join("")}`,
-            width,
-          ),
+          text: safeLine(`${left}${" ".repeat(padding)}${right}`, width),
           ...(canFocusLead && clickRegion
             ? {
                 label: item.work.branch,
