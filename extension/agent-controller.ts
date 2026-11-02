@@ -82,7 +82,7 @@ import {
   type RequiredEvidence,
 } from "./storage.ts";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
-import { readConfig } from "./config.ts";
+import { DEFAULT_STATUS_WIDGET_MAX_ROWS, readConfig } from "./config.ts";
 import {
   claimAssignmentLock as claimManagedAssignmentLock,
   claimProcessLock,
@@ -289,6 +289,18 @@ export function createAgentStatusRuntime() {
       }
     | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
+  let statusWidgetMaxRows = DEFAULT_STATUS_WIDGET_MAX_ROWS;
+  let statusConfigError: string | undefined;
+  const refreshWidgetConfig = (ctx: ExtensionContext) => {
+    try {
+      statusWidgetMaxRows = readConfig().statusWidgetMaxRows;
+      statusConfigError = undefined;
+    } catch (error) {
+      const message = String(error).replace(/^Error: /u, "");
+      if (message !== statusConfigError) ctx.ui.notify(message, "warning");
+      statusConfigError = message;
+    }
+  };
   let statusTimer: ReturnType<typeof setInterval> | undefined;
   let statusContext: ExtensionContext | undefined;
   let statusGeneration = 0;
@@ -377,6 +389,7 @@ export function createAgentStatusRuntime() {
       return;
     }
     statusInFlight = true;
+    refreshWidgetConfig(ctx);
     try {
       const snapshot = await configured.loadSnapshot(ctx);
       if (generation !== statusGeneration || ctx !== statusContext) return;
@@ -424,6 +437,10 @@ export function createAgentStatusRuntime() {
   return {
     configure: (value: NonNullable<typeof options>) => {
       options = value;
+    },
+    setStatusWidgetMaxRows: (rows: number) => {
+      statusWidgetMaxRows = rows;
+      statusWidget?.invalidate();
     },
     requestRefresh: () => {
       if (requestActive && statusContext)
@@ -499,6 +516,7 @@ export function createAgentStatusRuntime() {
                 if (generation === statusGeneration) focusInFlight = false;
               });
           },
+          () => statusWidgetMaxRows,
         );
         widget.setSnapshot(widgetSnapshot(presentedStatus, true));
         if (generation === statusGeneration && ctx === statusContext) {
@@ -8643,7 +8661,7 @@ export function createAgentController(
         label: Type.Optional(
           Type.String({
             description:
-              "Optional logical Agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
+              "Optional concise, task-specific logical Agent label (e.g. review-auth-tokens), without sensitive details. Must match ^[a-z][a-z0-9_-]{0,31}$; Herdsman chooses a definition-based label when omitted.",
             pattern: AGENT_LABEL_PATTERN.source,
           }),
         ),
@@ -8850,7 +8868,7 @@ export function createAgentController(
       name: "delegate_agent",
       label: "delegate agent",
       description:
-        "Start one fresh bounded assignment from an Agent definition.",
+        "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

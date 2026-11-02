@@ -258,6 +258,7 @@ import {
 } from "./errors.ts";
 
 import {
+  DEFAULT_STATUS_WIDGET_MAX_ROWS,
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   readConfig,
@@ -266,6 +267,7 @@ import {
   updateProjectOverride,
   updateConfig,
   validByteLimit,
+  validStatusWidgetMaxRows,
 } from "./config.ts";
 import {
   activeLeadRole,
@@ -1155,7 +1157,7 @@ function registerExtensionImpl(
         Type.String({
           minLength: 1,
           description:
-            "Optional Git branch for the new project work; Herdsman generates one when omitted.",
+            "Optional Git branch for new work. Prefer a concise, task-specific name following repository conventions, without sensitive details (e.g. fix/agent-selection). Herdsman generates one when omitted.",
         }),
       ),
       base: Type.Optional(
@@ -1817,14 +1819,24 @@ function registerExtensionImpl(
       messageLimits,
       formatMessageLimit,
       validByteLimit,
+      validStatusWidgetMaxRows,
       input: (ctx: ExtensionCommandContext, label: string) =>
         ctx.ui.input(label),
       updateSpawnPlacement: (placement: string) =>
         updateConfig("spawnPlacement", placement as SpawnPlacement),
       updateMessageLimit: (key: string, value: number | undefined) =>
         updateConfig(key as any, value),
-      updateConfig: (key: string, value: unknown) =>
-        updateConfig(key as any, value as any),
+      updateConfig: (key: string, value: unknown) => {
+        updateConfig(key as any, value as any);
+        if (key === "statusWidgetMaxRows") {
+          const rows =
+            value === undefined
+              ? DEFAULT_STATUS_WIDGET_MAX_ROWS
+              : (value as number);
+          leadRuntimes.statusRuntime?.setStatusWidgetMaxRows(rows);
+          leadRuntimes.supervisionUiRuntime?.setStatusWidgetMaxRows(rows);
+        }
+      },
       collectOwnedSessionUsage,
       formatSessionUsage,
     };

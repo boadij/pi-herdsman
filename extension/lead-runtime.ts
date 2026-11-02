@@ -22,7 +22,7 @@ import type {
   ManagerDescriptor,
   ManagerLease,
   ProjectAssignment,
-  UnverifiedAssignedLead,
+  UnverifiedLead,
   ProjectMessage,
   ChiefMessageRecord,
   ChiefInboxDrainOptions,
@@ -68,7 +68,7 @@ import {
   worktreeGroupScopeFromTopology,
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
-import { readConfig } from "./config.ts";
+import { DEFAULT_STATUS_WIDGET_MAX_ROWS, readConfig } from "./config.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
@@ -3822,6 +3822,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     includeAll = false,
     classifyBuilds = false,
     knownTopology?: HerdrRecord,
+    exactSession?: string,
   ) => {
     if (host.activeRole() === "chief" && !includeAll) {
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
@@ -3856,7 +3857,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       if (group.repoKey !== manager.repoKey)
         throw new Error("Manager workspace is not the assigned project");
       const incompatible: import("./supervision.ts").IncompatibleStaff[] = [];
-      const unverified: UnverifiedAssignedLead[] = [];
+      const unverified: UnverifiedLead[] = [];
       const inventory =
         suppliedInventory ??
         (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
@@ -4018,7 +4019,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     const agents = live.flatMap((agent: any) => {
       const sessionId = host.herdrSessionId(agent);
       if (!host.isPiAgent(agent) || !sessionId) return [];
-      const candidateSessionFile = host.supervisedSessionFile(agent, sessionId);
+      const candidateSessionFile =
+        !exactSession || sessionId === exactSession
+          ? host.supervisedSessionFile(agent, sessionId)
+          : undefined;
       const piSessionFile =
         candidateSessionFile &&
         host.persistedTranscriptReady({
@@ -4042,14 +4046,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         },
       ];
     });
+    const relevantAgents = exactSession
+      ? agents.filter((agent) => agent.sessionId === exactSession)
+      : agents;
     const workspaceCwds = new Map<string, string>();
-    for (const agent of agents)
+    for (const agent of relevantAgents)
       if (!workspaceCwds.has(agent.workspaceId) && agent.workspaceCwd)
         workspaceCwds.set(agent.workspaceId, agent.workspaceCwd);
     const workspaceProvenance = await host.workspacePresentationProvenance(
       host.pi,
       ctx,
-      [...new Set(agents.map((agent) => agent.workspaceId))],
+      [...new Set(relevantAgents.map((agent) => agent.workspaceId))],
       workspaceCwds,
       ctx.signal,
       inventory.workspaces,
@@ -4064,7 +4071,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           "Live Pi agents are present but their session identities are unresolvable",
         ]
       : undefined;
-    const coordinationStates = agents.flatMap((agent) => {
+    const coordinationStates = relevantAgents.flatMap((agent) => {
       try {
         const state = host.readLeadCoordinationState(
           host.supervisionRuntime(),
@@ -4101,7 +4108,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     incompatible?: import("./supervision.ts").IncompatibleStaff[],
     options?: {
       exactSession?: string;
-      unverified?: UnverifiedAssignedLead[];
+      unverified?: UnverifiedLead[];
       group?: import("./herdr.ts").WorktreeGroupScope;
       topology?: HerdrRecord;
     },
@@ -4132,6 +4139,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         true,
         true,
         options?.topology,
+        options?.exactSession,
       );
       for (const report of snapshot.incompatible ?? [])
         if (
@@ -4158,10 +4166,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       const initial = await Promise.all(
         candidates.map(async (lead) => {
           const unverified = (
-            status: UnverifiedAssignedLead["status"],
+            status: UnverifiedLead["status"],
             issue: string,
           ) => {
-            if (sessions.has(lead.lead))
+            if (sessions.has(lead.lead) || options?.exactSession === lead.lead)
               options?.unverified?.push({ lead: lead.lead, status, issue });
             return undefined;
           };
@@ -4182,7 +4190,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             if (typeof agent?.cwd !== "string" || !agent.cwd)
               return unverified(
                 "unknown",
-                "Assigned Lead identity could not be verified",
+                "Lead identity could not be verified",
               );
             verificationStage = "repository";
             const repository = await localRepositoryScope(
@@ -4195,7 +4203,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             if (repository.repoKey !== manager.repoKey)
               return unverified(
                 "conflict",
-                "Assigned Lead repository does not match the project",
+                "Lead repository does not match the project",
               );
             return { lead, cwd: agent.cwd };
           } catch (error) {
@@ -4205,8 +4213,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             return unverified(
               "unknown",
               verificationStage === "identity"
-                ? "Assigned Lead identity verification unavailable"
-                : "Assigned Lead repository verification unavailable",
+                ? "Lead identity verification unavailable"
+                : "Lead repository verification unavailable",
             );
           }
         }),
@@ -4234,22 +4242,23 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             );
             return current?.cwd === cwd
               ? lead
-              : (sessions.has(lead.lead) &&
+              : ((sessions.has(lead.lead) ||
+                  options?.exactSession === lead.lead) &&
                   options?.unverified?.push({
                     lead: lead.lead,
                     status: "unknown",
-                    issue: "Assigned Lead identity changed during verification",
+                    issue: "Lead identity changed during verification",
                   }),
                 undefined);
           } catch (error) {
             if (ctx.signal?.aborted) throw ctx.signal.reason;
             if (error instanceof Error && error.name === "AbortError")
               throw error;
-            if (sessions.has(lead.lead))
+            if (sessions.has(lead.lead) || options?.exactSession === lead.lead)
               options?.unverified?.push({
                 lead: lead.lead,
                 status: "unknown",
-                issue: "Assigned Lead final identity unavailable",
+                issue: "Lead final identity unavailable",
               });
             return undefined;
           }
@@ -4572,6 +4581,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let overviewGeneration = 0;
   let renderOverview: (() => void) | undefined;
   let renderWidget: (() => void) | undefined;
+  let statusWidgetMaxRows = DEFAULT_STATUS_WIDGET_MAX_ROWS;
+  let statusConfigError: string | undefined;
   let widgetFocusInFlight = false;
   let supervisionWidgetGeneration = 0;
   type CachedGitSummary = {
@@ -4639,7 +4650,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     const managerCheckoutPath = value.managerCheckoutPath;
     const entries = host
       .managerSupervisionItems(value)
-      .slice(0, 6)
+      .slice(0, statusWidgetMaxRows - 1)
       .filter(
         (item) =>
           item.kind === "work" &&
@@ -4889,6 +4900,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       !(host.activeRole() === "manager" && !host.state.roleSuspended)
     )
       return;
+    try {
+      statusWidgetMaxRows = readConfig().statusWidgetMaxRows;
+      statusConfigError = undefined;
+    } catch (error) {
+      const message = String(error).replace(/^Error: /u, "");
+      if (message !== statusConfigError) ctx.ui.notify(message, "warning");
+      statusConfigError = message;
+    }
     const currentGeneration = generation(ctx);
     const current = (): boolean => generation(ctx) === currentGeneration;
     try {
@@ -5813,6 +5832,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     setWidgetRender: (render: (() => void) | undefined) => {
       renderWidget = render;
     },
+    setStatusWidgetMaxRows: (rows: number) => {
+      statusWidgetMaxRows = rows;
+      renderWidget?.();
+    },
     registerWidget: (
       ctx: ExtensionContext,
       role: "chief" | "manager",
@@ -5870,7 +5893,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 !currentSnapshot.managerCheckoutPath ||
                 !host
                   .managerSupervisionItems(currentSnapshot)
-                  .slice(0, 6)
+                  .slice(0, statusWidgetMaxRows - 1)
                   .some(
                     (item) =>
                       item.kind === "work" &&
@@ -5922,6 +5945,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   });
               },
             },
+            () => statusWidgetMaxRows,
           );
         });
       } catch {

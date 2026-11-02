@@ -56,8 +56,13 @@ short inventory of successfully imported refs, not embedded artifact contents.
 }
 ```
 
-Call `delegate_agent` with `definition`, `task`, and optional `label` and `files`. The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets
-the requested logical agent label; an existing live-label collision fails.
+Call `delegate_agent` with `definition`, `task`, and optional `label` and `files`.
+Choose the most focused eligible definition capable of completing the entire
+bounded task. A general-purpose definition fits when broader capabilities are
+needed or no focused definition suffices. Prefer a concise, task-specific `label`
+without sensitive details; when omitted, Herdsman chooses a definition-based label.
+The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets the requested
+logical agent label; an existing live-label collision fails.
 Fresh delegation runs in the calling controller's cwd.
 The definition is resolved from the effective roster and delegating agent
 controllers may use only their allowlisted definitions. Project definitions

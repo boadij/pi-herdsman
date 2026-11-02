@@ -10648,6 +10648,9 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   );
   const leadSession = randomUUID();
   const leadWorkspace = `workspace-${randomUUID()}`;
+  const unrelatedSession = randomUUID();
+  const unrelatedWorkspace = `workspace-${randomUUID()}`;
+  const unrelatedCwd = realFs.mkdtempSync(join(tmpdir(), "unrelated-lead-"));
   const managerAgent = {
     agent_session: {
       source: "herdr:pi",
@@ -10672,6 +10675,19 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     tab_id: "ordinary-inbox-tab",
     cwd: "/tmp",
   };
+  const unrelatedAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: unrelatedSession,
+    },
+    workspace_id: unrelatedWorkspace,
+    pane_id: "unrelated-inbox-pane",
+    tab_id: "unrelated-inbox-tab",
+    cwd: unrelatedCwd,
+  };
+  let unrelatedStatePath: string | undefined;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -10682,7 +10698,17 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   let repoALocalScopeQueries = 0;
   let changeLeadCwdAfterLocalScope = false;
   let leadCwdMutationQueries = 0;
+  const unrelatedCalls: string[] = [];
   const exec = (_command: string, args: string[]) => {
+    if (
+      (args[0] === "workspace" && args[2] === unrelatedWorkspace) ||
+      (args[0] === "worktree" &&
+        (args.includes(unrelatedWorkspace) || args.includes(unrelatedCwd))) ||
+      (args[0] === "agent" &&
+        args[1] === "get" &&
+        args[2] === unrelatedAgent.pane_id)
+    )
+      unrelatedCalls.push(args.join(" "));
     if (args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace:
@@ -10730,19 +10756,27 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
           ? []
           : managerTopology
             ? [{ open_workspace_id: WORKSPACE }]
-            : [{ open_workspace_id: leadWorkspace }],
+            : [
+                { open_workspace_id: leadWorkspace },
+                { open_workspace_id: unrelatedWorkspace },
+              ],
       });
     }
     if (isAgentList(args))
-      return respond({ agents: [managerAgent, leadAgent] });
+      return respond({ agents: [managerAgent, leadAgent, unrelatedAgent] });
     if (args[0] === "agent" && args[1] === "get")
       return respond({
-        agent: args[2] === leadAgent.pane_id ? leadAgent : managerAgent,
+        agent:
+          args[2] === leadAgent.pane_id
+            ? leadAgent
+            : args[2] === unrelatedAgent.pane_id
+              ? unrelatedAgent
+              : managerAgent,
       });
     if (isApiSnapshot(args))
       return respond({
         snapshot: {
-          agents: [managerAgent, leadAgent],
+          agents: [managerAgent, leadAgent, unrelatedAgent],
           panes: [],
           workspaces: [],
         },
@@ -10768,6 +10802,13 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   let competingLease: ReturnType<typeof claimManagerLease> | undefined;
   try {
     useManagerIdentity();
+    unrelatedStatePath = writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: unrelatedSession,
+      updatedAt: Date.now(),
+    });
     manager = fakeRepositoryChiefPi({
       activeTools: ["read"],
       exec: managerExec,
@@ -10784,8 +10825,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       args: string[],
       options: { cwd?: string } | undefined,
     ) =>
-      command === "git" && args[0] === "rev-parse" && options?.cwd === repoA
-        ? { stdout: repoA, stderr: "", code: 0 }
+      command === "git" &&
+      args[0] === "rev-parse" &&
+      (options?.cwd === repoA || options?.cwd === unrelatedCwd)
+        ? {
+            stdout: options.cwd === repoA ? repoA : "/tmp",
+            stderr: "",
+            code: 0,
+          }
         : originalManagerExec(command, args, options);
 
     useLeadIdentity();
@@ -10818,6 +10865,68 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       )?.relationship,
       "supervised",
     );
+    assert.equal(
+      reports.details.reports.find(
+        (report: any) =>
+          report.target === coordinatorTarget("lead", unrelatedSession),
+      )?.relationship,
+      "supervised",
+    );
+    const unrelatedState = readFileSync(unrelatedStatePath, "utf8");
+    writeFileSync(unrelatedStatePath, "{malformed");
+    unrelatedCalls.length = 0;
+    const queued = await manager.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        {
+          target: coordinatorTarget("lead", leadSession),
+          message: "Scoped message",
+        },
+        undefined,
+        undefined,
+        managerCtx,
+      );
+    assert.equal(queued.details.ok, true);
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
+      1,
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), unrelatedSession),
+      [],
+    );
+    assert.deepEqual(unrelatedCalls, []);
+    leadAgent.cwd = repoA;
+    await assert.rejects(
+      manager.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          {
+            target: coordinatorTarget("lead", leadSession),
+            message: "Must not queue",
+          },
+          undefined,
+          undefined,
+          managerCtx,
+        ),
+      /repository does not match/,
+    );
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
+      1,
+    );
+    leadAgent.cwd = "/tmp";
+    writeFileSync(unrelatedStatePath, unrelatedState);
+    useLeadIdentity();
+    await t.waitFor(() =>
+      assert.equal(
+        listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
+        0,
+      ),
+    );
+    useManagerIdentity();
     omitLeadFromManagerTopology = true;
     const managerScope = await worktreeGroupScope(
       manager.pi,
@@ -10875,7 +10984,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     );
     omitLeadFromManagerTopology = false;
 
-    await manager.tools
+    const managerMessage = await manager.tools
       .find((tool) => tool.name === "message_staff")!
       .execute(
         "message",
@@ -10893,6 +11002,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         lead!.sent.some(
           (message: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
+            message?.details?.id === managerMessage.details.id &&
             message?.details?.fromSessionId === LEAD_SESSION_ID &&
             message?.details?.toSessionId === leadSession,
         ),
@@ -10994,6 +11104,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useManagerIdentity();
     managerCtx.isIdle = () => false;
     leadAgent.cwd = repoA;
+    repoALocalScopeQueries = 0;
     const managerDescriptor = readManagerDescriptor(
       supervisionRuntime(),
       WORKSPACE,
@@ -11019,7 +11130,17 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     );
     managerCtx.isIdle = () => true;
     await t.waitFor(() => assert.ok(repoALocalScopeQueries > 0));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await t.waitFor(() =>
+      assert.equal(
+        listCoordinationMessagePaths(
+          supervisionRuntime(),
+          LEAD_SESSION_ID,
+        ).some(
+          (path) => readChiefMessage(path).id === crossRepositoryUplink.id,
+        ),
+        false,
+      ),
+    );
     assert.equal(
       manager.sentMessageCalls.some(
         ({ message }: any) =>
@@ -11210,6 +11331,8 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     delete process.env.HERDR_TAB_ID;
     setLeadEnvironment();
     realFs.rmSync(repoA, { recursive: true, force: true });
+    realFs.rmSync(unrelatedCwd, { recursive: true, force: true });
+    if (unrelatedStatePath) realFs.rmSync(unrelatedStatePath, { force: true });
   }
 });
 
@@ -14727,12 +14850,12 @@ test("Manager direct reports preserve assigned Leads when ordinary supervision i
     {
       lead: "other",
       status: "conflict",
-      issue: "Assigned Lead repository does not match the project",
+      issue: "Lead repository does not match the project",
     },
     {
       lead: "changed",
       status: "unknown",
-      issue: "Assigned Lead identity changed during verification",
+      issue: "Lead identity changed during verification",
     },
   ]);
   calls.clear();
@@ -14833,6 +14956,153 @@ test("owned-Agent focus works before supervision is available and expires with i
     runtime.stopPeriodic();
     runtime.removeWidget(ctx);
   }
+});
+
+test("Manager exact reports enrich only the selected Lead while preserving fleet identities", async (t) => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const repo = mkdtempSync(join(tmpdir(), "exact-report-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  mkdirSync(join(repo, ".git"));
+  const manager = { repoKey: join(repo, ".git"), workspaceId: "manager" };
+  const agents = ["selected", "unrelated"].map((id) => ({
+    id,
+    workspace_id: id,
+    pane_id: id,
+    tab_id: id,
+    cwd: repo,
+  }));
+  const states: string[] = [];
+  const transcripts: string[] = [];
+  let provenance: string[] = [];
+  let projected: any;
+  let identityAvailable = true;
+  const identityChecks: string[] = [];
+  const runtime = createLeadSupervisionRuntime({
+    activeRole: () => "manager",
+    state: { managerLease: { descriptor: manager } },
+    currentManager: async () => manager,
+    sameManagerDescriptor: () => true,
+    worktreeGroupScope: async () => ({
+      workspaceIds: ["selected", "unrelated"],
+    }),
+    herdrSessionSnapshot: async () => ({ agents, workspaces: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    herdrSessionId: (agent: any) => agent.id,
+    isPiAgent: () => true,
+    supervisedSessionFile: (_agent: any, id: string) => {
+      transcripts.push(id);
+      return undefined;
+    },
+    normalizeHerdrLifecycleState: () => "running",
+    workspacePresentationProvenance: async (
+      _pi: any,
+      _ctx: any,
+      ids: string[],
+    ) => {
+      provenance = ids;
+      return {};
+    },
+    readLeadCoordinationState: (_runtime: any, id: string) => {
+      states.push(id);
+      if (id === "unrelated") throw new Error("malformed unrelated state");
+      return { id };
+    },
+    projectSupervision: (input: any) => {
+      projected = input;
+      return {
+        leads: [
+          {
+            lead: "selected",
+            workspaceId: "selected",
+            paneId: "selected",
+            tabId: "selected",
+          },
+        ],
+      };
+    },
+    listManagerDescriptors: () => [manager],
+    currentChief: () => undefined,
+    supervisionRuntime: () => ({}),
+    listProjectAssignments: () => [],
+    remoteChiefAgent: async (_ctx: any, descriptor: any) => {
+      identityChecks.push(descriptor.piSessionId);
+      return identityAvailable ? { cwd: repo } : undefined;
+    },
+    pi: {
+      exec: async (command: string, args: string[]) =>
+        command === "git"
+          ? {
+              code: 0,
+              stdout: args.includes("--show-toplevel")
+                ? repo
+                : join(repo, ".git"),
+              stderr: "",
+            }
+          : {
+              code: 0,
+              stdout: JSON.stringify({
+                id: 1,
+                result:
+                  args[0] === "workspace"
+                    ? { workspace: { workspace_id: args[2] } }
+                    : {
+                        source: {
+                          repo_key: join(repo, ".git"),
+                          repo_name: "repo",
+                        },
+                        worktrees: [],
+                      },
+              }),
+              stderr: "",
+            },
+    },
+  } as any);
+  const reports = await runtime.directReports(
+    fakeContext() as any,
+    undefined,
+    undefined,
+    undefined,
+    { exactSession: "selected" },
+  );
+  assert.equal(reports.length, 1);
+  assert.deepEqual(
+    projected.agents.map((agent: any) => agent.sessionId),
+    ["selected", "unrelated"],
+  );
+  assert.deepEqual(states, ["selected"]);
+  assert.deepEqual(transcripts, ["selected"]);
+  assert.deepEqual(provenance, ["selected"]);
+  assert.deepEqual(identityChecks, ["selected", "selected"]);
+  identityAvailable = false;
+  const unverified: any[] = [];
+  const unavailable = await runtime.directReports(
+    fakeContext() as any,
+    undefined,
+    undefined,
+    undefined,
+    { exactSession: "selected", unverified },
+  );
+  assert.deepEqual(unavailable, []);
+  assert.deepEqual(unverified, [
+    {
+      lead: "selected",
+      status: "unknown",
+      issue: "Lead identity could not be verified",
+    },
+  ]);
+  identityAvailable = true;
+  assert.equal(
+    (
+      await runtime.directReports(
+        fakeContext() as any,
+        undefined,
+        undefined,
+        undefined,
+        { exactSession: "selected" },
+      )
+    ).length,
+    1,
+  );
 });
 
 test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async (t) => {
@@ -15472,13 +15742,22 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   currentSnapshot.work[0].checkoutPath = originalCheckout;
 
   const hiddenCheckout = join(gitTestRoot, "beyond-visible-limit");
+  const seventhCheckout = join(gitTestRoot, "seventh-visible");
+  runGit(
+    ["worktree", "add", "-b", "feat/seventh", seventhCheckout],
+    managerCheckout,
+  );
   currentSnapshot.work.push(
-    ...Array.from({ length: 6 }, (_, index) => ({
-      branch: `feat/extra-${index}`,
+    ...Array.from({ length: 7 }, (_, index) => ({
+      branch: index === 5 ? "feat/seventh" : `feat/extra-${index}`,
       session: `extra-${index}`,
       status: "active" as const,
       checkoutPath:
-        index === 5 ? hiddenCheckout : join(gitTestRoot, `extra-${index}`),
+        index === 5
+          ? seventhCheckout
+          : index === 6
+            ? hiddenCheckout
+            : join(gitTestRoot, `extra-${index}`),
     })),
   );
   testNow += 30_001;
@@ -15487,10 +15766,23 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(
+    gitCalls
+      .slice(visibleLimitStart)
+      .some(
+        (call) => call.cwd === seventhCheckout && call.args.includes("status"),
+      ),
+    "the seventh work item is eligible for Git telemetry",
+  );
+  runtime.setStatusWidgetMaxRows(12);
+  assert.match(
+    widget.render(120).find((line: string) => line.includes("feat/seventh")),
+    /\+1 -0/,
+  );
+  assert.ok(
     !gitCalls
       .slice(visibleLimitStart)
       .some((call) => call.cwd === hiddenCheckout),
-    "rows after the first six visible items must not be probed",
+    "rows beyond the work-row budget must not be probed",
   );
   currentSnapshot.work.splice(1);
 
@@ -16601,6 +16893,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Skip Manager Git setup confirmation  Global off",
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Manager local merge  Global off",
+    "Status widget rows  8",
     "Message limits",
     "Project overrides…",
   ]);
@@ -17167,6 +17460,7 @@ test("settings navigation exposes message limits and one rough token formatter",
       "Skip Manager Git setup confirmation  Global off",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Manager local merge  Global off",
+      "Status widget rows  8",
       "Message limits",
       "Project overrides…",
     ]);
