@@ -164,8 +164,12 @@ Manager only. Start new project work with a required `task` and optional
 `branch`, `base`, and `files`:
 
 ```json
-{ "task": "Implement the change", "branch": "feat/example" }
+{ "task": "Improve Agent selection guidance", "branch": "feat/agent-selection" }
 ```
+
+For new work, prefer a concise, task-specific branch following repository
+conventions without exposing sensitive details. `branch` remains optional;
+Herdsman generates one when omitted.
 
 An existing assignment on that branch is rejected; use `resume_work` to
 continue it. An unoccupied existing Herdr worktree may still be reused for new
