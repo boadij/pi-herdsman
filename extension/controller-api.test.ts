@@ -6328,7 +6328,15 @@ async function runManagerStartupScenario(
                   fg: (_color: string, text: string) => text,
                   bold: (text: string) => text,
                 },
-                {},
+                {
+                  matches: (data: string, key: string) =>
+                    ({
+                      "tui.select.up": "\u001b[A",
+                      "tui.select.down": "\u001b[B",
+                      "tui.select.confirm": "\r",
+                      "tui.select.cancel": "\u001b",
+                    })[key] === data,
+                },
                 resolve,
               ),
             );
