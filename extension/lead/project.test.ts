@@ -18,7 +18,6 @@ const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
-const testSha = (letter: string) => letter.repeat(40);
 
 test("staff message rejects an identity change during attachment preparation", async () => {
   const entries: unknown[] = [];
@@ -216,13 +215,7 @@ test("staff handoff reports failure after required evidence retention commits", 
   );
 });
 
-function baselineLifecycle(options: {
-  reused?: boolean;
-  resume?: boolean;
-  managerHead?: string;
-  worktreeHead?: string;
-  mergeBases?: string[];
-  savedBaseline?: string;
+function projectLifecycle(options: {
   retained?: ReturnType<typeof persistRequiredEvidenceSnapshot>;
   rejectEvidence?: boolean;
   rejectAtPublication?: boolean;
@@ -244,19 +237,7 @@ function baselineLifecycle(options: {
     leaseId: randomUUID(),
     piSessionId: randomUUID(),
   };
-  const gitCalls: { args: string[]; cwd?: string }[] = [];
   let published: any;
-  const current = options.resume
-    ? {
-        version: 2 as const,
-        id: randomUUID(),
-        repoKey,
-        branch,
-        text: "existing task",
-        checkoutPath: realFs.realpathSync(worktreePath),
-        gitBaselineSha: options.savedBaseline,
-      }
-    : undefined;
   const topology = {
     source: {
       repo_key: repoKey,
@@ -264,14 +245,11 @@ function baselineLifecycle(options: {
       source_workspace_id: WORKSPACE,
       source_checkout_path: managerCheckout,
     },
-    worktrees:
-      options.reused || options.resume
-        ? [{ path: worktreePath, branch, is_linked_worktree: true }]
-        : [],
+    worktrees: [],
   };
   const runtime = createLeadProjectRuntime({
     pi: {
-      exec: async (command: string, args: string[], execOptions: any) => {
+      exec: async (command: string, args: string[]) => {
         if (command === "herdr") {
           const result =
             args[0] === "worktree" && args[1] === "list"
@@ -285,7 +263,6 @@ function baselineLifecycle(options: {
             code: 0,
           };
         }
-        gitCalls.push({ args, cwd: execOptions?.cwd });
         let stdout = "";
         if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
           stdout = managerCheckout;
@@ -294,10 +271,6 @@ function baselineLifecycle(options: {
         else if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
           stdout = repoKey;
         else if (args[0] === "symbolic-ref") stdout = `${branch}\n`;
-        else if (args[0] === "rev-parse" && args.includes("HEAD^{commit}"))
-          stdout = `${execOptions?.cwd === managerCheckout ? options.managerHead : options.worktreeHead}\n`;
-        else if (args[0] === "merge-base")
-          stdout = `${(options.mergeBases ?? []).join("\n")}\n`;
         return { stdout, stderr: "", code: 0 };
       },
     } as any,
@@ -312,8 +285,8 @@ function baselineLifecycle(options: {
       worktrees: topology.worktrees,
     }),
     supervisionRuntime: () => ({ root: assignmentRoot, assignments }),
-    readProjectAssignment: () => current,
-    listProjectAssignments: () => (current ? [current] : []),
+    readProjectAssignment: () => undefined,
+    listProjectAssignments: () => [],
     reconcileProjectAssignments: async () => {},
     runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
       if (args[0] === "worktree" && args[1] === "list") return topology;
@@ -397,11 +370,6 @@ function baselineLifecycle(options: {
     },
     appendDurableError: () => {},
   } as any);
-  if (current)
-    writeProjectAssignment(
-      { root: assignmentRoot, assignments } as any,
-      current,
-    );
   const ctx = fakeContext() as any;
   ctx.cwd = managerCheckout;
   return {
@@ -410,7 +378,6 @@ function baselineLifecycle(options: {
     managerCheckout,
     worktreePath,
     workspaceId,
-    gitCalls,
     get published() {
       return published;
     },
@@ -418,14 +385,12 @@ function baselineLifecycle(options: {
     ctx,
     activate: (signal = new AbortController().signal) =>
       runtime.activateProjectLead(
-        options.resume
-          ? { action: "resume", branch }
-          : {
-              action: "delegate",
-              task: "work",
-              branch,
-              ...(options.retained ? { files: [options.retained.ref!] } : {}),
-            },
+        {
+          action: "delegate",
+          task: "work",
+          branch,
+          ...(options.retained ? { files: [options.retained.ref!] } : {}),
+        },
         ctx,
         signal,
       ),
@@ -438,10 +403,8 @@ test("delegation copies retained evidence under the destination and rejects stal
     "source.md",
     "selected content",
   );
-  const accepted = baselineLifecycle({
+  const accepted = projectLifecycle({
     retained: source,
-    managerHead: testSha("a"),
-    worktreeHead: testSha("b"),
   });
   await assert.rejects(accepted.activate(), new RegExp(lifecycleStop));
   const copy = accepted.published.requiredEvidence.find(
@@ -458,19 +421,15 @@ test("delegation copies retained evidence under the destination and rejects stal
     readRequiredEvidenceSnapshot(source.sourceAssignmentId, source),
     "selected content",
   );
-  const denied = baselineLifecycle({
+  const denied = projectLifecycle({
     retained: source,
     rejectEvidence: true,
-    managerHead: testSha("a"),
-    worktreeHead: testSha("b"),
   });
   await assert.rejects(denied.activate(), /evidence authority changed/);
   assert.equal(denied.published, undefined);
-  const stale = baselineLifecycle({
+  const stale = projectLifecycle({
     retained: source,
     rejectAtPublication: true,
-    managerHead: testSha("a"),
-    worktreeHead: testSha("b"),
   });
   await assert.rejects(
     stale.activate(),
@@ -872,75 +831,6 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   );
   assert.deepEqual(calls[0]?.options, { signal });
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
-});
-
-test("new delegate worktree pins its verified HEAD without probing merge-base", async () => {
-  const worktreeHead = testSha("a");
-  const fixture = baselineLifecycle({ worktreeHead });
-  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
-  assert.equal(fixture.published?.gitBaselineSha, worktreeHead);
-  assert.equal(
-    sameDirectory(fixture.published!.checkoutPath, fixture.worktreePath),
-    true,
-  );
-  assert.equal(
-    fixture.gitCalls.some(({ args }) => args[0] === "merge-base"),
-    false,
-  );
-  assert.ok(
-    fixture.gitCalls.some(
-      ({ args, cwd }) =>
-        args.includes("HEAD^{commit}") && cwd === fixture.worktreePath,
-    ),
-  );
-});
-
-test("reused matching worktree pins its unique manager/worktree merge-base", async () => {
-  const managerHead = testSha("b");
-  const worktreeHead = testSha("c");
-  const mergeBase = testSha("d");
-  const fixture = baselineLifecycle({
-    reused: true,
-    managerHead,
-    worktreeHead,
-    mergeBases: [mergeBase],
-  });
-  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
-  assert.deepEqual(
-    fixture.gitCalls.find(({ args }) => args[0] === "merge-base"),
-    {
-      args: ["merge-base", "--all", managerHead, worktreeHead],
-      cwd: fixture.worktreePath,
-    },
-  );
-  assert.equal(fixture.published?.gitBaselineSha, mergeBase);
-  assert.deepEqual(
-    fixture.gitCalls.find(({ args }) => args[0] === "merge-base"),
-    {
-      args: ["merge-base", "--all", managerHead, worktreeHead],
-      cwd: fixture.worktreePath,
-    },
-  );
-});
-
-test("resume preserves its stored baseline and skips capture probes when Manager HEAD differs", async () => {
-  const storedBaseline = testSha("e");
-  const fixture = baselineLifecycle({
-    resume: true,
-    savedBaseline: storedBaseline,
-    managerHead: testSha("f"),
-    worktreeHead: testSha("a"),
-  });
-  await assert.rejects(fixture.activate(), new RegExp(lifecycleStop));
-  assert.equal(fixture.published, undefined);
-  assert.equal(
-    fixture.gitCalls.some(({ args }) => args[0] === "merge-base"),
-    false,
-  );
-  assert.equal(
-    fixture.gitCalls.some(({ args }) => args.includes("HEAD^{commit}")),
-    false,
-  );
 });
 
 test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {

@@ -3848,8 +3848,8 @@ test("project work derives active, paused, or conflict from runtime placement", 
   assert.equal(withVerifiedPlacement[0]!.status, "paused");
   assert.equal(withVerifiedPlacement[0]!.checkoutPath, verifiedCheckout);
   assert.equal(
-    withVerifiedPlacement[0]!.gitBaselineSha,
-    assignment.gitBaselineSha,
+    Object.hasOwn(withVerifiedPlacement[0]!, "gitBaselineSha"),
+    false,
   );
   assert.equal(Object.hasOwn(switched[0]!, "checkoutPath"), false);
 

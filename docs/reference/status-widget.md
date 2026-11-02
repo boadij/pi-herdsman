@@ -140,7 +140,9 @@ revalidated for control actions.
 ### Manager Git indicators
 
 Eligible Manager work rows can show net tracked textual additions and
-deletions from a stable assignment baseline to the current worktree contents.
+deletions from the unique merge base of the local Manager and Lead revisions to
+the Lead's current worktree contents. `~` marks a local PR-style estimate, not
+an exact GitHub result.
 The comparison includes committed, staged, and unstaged tracked changes without
 double-counting them; untracked files do not contribute numeric totals. `*`
 means the assigned checkout is dirty, including untracked changes. Thus `±0*`
@@ -148,13 +150,10 @@ means the verified comparison found no net tracked differences but the checkout
 is dirty; `±0` means it found no net tracked differences and the checkout is
 clean. A changed-file count such as `2f` is used when files changed without
 textual line counts, such as binary-only changes. These are net worktree
-contents, not cumulative effort or proof of merge readiness; merging upstream
-changes into a Lead checkout can contribute to its net diff.
+contents, not cumulative effort or proof of merge readiness.
 
-The stored baseline remains fixed when the Manager's `main` advances. Existing
-assignments without a stored baseline use a dynamically inferred merge-base
-approximation, marked with `~` before numeric statistics. That fallback is not
-persisted. If a Lead switches branches in its assigned worktree, `↪` followed
+Unavailable or ambiguous ancestry suppresses numeric totals. If a Lead switches
+branches in its assigned worktree, `↪` followed
 by the checked-out branch distinguishes that mutable Git branch from the
 original assignment branch shown as the row's clickable handle. Branch-switch
 metadata and Git suffixes are not clickable; the assignment handle continues to

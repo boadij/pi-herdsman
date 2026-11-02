@@ -3685,7 +3685,6 @@ export type ProjectWorkSnapshot = Readonly<{
   task?: string;
   issue?: string;
   checkoutPath?: string;
-  gitBaselineSha?: string;
 }>;
 export function projectTaskSummary(text: string): string | undefined {
   const task = text
@@ -3779,9 +3778,6 @@ export function projectWorkSnapshot(options: {
       (status === "active" || status === "paused")
         ? {
             checkoutPath: placement.path,
-            ...(assignment.gitBaselineSha
-              ? { gitBaselineSha: assignment.gitBaselineSha }
-              : {}),
           }
         : {}),
       ...(runtimeState ? { runtimeState } : {}),
