@@ -1,5 +1,10 @@
 # Use a reserved layered definition for managed project Leads
 
+> Clarification: `agents` configures runtime-enforced direct Agent delegation
+> policy, not a native Pi launch argument. A native extension/session
+> reinitialization may resolve this policy again; launch settings retain the
+> stop/resume boundary below.
+
 ## Decision
 
 Manager-created project Leads use the reserved `managed-lead` definition for
