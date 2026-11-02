@@ -188,27 +188,28 @@ test("Lead visibility follows only uniquely proven workspace-scoped ancestry", (
   );
 });
 
-test("status breadcrumb trusts only validated Lead ancestry", () => {
+test("status breadcrumb trusts only validated root ancestry", () => {
   const state = managedState("scout");
   const agent = { state, agentDefinition: "scout" } as any;
   const base = { agents: [agent], mailboxes: [] };
   const sameIdentity = (left: ManagedAgentState, right: ManagedAgentState) =>
     left.piSessionId === right.piSessionId;
+  for (const role of ["lead", "manager", "chief"] as const)
+    assert.deepEqual(
+      statusBreadcrumb(
+        { ...base, rootOwners: [{ sessionId: LEAD_SESSION_ID, role }] },
+        state,
+        { definition: "scout", label: "scout" },
+        sameIdentity,
+      ),
+      [
+        { text: role, sessionId: LEAD_SESSION_ID },
+        { text: "scout:scout", sessionId: state.piSessionId },
+      ],
+    );
   assert.deepEqual(
     statusBreadcrumb(
-      { ...base, leadSessionIds: [LEAD_SESSION_ID] },
-      state,
-      { definition: "scout", label: "scout" },
-      sameIdentity,
-    ),
-    [
-      { text: "lead", sessionId: LEAD_SESSION_ID },
-      { text: "scout:scout", sessionId: state.piSessionId },
-    ],
-  );
-  assert.deepEqual(
-    statusBreadcrumb(
-      { ...base, leadSessionIds: [] },
+      { ...base, rootOwners: [] },
       state,
       { definition: "scout", label: "scout" },
       sameIdentity,
@@ -229,13 +230,54 @@ test("status breadcrumb trusts only validated Lead ancestry", () => {
           { state: { ...ambiguousParent }, agentDefinition: "worker" },
         ],
         mailboxes: [],
-        leadSessionIds: [LEAD_SESSION_ID],
+        rootOwners: [{ sessionId: LEAD_SESSION_ID, role: "lead" }],
       },
       state,
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
     [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+  );
+  assert.deepEqual(
+    statusBreadcrumb(
+      {
+        ...base,
+        rootOwners: [
+          { sessionId: LEAD_SESSION_ID, role: "lead" },
+          { sessionId: LEAD_SESSION_ID, role: "chief" },
+        ],
+      },
+      state,
+      { definition: "scout", label: "scout" },
+      sameIdentity,
+    ),
+    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+  );
+  const parent = {
+    ...managedState("research"),
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+    ownerSessionId: LEAD_SESSION_ID,
+  };
+  const child = { ...state, ownerSessionId: parent.piSessionId };
+  assert.deepEqual(
+    statusBreadcrumb(
+      {
+        agents: [
+          { state: child, agentDefinition: "scout" },
+          { state: parent, agentDefinition: "researcher" },
+        ] as any,
+        mailboxes: [],
+        rootOwners: [{ sessionId: LEAD_SESSION_ID, role: "manager" }],
+      },
+      child,
+      { definition: "scout", label: "scout" },
+      sameIdentity,
+    ),
+    [
+      { text: "manager", sessionId: LEAD_SESSION_ID },
+      { text: "researcher:research", sessionId: parent.piSessionId },
+      { text: "scout:scout", sessionId: child.piSessionId },
+    ],
   );
 });
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
@@ -1120,6 +1162,19 @@ test("registered agent writes state, handles input, and settles one result", asy
     promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /direct_owner: lead/,
   );
+  for (const owner of ["manager", "chief", "researcher:research"]) {
+    process.env.PI_HERDSMAN_OWNER_DISPLAY = owner;
+    const event: any = {
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await agent.events.get("before_agent_start")![0](event, context as any);
+    assert.ok(
+      event.systemPromptOptions.sections.pi_herdsman_agent.includes(
+        `direct_owner: ${owner}`,
+      ),
+    );
+  }
+  process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   assert.equal(
     "delegating_agent_role" in promptEvent.systemPromptOptions.sections,
     false,

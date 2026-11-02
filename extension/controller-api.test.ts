@@ -7584,7 +7584,7 @@ test("empty stop inventory reports a valid Agent discovered in final verificatio
     isContextRetired: () => false,
     snapshotDependencies: {
       runtimeForLabel: () => undefined,
-      readLeadSessionIds: () => [],
+      readRootOwners: () => [],
       staleAfterMs: 60_000,
     },
     persistedTranscriptReady: () => true,
@@ -13471,7 +13471,7 @@ test("listing and transcript action retain distinct transcript-readiness callbac
     isContextRetired: () => false,
     snapshotDependencies: {
       runtimeForLabel: () => undefined,
-      readLeadSessionIds: () => [],
+      readRootOwners: () => [],
       staleAfterMs: 60_000,
     },
     persistedTranscriptReady: () => false,
@@ -13520,7 +13520,7 @@ test("root assignments fail closed when delegation authority callbacks are missi
     isContextRetired: () => false,
     snapshotDependencies: {
       runtimeForLabel: () => undefined,
-      readLeadSessionIds: () => [],
+      readRootOwners: () => [],
       staleAfterMs: 60_000,
     },
     persistedTranscriptReady: () => false,
@@ -13581,7 +13581,7 @@ test("root discovery fails closed without policy and preserves explicit unrestri
     isContextRetired: () => false,
     snapshotDependencies: {
       runtimeForLabel: () => undefined,
-      readLeadSessionIds: () => [],
+      readRootOwners: () => [],
       staleAfterMs: 60_000,
     },
     persistedTranscriptReady: () => false,
@@ -13639,7 +13639,7 @@ test("read_evidence revalidates project authority at execution and denies stale 
       isContextRetired: () => false,
       snapshotDependencies: {
         runtimeForLabel: () => undefined,
-        readLeadSessionIds: () => [],
+        readRootOwners: () => [],
         staleAfterMs: 60_000,
       },
       persistedTranscriptReady: () => false,
@@ -13720,7 +13720,7 @@ test("root read_evidence reads same-root published results without project assig
       isContextRetired: () => false,
       snapshotDependencies: {
         runtimeForLabel: () => undefined,
-        readLeadSessionIds: () => [],
+        readRootOwners: () => [],
         staleAfterMs: 60_000,
       },
       persistedTranscriptReady: () => false,
@@ -13816,7 +13816,7 @@ test("root assignments reject a generation owned by a different session", async 
       isContextRetired: () => false,
       snapshotDependencies: {
         runtimeForLabel: () => undefined,
-        readLeadSessionIds: () => [],
+        readRootOwners: () => [],
         staleAfterMs: 60_000,
       },
       persistedTranscriptReady: () => false,

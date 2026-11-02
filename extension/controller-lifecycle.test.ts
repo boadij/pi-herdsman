@@ -866,6 +866,81 @@ async function assertManagedLeadRole(
   context.mode = "tui";
 }
 
+test("manager and chief root generations set launch owner without changing ownership", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  const { discoverAgent } = await import("./agent-definitions.ts");
+  for (const role of ["manager", "chief"] as const) {
+    setLeadEnvironment();
+    const parent = managedState(`root-owner-${role}-parent`);
+    const lifecycle = delegatedLifecycleExecutor(parent);
+    const pi = fakePi({ exec: lifecycle.exec });
+    const context = fakeContext();
+    const ownerSessionId = context.sessionManager.getSessionId();
+    const label = `root-owner-${role}`;
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const controller = createAgentController(
+      pi.pi as never,
+      {
+        scope: { kind: "root" },
+        rootDelegationPolicy: () => "all",
+        rootDelegationGeneration: () => ({
+          sessionId: ownerSessionId,
+          roleGeneration: 1,
+          role,
+          authority: undefined,
+          profile: undefined,
+        }),
+        build: HERDSMAN_BUILD,
+        extensionPath: "test",
+        isContextRetired: () => false,
+        snapshotDependencies: {
+          runtimeForLabel: () => undefined,
+          readRootOwners: () => [],
+          staleAfterMs: 60_000,
+        },
+        persistedTranscriptReady: () => false,
+        agentDefinitions: async () => [discoverAgent("agent")],
+        readTranscript: () => ({ transcript: "", truncated: false }),
+        workspaceId: () => WORKSPACE,
+        sendResultMessage: () => undefined,
+        sendAskMessage: () => undefined,
+        sessionRetired: () => false,
+        appendError: () => undefined,
+        onChanged: () => undefined,
+        onWorkChanged: () => undefined,
+        reportWatcherError: () => undefined,
+      } as any,
+    );
+    resetAgentMailbox(mailbox);
+    try {
+      const result = await controller.action(
+        context as any,
+        {
+          action: "delegate",
+          definition: "agent",
+          label,
+          task: "verify root owner",
+        } as any,
+      );
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.ok(
+        lifecycle.environmentCommands.includes(
+          `PI_HERDSMAN_OWNER_DISPLAY=${role}`,
+        ),
+      );
+      assert.ok(
+        lifecycle.environmentCommands.includes(
+          `PI_HERDSMAN_OWNER_SESSION_ID=${ownerSessionId}`,
+        ),
+      );
+      assert.equal(readAgentState(mailbox)?.ownerSessionId, ownerSessionId);
+    } finally {
+      controller.abortSession();
+      resetAgentMailbox(mailbox);
+    }
+  }
+});
+
 test("lead direct placement modes use real controller delegation", async () => {
   for (const placement of ["tab", "subtree", "split"] as const) {
     setLeadEnvironment();
@@ -920,6 +995,15 @@ test("lead direct placement modes use real controller delegation", async () => {
         ).length,
         2,
       );
+      assert.equal(
+        lifecycle.environmentCommands.filter(
+          (command) =>
+            command === `PI_HERDSMAN_OWNER_SESSION_ID=${LEAD_SESSION_ID}`,
+        ).length,
+        2,
+      );
+      assert.equal(first.ownerSessionId, LEAD_SESSION_ID);
+      assert.equal(second.ownerSessionId, LEAD_SESSION_ID);
       const firstTab = lifecycle.tabForPane(first.paneId);
       const secondTab = lifecycle.tabForPane(second.paneId);
       assert.ok(firstTab);
