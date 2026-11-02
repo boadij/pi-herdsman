@@ -9,6 +9,53 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.38.0](https://github.com/boadij/pi-herdsman/compare/v0.37.0...v0.38.0) (2026-11-02)
+
+
+### Features
+
+* **config:** support Agent allowlists across all delegating roles ([#762](https://github.com/boadij/pi-herdsman/issues/762)) ([3998ea9](https://github.com/boadij/pi-herdsman/commit/3998ea9eb0f55f469ecb2d8cdd1a56af53a9423a))
+* **delegation:** guide semantic naming and specialist selection ([#767](https://github.com/boadij/pi-herdsman/issues/767)) ([7921d72](https://github.com/boadij/pi-herdsman/commit/7921d7220f25a816d7b9d4f7a9308cabc8cbb287)), closes [#766](https://github.com/boadij/pi-herdsman/issues/766)
+* **evidence:** allow verified Manager access to project evidence ([#773](https://github.com/boadij/pi-herdsman/issues/773)) ([66c7613](https://github.com/boadij/pi-herdsman/commit/66c76135367fcc0d408eaa690fb845327ecb9a56))
+* **ui:** configure ambient status widget row limit ([#768](https://github.com/boadij/pi-herdsman/issues/768)) ([e4a0860](https://github.com/boadij/pi-herdsman/commit/e4a0860a7463dcaaf5091749227ef5e893d08f42))
+* **ui:** enable fuzzy filtering in every Herdsman menu ([#772](https://github.com/boadij/pi-herdsman/issues/772)) ([1634e13](https://github.com/boadij/pi-herdsman/commit/1634e13fe56b299b10a41896d8979509a17f868b))
+* **ui:** show owned Agents in supervisor status widgets ([#758](https://github.com/boadij/pi-herdsman/issues/758)) ([3a95c58](https://github.com/boadij/pi-herdsman/commit/3a95c58d3d74c0d20fb8342b83f347b3343d2999))
+* **ui:** show PR-comparable Manager Git totals ([#775](https://github.com/boadij/pi-herdsman/issues/775)) ([9402a89](https://github.com/boadij/pi-herdsman/commit/9402a89a5b79f50492cc9ef3715a4da0e39a379c))
+
+
+### Fixes
+
+* **agent:** identify Manager and Chief root owners ([#786](https://github.com/boadij/pi-herdsman/issues/786)) ([23dd003](https://github.com/boadij/pi-herdsman/commit/23dd003817dfd19be35272418f3ecaae1c6ac920)), closes [#782](https://github.com/boadij/pi-herdsman/issues/782)
+* **agent:** require explicit managed-agent startup outcomes ([#769](https://github.com/boadij/pi-herdsman/issues/769)) ([fc3ddc5](https://github.com/boadij/pi-herdsman/commit/fc3ddc5de78743470aaa1e0eb82d4c5d8d1a3092))
+* align lead identity host composition contract ([#778](https://github.com/boadij/pi-herdsman/issues/778)) ([17441f9](https://github.com/boadij/pi-herdsman/commit/17441f93b4dd6826586a238a7cb03493c1c1eaa4))
+* import result binding from storage ([#787](https://github.com/boadij/pi-herdsman/issues/787)) ([9a83441](https://github.com/boadij/pi-herdsman/commit/9a83441dc258768fe29cba5ce64d1dc863c05041))
+* **lead:** narrow remote peer source handling ([#749](https://github.com/boadij/pi-herdsman/issues/749)) ([3c0bdbe](https://github.com/boadij/pi-herdsman/commit/3c0bdbe7e57778ee51db2d0a473eb598582fa1fc))
+* **lock:** preserve publication outcome on cleanup failure ([#751](https://github.com/boadij/pi-herdsman/issues/751)) ([fa6476a](https://github.com/boadij/pi-herdsman/commit/fa6476a17734ba574c8dc9b1d9e817a5aa908b10))
+* narrow verified evidence snapshot type ([#779](https://github.com/boadij/pi-herdsman/issues/779)) ([9f8a784](https://github.com/boadij/pi-herdsman/commit/9f8a78437a3e919b6cc722d2a32bd10f7ae98443))
+* **peer-bridge:** validate recovered attachment evidence ([#750](https://github.com/boadij/pi-herdsman/issues/750)) ([aeb67e9](https://github.com/boadij/pi-herdsman/commit/aeb67e90a9a03cdbe561b793a2e0edbc88f7b8e8))
+* preserve primary errors during temporary cleanup ([#784](https://github.com/boadij/pi-herdsman/issues/784)) ([1d6ea6d](https://github.com/boadij/pi-herdsman/commit/1d6ea6d32dd898ee242364039a17dc234ce7cd61))
+* **storage:** preserve snapshot outcomes on cleanup failure ([#754](https://github.com/boadij/pi-herdsman/issues/754)) ([ad0bc9e](https://github.com/boadij/pi-herdsman/commit/ad0bc9e958a0eea7aec9cbdcd6f282ad1cb69330))
+* **supervision:** scope Manager staff verification to exact recipients ([#764](https://github.com/boadij/pi-herdsman/issues/764)) ([1f5adf6](https://github.com/boadij/pi-herdsman/commit/1f5adf6f9f6f03bccd3851b71a160354374e7cda))
+* **ui:** decouple supervision overview from profile refresh ([#763](https://github.com/boadij/pi-herdsman/issues/763)) ([c2d57f5](https://github.com/boadij/pi-herdsman/commit/c2d57f5fc9f882b4878992c2c7c63e6dccb94497)), closes [#761](https://github.com/boadij/pi-herdsman/issues/761)
+* **ui:** right-align Manager Git diff summaries ([#771](https://github.com/boadij/pi-herdsman/issues/771)) ([e49ed45](https://github.com/boadij/pi-herdsman/commit/e49ed454f2fdf3d55795c7434f90b5517854bc40))
+* **ui:** simplify and color Manager Git statistics ([#776](https://github.com/boadij/pi-herdsman/issues/776)) ([69115ef](https://github.com/boadij/pi-herdsman/commit/69115efd507c7060ab022ac9fe6279265d835ac4))
+* use initialized lead runtime state ([#783](https://github.com/boadij/pi-herdsman/issues/783)) ([70928aa](https://github.com/boadij/pi-herdsman/commit/70928aaebaff60aa06e19c4fb6672054df936662))
+
+
+### Documentation
+
+* clarify project maturity and roadmap in README ([#777](https://github.com/boadij/pi-herdsman/issues/777)) ([b1ac1d0](https://github.com/boadij/pi-herdsman/commit/b1ac1d0490fb528c1480d5882a517ea174b13a50))
+
+
+### Tests
+
+* **smoke:** exercise ordinary readiness pane threshold ([#780](https://github.com/boadij/pi-herdsman/issues/780)) ([950cbbc](https://github.com/boadij/pi-herdsman/commit/950cbbc282061336ef9e13053a6fafcdb1b859a9))
+
+
+### Other Changes
+
+* **runtime:** adopt Pi 1.5.0 ([#789](https://github.com/boadij/pi-herdsman/issues/789)) ([b9b5de4](https://github.com/boadij/pi-herdsman/commit/b9b5de4f78e7aeeb4a53e9960cbccc85526fe7ad))
+
 ## [0.37.0](https://github.com/boadij/pi-herdsman/compare/v0.36.3...v0.37.0) (2026-11-01)
 
 
