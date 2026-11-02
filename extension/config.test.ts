@@ -89,6 +89,33 @@ function resetConfig(): void {
 
 test.afterEach(resetConfig);
 
+test("status widget rows validates, persists, and resets", () => {
+  assert.equal(readConfig().statusWidgetMaxRows, 8);
+  for (const value of [1, 100]) {
+    updateConfig("statusWidgetMaxRows", value);
+    assert.equal(readConfig().statusWidgetMaxRows, value);
+    assert.equal(
+      JSON.parse(realFs.readFileSync(configPath!, "utf8")).statusWidgetMaxRows,
+      value,
+    );
+  }
+  for (const value of [0, 101, 1.5, "8", null]) {
+    assert.throws(
+      () => updateConfig("statusWidgetMaxRows", value as never),
+      /statusWidgetMaxRows/,
+    );
+    realFs.writeFileSync(
+      configPath!,
+      JSON.stringify({ statusWidgetMaxRows: value }),
+    );
+    assert.throws(() => readConfig(), /statusWidgetMaxRows/);
+  }
+  realFs.writeFileSync(configPath!, JSON.stringify({ statusWidgetMaxRows: 5 }));
+  updateConfig("statusWidgetMaxRows", undefined);
+  assert.equal(readConfig().statusWidgetMaxRows, 8);
+  assert.equal(realFs.existsSync(configPath!), false);
+});
+
 test("missing config resolves to defaults without creating storage", () => {
   resetConfig();
   assert.deepEqual(readConfig(), DEFAULT_CONFIG);

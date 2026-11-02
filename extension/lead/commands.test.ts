@@ -2,9 +2,78 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { claimDelegationLock } from "../agent-controller.ts";
-import { readConfig } from "../config.ts";
+import { readConfig, validStatusWidgetMaxRows } from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
+
+test("status widget rows Settings validates choices and reports persistence errors", async () => {
+  for (const scenario of [
+    { choices: ["5"], inputs: [], expected: [5], errors: 0 },
+    {
+      choices: ["custom", "custom", "custom"],
+      inputs: ["1e1", "+3", " 100 "],
+      expected: [100],
+      errors: 2,
+    },
+    { choices: ["reset"], inputs: [], expected: [undefined], errors: 0 },
+    {
+      choices: ["custom", undefined],
+      inputs: [undefined],
+      expected: [],
+      errors: 0,
+    },
+    {
+      choices: ["12", undefined],
+      inputs: [],
+      expected: [],
+      errors: 1,
+      fail: true,
+    },
+  ]) {
+    const choices = [...scenario.choices];
+    const inputs = [...scenario.inputs];
+    const updates: (number | undefined)[] = [];
+    const notices: [string, string | undefined][] = [];
+    let settings = 0;
+    const runtime = createLeadCommandRuntime({
+      readConfig,
+      validStatusWidgetMaxRows,
+      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+        if (title === "Settings") {
+          assert.equal(
+            items.find((item) => item.value === "status-widget-rows")
+              .description,
+            "8",
+          );
+          return settings++ === 0 ? "status-widget-rows" : undefined;
+        }
+        return choices.shift();
+      },
+      input: async () => inputs.shift(),
+      updateConfig: (_key: string, value: number | undefined) => {
+        if (scenario.fail) throw new Error("disk failure");
+        updates.push(value);
+      },
+    } as any);
+    await runtime.openSettingsMenu({
+      isProjectTrusted: () => false,
+      ui: {
+        notify: (message: string, level?: string) =>
+          notices.push([message, level]),
+      },
+    } as any);
+    assert.deepEqual(updates, scenario.expected);
+    assert.equal(
+      notices.filter(([, level]) => level === "error").length,
+      scenario.errors,
+    );
+    if (scenario.fail)
+      assert.equal(
+        notices.some(([, level]) => level !== "error"),
+        false,
+      );
+  }
+});
 
 test("Herdsman root renders when status and definition metadata fail", async () => {
   let rootLabels: string[] = [];

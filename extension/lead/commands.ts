@@ -5,7 +5,11 @@ import type {
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { claimDelegationLock } from "../agent-controller.ts";
-import { effectiveMergePolicy, setManagerMergeOverride } from "../config.ts";
+import {
+  DEFAULT_STATUS_WIDGET_MAX_ROWS,
+  effectiveMergePolicy,
+  setManagerMergeOverride,
+} from "../config.ts";
 import {
   discoverRoleDefinitions,
   isReservedRoleDefinition,
@@ -106,6 +110,7 @@ type LeadCommandHost = {
   ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
   formatMessageLimit(bytes: number): string;
   validByteLimit(bytes: number): boolean;
+  validStatusWidgetMaxRows: typeof import("../config.ts").validStatusWidgetMaxRows;
   input(
     ctx: ExtensionCommandContext,
     label: string,
@@ -841,6 +846,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Allow the Manager to fast-forward accepted local project branches and automatically clean up integrated source worktrees.",
             },
             {
+              value: "status-widget-rows",
+              label: "Status widget rows",
+              description: String(config.statusWidgetMaxRows),
+              help: "Maximum ambient widget lines, including header and overflow (1–100).",
+            },
+            {
               value: "message-limits",
               label: "Message limits",
               help: "Configure inline attachment and managed mailbox payload byte limits.",
@@ -857,6 +868,55 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSetting = selected;
         if (selected === "project-overrides") {
           await this.openProjectOverridesMenu(ctx);
+        } else if (selected === "status-widget-rows") {
+          while (true) {
+            const choice = await host.selectMenu(ctx, "Status widget rows", [
+              {
+                value: "default",
+                label: `Default (${DEFAULT_STATUS_WIDGET_MAX_ROWS})`,
+              },
+              ...[3, 5, 8, 12, 20].map((rows) => ({
+                value: String(rows),
+                label: String(rows),
+              })),
+              { value: "custom", label: "Custom…" },
+              { value: "reset", label: "Reset" },
+            ]);
+            if (!choice) break;
+            let value: number | undefined;
+            if (choice === "reset") value = undefined;
+            else if (choice === "custom") {
+              const input = await host.input(
+                ctx,
+                "Custom status widget rows (1–100)",
+              );
+              if (input === undefined) continue;
+              value = Number(input.trim());
+              if (
+                !/^\d+$/u.test(input.trim()) ||
+                !host.validStatusWidgetMaxRows(value)
+              ) {
+                ctx.ui.notify("Enter an integer from 1 through 100", "error");
+                continue;
+              }
+            } else
+              value =
+                choice === "default"
+                  ? DEFAULT_STATUS_WIDGET_MAX_ROWS
+                  : Number(choice);
+            try {
+              host.updateConfig("statusWidgetMaxRows", value);
+              ctx.ui.notify(
+                `Status widget rows: ${value === undefined ? "reset" : value}`,
+              );
+              break;
+            } catch (error) {
+              ctx.ui.notify(
+                `Could not update status widget rows: ${String(error)}`,
+                "error",
+              );
+            }
+          }
         } else if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);
         else if (selected === "default-lead-execution") {

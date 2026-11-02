@@ -6701,6 +6701,38 @@ test("supervision widget composes owned Agents with independent focus and freshn
   );
 });
 
+test("combined supervision widget safely renders at zero width", () => {
+  const widget = createSupervisionWidget(
+    () => [lead()],
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    {
+      getSnapshot: () => ({
+        agents: [
+          {
+            label: "scout",
+            definition: "scout",
+            state: "working",
+            sessionId: "agent",
+          },
+        ],
+        stale: false,
+        unavailable: false,
+      }),
+      onFocus: () => assert.fail("zero-width rows must not be clickable"),
+    },
+    () => 2,
+  );
+  assert.deepEqual(widget.render(0), ["", ""]);
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 0 }),
+    undefined,
+  );
+});
+
 test("owned Agent composition preserves overflow and independent supervision freshness", () => {
   const reports = Array.from({ length: 7 }, (_, index) =>
     lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
@@ -6733,28 +6765,136 @@ test("owned Agent composition preserves overflow and independent supervision fre
     },
   );
   const rows = widget.render(80);
-  assert.match(rows[7]!, /^├─ … 1 more/);
-  assert.equal(rows[8], "└─ Agents · 1");
+  assert.equal(rows[7], "… more");
+  assert.equal(rows[5], "└─ Agents · 1");
   assert.equal(
-    widget.handleMouse({ type: "click", button: "left", x: 5, y: 9, width: 80 })
+    widget.handleMouse({ type: "click", button: "left", x: 5, y: 6, width: 80 })
       ?.handled,
     true,
   );
   assert.equal(focused, 1);
   frame++;
-  assert.notEqual(widget.render(80)[9], rows[9]);
+  assert.notEqual(widget.render(80)[6], rows[6]);
   snapshot.unavailable = true;
-  assert.match(widget.render(80)[8]!, /unavailable/);
+  assert.match(widget.render(80)[5]!, /unavailable/);
   assert.equal(
     widget.handleMouse({
       type: "click",
       button: "left",
       x: 5,
-      y: 9,
+      y: 6,
       width: 80,
     }),
     undefined,
   );
+});
+
+test("ambient budgets retain visible targets and the mixed Agent reserve", () => {
+  const reports = Array.from({ length: 12 }, (_, index) =>
+    lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
+  );
+  const snapshot = {
+    agents: [
+      {
+        label: "scout",
+        definition: "scout",
+        state: "done" as const,
+        sessionId: "agent",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+  };
+  let limit = 8;
+  const focused: string[] = [];
+  const widget = createSupervisionWidget(
+    () => reports,
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => {
+      if (intent.kind === "session") focused.push(intent.sessionId);
+    },
+    undefined,
+    {
+      getSnapshot: () => snapshot,
+      onFocus: (intent) => {
+        if (intent.kind === "session") focused.push(intent.sessionId);
+      },
+    },
+    () => limit,
+  );
+  for (limit of [1, 2, 3, 4, 5, 8, 100]) {
+    const rows = widget.render(80);
+    assert.ok(rows.length <= limit);
+    if (limit < 15 && limit > 1) assert.equal(rows.at(-1), "… more");
+    assert.equal(
+      rows.some((row) => row.includes("Agents ·")),
+      limit >= 4,
+    );
+    if (limit >= 5) assert.ok(rows.some((row) => row.includes("scout")));
+    assert.equal(
+      widget.handleMouse({
+        type: "click",
+        button: "left",
+        x: 5,
+        y: rows.length,
+        width: 80,
+      }),
+      undefined,
+    );
+    if (limit > 1 && limit < 15)
+      assert.equal(
+        widget.handleMouse({
+          type: "click",
+          button: "left",
+          x: 5,
+          y: rows.length - 1,
+          width: 80,
+        }),
+        undefined,
+      );
+    for (const width of [1, 4, 10])
+      assert.ok(
+        widget.render(width).every((row) => visibleWidth(row) <= width),
+      );
+  }
+  limit = 5;
+  const rows = widget.render(80);
+  const agentRow = rows.findIndex((row) => row.includes("scout"));
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 5,
+      y: agentRow,
+      width: 80,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, ["agent"]);
+});
+
+test("ordinary widget bounds rows without changing snapshot counts", () => {
+  let limit = 8;
+  const widget = new StatusWidget(undefined, undefined, undefined, () => limit);
+  widget.setSnapshot({
+    agents: Array.from({ length: 12 }, (_, index) => ({
+      label: `agent-${index}`,
+      definition: "scout",
+      state: "done" as const,
+      sessionId: `session-${index}`,
+    })),
+    stale: true,
+    unavailable: false,
+  });
+  for (limit of [1, 2, 5, 8, 100]) {
+    const rows = widget.render(80);
+    assert.ok(rows.length <= limit);
+    assert.match(rows[0]!, /stale/);
+    if (limit < 13 && limit > 1) assert.match(rows.at(-1)!, /… more/);
+  }
+  widget.dispose();
 });
 
 test("Chief tree connects nested Manager Leads without nesting direct Leads", () => {
@@ -6786,6 +6926,39 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
     ],
     leads: [lead({ lead: "direct", displayName: "unrelated-direct-lead" })],
   };
+  const manyChildren = {
+    managers: [manager("project", ["one", "two", "three", "four", "five"])],
+    leads: [],
+  };
+  const expanded = createSupervisionWidget(
+    () => manyChildren,
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => 100,
+  ).render(120);
+  assert.ok(expanded.some((row) => row.includes("five")));
+  const truncatedChiefChildren = createSupervisionWidget(
+    () => manyChildren,
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => 5,
+  ).render(120);
+  assert.equal(truncatedChiefChildren.at(-1), "… more");
+  assert.match(truncatedChiefChildren[2]!, /^   ├─/);
+  assert.doesNotMatch(truncatedChiefChildren.at(-1)!, /[└├│]/);
+  assert.ok(
+    !renderSupervisionLeads(manyChildren, 120).some((row) =>
+      row.includes("four"),
+    ),
+  );
   assert.deepEqual(renderSupervisionLeads(snapshot, 120).slice(1), [
     "├─ ● project-a · 2 compatible leads",
     "│  ├─ ◉ child-a1 · 1 agent",
@@ -7045,6 +7218,66 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
 });
 
+test("Manager Git stats anchor right without aligning elapsed or context", () => {
+  const now = Date.now();
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [
+      {
+        branch: "feat/long-name",
+        session: "lead-long",
+        status: "active" as const,
+      },
+      { branch: "fix/x", session: "lead-short", status: "active" as const },
+    ],
+    leads: [
+      lead({
+        lead: "lead-long",
+        branch: "feat/long-name",
+        runtimeState: "working",
+        herdRunStartedAt: now - 8 * 60_000,
+        contextPercent: 10,
+      }),
+      lead({
+        lead: "lead-short",
+        branch: "fix/x",
+        runtimeState: "working",
+        herdRunStartedAt: now - 20 * 60_000,
+        contextPercent: 7,
+      }),
+    ],
+  };
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    (work) =>
+      work.branch === "feat/long-name"
+        ? { additions: 245, deletions: 52, changedFiles: 3, dirty: true }
+        : {
+            additions: 273,
+            deletions: 38,
+            changedFiles: 2,
+            dirty: true,
+            approximate: true,
+          },
+  );
+  const width = 80;
+  const [, first, second] = widget.render(width);
+  assert.match(first!, /feat\/long-name.*8m.*10% {2,}\+245 -52\*$/);
+  assert.match(second!, /fix\/x.*20m.*7% {2,}~\+273 -38\*$/);
+  assert.equal(visibleWidth(first!), width);
+  assert.equal(visibleWidth(second!), width);
+  const withoutGit = renderSupervisionLeads(snapshot, width, {
+    role: "manager",
+  });
+  assert.ok(visibleWidth(withoutGit[1]!) < width);
+  for (let w = 1; w <= width; w++)
+    assert.ok(widget.render(w).every((row) => visibleWidth(row) <= w));
+});
+
 test("Manager Git summaries fit per row and keep suffixes outside branch navigation", () => {
   const snapshot = {
     project: "pi-herdsman",
@@ -7078,6 +7311,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   );
   const dirtyOnly = dirtyOnlyWidget.render(100)[1]!;
   assert.match(dirtyOnly, /\*/);
+  assert.equal(visibleWidth(dirtyOnly), 100);
   assert.doesNotMatch(dirtyOnly, /±0|\+\d+ -\d+|\d+f/);
   const successfulZeroWidget = createSupervisionWidget(
     () => snapshot,
@@ -7088,6 +7322,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     () => ({ dirty: true, additions: 0, deletions: 0, changedFiles: 0 }),
   );
   assert.match(successfulZeroWidget.render(100)[1]!, /±0\*/);
+  assert.equal(visibleWidth(successfulZeroWidget.render(100)[1]!), 100);
 
   for (let width = 1; width <= 100; width++)
     assert.ok(widget.render(width).every((row) => visibleWidth(row) <= width));
@@ -7114,6 +7349,16 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
     undefined,
   );
   assert.deepEqual(focused, []);
+  assert.equal(
+    clickableWidget.handleMouse({
+      type: "click",
+      button: "left",
+      width: 100,
+      x: suffixX - 1,
+      y: 1,
+    }),
+    undefined,
+  );
   const branchX = visibleWidth(row.slice(0, row.indexOf("feat/git")));
   clickableWidget.handleMouse({
     type: "click",
@@ -7179,7 +7424,7 @@ test("Manager Git summaries fit per row and keep suffixes outside branch navigat
   ]);
   assert.match(
     switchedWidget.render(47)[1]!,
-    /feat\/git ↪ fix\/recovery  ~\+12 -3\*/,
+    /feat\/git ↪ fix\/recovery {2,}~\+12 -3\*/,
   );
   assert.ok(
     Array.from({ length: 120 }, (_, index) => index + 1).every((width) =>

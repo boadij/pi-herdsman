@@ -68,7 +68,7 @@ import {
   worktreeGroupScopeFromTopology,
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
-import { readConfig } from "./config.ts";
+import { DEFAULT_STATUS_WIDGET_MAX_ROWS, readConfig } from "./config.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
@@ -4581,6 +4581,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let overviewGeneration = 0;
   let renderOverview: (() => void) | undefined;
   let renderWidget: (() => void) | undefined;
+  let statusWidgetMaxRows = DEFAULT_STATUS_WIDGET_MAX_ROWS;
+  let statusConfigError: string | undefined;
   let widgetFocusInFlight = false;
   let supervisionWidgetGeneration = 0;
   type CachedGitSummary = {
@@ -4648,7 +4650,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     const managerCheckoutPath = value.managerCheckoutPath;
     const entries = host
       .managerSupervisionItems(value)
-      .slice(0, 6)
+      .slice(0, statusWidgetMaxRows - 1)
       .filter(
         (item) =>
           item.kind === "work" &&
@@ -4898,6 +4900,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       !(host.activeRole() === "manager" && !host.state.roleSuspended)
     )
       return;
+    try {
+      statusWidgetMaxRows = readConfig().statusWidgetMaxRows;
+      statusConfigError = undefined;
+    } catch (error) {
+      const message = String(error).replace(/^Error: /u, "");
+      if (message !== statusConfigError) ctx.ui.notify(message, "warning");
+      statusConfigError = message;
+    }
     const currentGeneration = generation(ctx);
     const current = (): boolean => generation(ctx) === currentGeneration;
     try {
@@ -5822,6 +5832,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     setWidgetRender: (render: (() => void) | undefined) => {
       renderWidget = render;
     },
+    setStatusWidgetMaxRows: (rows: number) => {
+      statusWidgetMaxRows = rows;
+      renderWidget?.();
+    },
     registerWidget: (
       ctx: ExtensionContext,
       role: "chief" | "manager",
@@ -5879,7 +5893,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 !currentSnapshot.managerCheckoutPath ||
                 !host
                   .managerSupervisionItems(currentSnapshot)
-                  .slice(0, 6)
+                  .slice(0, statusWidgetMaxRows - 1)
                   .some(
                     (item) =>
                       item.kind === "work" &&
@@ -5931,6 +5945,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   });
               },
             },
+            () => statusWidgetMaxRows,
           );
         });
       } catch {
