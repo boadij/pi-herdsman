@@ -35,6 +35,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const worktreePi = join(repoRoot, "node_modules", ".bin", "pi");
 const scenarioNames = [
   "core",
   "continuation",
@@ -3385,7 +3386,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   }
 }
 
-async function preflight(pkg) {
+export async function preflight(pkg) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
     typeof nodeEngine === "string"
@@ -3395,7 +3396,7 @@ async function preflight(pkg) {
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
   const [{ stdout: piVersion }, { stdout: herdrVersion }] = await Promise.all([
-    run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
+    run(worktreePi, ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
     run("herdr", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
   const actualPiVersion = piVersion.trim();
@@ -3817,7 +3818,7 @@ async function startCandidate(ctx) {
     model: ctx.model,
   });
   let candidateCommand = [
-    join(repoRoot, "node_modules", ".bin", "pi"),
+    worktreePi,
     ...args,
     ...(prompt === undefined ? [] : [prompt]),
   ];
@@ -6634,7 +6635,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "run",
       ctx.rootPaneId,
       rootCandidateCommand([
-        join(repoRoot, "node_modules", ".bin", "pi"),
+        worktreePi,
         ...args,
         "--session",
         ctx.crashRecovery.ownerSessionPath,
@@ -7038,6 +7039,18 @@ export function assertContinuationReadEvidence(
   );
 }
 
+export function retainCoreObservation(ctx, records, elapsedMs) {
+  if (
+    records.some(
+      (record) => Number.isSafeInteger(record?.pid) && record.pid > 0,
+    )
+  )
+    ctx.coreLastNonemptyObservation = {
+      elapsedMs,
+      processRecords: sanitizedProcessRecords(records),
+    };
+}
+
 async function runCoreSmoke(ctx) {
   const marker = `PI_HERDSMAN_SMOKE_OK ${ctx.expectedPackage}`;
   const observed = new Map();
@@ -7047,11 +7060,7 @@ async function runCoreSmoke(ctx) {
     "core-delegation",
     async () => {
       const inspection = await inspectCandidateProcesses(ctx);
-      if (inspection.records.length)
-        ctx.coreLastNonemptyObservation = {
-          elapsedMs: Date.now() - startedAt,
-          processRecords: sanitizedProcessRecords(inspection.records),
-        };
+      retainCoreObservation(ctx, inspection.records, Date.now() - startedAt);
       for (const item of inspection.verified) {
         observed.set(`${item.paneId}\0${item.pid}`, item);
       }

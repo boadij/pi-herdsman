@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
@@ -16,7 +17,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assistantResultForSession,
@@ -70,6 +79,8 @@ import {
   waitForEvidence,
   parseHerdrOutput,
   parseSmokeArgs,
+  preflight,
+  retainCoreObservation,
   formatSmokeFailure,
   managerBootstrapDelegationProjection,
   managerBootstrapDelegationState,
@@ -144,6 +155,46 @@ import {
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
 } from "../scripts/smoke.mjs";
+
+test("preflight uses worktree Pi instead of a conflicting PATH executable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "smoke-path-"));
+  const originalPath = process.env.PATH;
+  try {
+    await writeFile(join(dir, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+    await writeFile(join(dir, "herdr"), "#!/bin/sh\necho 1.0.0\n", {
+      mode: 0o755,
+    });
+    const pi = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../node_modules/.bin/pi",
+    );
+    const version = execFileSync(pi, ["--version"], {
+      encoding: "utf8",
+    }).trim();
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ""}`;
+    const result = await preflight({
+      engines: { node: ">=0.0.0" },
+      piHerdsman: { runtime: { pi: "0.0.0", herdr: { version: "0.0.0" } } },
+    });
+    assert.equal(result.piVersion, version);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("core observation retains meaningful evidence after empty or placeholder samples", () => {
+  const ctx: {
+    coreLastNonemptyObservation?: { processRecords: { pid: number | null }[] };
+  } = {};
+  retainCoreObservation(ctx, [{ paneId: "w1:p1", pid: 123 }], 10);
+  const prior = ctx.coreLastNonemptyObservation;
+  assert.equal(prior?.processRecords[0].pid, 123);
+  retainCoreObservation(ctx, [], 20);
+  retainCoreObservation(ctx, [{ pid: null }, { pid: 0 }, { pid: -1 }], 30);
+  assert.equal(ctx.coreLastNonemptyObservation, prior);
+});
 
 test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
   const cases = [
@@ -2611,59 +2662,6 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     HERDR_SESSION: "smoke-123",
   });
   assert.equal(base.HERDR_SESSION, "parent");
-});
-
-test("smoke candidate launches select the worktree Pi", async () => {
-  const source = await readFile(
-    new URL("../scripts/smoke.mjs", import.meta.url),
-    "utf8",
-  );
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const bin = join(repoRoot, "node_modules", ".bin");
-  const pi = join(bin, "pi");
-  assert.ok(isAbsolute(pi));
-
-  const initial = source.match(
-    /let candidateCommand = \[([\s\S]*?)\n  \];/u,
-  )?.[1];
-  assert.ok(initial);
-  const initialCommand = new Function(
-    "join",
-    "repoRoot",
-    "args",
-    "prompt",
-    `return [${initial}\n]`,
-  );
-  assert.deepEqual(initialCommand(join, repoRoot, ["--initial"], "prompt"), [
-    pi,
-    "--initial",
-    "prompt",
-  ]);
-
-  const reopen = source.match(
-    /rootCandidateCommand\(\[\s*([\s\S]*?ctx\.crashRecovery\.ownerSessionPath,)\s*\]\)/u,
-  )?.[1];
-  assert.ok(reopen);
-  const buildReopen = new Function(
-    "join",
-    "repoRoot",
-    "args",
-    "ctx",
-    "rootCandidateCommand",
-    `return rootCandidateCommand([${reopen}])`,
-  );
-  assert.equal(
-    buildReopen(
-      join,
-      repoRoot,
-      ["--reopen"],
-      {
-        crashRecovery: { ownerSessionPath: "/session" },
-      },
-      rootCandidateCommand,
-    ),
-    rootCandidateCommand([pi, "--reopen", "--session", "/session"]),
-  );
 });
 
 test("root pane command removes inherited managed identity before Pi only", async () => {
