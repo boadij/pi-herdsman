@@ -16910,6 +16910,67 @@ test("Herdsman Agents row opens the focused Running, Layout, Stop all menu", asy
   }
 });
 
+const tuiMenuKeybindings = {
+  matches: (data: string, key: string) =>
+    ({
+      "tui.select.up": "\u001b[A",
+      "tui.select.down": "\u001b[B",
+      "tui.select.confirm": "\r",
+      "tui.select.cancel": "\u001b",
+    })[key] === data,
+};
+
+test("Herdsman menu filtering narrows Settings, clears, and preserves help", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  let calls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        tuiMenuKeybindings,
+        resolve,
+      );
+      const render = () => component.render(200).join("\n");
+      if (calls++ === 0) {
+        for (const character of "settings") component.handleInput(character);
+        assert.match(render(), /→ Settings/u);
+        assert.doesNotMatch(render(), /→ Execution/u);
+        component.handleInput("\r");
+        return;
+      }
+      if (calls === 2) {
+        assert.match(render(), /→ Default Lead execution/u);
+        for (const character of "message limits") component.handleInput(character);
+        assert.match(render(), /→ Message limits/u);
+        assert.doesNotMatch(render(), /Default Lead execution/u);
+        for (let i = 0; i < "message limits".length; i++)
+          component.handleInput("\u007f");
+        assert.match(render(), /→ Default Lead execution/u);
+        for (const character of "not-a-real-menu-item") component.handleInput(character);
+        assert.match(render(), /No matching options/u);
+        assert.doesNotMatch(render(), /→ Default Lead execution/u);
+        component.handleInput("\u001b");
+        return;
+      }
+      component.handleInput("\u001b");
+    });
+  try {
+    await pi.commandOptions.get("herdsman").handler("", context);
+    assert.equal(calls, 3);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("Herdsman TUI selectors use stable values and current preselection", async () => {
   setLeadEnvironment();
   const pi = fakePi();
@@ -16927,7 +16988,7 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       renders.push(component.render(200));
@@ -16988,7 +17049,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       const snapshot = () => component.render(200);
@@ -17066,7 +17127,7 @@ test("Definitions contextual help uses the selected definition description", asy
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       const call = customCalls++;
@@ -17650,7 +17711,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       renders.push(component.render(200));
@@ -18309,7 +18370,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       const lines = () => component.render(200);
@@ -18531,7 +18592,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
           fg: (_color: string, text: string) => text,
           bold: (text: string) => text,
         },
-        {},
+        tuiMenuKeybindings,
         resolve,
       );
       const lines = () => component.render(200);
