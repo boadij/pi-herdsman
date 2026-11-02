@@ -2513,11 +2513,18 @@ export function registerLeadRuntime(
             ...ctx,
             sessionManager: owner,
           } as ExtensionContext;
-          const resolved = resolveAssignmentSession(edgeContext, child.id, {
-            readOnlyEvidence: true,
-          });
-          if (resolved.id !== child.id)
-            throw new Error("Invalid nested assignment");
+          let resolved: ReturnType<typeof resolveAssignmentSession>;
+          let nested: ReturnType<typeof openOwnedAssignmentSession>;
+          try {
+            resolved = resolveAssignmentSession(edgeContext, child.id, {
+              readOnlyEvidence: true,
+            });
+            if (resolved.id !== child.id) continue;
+            nested = openOwnedAssignmentSession(child);
+            if (!nested) continue;
+          } catch {
+            continue;
+          }
           for (const item of resolved.evidence?.localEvidence ?? [])
             if (
               !("result" in item) &&
@@ -2528,8 +2535,6 @@ export function registerLeadRuntime(
               refs.includes(item.ref)
             )
               retained.push(item);
-          const nested = openOwnedAssignmentSession(child);
-          if (!nested) throw new Error("Nested assignment session unavailable");
           visit(nested, projectAssignmentId);
         }
       };

@@ -9836,6 +9836,17 @@ test("Manager read_evidence follows retained evidence in a saved child session",
       },
     };
     leadBranch.push(unavailableChildEdge);
+    const retainedWithUnavailableSibling = await reader.execute(
+      "nested retained with unavailable sibling",
+      { ref: retained.ref },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(
+      JSON.stringify(retainedWithUnavailableSibling),
+      /nested retained evidence/,
+    );
     const published = await reader.execute(
       "published result only",
       { ref: publishedResultRef },
@@ -9844,7 +9855,6 @@ test("Manager read_evidence follows retained evidence in a saved child session",
       ctx,
     );
     assert.match(JSON.stringify(published), /published Lead result/);
-    leadBranch.splice(leadBranch.indexOf(unavailableChildEdge), 1);
 
     const reservations = () => {
       const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
