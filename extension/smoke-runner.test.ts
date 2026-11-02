@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assistantResultForSession,
   assistantResponseCompletedForSession,
@@ -60,6 +61,8 @@ import {
   nestedControlEnv,
   parentControlEnv,
   rootCandidateCommand,
+  rootFailureProvenance,
+  scenarioVersionProvenance,
   nestedHerdrApiSocketPath,
   nestedPaneInput,
   nestedPaneText,
@@ -103,6 +106,7 @@ import {
   captureManagerHandoffWorktree,
   coreAgentDefinitionsExpectations,
   coreObservationReady,
+  coreCorrelationSummary,
   captureTerminalFailureWorktree,
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
@@ -261,6 +265,188 @@ test("manager bootstrap timeout omits raw session evidence", () => {
   });
   assert.match(output, /resultState.*success/);
   assert.doesNotMatch(output, /PRIVATE/);
+});
+
+test("core failure retains bounded process observation without raw errors", () => {
+  const evidence = sanitizedFailureEvidence(
+    { scenario: "core" },
+    {
+      error: {
+        smoke: {
+          stage: "core-delegation",
+          lastProgress: { verifiedProcesses: [`w2:p1\0${42}`] },
+          lastEvidence: {
+            processRecords: [
+              {
+                paneId: "w2:p1",
+                pid: 42,
+                processName: "pi",
+                processMatch: true,
+                processMatchSource: "argv",
+                error: null,
+              },
+              {
+                paneId: "w3:p1",
+                pid: null,
+                processMatch: false,
+                error: "PRIVATE SECRET",
+              },
+            ],
+          },
+          lastObservationError: "PRIVATE SECRET",
+        },
+      },
+    },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(evidence.coreObservation, {
+    verifiedProcesses: [{ paneId: "w2:p1", pid: 42 }],
+    processRecords: [
+      {
+        paneId: "w2:p1",
+        pid: 42,
+        parentPid: null,
+        processName: "pi",
+        processMatch: true,
+        processMatchSource: "argv",
+        error: null,
+      },
+      {
+        paneId: "w3:p1",
+        pid: null,
+        parentPid: null,
+        processName: null,
+        processMatch: false,
+        processMatchSource: null,
+        error: "observation error",
+      },
+    ],
+    lastNonemptyObservation: null,
+    lastObservationError: "observation error",
+    candidateStartRecords: null,
+    gateRootObservation: null,
+    correlation: null,
+  });
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE/);
+});
+
+test("core correlation summary retains bounded membership and match counts without session IDs", () => {
+  const observed = new Set([
+    42,
+    43,
+    ...Array.from({ length: 45 }, (_, i) => i + 100),
+  ]);
+  const summary = coreCorrelationSummary(
+    {
+      sessionIds: new Set(["PRIVATE-1", "PRIVATE-2", "PRIVATE-3"]),
+      provenance: [
+        { sessionId: "PRIVATE-1", pid: 42 },
+        { sessionId: "PRIVATE-2", pid: 99 },
+      ],
+    },
+    observed,
+    false,
+  );
+  assert.equal(summary.observedPids.length, 40);
+  assert.equal(summary.observedPidCount, 47);
+  assert.equal(summary.sessionCount, 3);
+  assert.equal(summary.provenanceCount, 2);
+  assert.equal(summary.matchedCount, 1);
+  assert.equal(summary.ready, false);
+  assert.doesNotMatch(JSON.stringify(summary), /PRIVATE/);
+  assert.equal(
+    coreCorrelationSummary(undefined, observed, false).evaluated,
+    false,
+  );
+});
+
+test("failure projections retain prior core and current candidate process observations", () => {
+  const record = {
+    paneId: "w1:p2",
+    pid: 42,
+    parentPid: 21,
+    processName: "node",
+    processMatch: false,
+    processMatchSource: null,
+    error: null,
+  };
+  const core = sanitizedFailureEvidence(
+    {
+      scenario: "core",
+      coreLastNonemptyObservation: { elapsedMs: 123, processRecords: [record] },
+      coreCandidateStartRecords: [record],
+      coreGateRootObservation: { matchCount: 1, processRecords: [record] },
+      coreCorrelation: { evaluated: false, ready: false },
+    },
+    {
+      error: {
+        smoke: {
+          stage: "core-delegation",
+          lastEvidence: { processRecords: [] },
+        },
+      },
+    },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(core.coreObservation.processRecords, []);
+  assert.deepEqual(core.coreObservation.lastNonemptyObservation, {
+    elapsedMs: 123,
+    processRecords: [record],
+  });
+  assert.deepEqual(core.coreObservation.candidateStartRecords, [record]);
+  assert.deepEqual(core.coreObservation.gateRootObservation, {
+    matchCount: 1,
+    processRecords: [record],
+  });
+  assert.deepEqual(core.coreObservation.correlation, {
+    evaluated: false,
+    ready: false,
+  });
+  const candidate = sanitizedFailureEvidence(
+    { scenario: "chief-tree" },
+    {
+      error: {
+        smoke: {
+          stage: "candidate-start",
+          lastEvidence: {
+            processRecords: [
+              { ...record, argv: ["PRIVATE"], cmdline: "PRIVATE" },
+            ],
+          },
+        },
+      },
+    },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(candidate.candidateStartObservation.processRecords, [
+    record,
+  ]);
+  assert.doesNotMatch(JSON.stringify(candidate), /PRIVATE/);
+  for (const [input, expected] of [
+    [-1, 0],
+    [Infinity, null],
+    [Number.MAX_VALUE, Number.MAX_SAFE_INTEGER],
+    ["123", null],
+  ]) {
+    const projected = sanitizedFailureEvidence(
+      {
+        scenario: "core",
+        coreLastNonemptyObservation: {
+          elapsedMs: input,
+          processRecords: [{ ...record, parentPid: -1, argv: ["PRIVATE"] }],
+        },
+      },
+      { error: { smoke: { stage: "core-delegation" } } },
+      "STALLED",
+      "PASS",
+    ).coreObservation.lastNonemptyObservation;
+    assert.equal(projected.elapsedMs, expected);
+    assert.equal(projected.processRecords[0].parentPid, null);
+    assert.doesNotMatch(JSON.stringify(projected), /PRIVATE/);
+  }
 });
 
 test("manager bootstrap run reference resolves to its exact retained artifact", async () => {
@@ -2425,6 +2611,59 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     HERDR_SESSION: "smoke-123",
   });
   assert.equal(base.HERDR_SESSION, "parent");
+});
+
+test("smoke candidate launches select the worktree Pi", async () => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const bin = join(repoRoot, "node_modules", ".bin");
+  const pi = join(bin, "pi");
+  assert.ok(isAbsolute(pi));
+
+  const initial = source.match(
+    /let candidateCommand = \[([\s\S]*?)\n  \];/u,
+  )?.[1];
+  assert.ok(initial);
+  const initialCommand = new Function(
+    "join",
+    "repoRoot",
+    "args",
+    "prompt",
+    `return [${initial}\n]`,
+  );
+  assert.deepEqual(initialCommand(join, repoRoot, ["--initial"], "prompt"), [
+    pi,
+    "--initial",
+    "prompt",
+  ]);
+
+  const reopen = source.match(
+    /rootCandidateCommand\(\[\s*([\s\S]*?ctx\.crashRecovery\.ownerSessionPath,)\s*\]\)/u,
+  )?.[1];
+  assert.ok(reopen);
+  const buildReopen = new Function(
+    "join",
+    "repoRoot",
+    "args",
+    "ctx",
+    "rootCandidateCommand",
+    `return rootCandidateCommand([${reopen}])`,
+  );
+  assert.equal(
+    buildReopen(
+      join,
+      repoRoot,
+      ["--reopen"],
+      {
+        crashRecovery: { ownerSessionPath: "/session" },
+      },
+      rootCandidateCommand,
+    ),
+    rootCandidateCommand([pi, "--reopen", "--session", "/session"]),
+  );
 });
 
 test("root pane command removes inherited managed identity before Pi only", async () => {
@@ -5717,6 +5956,62 @@ test("terminal-failure evidence remains actionable and Manager uses only delegat
   });
 });
 
+test("core failure retains only unique root-session provenance", () => {
+  const sessionId = "01234567-89ab-cdef-0123-456789abcdef";
+  const root = {
+    sessionId,
+    pid: 42,
+    piVersion: "1.5.0",
+    packageName: "@earendil-works/pi-coding-agent",
+    private: "PRIVATE_TOKEN",
+  };
+  const child = {
+    ...root,
+    sessionId: "11234567-89ab-cdef-0123-456789abcdef",
+    pid: 43,
+  };
+  const contents = [child, root].map((row) => JSON.stringify(row)).join("\n");
+  const proof = rootFailureProvenance(contents, sessionId);
+  assert.deepEqual(
+    scenarioVersionProvenance(contents, [sessionId, child.sessionId], "1.5.0"),
+    [
+      [{ sessionId, pid: 42, piVersion: "1.5.0" }],
+      [{ sessionId: child.sessionId, pid: 43, piVersion: "1.5.0" }],
+    ],
+  );
+  assert.throws(
+    () => scenarioVersionProvenance(contents, [sessionId], "1.5.1"),
+    /differs from pinned/,
+  );
+  assert.throws(
+    () =>
+      scenarioVersionProvenance(
+        `${contents}\n${JSON.stringify(root)}`,
+        [sessionId],
+        "1.5.0",
+      ),
+    /missing unique/,
+  );
+  assert.deepEqual(proof, { sessionId, pid: 42, piVersion: "1.5.0" });
+  assert.equal(
+    rootFailureProvenance(contents, child.sessionId.replace(/^1/u, "2")),
+    null,
+  );
+  assert.equal(
+    rootFailureProvenance(`${contents}\n${JSON.stringify(root)}`, sessionId),
+    null,
+  );
+  assert.equal(rootFailureProvenance(`${contents}\ninvalid`, sessionId), null);
+  const evidence = sanitizedFailureEvidence(
+    { scenario: "core", simulated: true, coreRootProvenance: proof },
+    { error: { code: "SMOKE_STALLED" } },
+    "SCENARIO_FAIL",
+    "PENDING",
+  );
+  assert.deepEqual(evidence.rootProvenance, proof);
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_TOKEN/u);
+});
+
 test("Pi provenance requires the exact pinned version and reports the observed version", () => {
   const record = {
     pid: 42,
@@ -8613,6 +8908,7 @@ test("core counts distinct non-root pane/PID processes with both extension paths
         foreground_processes: [
           {
             pid: 11,
+            parent_pid: 7,
             argv: [
               "pi",
               "--extension",
@@ -8659,11 +8955,50 @@ test("core counts distinct non-root pane/PID processes with both extension paths
     ],
   );
   assert.equal(result.verified.length, 2);
+  assert.equal(result.verified[0].parentPid, 7);
   assert.ok(
     result.verified.every(
       (record) => !("identity" in record) && !("definition" in record),
     ),
   );
+});
+
+test("time-specific process diagnostics retain only bounded match metadata", async () => {
+  const result = await inspectPaneProcesses(
+    ["w1:p1"],
+    null,
+    async () => ({
+      process_info: {
+        foreground_processes: [
+          {
+            pid: 42,
+            name: "node",
+            argv: ["node", "--extension", "/candidate.js"],
+            cmdline: "private command",
+            environment: "private environment",
+          },
+        ],
+      },
+    }),
+    "/candidate.js",
+    "/herdr.js",
+    "core-gate",
+  );
+  assert.deepEqual(result.records[0], {
+    paneId: "w1:p1",
+    pid: 42,
+    parentPid: null,
+    processName: "node",
+    processMatch: false,
+    processMatchSource: null,
+    error: null,
+    stage: "core-gate",
+    argvPresent: true,
+    argvLength: 3,
+    candidateExtensionArgMatch: true,
+    integrationExtensionArgMatch: false,
+    cmdlinePresent: true,
+  });
 });
 
 test("process evidence requires both exact extension paths and excludes root pane", async () => {

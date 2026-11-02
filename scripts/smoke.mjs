@@ -3817,7 +3817,7 @@ async function startCandidate(ctx) {
     model: ctx.model,
   });
   let candidateCommand = [
-    "pi",
+    join(repoRoot, "node_modules", ".bin", "pi"),
     ...args,
     ...(prompt === undefined ? [] : [prompt]),
   ];
@@ -3863,6 +3863,18 @@ async function startCandidate(ctx) {
         ctx.candidateExtension,
         ctx.herdrStateExtension,
       );
+      const inspection = await inspectPaneProcesses(
+        [paneId],
+        null,
+        async () => observed.value,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+        "candidate-start",
+      );
+      if (matches.length > 0 && ctx.scenario === "core")
+        ctx.coreCandidateStartRecords = sanitizedProcessRecords(
+          inspection.records,
+        );
       return {
         done: matches.length > 0,
         value: paneId,
@@ -3872,7 +3884,9 @@ async function startCandidate(ctx) {
             .filter(Boolean)
             .sort(),
         },
-        evidence: observed.value.process_info,
+        evidence: {
+          processRecords: sanitizedProcessRecords(inspection.records),
+        },
       };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
@@ -3963,6 +3977,67 @@ export function matchPiProvenance(
   }
 }
 
+export function rootFailureProvenance(contents, sessionId) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      sessionId ?? "",
+    )
+  )
+    return null;
+  try {
+    const matches = contents
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.sessionId === sessionId);
+    if (matches.length !== 1) return null;
+    const { pid, piVersion, packageName } = matches[0];
+    if (
+      packageName !== "@earendil-works/pi-coding-agent" ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      typeof piVersion !== "string" ||
+      piVersion.length > 80 ||
+      !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(piVersion)
+    )
+      return null;
+    return { sessionId, pid, piVersion };
+  } catch {
+    return null;
+  }
+}
+
+export function scenarioVersionProvenance(
+  contents,
+  sessionIds,
+  expectedVersion,
+) {
+  const rows = contents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  return sessionIds.map((sessionId) => {
+    const records = rows
+      .filter((row) => row.sessionId === sessionId)
+      .map((row) => rootFailureProvenance(JSON.stringify(row), sessionId));
+    requireSmokeEvidence(
+      records.every(Boolean),
+      `invalid Pi provenance for ${sessionId}`,
+    );
+    requireSmokeEvidence(
+      records.length > 0 &&
+        new Set(records.map((record) => record.pid)).size === records.length,
+      `missing unique Pi provenance for ${sessionId}`,
+    );
+    for (const provenance of records)
+      requireSmokeEvidence(
+        provenance.piVersion === expectedVersion,
+        `executing Pi ${provenance.piVersion} differs from pinned Pi ${expectedVersion}`,
+      );
+    return records;
+  });
+}
+
 export function managerHandoffLeadProcessProof(
   provenanceContents,
   sessionId,
@@ -4050,6 +4125,43 @@ export function coreObservationReady({
       );
     })
   );
+}
+
+export function coreCorrelationSummary(
+  provenanceObservation,
+  observedPids,
+  done,
+) {
+  const pids = [...observedPids].filter(
+    (pid) => Number.isSafeInteger(pid) && pid > 0,
+  );
+  if (!provenanceObservation)
+    return {
+      observedPids: pids.slice(0, 40),
+      observedPidCount: pids.length,
+      evaluated: false,
+      ready: done,
+    };
+  const { provenance, sessionIds } = provenanceObservation;
+  let matched = 0;
+  for (const sessionId of sessionIds) {
+    const record = provenance.find((item) => item.sessionId === sessionId);
+    if (
+      Number.isSafeInteger(record?.pid) &&
+      record.pid > 0 &&
+      observedPids.has(record.pid)
+    )
+      matched++;
+  }
+  return {
+    observedPids: pids.slice(0, 40),
+    observedPidCount: pids.length,
+    evaluated: true,
+    sessionCount: sessionIds.size,
+    provenanceCount: provenance.length,
+    matchedCount: matched,
+    ready: done,
+  };
 }
 
 async function coreObservationProvenance(ctx) {
@@ -4390,6 +4502,7 @@ async function runTerminalFailureSmoke(ctx) {
     true,
     ctx.expectedPiVersion,
   );
+  ctx.versionChildSessionIds = [sessionId];
   ctx.firstRequestVerified = true;
   const report = terminalFailureEvidence(
     managerSession.contents,
@@ -5953,6 +6066,7 @@ export async function inspectPaneProcesses(
   inspect,
   extension,
   integration,
+  stage,
 ) {
   const paneIds = [
     ...new Set(
@@ -5971,7 +6085,16 @@ export async function inspectPaneProcesses(
   );
   const records = inspected.flatMap(({ paneId, info, error }) => {
     const processes = info?.process_info?.foreground_processes;
-    if (error) return [{ paneId, pid: null, processMatch: false, error }];
+    if (error)
+      return [
+        {
+          paneId,
+          pid: null,
+          processMatch: false,
+          error,
+          ...(stage ? { stage } : {}),
+        },
+      ];
     if (!Array.isArray(processes) || !processes.length)
       return [
         {
@@ -5979,6 +6102,7 @@ export async function inspectPaneProcesses(
           pid: null,
           processMatch: false,
           error: "no foreground process records",
+          ...(stage ? { stage } : {}),
         },
       ];
     return processes.map((proc) => {
@@ -5990,9 +6114,27 @@ export async function inspectPaneProcesses(
       return {
         paneId,
         pid: proc.pid ?? null,
+        parentPid: proc.parent_pid ?? null,
+        processName: ["pi", "node"].includes(proc.name) ? proc.name : "other",
         processMatch: !!processMatchSource,
         processMatchSource,
         error: null,
+        ...(stage
+          ? {
+              stage,
+              argvPresent: Array.isArray(proc.argv),
+              argvLength: Array.isArray(proc.argv)
+                ? Math.min(proc.argv.length, 10000)
+                : null,
+              candidateExtensionArgMatch:
+                Array.isArray(proc.argv) &&
+                hasExtensionArg(proc.argv, extension),
+              integrationExtensionArgMatch:
+                Array.isArray(proc.argv) &&
+                hasExtensionArg(proc.argv, integration),
+              cmdlinePresent: typeof proc.cmdline === "string",
+            }
+          : {}),
       };
     });
   });
@@ -6492,7 +6634,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "run",
       ctx.rootPaneId,
       rootCandidateCommand([
-        "pi",
+        join(repoRoot, "node_modules", ".bin", "pi"),
         ...args,
         "--session",
         ctx.crashRecovery.ownerSessionPath,
@@ -6899,11 +7041,17 @@ export function assertContinuationReadEvidence(
 async function runCoreSmoke(ctx) {
   const marker = `PI_HERDSMAN_SMOKE_OK ${ctx.expectedPackage}`;
   const observed = new Map();
+  const startedAt = Date.now();
   await waitForEvidence(
     ctx,
     "core-delegation",
     async () => {
       const inspection = await inspectCandidateProcesses(ctx);
+      if (inspection.records.length)
+        ctx.coreLastNonemptyObservation = {
+          elapsedMs: Date.now() - startedAt,
+          processRecords: sanitizedProcessRecords(inspection.records),
+        };
       for (const item of inspection.verified) {
         observed.set(`${item.paneId}\0${item.pid}`, item);
       }
@@ -6921,6 +7069,25 @@ async function runCoreSmoke(ctx) {
         ctx.candidateExtension,
         ctx.herdrStateExtension,
       );
+      try {
+        const rootInspection = await inspectPaneProcesses(
+          [ctx.rootPaneId],
+          null,
+          async () => rootInfo.value,
+          ctx.candidateExtension,
+          ctx.herdrStateExtension,
+          "core-gate",
+        );
+        ctx.coreGateRootObservation = {
+          matchCount: rootMatches.length,
+          processRecords: sanitizedProcessRecords(rootInspection.records),
+        };
+      } catch {
+        ctx.coreGateRootObservation = {
+          matchCount: rootMatches.length,
+          processRecords: null,
+        };
+      }
       if (rootMatches.length === 1)
         ctx.coreRootProcess = {
           paneId: ctx.rootPaneId,
@@ -6931,6 +7098,9 @@ async function runCoreSmoke(ctx) {
       const session = await rootSessionSnapshot(ctx);
       if (session) {
         ctx.rootSessionPath = session.path;
+        ctx.coreRootSessionId = sessionEntries(session.contents).find(
+          (entry) => entry.type === "session",
+        )?.id;
         const assistantResult = assistantResultForSession(
           session,
           ctx.initialPrompt,
@@ -6959,6 +7129,11 @@ async function runCoreSmoke(ctx) {
         ...provenanceObservation,
         observedPids,
       });
+      ctx.coreCorrelation = coreCorrelationSummary(
+        provenanceObservation,
+        observedPids,
+        done,
+      );
       return {
         done,
         progress: {
@@ -7073,6 +7248,7 @@ async function runCoreSmoke(ctx) {
       );
     }
     verifyCoreProvenanceEvidence(ctx, provenance, sessionIds);
+    ctx.versionChildSessionIds = [...sessionIds].filter((id) => id !== rootId);
     const files = (
       await readdir(ctx.paths.piSessions, { recursive: true })
     ).filter((file) => file.endsWith(".jsonl"));
@@ -7476,6 +7652,8 @@ async function runContinuationSmoke(ctx) {
             `continuation-follow-up: expected one final owner result after cleanup, observed ${finalResults.length}`,
           );
         ctx.continuationSessionId = firstSession.id;
+        ctx.versionChildSessionIds = [firstSession.id];
+        ctx.continuationFirstPids = [...firstPids];
         ctx.continuationSessionPath = firstSession.path;
         ctx.continuationFirstPaneId = firstSession.paneId;
         ctx.continuationGenerationPid = firstGeneration;
@@ -12028,6 +12206,48 @@ function sanitizedFailureDiagnostics(value) {
   };
 }
 
+function sanitizedProcessRecords(records) {
+  const pane = (value) =>
+    typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null;
+  const pid = (value) =>
+    Number.isSafeInteger(value) && value > 0 ? value : null;
+  return records.slice(0, 10).map((record) => ({
+    paneId: pane(record?.paneId),
+    pid: pid(record?.pid),
+    parentPid: pid(record?.parentPid),
+    processName: ["pi", "node", "other"].includes(record?.processName)
+      ? record.processName
+      : null,
+    processMatch: record?.processMatch === true,
+    processMatchSource: ["argv", "cmdline", "process-title"].includes(
+      record?.processMatchSource,
+    )
+      ? record.processMatchSource
+      : null,
+    ...(["candidate-start", "core-gate"].includes(record?.stage)
+      ? {
+          stage: record.stage,
+          argvPresent: record.argvPresent === true,
+          argvLength:
+            Number.isSafeInteger(record.argvLength) && record.argvLength >= 0
+              ? Math.min(record.argvLength, 10000)
+              : null,
+          candidateExtensionArgMatch:
+            record.candidateExtensionArgMatch === true,
+          integrationExtensionArgMatch:
+            record.integrationExtensionArgMatch === true,
+          cmdlinePresent: record.cmdlinePresent === true,
+        }
+      : {}),
+    error:
+      record?.error == null
+        ? null
+        : record.error === "no foreground process records"
+          ? record.error
+          : "observation error",
+  }));
+}
+
 export function sanitizedFailureEvidence(
   ctx,
   failure,
@@ -12036,6 +12256,58 @@ export function sanitizedFailureEvidence(
   diagnostics,
 ) {
   const parent = ctx.owned?.parent;
+  const smoke = failure?.error?.smoke;
+  const pane = (value) =>
+    typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null;
+  const pid = (value) =>
+    Number.isSafeInteger(value) && value > 0 ? value : null;
+  const observationError = (value) =>
+    value == null
+      ? null
+      : value === "no foreground process records"
+        ? value
+        : "observation error";
+  const coreObservation =
+    ctx.scenario === "core" && smoke?.stage === "core-delegation"
+      ? {
+          verifiedProcesses: Array.isArray(
+            smoke.lastProgress?.verifiedProcesses,
+          )
+            ? smoke.lastProgress.verifiedProcesses.slice(0, 40).map((key) => {
+                const [paneId, processId] =
+                  typeof key === "string" ? key.split("\0") : [];
+                return { paneId: pane(paneId), pid: pid(Number(processId)) };
+              })
+            : null,
+          processRecords: Array.isArray(smoke.lastEvidence?.processRecords)
+            ? sanitizedProcessRecords(smoke.lastEvidence.processRecords)
+            : null,
+          lastNonemptyObservation: ctx.coreLastNonemptyObservation
+            ? {
+                elapsedMs:
+                  typeof ctx.coreLastNonemptyObservation.elapsedMs ===
+                    "number" &&
+                  Number.isFinite(ctx.coreLastNonemptyObservation.elapsedMs)
+                    ? Math.min(
+                        Number.MAX_SAFE_INTEGER,
+                        Math.max(0, ctx.coreLastNonemptyObservation.elapsedMs),
+                      )
+                    : null,
+                processRecords: Array.isArray(
+                  ctx.coreLastNonemptyObservation.processRecords,
+                )
+                  ? sanitizedProcessRecords(
+                      ctx.coreLastNonemptyObservation.processRecords,
+                    )
+                  : null,
+              }
+            : null,
+          lastObservationError: observationError(smoke.lastObservationError),
+          candidateStartRecords: ctx.coreCandidateStartRecords ?? null,
+          gateRootObservation: ctx.coreGateRootObservation ?? null,
+          correlation: ctx.coreCorrelation ?? null,
+        }
+      : null;
   const progress =
     failure?.error?.smoke?.stage === "terminal-failure-report"
       ? failure.error.smoke.lastProgress
@@ -12252,6 +12524,17 @@ export function sanitizedFailureEvidence(
         ? failure.error.code.slice(0, 80)
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
+    ...(coreObservation ? { coreObservation } : {}),
+    ...(smoke?.stage === "candidate-start"
+      ? {
+          candidateStartObservation: {
+            processRecords: Array.isArray(smoke.lastEvidence?.processRecords)
+              ? sanitizedProcessRecords(smoke.lastEvidence.processRecords)
+              : null,
+            lastObservationError: observationError(smoke.lastObservationError),
+          },
+        }
+      : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
     ...(ctx.scenario === "manager-bootstrap" &&
     ctx.managerBootstrapDelegationProgress
@@ -12277,6 +12560,9 @@ export function sanitizedFailureEvidence(
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
     firstRequestObserved: ctx.firstRequestObserved ?? false,
+    ...(ctx.scenario === "core" && ctx.simulated && ctx.coreRootProvenance
+      ? { rootProvenance: ctx.coreRootProvenance }
+      : {}),
     firstRequestVerified: ctx.firstRequestVerified ?? false,
     parentOwnership: parent
       ? {
@@ -12745,6 +13031,47 @@ async function main() {
     }
     phase = "scenario";
     await runScenario(ctx, scenario);
+    if (
+      ctx.simulated &&
+      ["core", "continuation", "chief-tree", "terminal-failure"].includes(
+        scenario,
+      )
+    ) {
+      const root = await rootSessionSnapshot(ctx);
+      const rootId =
+        root &&
+        sessionEntries(root.contents).find((entry) => entry.type === "session")
+          ?.id;
+      requireSmokeEvidence(
+        rootId,
+        "scenario root session has no exact Pi session identity",
+      );
+      const contents = await readFile(
+        join(
+          ctx.paths.piAgent,
+          "pi-herdsman",
+          "runtime",
+          "smoke-faux-provenance.jsonl",
+        ),
+        "utf8",
+      );
+      const versions = scenarioVersionProvenance(
+        contents,
+        [rootId, ...(ctx.versionChildSessionIds ?? [])],
+        pkg.piHerdsman.runtime.pi,
+      );
+      if (scenario === "continuation") {
+        const pids = versions[1].map((record) => record.pid);
+        requireSmokeEvidence(
+          pids.some((pid) => ctx.continuationFirstPids.includes(pid)) &&
+            pids.includes(ctx.continuationGenerationPid),
+          "continuation provenance does not match both process generations",
+        );
+      }
+      console.log(
+        `Pi version provenance: ${JSON.stringify({ root: versions[0], children: versions.slice(1) })}`,
+      );
+    }
     console.log(`herdr server: ${ctx.nestedServerVersion}`);
     console.log(`model: ${ctx.model}`);
     console.log(`candidate: ${ctx.candidateExtension}`);
@@ -12831,6 +13158,11 @@ async function main() {
           "utf8",
         );
         ctx.firstRequestObserved = provenance.trim().length > 0;
+        if (ctx.scenario === "core" && ctx.simulated)
+          ctx.coreRootProvenance = rootFailureProvenance(
+            provenance,
+            ctx.coreRootSessionId,
+          );
       } catch {}
       evidence = sanitizedFailureEvidence(
         ctx,
