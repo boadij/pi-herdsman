@@ -26,8 +26,10 @@ import {
 const DEFAULT_BYTE_LIMIT = 128 * 1024;
 export const MIN_BYTE_LIMIT = 1024;
 export const MAX_BYTE_LIMIT = 1024 * 1024;
+export const DEFAULT_STATUS_WIDGET_MAX_ROWS = 8;
 
 export type HerdsmanConfig = {
+  statusWidgetMaxRows: number;
   spawnPlacement: SpawnPlacement;
   defaultLeadExecution: LeadExecutionMode;
   contextRetirement: boolean;
@@ -41,6 +43,7 @@ export type HerdsmanConfig = {
 };
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
+  statusWidgetMaxRows: DEFAULT_STATUS_WIDGET_MAX_ROWS,
   spawnPlacement: "subtree",
   defaultLeadExecution: "flexible",
   contextRetirement: true,
@@ -62,8 +65,18 @@ export function validByteLimit(value: unknown): value is number {
   );
 }
 
+export function validStatusWidgetMaxRows(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 100
+  );
+}
+
 type ConfigKey = keyof HerdsmanConfig;
 const CONFIG_KEYS = new Set<ConfigKey>([
+  "statusWidgetMaxRows",
   "spawnPlacement",
   "defaultLeadExecution",
   "contextRetirement",
@@ -119,6 +132,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (!CONFIG_KEYS.has(key as ConfigKey))
       throw new Error(`Invalid Pi Herdsman config: unknown field ${key}`);
   const result: Partial<HerdsmanConfig> = {};
+  if ("statusWidgetMaxRows" in record) {
+    if (!validStatusWidgetMaxRows(record.statusWidgetMaxRows))
+      throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");
+    result.statusWidgetMaxRows = record.statusWidgetMaxRows;
+  }
   if ("spawnPlacement" in record) {
     if (!isSpawnPlacement(record.spawnPlacement))
       throw new Error("Invalid Pi Herdsman config field spawnPlacement");
@@ -488,6 +506,8 @@ export function updateConfig<K extends ConfigKey>(
   try {
     const current = readRawConfig();
     if (value !== undefined) {
+      if (key === "statusWidgetMaxRows" && !validStatusWidgetMaxRows(value))
+        throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");
       if (key === "spawnPlacement" && !isSpawnPlacement(value))
         throw new Error("Invalid Pi Herdsman config field spawnPlacement");
       if (key === "defaultLeadExecution" && !isLeadExecutionMode(value))
@@ -522,6 +542,7 @@ export function updateConfig<K extends ConfigKey>(
         );
       if (
         key !== "spawnPlacement" &&
+        key !== "statusWidgetMaxRows" &&
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&

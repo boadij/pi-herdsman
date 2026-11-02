@@ -15741,13 +15741,22 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   currentSnapshot.work[0].checkoutPath = originalCheckout;
 
   const hiddenCheckout = join(gitTestRoot, "beyond-visible-limit");
+  const seventhCheckout = join(gitTestRoot, "seventh-visible");
+  runGit(
+    ["worktree", "add", "-b", "feat/seventh", seventhCheckout],
+    managerCheckout,
+  );
   currentSnapshot.work.push(
-    ...Array.from({ length: 6 }, (_, index) => ({
-      branch: `feat/extra-${index}`,
+    ...Array.from({ length: 7 }, (_, index) => ({
+      branch: index === 5 ? "feat/seventh" : `feat/extra-${index}`,
       session: `extra-${index}`,
       status: "active" as const,
       checkoutPath:
-        index === 5 ? hiddenCheckout : join(gitTestRoot, `extra-${index}`),
+        index === 5
+          ? seventhCheckout
+          : index === 6
+            ? hiddenCheckout
+            : join(gitTestRoot, `extra-${index}`),
     })),
   );
   testNow += 30_001;
@@ -15756,10 +15765,23 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(
+    gitCalls
+      .slice(visibleLimitStart)
+      .some(
+        (call) => call.cwd === seventhCheckout && call.args.includes("status"),
+      ),
+    "the seventh work item is eligible for Git telemetry",
+  );
+  runtime.setStatusWidgetMaxRows(12);
+  assert.match(
+    widget.render(120).find((line: string) => line.includes("feat/seventh")),
+    /\+1 -0/,
+  );
+  assert.ok(
     !gitCalls
       .slice(visibleLimitStart)
       .some((call) => call.cwd === hiddenCheckout),
-    "rows after the first six visible items must not be probed",
+    "rows beyond the work-row budget must not be probed",
   );
   currentSnapshot.work.splice(1);
 
@@ -16870,6 +16892,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Skip Manager Git setup confirmation  Global off",
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Manager local merge  Global off",
+    "Status widget rows  8",
     "Message limits",
     "Project overrides…",
   ]);
@@ -17436,6 +17459,7 @@ test("settings navigation exposes message limits and one rough token formatter",
       "Skip Manager Git setup confirmation  Global off",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Manager local merge  Global off",
+      "Status widget rows  8",
       "Message limits",
       "Project overrides…",
     ]);

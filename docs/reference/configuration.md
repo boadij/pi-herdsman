@@ -45,6 +45,7 @@ schema is:
 
 ```json
 {
+  "statusWidgetMaxRows": 8,
   "defaultLeadExecution": "flexible",
   "spawnPlacement": "subtree",
   "contextRetirement": true,
@@ -62,6 +63,7 @@ An absent file means these defaults:
 
 | Field                                    |            Default | Allowed values                                                                |
 | ---------------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
+| `statusWidgetMaxRows`                    |                `8` | integer from 1 through 100; global-only                                       |
 | `defaultLeadExecution`                   |         `flexible` | `flexible`, `orchestrate`                                                     |
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
@@ -76,6 +78,12 @@ An absent file means these defaults:
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human
 configuration controls update this single file atomically.
+
+`statusWidgetMaxRows` limits the total rendered lines in the ambient status
+widget, including its header and any overflow line. Settings offers presets,
+a custom value, and reset; reset removes the override and restores the default.
+This global-only display preference does not limit authoritative snapshots or
+expanded inspection. See [Status widget](status-widget.md) for layout details.
 
 `defaultLeadExecution` selects the initial profile only for a future ordinary
 Lead session that has no persisted execution choice. Its values select

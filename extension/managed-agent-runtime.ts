@@ -96,7 +96,11 @@ import {
   verifiedBranchResultMappings,
 } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
-import { readConfig, readEffectiveConfig } from "./config.ts";
+import {
+  DEFAULT_STATUS_WIDGET_MAX_ROWS,
+  readConfig,
+  readEffectiveConfig,
+} from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
 import { TextDecoder } from "node:util";
@@ -1147,6 +1151,8 @@ export function createManagedAgentLeafStatus(options: {
   ): Promise<void>;
 }) {
   let widget: ReturnType<typeof createStatusWidget> | undefined;
+  let statusWidgetMaxRows = DEFAULT_STATUS_WIDGET_MAX_ROWS;
+  let statusConfigError: string | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let context: ExtensionContext | undefined;
   let generation = 0;
@@ -1171,6 +1177,14 @@ export function createManagedAgentLeafStatus(options: {
   const refresh = async (ctx: ExtensionContext, activeGeneration: number) => {
     if (activeGeneration !== generation || ctx !== context || inFlight) return;
     inFlight = true;
+    try {
+      statusWidgetMaxRows = readConfig().statusWidgetMaxRows;
+      statusConfigError = undefined;
+    } catch (error) {
+      const message = String(error).replace(/^Error: /u, "");
+      if (message !== statusConfigError) ctx.ui.notify(message, "warning");
+      statusConfigError = message;
+    }
     try {
       const snapshot = await options.snapshot(ctx, options.signal());
       if (activeGeneration !== generation || ctx !== context) return;
@@ -1258,6 +1272,7 @@ export function createManagedAgentLeafStatus(options: {
                 if (activeGeneration === generation) focusInFlight = false;
               });
           },
+          () => statusWidgetMaxRows,
         );
         next.setSnapshot({
           agents: [],
