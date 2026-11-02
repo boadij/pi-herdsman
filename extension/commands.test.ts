@@ -16942,6 +16942,13 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
       const render = () => component.render(200).join("\n");
       if (calls++ === 0) {
         for (const character of "settings") component.handleInput(character);
+        const lines = component.render(200);
+        const selection = lines.findIndex((line: string) =>
+          line.includes("→ Settings"),
+        );
+        assert.ok(selection >= 2);
+        assert.equal(lines[selection - 1].trim(), "");
+        assert.match(lines[selection - 2], /settings/u);
         assert.match(render(), /→ Settings/u);
         assert.doesNotMatch(render(), /→ Execution/u);
         component.handleInput("\r");
