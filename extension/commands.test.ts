@@ -16949,7 +16949,8 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
       }
       if (calls === 2) {
         assert.match(render(), /→ Default Lead execution/u);
-        for (const character of "message limits") component.handleInput(character);
+        for (const character of "message limits")
+          component.handleInput(character);
         assert.match(render(), /→ Message limits/u);
         assert.doesNotMatch(render(), /Default Lead execution/u);
         for (let i = 0; i < "message limits".length; i++)
