@@ -1601,17 +1601,27 @@ function registerExtensionImpl(
         return index >= 0 ? items[index]?.value : undefined;
       }
       return (await ctx.ui.custom(
-        (tui: any, theme: any, keybindings: any, done: (value: unknown) => void) => {
+        (
+          tui: any,
+          theme: any,
+          keybindings: any,
+          done: (value: unknown) => void,
+        ) => {
           const input = new Input();
           const listContainer = new Container();
-          const helpArea = items.some((item) => collapseDisplayText(item.help, 160))
+          const helpArea = items.some((item) =>
+            collapseDisplayText(item.help, 160),
+          )
             ? new Container()
             : undefined;
           const helpText = new TuiText("", 1, 0);
           const emptyHelp = new Spacer(1);
           const updateHelp = (item: SelectItem | null): void => {
             if (!helpArea) return;
-            const help = collapseDisplayText((item as MenuItem | null)?.help, 160);
+            const help = collapseDisplayText(
+              (item as MenuItem | null)?.help,
+              160,
+            );
             helpArea.clear();
             if (help) {
               helpText.setText(theme.fg("dim", help));
@@ -1631,7 +1641,9 @@ function registerExtensionImpl(
             const query = input.getValue();
             filtered = query.trim()
               ? fuzzyFilter([...items], query, (item) =>
-                  [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+                  [item.label, item.description, item.searchText]
+                    .filter(Boolean)
+                    .join(" "),
                 )
               : [...items];
             listContainer.clear();
@@ -1668,13 +1680,20 @@ function registerExtensionImpl(
           body.addChild(listContainer);
           const container = new Container();
           populateMenuFrame(
-            container, theme, title, body,
+            container,
+            theme,
+            title,
+            body,
             "Type to filter · ↑↓ navigate · Enter select · Esc back",
             helpArea,
           );
           return {
-            get focused() { return input.focused; },
-            set focused(value: boolean) { input.focused = value; },
+            get focused() {
+              return input.focused;
+            },
+            set focused(value: boolean) {
+              input.focused = value;
+            },
             render: (width: number) => container.render(width),
             invalidate: () => container.invalidate(),
             handleInput: (data: string) => {
@@ -1688,8 +1707,12 @@ function registerExtensionImpl(
                     (item) => item.value === selected.value,
                   );
                   const next = keybindings.matches(data, "tui.select.up")
-                    ? index <= 0 ? filtered.length - 1 : index - 1
-                    : index < 0 || index === filtered.length - 1 ? 0 : index + 1;
+                    ? index <= 0
+                      ? filtered.length - 1
+                      : index - 1
+                    : index < 0 || index === filtered.length - 1
+                      ? 0
+                      : index + 1;
                   list.setSelectedIndex(next);
                   updateHelp(list.getSelectedItem());
                 }
