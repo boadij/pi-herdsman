@@ -281,9 +281,8 @@ function boundedInspectionOutput(value: string): {
   text: string;
   truncated: boolean;
 } {
-  // Pi's ExecOptions has no maxBuffer, and Herdr's agent.read schema
-  // bounds lines but not bytes. This bounds returned evidence only; pi.exec
-  // may still buffer a larger subprocess response before returning it.
+  // Pi bounds captured subprocess output. This additionally bounds
+  // the successful inspection evidence to its last 80 lines / 16 KiB.
   return boundedUtf8Tail(
     value.trim().split(/\r?\n/).slice(-INSPECTION_LINES).join("\n"),
     INSPECTION_OUTPUT_BYTES,
@@ -442,18 +441,21 @@ function throwHerdrFailure(operation: string, result: ExecResult): never {
   const stderr = String(result.stderr ?? "");
   const stdoutDiagnostic = boundedDiagnostic(stdout);
   const stderrDiagnostic = boundedDiagnostic(stderr);
-  const value =
-    structuredHerdrError(parseJson(stdout)) ??
-    structuredHerdrError(parseJson(stderr));
+  const value = result.truncated
+    ? undefined
+    : (structuredHerdrError(parseJson(stdout)) ??
+      structuredHerdrError(parseJson(stderr)));
   const structuredMessage =
     typeof value?.message === "string" ? boundedDiagnostic(value.message) : "";
 
   error(
     operation,
-    structuredMessage ||
-      stderrDiagnostic ||
-      stdoutDiagnostic ||
-      (result.killed ? "Herdr command was killed" : `exit ${result.code}`),
+    result.truncated
+      ? "Herdr command output exceeded Pi's subprocess capture limit"
+      : structuredMessage ||
+          stderrDiagnostic ||
+          stdoutDiagnostic ||
+          (result.killed ? "Herdr command was killed" : `exit ${result.code}`),
     {
       ...(value?.details && typeof value.details === "object"
         ? value.details
@@ -463,6 +465,7 @@ function throwHerdrFailure(operation: string, result: ExecResult): never {
         : {}),
       exitCode: result.code,
       killed: result.killed === true,
+      ...(result.truncated ? { truncated: true } : {}),
       ...(stdoutDiagnostic ? { stdout: stdoutDiagnostic } : {}),
       ...(stderrDiagnostic ? { stderr: stderrDiagnostic } : {}),
     },
@@ -484,12 +487,12 @@ export async function runHerdr(
     signal: options.signal,
     timeout: options.timeout ?? 30_000,
   });
-  const stdout = String(result.stdout ?? "");
-  const stderr = String(result.stderr ?? "");
-  const stdoutJson = parseJson(stdout);
   const operation = `herdr ${args.slice(0, 2).join(" ") || "command"}`;
   if (result.code !== 0 || result.killed) throwHerdrFailure(operation, result);
   if (options.noResult) return undefined;
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  const stdoutJson = parseJson(stdout);
   if (stdoutJson === undefined) {
     const classification =
       stdout.trim() || stderr.trim() ? "malformed" : "empty";

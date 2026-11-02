@@ -26,10 +26,11 @@ const peerBridge = readFileSync(resolve(root, "dist/peer-bridge.js"), "utf8");
 if (peerBridge.includes("@earendil-works/pi-coding-agent"))
   throw new Error("standalone peer endpoint must not import the Pi SDK");
 const allowed =
-  /^(?:package\.json|README\.md|SKILL\.md|LICENSE|docs\/|dist\/|skills\/)/u;
+  /^(?:package\.json|README\.md|CHANGELOG\.md|SKILL\.md|LICENSE|docs\/|dist\/|skills\/)/u;
 const expectedRoot = new Set([
   "package.json",
   "README.md",
+  "CHANGELOG.md",
   "SKILL.md",
   "LICENSE",
   "skills/agent-definitions/SKILL.md",

@@ -1733,6 +1733,7 @@ function registerExtensionImpl(
             },
           };
         },
+        { blocked: { kind: "question", message: title } },
       )) as string | undefined;
     };
     const presentStopSummary = (summary: string): void => {
