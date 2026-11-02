@@ -250,7 +250,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
             fg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          tuiMenuKeybindings,
           resolve,
         );
         setImmediate(() => component.handleInput("\r"));
@@ -16967,7 +16967,7 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    assert.equal(calls, 3);
+    assert.equal(calls, 2);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
