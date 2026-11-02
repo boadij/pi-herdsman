@@ -16920,7 +16920,7 @@ const tuiMenuKeybindings = {
     })[key] === data,
 };
 
-test("Herdsman menu filtering narrows Settings, clears, and preserves help", async () => {
+test("Herdsman menu filters Settings and handles empty results", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -16955,7 +16955,8 @@ test("Herdsman menu filtering narrows Settings, clears, and preserves help", asy
         for (let i = 0; i < "message limits".length; i++)
           component.handleInput("\u007f");
         assert.match(render(), /→ Default Lead execution/u);
-        for (const character of "not-a-real-menu-item") component.handleInput(character);
+        for (const character of "not-a-real-menu-item")
+          component.handleInput(character);
         assert.match(render(), /No matching options/u);
         assert.doesNotMatch(render(), /→ Default Lead execution/u);
         component.handleInput("\u001b");
