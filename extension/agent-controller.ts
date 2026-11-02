@@ -8614,7 +8614,7 @@ export function createAgentController(
         label: Type.Optional(
           Type.String({
             description:
-              "Optional logical Agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
+              "Optional concise, task-specific logical Agent label (e.g. review-auth-tokens), without sensitive details. Must match ^[a-z][a-z0-9_-]{0,31}$; Herdsman chooses a definition-based label when omitted.",
             pattern: AGENT_LABEL_PATTERN.source,
           }),
         ),
@@ -8821,7 +8821,7 @@ export function createAgentController(
       name: "delegate_agent",
       label: "delegate agent",
       description:
-        "Start one fresh bounded assignment from an Agent definition.",
+        "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

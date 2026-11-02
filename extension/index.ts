@@ -1157,7 +1157,7 @@ function registerExtensionImpl(
         Type.String({
           minLength: 1,
           description:
-            "Optional Git branch for the new project work; Herdsman generates one when omitted.",
+            "Optional Git branch for new work. Prefer a concise, task-specific name following repository conventions, without sensitive details (e.g. fix/agent-selection). Herdsman generates one when omitted.",
         }),
       ),
       base: Type.Optional(
