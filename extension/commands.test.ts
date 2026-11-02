@@ -18706,7 +18706,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
             fg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          tuiMenuKeybindings,
           resolve,
         );
         const call = customCalls++;
