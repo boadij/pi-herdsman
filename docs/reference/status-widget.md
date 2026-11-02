@@ -140,7 +140,9 @@ persisted. If a Lead switches branches in its assigned worktree, `↪` followed
 by the checked-out branch distinguishes that mutable Git branch from the
 original assignment branch shown as the row's clickable handle. Branch-switch
 metadata and Git suffixes are not clickable; the assignment handle continues to
-target the same exact managed Lead.
+target the same exact managed Lead. Git statistics (including the dirty marker)
+are anchored at the right edge of Manager work rows when available; branch,
+elapsed time, and context percentage flow naturally on the left.
 
 No Git suffix means the optional observation is unavailable or has not yet
 been sampled; it does not mean the checkout is clean. Sampling is best-effort,
