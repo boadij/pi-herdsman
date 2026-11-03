@@ -196,20 +196,28 @@ decision for that run; this does not modify Pi's persistent trust store.
 ## `resume_work`
 
 Manager only. Resume existing unresolved project work using its original
-assignment branch handle:
+assignment branch handle and a required fresh instruction:
 
 ```json
-{ "branch": "feat/example" }
+{
+  "branch": "feat/example",
+  "message": "Continue the existing work and prioritize the startup regression."
+}
 ```
 
-The assignment must already exist; resume does not create or replace it.
-Resuming already-running work returns the current exact Lead instead of
-starting another. This recovers no stopped Lead and does not recover its Agents
-or refresh its progress; use `message_staff` to communicate with an eligible
-running Lead. `resume_work` is not a general progress-refresh mechanism. A
+The assignment must already exist; resume does not create or replace it. The
+message adds direction within the assignment without changing its saved task.
+It is queued as a separate Manager message through the normal authorized,
+durable channel; queueing does not guarantee receipt. Resuming already-running
+work queues the instruction for that exact Lead without relaunching it. A
 stopped Lead is relaunched with the same exact session in its existing verified
-checkout while that checkout exists; its current branch is not reset to the
-assignment handle.
+checkout, with the assignment notification and instruction queued before the
+controlled launch. If recovery fails after queueing, the result reports that
+the instruction remains queued; inspect state before resuming or sending it
+again. Resume does not recover the Lead's Agents or refresh its progress; use
+`message_staff` for ordinary communication with known running Leads.
+`resume_work` is not a general progress-refresh mechanism. The current branch
+is not reset to the assignment handle.
 Verified checkout absence retires the assignment rather than recreating it. A
 retired assignment cannot be resumed; new work may use `delegate_work` with the
 remaining branch.
@@ -223,7 +231,7 @@ remaining branch.
 Stops only an exact currently assigned project Lead and its owned Agent
 execution tree. The assignment, Pi session, linked checkout, and its current
 Git state are preserved. Resume the work with
-`resume_work` using its branch. An unassigned Lead is not a Manager staff-stop
+`resume_work` using its branch and a fresh instruction. An unassigned Lead is not a Manager staff-stop
 target. Failed or ambiguous cleanup does not retire an assignment. Successful
 Herdr worktree removal or verified checkout absence retires the assignment and
 removes pending project messages. Failed or ambiguous inventory preserves the

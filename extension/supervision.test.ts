@@ -202,6 +202,246 @@ test("peer Pi-history entries carry the exact inbox-content digest", async () =>
   assert.equal(details?.digest, coordinationMessageDigest(record));
 });
 
+test("resume inbox submits assignment without triggering before replacement-lease instructions", async () => {
+  const runtime = supervisionRuntime(socket());
+  const sessionId = id();
+  const replacementLeaseId = id();
+  const assignment = message({
+    id: sessionId,
+    leaseId: replacementLeaseId,
+    kind: "project_assignment",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    text: "Original feature assignment",
+    createdAt: 1,
+  });
+  const instruction = message({
+    leaseId: replacementLeaseId,
+    kind: "manager_message",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    text: "Changed priority: investigate the regression first",
+    createdAt: 2,
+  });
+  writeChiefMessage(assignment, runtime);
+  writeChiefMessage(instruction, runtime);
+
+  const context: string[] = [];
+  let firstTriggeredContext: string[] | undefined;
+  const triggerOptions: boolean[] = [];
+  const deliveredIds = new Set<string>();
+  await drainCoordinationInbox({
+    runtime,
+    sessionId,
+    isAuthorized: (record) => record.leaseId === replacementLeaseId,
+    isDelivered: (recordId) => deliveredIds.has(recordId),
+    sendMessage: (payload, options, record) => {
+      context.push((payload as { content: string }).content);
+      deliveredIds.add(record.id);
+      triggerOptions.push(options.triggerTurn);
+      if (options.triggerTurn && !firstTriggeredContext)
+        firstTriggeredContext = [...context];
+    },
+  });
+
+  assert.deepEqual(triggerOptions, [false, true]);
+  assert.deepEqual(firstTriggeredContext, [
+    "Project assignment for branch feature/resume:\n\nOriginal feature assignment",
+    "From Manager: Changed priority: investigate the regression first",
+  ]);
+});
+
+test("running resume handoff delivers only the fresh instruction", async () => {
+  const runtime = supervisionRuntime(socket());
+  const sessionId = id();
+  const leaseId = id();
+  const instruction = message({
+    leaseId,
+    kind: "manager_message",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    text: "Changed priority: investigate the regression first",
+    createdAt: 2,
+  });
+  const context: string[] = [];
+  const triggered: string[][] = [];
+  const delivered = new Set<string>();
+  const drain = () =>
+    drainCoordinationInbox({
+      runtime,
+      sessionId,
+      isAuthorized: (record) => record.leaseId === leaseId,
+      isDelivered: (recordId) => delivered.has(recordId),
+      sendMessage: (payload, options, record) => {
+        context.push((payload as { content: string }).content);
+        delivered.add(record.id);
+        if (options.triggerTurn) triggered.push([...context]);
+      },
+    });
+
+  // An already-running Lead receives only the fresh manager_message.
+  writeChiefMessage(instruction, runtime);
+  await drain();
+  assert.equal(triggered.length, 1);
+  assert.deepEqual(triggered[0], [
+    "From Manager: Changed priority: investigate the regression first",
+  ]);
+
+  await drain();
+  assert.equal(triggered.length, 1);
+  assert.deepEqual(context, [
+    "From Manager: Changed priority: investigate the regression first",
+  ]);
+});
+
+test("paired assignment waits when resume instruction authorization is transient", async () => {
+  const runtime = supervisionRuntime(socket());
+  const sessionId = id();
+  const leaseId = id();
+  const assignment = message({
+    leaseId,
+    kind: "project_assignment",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 1,
+  });
+  const instruction = message({
+    leaseId,
+    kind: "manager_message",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 2,
+    text: "Changed priority",
+  });
+  writeChiefMessage(assignment, runtime);
+  writeChiefMessage(instruction, runtime);
+  const delivered = new Set<string>();
+  const triggered: string[] = [];
+  let instructionAuthorizationAttempts = 0;
+  const drain = () =>
+    drainCoordinationInbox({
+      runtime,
+      sessionId,
+      isAuthorized: (record) => {
+        if (
+          record.id === instruction.id &&
+          ++instructionAuthorizationAttempts === 1
+        )
+          throw new Error("temporary authorization failure");
+        return record.leaseId === leaseId;
+      },
+      isDelivered: (recordId) => delivered.has(recordId),
+      sendMessage: (_payload, options, record) => {
+        delivered.add(record.id);
+        if (options.triggerTurn) triggered.push(record.kind);
+      },
+    });
+
+  await drain();
+  assert.deepEqual(triggered, []);
+  assert.deepEqual([...delivered], []);
+
+  await drain();
+  assert.deepEqual(triggered, ["manager_message"]);
+  assert.deepEqual([...delivered], [assignment.id, instruction.id]);
+});
+
+test("same-route unauthorized or quarantined Manager messages do not suppress assignments", async () => {
+  for (const state of ["unauthorized", "quarantined"] as const) {
+    const runtime = supervisionRuntime(socket());
+    const sessionId = id();
+    const leaseId = id();
+    const assignment = message({
+      leaseId,
+      kind: "project_assignment",
+      toSessionId: sessionId,
+      leadSessionId: sessionId,
+      branch: "feature/resume",
+      createdAt: 1,
+    });
+    const instruction = message({
+      leaseId,
+      kind: "manager_message",
+      toSessionId: sessionId,
+      leadSessionId: sessionId,
+      branch: "feature/resume",
+      createdAt: 2,
+      text: "unrelated instruction",
+    });
+    writeChiefMessage(assignment, runtime);
+    writeChiefMessage(instruction, runtime);
+    if (state === "quarantined")
+      quarantineChiefMessage(runtime, sessionId, instruction.id);
+
+    const triggerOptions: boolean[] = [];
+    const delivered = new Set<string>();
+    await drainCoordinationInbox({
+      runtime,
+      sessionId,
+      isAuthorized: (record) =>
+        state !== "unauthorized" || record.id === assignment.id,
+      isDelivered: (recordId) => delivered.has(recordId),
+      sendMessage: (_payload, options, record) => {
+        triggerOptions.push(options.triggerTurn);
+        delivered.add(record.id);
+      },
+    });
+    assert.deepEqual(triggerOptions, [true], state);
+  }
+});
+
+test("same-route unpaired Manager messages do not suppress assignments", async () => {
+  const runtime = supervisionRuntime(socket());
+  const sessionId = id();
+  const leaseId = id();
+  const assignment = message({
+    leaseId,
+    kind: "project_assignment",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 10,
+  });
+  const unrelatedMessage = message({
+    leaseId,
+    kind: "manager_message",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 12,
+    text: "An unrelated same-route instruction",
+  });
+  writeChiefMessage(assignment, runtime);
+  writeChiefMessage(unrelatedMessage, runtime);
+
+  const triggerOptions: boolean[] = [];
+  const delivered = new Set<string>();
+  await drainCoordinationInbox({
+    runtime,
+    sessionId,
+    isAuthorized: () => true,
+    isDelivered: (recordId) => delivered.has(recordId),
+    sendMessage: (_payload, options, record) => {
+      triggerOptions.push(options.triggerTurn);
+      delivered.add(record.id);
+    },
+  });
+
+  assert.deepEqual(triggerOptions, [true, true]);
+});
+
 test("peer eligibility preserves global ordinary and Manager behavior while scoping managed Leads", () => {
   const groupA = { repoKey: "repo", primaryWorkspaceId: "primary" };
   const groupB = { repoKey: "repo", primaryWorkspaceId: "other-primary" };
@@ -4265,6 +4505,7 @@ test("project assignment uses durable project transport, not Manager message fra
   });
   writeChiefMessage(record, runtime);
   const delivered: any[] = [];
+  let triggerTurn: boolean | undefined;
   let receipt = false;
   assert.equal(
     await drainCoordinationInbox({
@@ -4273,14 +4514,16 @@ test("project assignment uses durable project transport, not Manager message fra
       isAuthorized: (candidate) =>
         candidate.toSessionId === session && candidate.text === instruction,
       isDelivered: () => receipt,
-      sendMessage: (payload) => {
+      sendMessage: (payload, options) => {
         delivered.push(payload);
+        triggerTurn = options.triggerTurn;
         receipt = true;
       },
     }),
     1,
   );
   assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
+  assert.equal(triggerTurn, true);
   assert.equal(
     delivered[0].content,
     `Project assignment for branch ${record.branch}:\n\n${instruction}`,

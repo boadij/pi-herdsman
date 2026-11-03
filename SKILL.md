@@ -481,8 +481,11 @@ Pi Herdsman uses one durable vocabulary:
   managed Lead, keyed by repository identity and semantic branch, not by Manager
   session. Its branch is the work handle. A
   Manager uses `delegate_work` with a task and optional branch to start new
-  project work, and `resume_work` with its branch to resume an existing
-  assignment. A successful matching Herdr removal event or verified Git
+  project work, and `resume_work` with its branch and required fresh instruction
+  to resume an existing assignment. The instruction is queued separately and
+  does not replace the saved task; queueing does not prove delivery. Already
+  running Leads are not relaunched; use `message_staff` for ordinary
+  communication with known running Leads. A successful matching Herdr removal event or verified Git
   worktree inventory showing the checkout absent retires that assignment and
   pending project messages. Unavailable or ambiguous inventory preserves the
   assignment. A retired assignment cannot be resumed, but new work may reuse

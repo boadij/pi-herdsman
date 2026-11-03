@@ -1375,6 +1375,53 @@ export async function drainCoordinationInbox(
               record.kind === "manager_message")
               ? await options.senderTarget(record)
               : undefined;
+          let hasResumeInstruction = false;
+          let authorizationUnavailable = false;
+          if (record.kind === "project_assignment") {
+            for (const candidatePath of allChiefMessagePaths(
+              options.runtime,
+              options.sessionId,
+            )) {
+              try {
+                const candidate = readChiefMessage(candidatePath);
+                if (
+                  candidate.kind !== "manager_message" ||
+                  candidate.leaseId !== record.leaseId ||
+                  candidate.fromSessionId !== record.fromSessionId ||
+                  candidate.toSessionId !== record.toSessionId ||
+                  candidate.leadSessionId !== record.leadSessionId ||
+                  candidate.branch !== record.branch ||
+                  candidate.createdAt !== record.createdAt + 1
+                )
+                  continue;
+                if (
+                  chiefMessageQuarantined(
+                    options.runtime,
+                    options.sessionId,
+                    candidate.id,
+                  )
+                )
+                  continue;
+                let candidateAuthorized: boolean;
+                try {
+                  candidateAuthorized = await options.isAuthorized(candidate);
+                } catch {
+                  authorizationUnavailable = true;
+                  break;
+                }
+                if (candidateAuthorized) {
+                  hasResumeInstruction = true;
+                  break;
+                }
+              } catch {
+                // Invalid or quarantined messages cannot suppress delivery.
+              }
+            }
+          }
+          if (authorizationUnavailable) {
+            await clearTransaction();
+            break;
+          }
           await options.sendMessage(
             {
               customType: `pi-herdsman-${record.kind}`,
@@ -1393,7 +1440,11 @@ export async function drainCoordinationInbox(
                   : {}),
               },
             },
-            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            {
+              deliverAs: deliverAs ?? "followUp",
+              triggerTurn:
+                record.kind !== "project_assignment" || !hasResumeInstruction,
+            },
             record,
           );
           await options.transaction?.revalidate(token, "after-send");

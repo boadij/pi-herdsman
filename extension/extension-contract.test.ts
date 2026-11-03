@@ -303,9 +303,9 @@ const MANAGER_STAFF_TOOL_CASES = [
   ],
   [
     "resume_work",
-    { branch: "feat/existing" },
-    { branch: "feat/existing", task: "replace it" },
-    ["branch"],
+    { branch: "feat/existing", message: "continue" },
+    { branch: "feat/existing", message: "continue", task: "replace it" },
+    ["branch", "message"],
   ],
   [
     "stop_lead",
@@ -354,6 +354,34 @@ test("Pi validates Herdsman coordination schemas", async () => {
         validate("delegate_work", { task: "implement", extra: "unexpected" }),
       /Validation failed/,
     );
+    assert.deepEqual(
+      validate("resume_work", {
+        branch: "feat/existing",
+        message: "continue existing work",
+      }),
+      { branch: "feat/existing", message: "continue existing work" },
+    );
+    assert.throws(
+      () => validate("resume_work", { branch: "feat/existing" }),
+      /Validation failed/,
+    );
+    assert.throws(
+      () =>
+        validate("resume_work", {
+          branch: "feat/existing",
+          message: "",
+        }),
+      /Validation failed/,
+    );
+    assert.throws(
+      () =>
+        validate("resume_work", {
+          branch: "feat/existing",
+          message: "continue",
+          task: "replace assignment",
+        }),
+      /Validation failed/,
+    );
     assert.throws(
       () =>
         validate("message_staff", { target: "lead:0123456789", message: "" }),
@@ -395,7 +423,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     ["message_staff", ["message"]],
     ["message_peer", ["message"]],
     ["delegate_work", ["task", "branch", "base"]],
-    ["resume_work", ["branch"]],
+    ["resume_work", ["branch", "message"]],
     ["remove_worktree", ["branch"]],
     ["message_supervisor", ["message"]],
   ] as const;

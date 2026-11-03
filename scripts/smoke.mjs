@@ -5870,11 +5870,15 @@ async function runManagerMergeSmoke(ctx) {
 }
 
 export function managerRecoveryResumePrompt(branch) {
-  return `Resume the existing work on branch ${branch}.\n\nCall resume_work using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+  return `Resume the existing work on branch ${branch}.\n\nCall resume_work using only:\n${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+}
+
+export function managerRecoveryResumeInstruction() {
+  return "PI_HERDSMAN_MANAGER_RECOVERY_FRESH_INSTRUCTION: changed priority — inspect package.json before continuing the existing assignment; preserve its current changes.";
 }
 
 export function managerRecoveryRetiredResumePrompt(branch) {
-  return `Attempt to resume the retired assignment on ${branch}. Call resume_work exactly once using only ${JSON.stringify({ branch })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
+  return `Attempt to resume the retired assignment on ${branch}. Call resume_work exactly once using only ${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
@@ -5894,7 +5898,7 @@ export function managerRecoveryReviewPrompt(branch) {
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
-  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_work exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_work succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
+  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_work exactly once using only these arguments:\n${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}\n\nDo not call any other tool.\n\nAfter resume_work succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
@@ -8323,6 +8327,7 @@ async function runManagerRecoverySmoke(ctx) {
                     "graceful-close",
                     "review-message",
                     "graceful-resume",
+                    "resume-first-tool-after-instruction",
                     "recovery",
                     "project-message-retained",
                     "project-complete",
@@ -8757,6 +8762,39 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
+  // Replace the Manager lease while the exact Lead is still live; the later
+  // stop/resume assertion must exercise recovery under the replacement lease.
+  const preResumeLease = await managerLease();
+  markStage(ctx, "resume-manager-turnover-leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await waitFor(
+    "resume-manager-left",
+    async () => {
+      try {
+        await lstat(managerPath);
+        return false;
+      } catch (error) {
+        if (error.code === "ENOENT") return true;
+        throw error;
+      }
+    },
+    15_000,
+  );
+  markStage(ctx, "resume-manager-turnover-reenter");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await waitFor(
+    "resume-manager-reentered",
+    async () => {
+      try {
+        const lease = await managerLease();
+        return lease !== preResumeLease ? lease : null;
+      } catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+    },
+    15_000,
+  );
   const closePrompt = managerRecoveryStopPrompt(branch);
   markStage(ctx, "graceful-close");
   await promptRoot(closePrompt);
@@ -9191,6 +9229,12 @@ async function runManagerRecoverySmoke(ctx) {
   }
 
   const resumePrompt = managerRecoveryResumeOnlyPrompt(branch);
+  const stoppedLeadSession = await exactIsolatedSession(ctx, first.session);
+  assert.ok(
+    stoppedLeadSession?.contents,
+    "stopped Lead session is unavailable",
+  );
+  const resumeHistoryStart = sessionEntries(stoppedLeadSession.contents).length;
   ctx.managerRecovery.resumePrompt = resumePrompt;
   markStage(ctx, "graceful-resume");
   await promptRoot(resumePrompt);
@@ -9218,6 +9262,52 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(resumed.session, first.session);
   assert.equal(resumed.branch, first.branch);
   assert.equal(resumed.workspace_id, workspaceId);
+  assert.equal(resumed.message_queued, true);
+  assert.ok(resumed.message_id);
+  await waitFor("resume-instruction-delivered", async () => {
+    const session = await exactIsolatedSession(ctx, first.session);
+    return session?.contents &&
+      sessionEntries(session.contents).some(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-manager_message" &&
+          entry.details?.id === resumed.message_id &&
+          entry.details?.toSessionId === first.session &&
+          entry.details?.leadSessionId === first.session &&
+          String(entry.content).includes(managerRecoveryResumeInstruction()),
+      )
+      ? true
+      : null;
+  });
+  await waitFor("resume-first-tool-after-instruction", async () => {
+    const session = await exactIsolatedSession(ctx, first.session);
+    if (!session?.contents) return null;
+    const resumedEntries = sessionEntries(session.contents).slice(
+      resumeHistoryStart,
+    );
+    const instructionIndex = resumedEntries.findIndex(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-manager_message" &&
+        entry.details?.id === resumed.message_id &&
+        entry.details?.toSessionId === first.session &&
+        entry.details?.leadSessionId === first.session &&
+        String(entry.content).includes(managerRecoveryResumeInstruction()),
+    );
+    const firstToolIndex = resumedEntries.findIndex(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "assistant" &&
+        Array.isArray(entry.message.content) &&
+        entry.message.content.some((part) => part?.type === "toolCall"),
+    );
+    if (firstToolIndex < 0) return null;
+    assert.ok(
+      instructionIndex >= 0 && instructionIndex < firstToolIndex,
+      "first resumed Lead tool call must follow the exact fresh instruction in the same persisted Pi session",
+    );
+    return { instructionIndex, firstToolIndex };
+  });
   await assertUnchangedAssignment();
   const resumedWorktrees = await matchingWorktrees();
   assert.equal(resumedWorktrees.length, 1);

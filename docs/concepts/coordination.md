@@ -180,8 +180,12 @@ ownership without asserting completion or acceptance. See
 
 `stop_lead` pauses assigned execution while preserving the assignment, Pi
 session, checkout, and its current Git state; `resume_work` resumes the exact
-session in the existing verified checkout without switching branches. These
-operations do not change project authority. Integration selects work by its
+session in the existing verified checkout without switching branches. Resume
+requires a fresh instruction and queues it as a separate durable Manager
+message without changing the saved assignment; queue acceptance does not prove
+delivery. An already-running Lead is not relaunched; use `message_staff` for
+ordinary communication with known running Leads. These operations do not
+change project authority. Integration selects work by its
 assignment handle but validates and integrates the actual named branch and
 accepted SHA at the assigned checkout. Removal targets that exact checkout
 under the existing authorization and safety checks. Successful Herdr worktree

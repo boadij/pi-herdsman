@@ -84,9 +84,12 @@ worktree measurements, not cumulative Lead-authored effort or proof of
 integration readiness.
 
 Start new work with `delegate_work`. Resume existing work with
-`resume_work` using its original assignment branch handle; resume reuses the
-existing verified checkout and exact Pi session without switching its current
-branch. A verified Git inventory showing the
+`resume_work` using its original assignment branch handle and required fresh
+instructions. Resume reuses the existing verified checkout and exact Pi
+session without switching its current branch, and queues the instruction
+through the normal durable Manager-to-Lead channel. Queueing is not proof of
+delivery. An already-running Lead is not relaunched; use `message_staff` for
+ordinary communication with known running Leads. A verified Git inventory showing the
 assignment's worktree checkout is absent retires that assignment and its
 pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
@@ -245,7 +248,7 @@ retry the model run or replay tool calls automatically. Before continuing the
 same assigned session, inspect its transcript and any external effects because
 a failed execution may have partially acted. Send an authorized message to the
 exact live, idle Lead to continue; resume a deliberately stopped Lead with
-`resume_work` on its branch. Do not create a second writer or treat
+`resume_work` on its branch and a required fresh instruction. Do not create a second writer or treat
 cancellation as a request to resume. Missing or conflicting runtime identity
 fails closed; verify current assignment and supervisor authority before acting.
 Managers should treat routine results as informational and act when useful
@@ -260,7 +263,8 @@ evidence only when it materially matters.
 `stop_lead` selects the assigned Lead by its original branch handle and stops
 its owned Agent execution tree while preserving the assignment, Pi session,
 verified checkout, and current Git state. Resume the same work with
-`resume_work` using that assignment handle. `stop_lead` does not resolve
+`resume_work` using that assignment handle and a required instruction; the
+instruction does not replace the saved assignment. `stop_lead` does not resolve
 project work.
 
 See [`stop_lead`](../reference/staff.md#stop_lead) and
