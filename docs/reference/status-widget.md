@@ -165,10 +165,14 @@ elapsed time, and context percentage flow naturally on the left.
 No Git suffix means the optional observation is unavailable or has not yet
 been sampled; it does not mean the checkout is clean. Sampling is best-effort,
 with a minimum interval of about 30 seconds between attempts. Under width
-pressure, optional Git details may be omitted. The branch remains the
-navigation target; its suffix is not clickable. Git indicators are advisory
-display values only and do not establish project status, authority, or
-integration readiness.
+pressure, Manager work rows prioritize complete available Git statistics over
+context percentage and excess branch-name width. The assigned branch is
+truncated as needed while preserving a recognizable clickable fragment. If the
+complete Git summary cannot fit alongside essential identity information, it
+is omitted rather than partially displayed; other optional metadata may use the
+released space. The branch remains the navigation target; its suffix is not
+clickable. Git indicators are advisory display values only and do not
+establish project status, authority, or integration readiness.
 
 ## Installation
 

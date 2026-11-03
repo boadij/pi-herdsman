@@ -1334,8 +1334,9 @@ function renderSupervisionRows(
           ...(elapsed ? [{ value: elapsed, kind: "elapsed" }] : []),
         ];
         const fixedWidth = visibleWidth(prefix) + visibleWidth(suffix);
-        const kept = [...optionsToFit];
-        let showBranchMarker = changedBranch;
+        const kept: typeof optionsToFit = [];
+        const minBranchWidth = Math.min(8, visibleWidth(item.work.branch));
+        let showBranchMarker = false;
         const branchSwitchText = () =>
           showBranchMarker
             ? ` ↪${kept.some((option) => option.kind === "checked-out-branch") ? ` ${git!.checkedOutBranch}` : ""}`
@@ -1348,7 +1349,7 @@ function renderSupervisionRows(
         ];
         const rowFits = () =>
           fixedWidth +
-            visibleWidth(item.work.branch) +
+            minBranchWidth +
             visibleWidth(branchSwitchText()) +
             telemetryOptions().reduce(
               (total, option, index, telemetry) =>
@@ -1362,17 +1363,25 @@ function renderSupervisionRows(
             ) <=
           width;
         for (const kind of [
-          "elapsed",
-          "checked-out-branch",
           "stats",
           "dirty",
           "context",
-        ])
+          "checked-out-branch",
+          "elapsed",
+        ]) {
+          const option = optionsToFit.find((item) => item.kind === kind);
+          if (!option) continue;
+          kept.push(option);
+          if (kind === "checked-out-branch") showBranchMarker = true;
           if (!rowFits()) {
-            const at = kept.findIndex((option) => option.kind === kind);
-            if (at >= 0) kept.splice(at, 1);
+            kept.pop();
+            if (kind === "checked-out-branch") showBranchMarker = false;
           }
-        if (!rowFits()) showBranchMarker = false;
+        }
+        if (changedBranch && !showBranchMarker) {
+          showBranchMarker = true;
+          if (!rowFits()) showBranchMarker = false;
+        }
         const branchSwitch = branchSwitchText();
         const outputTelemetry = telemetryOptions().filter(
           (option) => option.kind !== "checked-out-branch",
