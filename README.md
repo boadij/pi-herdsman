@@ -127,11 +127,18 @@ workflow.
 Pi Herdsman is actively evolving. Core orchestration workflows are available today,
 while other areas are being refined or expanded.
 
-| Area                           | Status               | What to expect                                                                                             |
-| ------------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Lead & Agent orchestration** | ✅ **Core complete** | Background and nested delegation, result handoffs, and peer communication. Ongoing reliability fixes.      |
-| **Manager orchestration**      | ✨ **Polishing**     | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability.    |
-| **Chief coordination**         | 🚧 **In progress**   | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed. |
+| Area                             | Status              | What to expect                                                                                                                                                                                           |
+| -------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Lead & Agent orchestration**   | ✅ **Core complete** | Background and nested delegation, result handoffs, and local peer communication. Ongoing reliability fixes.                                                                                              |
+| **Manager orchestration**        | ✨ **Polishing**     | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability.                                                                                                  |
+| **Chief coordination**           | 🚧 **In progress**  | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed.                                                                                               |
+| **Federated peer communication** | 🚧 **In progress**  | Cross-machine messaging between Managers and eligible ordinary Leads is available, including durable replies. Bidirectional discovery and initiation over one-way connections are still being developed. |
+
+**Federation limitations:** Independent discovery and initiation currently require
+an SSH route from the initiating machine. Replies work over an existing
+correspondence without reverse SSH. See [#790](https://github.com/boadij/pi-herdsman/issues/790)
+for bidirectional initiation and [#688](https://github.com/boadij/pi-herdsman/issues/688)
+for cross-build messaging interoperability.
 
 **On the roadmap:** [Coordination profiles](https://github.com/boadij/pi-herdsman/issues/734)
 (replacing the current role-definition terminology),
