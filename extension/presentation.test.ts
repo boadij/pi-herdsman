@@ -7277,6 +7277,87 @@ test("Manager Git stats anchor right without aligning elapsed or context", () =>
     assert.ok(widget.render(w).every((row) => visibleWidth(row) <= w));
 });
 
+test("Manager Git totals survive branch truncation before context is shown", () => {
+  const branch = "feat/790-bidirectional-peer-federation";
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [
+      lead({
+        lead: "git-layout-lead",
+        branch,
+        runtimeState: "working",
+        contextPercent: 14,
+      }),
+    ],
+    work: [{ branch, session: "git-layout-lead", status: "active" as const }],
+  };
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+    () => ({ additions: 4861, deletions: 577, changedFiles: 2, dirty: true }),
+  );
+  const widths = Array.from({ length: 120 }, (_, index) => index + 1);
+  const wide = widget.render(120)[1]!;
+  assert.ok(wide.includes(branch));
+  assert.ok(wide.includes("14%"));
+  const medium = widths.find((width) => {
+    const row = widget.render(width)[1]!;
+    return (
+      row.includes("+4861 -577*") && row.includes("…") && !row.includes("14%")
+    );
+  });
+  assert.ok(medium, "complete Git totals must survive branch truncation");
+  const row = widget.render(medium)[1]!;
+  assert.ok(row.endsWith("+4861 -577*"));
+  assert.ok(row.includes("feat/"));
+
+  const fallback = widths.find((width) => {
+    const candidate = widget.render(width)[1]!;
+    return candidate.includes("14%") && !candidate.includes("+4861 -577");
+  });
+  assert.ok(
+    fallback,
+    "narrow rows should retain context without partial totals",
+  );
+  assert.ok(widget.render(fallback)[1]!.includes("feat/"));
+  assert.ok(
+    widths.every((width) =>
+      widget.render(width).every((line) => visibleWidth(line) <= width),
+    ),
+  );
+
+  const branchStart = visibleWidth(row.slice(0, row.indexOf("feat/")));
+  widget.render(medium);
+  widget.handleMouse({
+    type: "click",
+    button: "left",
+    width: medium,
+    x: branchStart,
+    y: 1,
+  });
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "git-layout-lead" },
+  ]);
+  const statsStart = visibleWidth(row.slice(0, row.indexOf("+4861 -577")));
+  widget.render(medium);
+  widget.handleMouse({
+    type: "click",
+    button: "left",
+    width: medium,
+    x: statsStart,
+    y: 1,
+  });
+  assert.equal(
+    focused.length,
+    1,
+    "Git suffix must remain outside the click target",
+  );
+});
+
 test("Manager Git summaries fit per row and keep suffixes outside branch navigation", () => {
   const snapshot = {
     project: "pi-herdsman",
