@@ -1056,7 +1056,11 @@ export function managerSupervisionItems(
         kind: "lead" as const,
         lead,
       })),
-  ];
+  ].sort(
+    (a, b) =>
+      Number(a.kind === "work" && a.work.status === "paused") -
+      Number(b.kind === "work" && b.work.status === "paused"),
+  );
 }
 
 function supervisionActivityMarker(

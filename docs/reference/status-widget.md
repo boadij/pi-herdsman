@@ -88,6 +88,12 @@ They disappear after a successful fresh observation confirms build
 convergence. Ambiguous or conflicting identity/build evidence is not shown as
 a confidently identified mismatch.
 
+Manager work rows place active, unknown, and conflicting assignments and
+ordinary supervised Leads ahead of paused assignments, preserving relative
+order within the current and paused groups. This is presentation-only: paused
+work remains assigned while its checkout exists, and unknown or conflicting
+work is not treated as inactive.
+
 ```text
 ● manager · pi-herdsman
 ├─ ● feat/example

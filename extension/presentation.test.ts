@@ -7027,13 +7027,15 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   assert.equal(rows[0], "● manager · pi-herdsman");
   assert.match(rows[1]!, /◐ feat\/active.* · blocked/);
   assert.doesNotMatch(rows[1]!, /!◐/);
-  assert.match(rows[2]!, /◫ feat\/paused/);
-  assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
+  assert.match(rows[2]!, /! feat\/conflict.* · conflict/);
+  assert.match(rows[3]!, /○ feat\/manual · Lead/);
+  assert.match(rows[4]!, /◫ feat\/paused/);
   assert.match(
     renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
     / · blocked$/,
   );
-  assert.equal(rows[4], "└─ ○ feat/manual · Lead");
+  assert.equal(rows[3], "├─ ○ feat/manual · Lead");
+  assert.equal(rows[4]!.startsWith("└─ ◫ feat/paused"), true);
   assert.equal(rows.filter((row) => row.startsWith("└─")).length, 1);
   assert.doesNotMatch(rows.join("\n"), /other Lead/i);
   assert.doesNotMatch(
@@ -7049,11 +7051,11 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   });
   assert.ok(themedRows[1]!.includes("<warning>◐</warning>"));
   assert.doesNotMatch(themedRows[1]!, /!◐/);
-  assert.ok(themedRows[3]!.includes("<warning>!</warning>"));
+  assert.ok(themedRows[2]!.includes("<warning>!</warning>"));
   const items = managerSupervisionItems(snapshot);
   assert.deepEqual(
     items.map((item) => item.kind),
-    ["work", "work", "work", "lead"],
+    ["work", "work", "lead", "work"],
   );
   assert.equal(items[0]!.kind === "work" && items[0]!.lead?.lead, "managed-0");
   assert.deepEqual(
@@ -7061,11 +7063,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
       role: "manager",
       ordinaryCap: 2,
     }).slice(1),
-    [
-      rows[1],
-      "├─ ◫ feat/paused-" + "long".repeat(20),
-      "└─ … 2 more · /manager",
-    ],
+    [rows[1], rows[2], "└─ … 2 more · /manager"],
   );
   const context = formatSupervisionContext(
     { work, leads: [] },
@@ -7090,6 +7088,39 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
       "manager",
     ).render(120)[0],
     "● manager · pi-herdsman",
+  );
+});
+
+test("Manager places paused work after current work and supervised Leads", () => {
+  const snapshot = {
+    work: [
+      { branch: "paused-a", session: "p1", status: "paused" as const },
+      { branch: "active-a", session: "a1", status: "active" as const },
+      { branch: "unknown", session: "u1", status: "unknown" as const },
+      { branch: "paused-b", session: "p2", status: "paused" as const },
+      { branch: "active-b", session: "a2", status: "active" as const },
+      { branch: "conflict", session: "c1", status: "conflict" as const },
+    ],
+    leads: [
+      lead({ lead: "a1", runtimeState: "working" }),
+      lead({ lead: "a2", runtimeState: "idle" }),
+      lead({ lead: "ordinary", branch: "ordinary" }),
+    ],
+  };
+
+  assert.deepEqual(
+    managerSupervisionItems(snapshot).map((item) =>
+      item.kind === "work" ? item.work.branch : item.lead.branch,
+    ),
+    [
+      "active-a",
+      "unknown",
+      "active-b",
+      "conflict",
+      "ordinary",
+      "paused-a",
+      "paused-b",
+    ],
   );
 });
 
@@ -8782,14 +8813,14 @@ test("Manager mixed tree has one final connector and independent Leads share the
   };
   assert.deepEqual(renderSupervisionLeads(snapshot, 120, { role: "manager" }), [
     "● manager · pi-herdsman",
-    "├─ ◫ worktree/lead-management-smoke-ping",
-    "└─ ◉ test/manager-lifecycle-smoke · Lead",
+    "├─ ◉ test/manager-lifecycle-smoke · Lead",
+    "└─ ◫ worktree/lead-management-smoke-ping",
   ]);
   assert.deepEqual(
     renderSupervisionLeads(snapshot, 120, { role: "manager", ordinaryCap: 1 }),
     [
       "● manager · pi-herdsman",
-      "├─ ◫ worktree/lead-management-smoke-ping",
+      "├─ ◉ test/manager-lifecycle-smoke · Lead",
       "└─ … 1 more · /manager",
     ],
   );
