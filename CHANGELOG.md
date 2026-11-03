@@ -9,6 +9,18 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.38.1](https://github.com/boadij/pi-herdsman/compare/v0.38.0...v0.38.1) (2026-11-03)
+
+
+### Fixes
+
+* preserve inherited tools across order-preserving projections ([#792](https://github.com/boadij/pi-herdsman/issues/792)) ([98c9d98](https://github.com/boadij/pi-herdsman/commit/98c9d9875d5cae006ccf24177b1d2638f0c5aee5))
+
+
+### Tests
+
+* remove redundant and self-referential checks ([#793](https://github.com/boadij/pi-herdsman/issues/793)) ([6f51a42](https://github.com/boadij/pi-herdsman/commit/6f51a424de2e4cd8510e77212be6111242d2f69e))
+
 ## [0.38.0](https://github.com/boadij/pi-herdsman/compare/v0.37.0...v0.38.0) (2026-11-02)
 
 
