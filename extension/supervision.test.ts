@@ -255,21 +255,10 @@ test("resume inbox submits assignment without triggering before replacement-leas
   ]);
 });
 
-test("resume instruction is the only possible trigger between handoff writes", async () => {
+test("running resume handoff delivers only the fresh instruction", async () => {
   const runtime = supervisionRuntime(socket());
   const sessionId = id();
   const leaseId = id();
-  const assignment = message({
-    id: sessionId,
-    leaseId,
-    kind: "project_assignment",
-    fromSessionId: "replacement-manager",
-    toSessionId: sessionId,
-    leadSessionId: sessionId,
-    branch: "feature/resume",
-    text: "Project assignment ready.",
-    createdAt: 1,
-  });
   const instruction = message({
     leaseId,
     kind: "manager_message",
@@ -296,7 +285,7 @@ test("resume instruction is the only possible trigger between handoff writes", a
       },
     });
 
-  // The producer writes the manager_message before project_assignment.
+  // An already-running Lead receives only the fresh manager_message.
   writeChiefMessage(instruction, runtime);
   await drain();
   assert.equal(triggered.length, 1);
@@ -304,17 +293,67 @@ test("resume instruction is the only possible trigger between handoff writes", a
     "From Manager: Changed priority: investigate the regression first",
   ]);
 
-  writeChiefMessage(assignment, runtime);
   await drain();
-  assert.equal(triggered.length, 2);
-  assert.deepEqual(triggered[1], [
-    "From Manager: Changed priority: investigate the regression first",
-    "Project assignment for branch feature/resume:\n\nProject assignment ready.",
-  ]);
+  assert.equal(triggered.length, 1);
   assert.deepEqual(context, [
     "From Manager: Changed priority: investigate the regression first",
-    "Project assignment for branch feature/resume:\n\nProject assignment ready.",
   ]);
+});
+
+test("paired assignment waits when resume instruction authorization is transient", async () => {
+  const runtime = supervisionRuntime(socket());
+  const sessionId = id();
+  const leaseId = id();
+  const assignment = message({
+    leaseId,
+    kind: "project_assignment",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 1,
+  });
+  const instruction = message({
+    leaseId,
+    kind: "manager_message",
+    fromSessionId: "replacement-manager",
+    toSessionId: sessionId,
+    leadSessionId: sessionId,
+    branch: "feature/resume",
+    createdAt: 2,
+    text: "Changed priority",
+  });
+  writeChiefMessage(assignment, runtime);
+  writeChiefMessage(instruction, runtime);
+  const delivered = new Set<string>();
+  const triggered: string[] = [];
+  let instructionAuthorizationAttempts = 0;
+  const drain = () =>
+    drainCoordinationInbox({
+      runtime,
+      sessionId,
+      isAuthorized: (record) => {
+        if (
+          record.id === instruction.id &&
+          ++instructionAuthorizationAttempts === 1
+        )
+          throw new Error("temporary authorization failure");
+        return record.leaseId === leaseId;
+      },
+      isDelivered: (recordId) => delivered.has(recordId),
+      sendMessage: (_payload, options, record) => {
+        delivered.add(record.id);
+        if (options.triggerTurn) triggered.push(record.kind);
+      },
+    });
+
+  await drain();
+  assert.deepEqual(triggered, []);
+  assert.deepEqual([...delivered], []);
+
+  await drain();
+  assert.deepEqual(triggered, ["manager_message"]);
+  assert.deepEqual([...delivered], [assignment.id, instruction.id]);
 });
 
 test("same-route unauthorized or quarantined Manager messages do not suppress assignments", async () => {

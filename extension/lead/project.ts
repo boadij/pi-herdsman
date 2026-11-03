@@ -2809,14 +2809,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         }),
       );
     }
-    const queueResumeHandoff = () => {
+    const queueResumeHandoff = (includeAssignment: boolean) => {
       if (operation.action !== "resume" || !preparedResumeMessage)
         throw new Error("Resume handoff was not prepared");
       const createdAt = Date.now();
       resumeMessageQueueAttempted = true;
       try {
-        // Publish the triggering instruction first. If inbox draining races the
-        // second write, it can only start a turn with the priority instruction.
+        // Publish the triggering instruction first so an inbox drain racing
+        // the assignment write cannot start a turn with stale task context.
         writeChiefMessage({
           version: 2,
           build: HERDSMAN_BUILD,
@@ -2833,19 +2833,20 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             : {}),
           createdAt: createdAt + 1,
         });
-        writeChiefMessage({
-          version: 2,
-          build: HERDSMAN_BUILD,
-          id,
-          leaseId: manager.leaseId,
-          kind: "project_assignment",
-          fromSessionId: manager.piSessionId,
-          toSessionId: id,
-          leadSessionId: id,
-          branch: currentAssignment!.branch,
-          text: "Project assignment ready.",
-          createdAt,
-        });
+        if (includeAssignment)
+          writeChiefMessage({
+            version: 2,
+            build: HERDSMAN_BUILD,
+            id,
+            leaseId: manager.leaseId,
+            kind: "project_assignment",
+            fromSessionId: manager.piSessionId,
+            toSessionId: id,
+            leadSessionId: id,
+            branch: currentAssignment!.branch,
+            text: "Project assignment ready.",
+            createdAt,
+          });
       } catch (error) {
         throw new Error(
           `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. ${error instanceof Error ? error.message : String(error)}`,
@@ -2931,7 +2932,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const current = await currentManager(ctx);
       if (!current || !sameManagerDescriptor(current, manager))
         throw new Error("Manager changed during project activation");
-      queueResumeHandoff();
+      queueResumeHandoff(false);
       return {
         content: [
           {
@@ -3279,7 +3280,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error("Manager changed before resume handoff");
         if (!stillAssigned || stillAssigned.id !== assignment.id)
           throw new Error("Project assignment changed before resume handoff");
-        queueResumeHandoff();
+        queueResumeHandoff(true);
       }
       let lead: any;
       let startedLead = false;

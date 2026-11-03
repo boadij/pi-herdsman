@@ -1376,6 +1376,7 @@ export async function drainCoordinationInbox(
               ? await options.senderTarget(record)
               : undefined;
           let hasResumeInstruction = false;
+          let authorizationUnavailable = false;
           if (record.kind === "project_assignment") {
             for (const candidatePath of allChiefMessagePaths(
               options.runtime,
@@ -1393,22 +1394,33 @@ export async function drainCoordinationInbox(
                   candidate.createdAt !== record.createdAt + 1
                 )
                   continue;
-                assertChiefMessageNotQuarantined(
-                  options.runtime,
-                  options.sessionId,
-                  candidate.id,
-                );
                 if (
-                  !(await options.isDelivered(candidate.id)) &&
-                  (await options.isAuthorized(candidate))
-                ) {
+                  chiefMessageQuarantined(
+                    options.runtime,
+                    options.sessionId,
+                    candidate.id,
+                  )
+                )
+                  continue;
+                let candidateAuthorized: boolean;
+                try {
+                  candidateAuthorized = await options.isAuthorized(candidate);
+                } catch {
+                  authorizationUnavailable = true;
+                  break;
+                }
+                if (candidateAuthorized) {
                   hasResumeInstruction = true;
                   break;
                 }
               } catch {
-                // Invalid, unauthorized, or quarantined messages cannot suppress delivery.
+                // Invalid or quarantined messages cannot suppress delivery.
               }
             }
+          }
+          if (authorizationUnavailable) {
+            await clearTransaction();
+            break;
           }
           await options.sendMessage(
             {

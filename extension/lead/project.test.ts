@@ -953,7 +953,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
       resultBindings: [],
     }),
     writeChiefMessage: () => {
-      if (++writes === 2) throw new Error("disk write failed");
+      if (++writes === 1) throw new Error("disk write failed");
     },
     startHerdrAgentInPane: async () => {
       launches++;
@@ -968,7 +968,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     ),
     /enqueue could not be confirmed/,
   );
-  assert.equal(writes, 2);
+  assert.equal(writes, 1);
   assert.equal(launches, 0);
 });
 
@@ -997,8 +997,9 @@ test("resume preserves queued manager message when controlled recovery fails", a
     { root: assignmentRoot, assignments: assignmentRoot } as any,
     assignment as any,
   );
-  const messages: any[] = [];
+  const events: any[] = [];
   let launches = 0;
+  let alreadyRunning = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -1073,7 +1074,11 @@ test("resume preserves queued manager message when controlled recovery fails", a
       op: () => unknown,
     ) => op(),
     herdrSessionSnapshot: async () => ({ agents: [] }),
-    liveAgent: async () => [],
+    liveAgent: async () =>
+      alreadyRunning ? [{ workspace_id: "resume-workspace" }] : [],
+    readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
+    requireCompatibleBuild: () => {},
+    supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
     messageLimits: async () => ({
       inline: { bytes: 1000 },
@@ -1083,9 +1088,10 @@ test("resume preserves queued manager message when controlled recovery fails", a
       text: message,
       resultBindings: [],
     }),
-    writeChiefMessage: (message: any) => messages.push(message),
+    writeChiefMessage: (message: any) => events.push(message),
     startHerdrAgentInPane: async () => {
       launches++;
+      events.push("launch");
       throw new Error("controlled launch failed");
     },
     appendDurableError: () => {},
@@ -1099,11 +1105,23 @@ test("resume preserves queued manager message when controlled recovery fails", a
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
   assert.equal(result.details.recovery_verified, false);
-  assert.ok(
-    messages.some(
-      (message) =>
-        message.kind === "manager_message" && message.toSessionId === id,
-    ),
+  assert.deepEqual(
+    events.map((event) => (typeof event === "string" ? event : event.kind)),
+    ["manager_message", "project_assignment", "launch"],
+  );
+  assert.equal(events[1].createdAt + 1, events[0].createdAt);
+
+  alreadyRunning = true;
+  events.length = 0;
+  const runningResult = (await runtime.activateProjectLead(
+    { action: "resume", branch: assignment.branch, message: "continue" },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(runningResult.details.already_running, true);
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ["manager_message"],
   );
 });
 

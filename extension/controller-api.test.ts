@@ -5702,7 +5702,7 @@ async function runManagerStartupScenario(
             .filter((message) => message.kind === "project_assignment");
         assert.deepEqual(
           messages().map((message) => message.id),
-          [staleId],
+          [],
         );
         const delivered: any[] = [];
         const entries: any[] = [];
@@ -5721,11 +5721,7 @@ async function runManagerStartupScenario(
             sendMessage: (message) => delivered.push(message),
           });
         assert.equal(await drain(), 0);
-        assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
-        assert.equal(delivered[0].details.id, staleId);
-        entries.push(delivered[0]);
-        assert.equal(await drain(), 0);
-        assert.equal(messages().length, 0);
+        assert.deepEqual(delivered, []);
         const stillRunning = await execute();
         assert.equal(stillRunning.details.action, "resume");
         assert.equal(stillRunning.details.already_running, true);
@@ -5776,10 +5772,10 @@ async function runManagerStartupScenario(
         );
         assert.deepEqual(
           messages().map((message) => message.id),
-          [staleId],
+          [],
         );
         assert.equal(await drain(), 0);
-        assert.equal(delivered.length, 1);
+        assert.deepEqual(delivered, []);
         const conflictingPath = join(tmpdir(), `conflicting-${staleId}.jsonl`);
         writeFileSync(conflictingPath, "");
         writeProjectAssignment(supervisionRuntime(), {
