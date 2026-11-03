@@ -24,6 +24,7 @@ import {
   resolveRemotePeerOutboundRetry,
   tryClaimRemotePeerOutbound,
   runPeerEndpoint,
+  exchangePeerEndpoint,
   tryPollPeerReplies,
 } from "./peer-transport.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -305,6 +306,32 @@ test("SSH stdin EPIPE rejects the transport without an uncaught process error", 
         "x".repeat(4 * 1024 * 1024),
       ),
     );
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("exchange transport accepts only the bounded exchange response shape", async (t) => {
+  if (process.platform === "win32")
+    return t.skip("uses a POSIX fake ssh executable");
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-peer-exchange-"));
+  const ssh = join(directory, "ssh");
+  writeFileSync(
+    ssh,
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ snapshot: { dataRoot: "/root", peers: [] }, messages: [], oversized: ["id"] })}'\n`,
+    { mode: 0o700 },
+  );
+  chmodSync(ssh, 0o700);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${directory}:${oldPath ?? ""}`;
+  try {
+    const response = await exchangePeerEndpoint(
+      { id: "fixture", label: "fixture", target: "fixture", reachable: true },
+      JSON.stringify({ expectedDataRoot: "/root", known: [] }),
+    );
+    assert.deepEqual(response.oversized, ["id"]);
   } finally {
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;

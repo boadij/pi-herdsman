@@ -68,6 +68,7 @@ export type PeerCorrespondence = {
     id: string;
     digest: string;
     text: string;
+    senderGeneration?: string;
     attachments?: PeerPortableAttachment[];
     resultBindings?: ResultBinding[];
     createdAt: number;
@@ -138,6 +139,10 @@ function valid(value: unknown): value is PeerCorrespondence {
         ID.test(reply.id) &&
         /^[0-9a-f]{64}$/u.test(reply.digest) &&
         typeof reply.text === "string" &&
+        (reply.senderGeneration === undefined ||
+          (typeof reply.senderGeneration === "string" &&
+            reply.senderGeneration.length > 0 &&
+            reply.senderGeneration.length <= 512)) &&
         (reply.attachments === undefined ||
           (Array.isArray(reply.attachments) &&
             reply.attachments.every(
@@ -304,6 +309,7 @@ export function updatePeerOriginGeneration(
     if (c.originGeneration === newGeneration) return c;
     if (c.originGeneration !== oldGeneration)
       throw new Error("peer correspondence recovery rejected");
+    backfillPendingSenderGenerations(c);
     c.originGeneration = newGeneration;
     return c;
   });
@@ -327,6 +333,7 @@ export function updatePeerRecipientGeneration(
     if (c.recipientGeneration === newGeneration) return c;
     if (c.recipientGeneration !== oldGeneration)
       throw new Error("peer correspondence recipient recovery rejected");
+    backfillPendingSenderGenerations(c);
     c.recipientGeneration = newGeneration;
     return c;
   });
@@ -366,6 +373,12 @@ function matchesCapability(actual: string, expected: string): boolean {
     ),
     actualBytes,
   );
+}
+function backfillPendingSenderGenerations(c: PeerCorrespondence): void {
+  for (const reply of c.replies) {
+    if (!reply.acknowledged && reply.senderGeneration === undefined)
+      reply.senderGeneration = c.recipientGeneration;
+  }
 }
 export function queuePeerReply(
   c: PeerCorrespondence,
@@ -408,6 +421,7 @@ export function queuePeerReply(
       ...(evidence.resultBindings?.length
         ? { resultBindings: [...evidence.resultBindings] }
         : {}),
+      senderGeneration: current.recipientGeneration,
       createdAt: Date.now(),
       acknowledged: false,
     };

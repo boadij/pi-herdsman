@@ -18,6 +18,7 @@ import {
   removePeerCorrespondence,
   storePeerCorrespondence,
   updatePeerOriginGeneration,
+  updatePeerRecipientGeneration,
 } from "./peer-correspondence.ts";
 
 const WORKER_DIAGNOSTIC = "HERDSMAN_WORKER:";
@@ -507,6 +508,40 @@ test("same exact session may explicitly recover a changed generation, but a mism
       ),
     /rejected/,
   );
+  removePeerCorrespondence(c.id);
+});
+
+test("queued replies retain sender generation across recipient recovery, including legacy pending replies", () => {
+  const c = createPeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: randomUUID(),
+  });
+  const id = randomUUID();
+  queuePeerReply(c, id, "new reply");
+  const path = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "peer-correspondences",
+    `${c.id}.json`,
+  );
+  const persisted = JSON.parse(readFileSync(path, "utf8"));
+  assert.equal(persisted.replies[0].senderGeneration, c.recipientGeneration);
+  delete persisted.replies[0].senderGeneration;
+  writeFileSync(path, JSON.stringify(persisted));
+
+  const recoveredGeneration = randomUUID();
+  const recovered = updatePeerRecipientGeneration(
+    c.id,
+    c.capability,
+    c.recipientSession,
+    c.recipientGeneration,
+    recoveredGeneration,
+  );
+  assert.equal(recovered.replies[0].senderGeneration, c.recipientGeneration);
+  assert.equal(recovered.recipientGeneration, recoveredGeneration);
   removePeerCorrespondence(c.id);
 });
 
