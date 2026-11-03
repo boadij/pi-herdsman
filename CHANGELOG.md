@@ -9,6 +9,54 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.37.0](https://github.com/boadij/pi-herdsman/compare/v0.36.3...v0.37.0) (2026-11-01)
+
+
+### Features
+
+* **coordination:** distinguish managed Lead handoff semantics ([#724](https://github.com/boadij/pi-herdsman/issues/724)) ([ae49626](https://github.com/boadij/pi-herdsman/commit/ae496260ba89d5bef7fc37f65583cd03da0dbca4))
+* **ui:** compact ambient status indicators ([#744](https://github.com/boadij/pi-herdsman/issues/744)) ([bd589d9](https://github.com/boadij/pi-herdsman/commit/bd589d9949a7677e2e85adcaa51b1e7d4f91cac8))
+* **ui:** measure Manager worktree progress from stable baselines ([#732](https://github.com/boadij/pi-herdsman/issues/732)) ([84edd2e](https://github.com/boadij/pi-herdsman/commit/84edd2eb5c4d6597bd31cbf861593ca14f996372))
+* **ui:** show compact Git changes in Manager status ([#728](https://github.com/boadij/pi-herdsman/issues/728)) ([dfc4a86](https://github.com/boadij/pi-herdsman/commit/dfc4a862538447148d6510037801b71101f36162))
+
+
+### Fixes
+
+* **lead:** align transition host contracts ([38e6857](https://github.com/boadij/pi-herdsman/commit/38e6857adf737df12ff28aeb7dfdacc62042fbc7))
+* **lead:** clean stale peer inbox across worktree scopes ([#736](https://github.com/boadij/pi-herdsman/issues/736)) ([d4adcb1](https://github.com/boadij/pi-herdsman/commit/d4adcb1fe204f6f4753f050a574b974c2770af52))
+* **lead:** complete project host contract ([#737](https://github.com/boadij/pi-herdsman/issues/737)) ([3deb13f](https://github.com/boadij/pi-herdsman/commit/3deb13f1328b9acd2e1f97921bab6c0d5a2c2f4b))
+* **lead:** narrow project message actions ([#741](https://github.com/boadij/pi-herdsman/issues/741)) ([2f49503](https://github.com/boadij/pi-herdsman/commit/2f495037a7b96851302a38cca567de1aa95209be))
+* **lead:** preserve herd settlement across reload ([#716](https://github.com/boadij/pi-herdsman/issues/716)) ([3f18048](https://github.com/boadij/pi-herdsman/commit/3f180483db327bdde7107814751a1fdfa7985e83))
+* **lead:** prevent false restoration reports and simplify recovery ([#730](https://github.com/boadij/pi-herdsman/issues/730)) ([48f562b](https://github.com/boadij/pi-herdsman/commit/48f562bf3c5c7e3e32e58f7916153e147575a055))
+* **lead:** type peer runtime hosts as factories ([#739](https://github.com/boadij/pi-herdsman/issues/739)) ([eca8c2b](https://github.com/boadij/pi-herdsman/commit/eca8c2b7798ee371bc1ce3b6ed664d630f3ccfd6))
+* **lead:** validate peer presence before delivery ([#733](https://github.com/boadij/pi-herdsman/issues/733)) ([ffeeab0](https://github.com/boadij/pi-herdsman/commit/ffeeab0fcb13bc6ee008a54f5bb9fad13d35d83f))
+* **supervision:** type Chief inbox path results ([#740](https://github.com/boadij/pi-herdsman/issues/740)) ([6627043](https://github.com/boadij/pi-herdsman/commit/6627043f916f381fc13b3d398f7e3dd07cdf1e35))
+* **types:** preserve tool registration literals ([#743](https://github.com/boadij/pi-herdsman/issues/743)) ([cf8b591](https://github.com/boadij/pi-herdsman/commit/cf8b591ef344a2fa562b074ac7d1db1e2c527aa1))
+* **ui:** improve ambient status count spacing ([#746](https://github.com/boadij/pi-herdsman/issues/746)) ([aaf7c48](https://github.com/boadij/pi-herdsman/commit/aaf7c48b42e9c702f7025e0ec89dcba1e98c3664))
+
+
+### Performance
+
+* **coordination:** skip empty Manager project-message scans ([#723](https://github.com/boadij/pi-herdsman/issues/723)) ([ec0c267](https://github.com/boadij/pi-herdsman/commit/ec0c2678a98ba6103e9376e64185c6c8ed8e9334))
+* **peer:** avoid redundant local inventory scans ([#718](https://github.com/boadij/pi-herdsman/issues/718)) ([1cf7487](https://github.com/boadij/pi-herdsman/commit/1cf748793204f9e46fb14e7763fa61de2ed3c702))
+
+
+### Documentation
+
+* document protected main workflow for agents ([#726](https://github.com/boadij/pi-herdsman/issues/726)) ([feb908e](https://github.com/boadij/pi-herdsman/commit/feb908e601e0cb6e435cc39b8b71f0ae4c573573))
+
+
+### CI
+
+* skip post-merge validation on main ([#727](https://github.com/boadij/pi-herdsman/issues/727)) ([a6ffa8b](https://github.com/boadij/pi-herdsman/commit/a6ffa8b1b95f85d264a1102558f593bfcb642ef8))
+
+
+### Other Changes
+
+* add minimal TypeScript baseline ([#720](https://github.com/boadij/pi-herdsman/issues/720)) ([4d92b11](https://github.com/boadij/pi-herdsman/commit/4d92b1158246d5901254ad14346de9077a5c8111))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.10.25 ([#717](https://github.com/boadij/pi-herdsman/issues/717)) ([0cecf63](https://github.com/boadij/pi-herdsman/commit/0cecf63990101f66f21afb3fccb840bd42f0099a))
+* **tooling:** derive Node compatibility from package engines ([#729](https://github.com/boadij/pi-herdsman/issues/729)) ([b3aaf4d](https://github.com/boadij/pi-herdsman/commit/b3aaf4daa2c223d77a32d6b1a3c575aa9316d985))
+
 ## [0.36.3](https://github.com/boadij/pi-herdsman/compare/v0.36.2...v0.36.3) (2026-10-31)
 
 

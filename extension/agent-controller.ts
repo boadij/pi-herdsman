@@ -8681,7 +8681,7 @@ export function createAgentController(
           return {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: bounded.content,
               },
             ],
@@ -8715,7 +8715,7 @@ export function createAgentController(
           return {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: bounded.content,
               },
             ],
