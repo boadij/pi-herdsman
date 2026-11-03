@@ -5870,11 +5870,15 @@ async function runManagerMergeSmoke(ctx) {
 }
 
 export function managerRecoveryResumePrompt(branch) {
-  return `Resume the existing work on branch ${branch}.\n\nCall resume_work using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+  return `Resume the existing work on branch ${branch}.\n\nCall resume_work using only:\n${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+}
+
+export function managerRecoveryResumeInstruction() {
+  return "PI_HERDSMAN_MANAGER_RECOVERY_FRESH_INSTRUCTION: continue the existing assignment and preserve its current changes.";
 }
 
 export function managerRecoveryRetiredResumePrompt(branch) {
-  return `Attempt to resume the retired assignment on ${branch}. Call resume_work exactly once using only ${JSON.stringify({ branch })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
+  return `Attempt to resume the retired assignment on ${branch}. Call resume_work exactly once using only ${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
@@ -5894,7 +5898,7 @@ export function managerRecoveryReviewPrompt(branch) {
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
-  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_work exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_work succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
+  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_work exactly once using only these arguments:\n${JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })}\n\nDo not call any other tool.\n\nAfter resume_work succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
@@ -9218,6 +9222,23 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(resumed.session, first.session);
   assert.equal(resumed.branch, first.branch);
   assert.equal(resumed.workspace_id, workspaceId);
+  assert.equal(resumed.message_queued, true);
+  assert.ok(resumed.message_id);
+  await waitFor("resume-instruction-delivered", async () => {
+    const session = await exactIsolatedSession(ctx, first.session);
+    return session?.contents &&
+      sessionEntries(session.contents).some(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-manager_message" &&
+          entry.details?.id === resumed.message_id &&
+          entry.details?.toSessionId === first.session &&
+          entry.details?.leadSessionId === first.session &&
+          String(entry.content).includes(managerRecoveryResumeInstruction()),
+      )
+      ? true
+      : null;
+  });
   await assertUnchangedAssignment();
   const resumedWorktrees = await matchingWorktrees();
   assert.equal(resumedWorktrees.length, 1);

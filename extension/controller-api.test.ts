@@ -5267,6 +5267,7 @@ async function runManagerStartupScenario(
                 mode === "invalid-topology"
                   ? "smoke/vanished"
                   : "smoke/recover",
+              message: "Continue the existing assignment.",
             }
           : {
               ...(!["invalid-topology"].includes(mode) && !activeMode
@@ -5648,6 +5649,18 @@ async function runManagerStartupScenario(
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
         assert.equal(running.details.session, staleId);
+        assert.equal(running.details.message_queued, true);
+        assert.ok(running.details.message_id);
+        assert.ok(
+          listChiefMessagePaths(supervisionRuntime(), staleId)
+            .map((path) => readChiefMessage(path))
+            .some(
+              (record) =>
+                record.id === running.details.message_id &&
+                record.kind === "manager_message" &&
+                record.text.includes("Continue the existing assignment."),
+            ),
+        );
         const listed = await pi.tools
           .find((tool) => tool.name === "list_staff")!
           .execute("list", {}, undefined, undefined, ctx);
@@ -6237,6 +6250,27 @@ async function runManagerStartupScenario(
         assert.equal(recovered.details.action, "resume");
         assert.equal(recovered.details.session, staleId);
         assert.equal(recovered.details.branch, "smoke/recover");
+        assert.equal(recovered.details.recovered, true);
+        assert.equal(recovered.details.message_queued, true);
+        assert.ok(recovered.details.message_id);
+        const queuedResume = listChiefMessagePaths(
+          supervisionRuntime(),
+          staleId,
+        )
+          .map((path) => readChiefMessage(path))
+          .sort((left, right) => left.createdAt - right.createdAt);
+        const assignmentNotice = queuedResume.find(
+          (record) => record.kind === "project_assignment",
+        );
+        const instruction = queuedResume.find(
+          (record) => record.id === recovered.details.message_id,
+        );
+        assert.equal(instruction?.kind, "manager_message");
+        assert.ok(assignmentNotice);
+        assert.ok(instruction!.createdAt > assignmentNotice.createdAt);
+        assert.ok(
+          instruction!.text.includes("Continue the existing assignment."),
+        );
         assert.equal(recovered.details.presentation_task, "recover exact Lead");
         assert.doesNotMatch(
           (recovered.content[0] as { text: string }).text,
@@ -7336,7 +7370,10 @@ async function runManagerStartupScenario(
       await assert.rejects(
         staffResume.execute(
           "resume",
-          { branch: "smoke/missing" },
+          {
+            branch: "smoke/missing",
+            message: "Continue the existing assignment.",
+          },
           undefined,
           undefined,
           ctx,

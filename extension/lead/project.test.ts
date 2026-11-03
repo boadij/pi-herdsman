@@ -802,6 +802,14 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     ],
     [{ action: "resume", branch: " \n" }, /Project branch must not be empty/],
     [
+      { action: "resume", branch: "feature/existing", message: " \t\n" },
+      /Resume instruction must not be empty/,
+    ],
+    [
+      { action: "resume", branch: "feature/existing" },
+      /Resume instruction must not be empty/,
+    ],
+    [
       { action: "delegate", task: "work", base: " \t" },
       /Base ref must not be empty/,
     ],
@@ -831,6 +839,272 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   );
   assert.deepEqual(calls[0]?.options, { signal });
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
+});
+
+test("resume queue failure does not launch a Lead and reports enqueue unconfirmed", async () => {
+  const repoKey = realFs.realpathSync(process.cwd());
+  const checkout = join(tmpdir(), `resume-${randomUUID()}`);
+  mkdirSync(checkout);
+  const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
+  mkdirSync(assignmentRoot);
+  const id = randomUUID();
+  const manager = {
+    repoKey,
+    workspaceId: WORKSPACE,
+    leaseId: randomUUID(),
+    piSessionId: randomUUID(),
+  };
+  const assignment = {
+    version: 2,
+    id,
+    repoKey,
+    branch: "feature/resume",
+    text: "original",
+    checkoutPath: checkout,
+  };
+  writeProjectAssignment(
+    { root: assignmentRoot, assignments: assignmentRoot } as any,
+    assignment as any,
+  );
+  let writes = 0;
+  let launches = 0;
+  const ctx = fakeContext() as any;
+  ctx.cwd = repoKey;
+  const runtime = createLeadProjectRuntime({
+    pi: {
+      exec: async (command: string) => ({
+        stdout:
+          command === "herdr"
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  source: {
+                    repo_key: repoKey,
+                    repo_name: "project",
+                    source_checkout_path: repoKey,
+                  },
+                  worktrees: [],
+                  workspace: { workspace_id: WORKSPACE },
+                },
+              })
+            : repoKey,
+        stderr: "",
+        code: 0,
+      }),
+    } as any,
+    leadRuntime: { managerLease: { descriptor: manager } },
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: () => true,
+    supervisionRuntime: () => ({
+      root: assignmentRoot,
+      assignments: assignmentRoot,
+    }),
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: WORKSPACE,
+      worktrees: [],
+    }),
+    runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          source: { repo_key: repoKey, source_checkout_path: repoKey },
+          worktrees: [
+            {
+              path: checkout,
+              branch: assignment.branch,
+              is_linked_worktree: true,
+              open_workspace_id: "resume-workspace",
+            },
+          ],
+        };
+      if (args[0] === "workspace" && args[1] === "get")
+        return { workspace: { workspace_id: WORKSPACE } };
+      if (args[0] === "worktree" && args[1] === "open")
+        return {
+          workspace: { workspace_id: "resume-workspace" },
+          root_pane: { pane_id: "pane" },
+          tab: { tab_id: "tab" },
+          worktree: { path: checkout, branch: assignment.branch },
+        };
+      if (args[0] === "pane" && args[1] === "process-info")
+        return { process_info: { foreground_processes: [] } };
+      throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
+    },
+    readProjectAssignment: () => assignment,
+    listProjectAssignments: () => [assignment],
+    reconcileProjectAssignments: async () => {},
+    withProjectWorkLock: (_key: string, op: () => unknown) => op(),
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      op: () => unknown,
+    ) => op(),
+    herdrSessionSnapshot: async () => ({ agents: [] }),
+    liveAgent: async () => [],
+    scanAgentStates: () => ({ states: [] }),
+    messageLimits: async () => ({
+      inline: { bytes: 1000 },
+      mailbox: { bytes: 1000 },
+    }),
+    prepareCoordinationInput: async (message: string) => ({
+      text: message,
+      resultBindings: [],
+    }),
+    writeChiefMessage: () => {
+      if (++writes === 2) throw new Error("disk write failed");
+    },
+    startHerdrAgentInPane: async () => {
+      launches++;
+    },
+    appendDurableError: () => {},
+  } as any);
+  await assert.rejects(
+    runtime.activateProjectLead(
+      { action: "resume", branch: assignment.branch, message: "continue" },
+      ctx,
+      new AbortController().signal,
+    ),
+    /enqueue could not be confirmed/,
+  );
+  assert.equal(writes, 2);
+  assert.equal(launches, 0);
+});
+
+test("resume preserves queued manager message when controlled recovery fails", async () => {
+  const repoKey = realFs.realpathSync(process.cwd());
+  const checkout = join(tmpdir(), `resume-${randomUUID()}`);
+  mkdirSync(checkout);
+  const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
+  mkdirSync(assignmentRoot);
+  const id = randomUUID();
+  const manager = {
+    repoKey,
+    workspaceId: WORKSPACE,
+    leaseId: randomUUID(),
+    piSessionId: randomUUID(),
+  };
+  const assignment = {
+    version: 2,
+    id,
+    repoKey,
+    branch: "feature/resume",
+    text: "original",
+    checkoutPath: checkout,
+  };
+  writeProjectAssignment(
+    { root: assignmentRoot, assignments: assignmentRoot } as any,
+    assignment as any,
+  );
+  const messages: any[] = [];
+  let launches = 0;
+  const ctx = fakeContext() as any;
+  ctx.cwd = repoKey;
+  const runtime = createLeadProjectRuntime({
+    pi: {
+      exec: async (command: string) => ({
+        stdout:
+          command === "herdr"
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  source: {
+                    repo_key: repoKey,
+                    repo_name: "project",
+                    source_checkout_path: repoKey,
+                  },
+                  worktrees: [],
+                  workspace: { workspace_id: WORKSPACE },
+                },
+              })
+            : repoKey,
+        stderr: "",
+        code: 0,
+      }),
+    } as any,
+    leadRuntime: { managerLease: { descriptor: manager } },
+    activeRole: () => "manager",
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: () => true,
+    supervisionRuntime: () => ({
+      root: assignmentRoot,
+      assignments: assignmentRoot,
+    }),
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: WORKSPACE,
+      worktrees: [],
+    }),
+    runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          source: { repo_key: repoKey, source_checkout_path: repoKey },
+          worktrees: [
+            {
+              path: checkout,
+              branch: assignment.branch,
+              is_linked_worktree: true,
+              open_workspace_id: "resume-workspace",
+            },
+          ],
+        };
+      if (args[0] === "workspace" && args[1] === "get")
+        return { workspace: { workspace_id: WORKSPACE } };
+      if (args[0] === "worktree" && args[1] === "open")
+        return {
+          workspace: { workspace_id: "resume-workspace" },
+          root_pane: { pane_id: "pane" },
+          tab: { tab_id: "tab" },
+          worktree: { path: checkout, branch: assignment.branch },
+        };
+      if (args[0] === "pane" && args[1] === "process-info")
+        return { process_info: { foreground_processes: [] } };
+      throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
+    },
+    readProjectAssignment: () => assignment,
+    listProjectAssignments: () => [assignment],
+    reconcileProjectAssignments: async () => {},
+    withProjectWorkLock: (_key: string, op: () => unknown) => op(),
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      op: () => unknown,
+    ) => op(),
+    herdrSessionSnapshot: async () => ({ agents: [] }),
+    liveAgent: async () => [],
+    scanAgentStates: () => ({ states: [] }),
+    messageLimits: async () => ({
+      inline: { bytes: 1000 },
+      mailbox: { bytes: 1000 },
+    }),
+    prepareCoordinationInput: async (message: string) => ({
+      text: message,
+      resultBindings: [],
+    }),
+    writeChiefMessage: (message: any) => messages.push(message),
+    startHerdrAgentInPane: async () => {
+      launches++;
+      throw new Error("controlled launch failed");
+    },
+    appendDurableError: () => {},
+  } as any);
+  const result = (await runtime.activateProjectLead(
+    { action: "resume", branch: assignment.branch, message: "continue" },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(launches, 1);
+  assert.equal(result.details.status, "recovery_unverified");
+  assert.equal(result.details.message_queued, true);
+  assert.equal(result.details.recovery_verified, false);
+  assert.ok(
+    messages.some(
+      (message) =>
+        message.kind === "manager_message" && message.toSessionId === id,
+    ),
+  );
 });
 
 test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {

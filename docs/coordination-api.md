@@ -37,6 +37,11 @@ observation and communication.
 Manager additionally uses branch-based project operations to start and resume
 project work, can stop a Lead without retiring its assignment, and can request
 independent human confirmation to remove an assigned project's worktree.
+`resume_work` requires a fresh instruction for the existing assignment; it
+queues that instruction separately without replacing the saved task. Already
+running Leads are not relaunched. Use `message_staff` for ordinary
+communication with known running Leads; queue acceptance is not proof of
+message delivery.
 
 ```text
 list_staff

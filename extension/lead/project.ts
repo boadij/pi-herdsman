@@ -1897,7 +1897,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         base?: string;
         files?: string[];
       }
-    | { action: "resume"; branch: string };
+    | { action: "resume"; branch: string; message: string };
   type StaffOperation =
     | { action: "list" }
     | {
@@ -1907,7 +1907,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         base?: string;
         files?: string[];
       }
-    | { action: "resume"; branch: string }
+    | { action: "resume"; branch: string; message: string }
     | { action: "remove"; branch: string }
     | { action: "merge"; branch: string; expected_head: string }
     | { action: "stop"; branch: string }
@@ -1930,7 +1930,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           base?: string;
           files?: string[];
         }
-      | { action: "resume"; branch: string },
+      | { action: "resume"; branch: string; message: string },
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
@@ -1947,6 +1947,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : params;
     if (!operation.branch.trim())
       throw new Error("Project branch must not be empty");
+    if (
+      operation.action === "resume" &&
+      (typeof operation.message !== "string" || !operation.message.trim())
+    )
+      throw new Error("Resume instruction must not be empty");
     if (
       operation.action === "delegate" &&
       operation.base !== undefined &&
@@ -2695,6 +2700,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
+    let resumeMessageId: string | undefined;
+    let resumeMessageQueued = false;
+    let resumeMessageQueueAttempted = false;
     const operationName =
       operation.action === "resume" ? "resume_work" : "delegate_work";
     const manager = await currentManager(ctx);
@@ -2773,6 +2781,76 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : undefined;
     const id =
       operation.action === "resume" ? currentAssignment!.id : operation.id;
+    let preparedResumeMessage:
+      Awaited<ReturnType<typeof prepareCoordinationInput>> | undefined;
+    if (operation.action === "resume") {
+      resumeMessageId = randomUUID();
+      preparedResumeMessage = await prepareCoordinationInput(
+        ctx,
+        operation.message,
+        [],
+        "resume_work",
+        "Message",
+        (candidate, resultBindings) => ({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id: resumeMessageId!,
+          leaseId: manager.leaseId,
+          kind: "manager_message",
+          fromSessionId: manager.piSessionId,
+          toSessionId: id,
+          leadSessionId: id,
+          branch: currentAssignment!.branch,
+          text: candidate,
+          ...(resultBindings.length
+            ? { resultBindings: [...resultBindings] }
+            : {}),
+          createdAt: Date.now(),
+        }),
+      );
+    }
+    const queueResumeHandoff = () => {
+      if (operation.action !== "resume" || !preparedResumeMessage)
+        throw new Error("Resume handoff was not prepared");
+      const createdAt = Date.now();
+      resumeMessageQueueAttempted = true;
+      try {
+        writeChiefMessage({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id,
+          leaseId: manager.leaseId,
+          kind: "project_assignment",
+          fromSessionId: manager.piSessionId,
+          toSessionId: id,
+          leadSessionId: id,
+          branch: currentAssignment!.branch,
+          text: "Project assignment ready.",
+          createdAt,
+        });
+        writeChiefMessage({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id: resumeMessageId!,
+          leaseId: manager.leaseId,
+          kind: "manager_message",
+          fromSessionId: manager.piSessionId,
+          toSessionId: id,
+          leadSessionId: id,
+          branch: currentAssignment!.branch,
+          text: preparedResumeMessage.text,
+          ...(preparedResumeMessage.resultBindings.length
+            ? { resultBindings: preparedResumeMessage.resultBindings }
+            : {}),
+          createdAt: createdAt + 1,
+        });
+      } catch (error) {
+        throw new Error(
+          `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      resumeMessageQueued = true;
+    };
     let savedSessionCwd: string | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
       try {
@@ -2841,19 +2919,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         `Lead ${id}`,
       );
       await bindLeadSessionFile(currentAssignment!, live[0]);
-      writeChiefMessage({
-        version: 2,
-        build: HERDSMAN_BUILD,
-        id,
-        leaseId: manager.leaseId,
-        kind: "project_assignment",
-        fromSessionId: manager.piSessionId,
-        toSessionId: id,
-        leadSessionId: id,
-        branch: currentAssignment!.branch,
-        text: "Project assignment ready.",
-        createdAt: Date.now(),
-      });
+      const stillAssigned = readProjectAssignment(
+        runtime,
+        manager.repoKey,
+        branch,
+      );
+      if (!stillAssigned || stillAssigned.id !== id)
+        throw new Error("Project assignment changed during Lead activation");
+      const current = await currentManager(ctx);
+      if (!current || !sameManagerDescriptor(current, manager))
+        throw new Error("Manager changed during project activation");
+      queueResumeHandoff();
       return {
         content: [
           {
@@ -2868,6 +2944,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: id,
           status: "active",
           already_running: true,
+          message_queued: true,
+          message_id: resumeMessageId,
           ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
@@ -3188,6 +3266,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       await assertUnoccupied(workspaceId!);
+      if (operation.action === "resume") {
+        const fresh = await currentManager(ctx);
+        const stillAssigned = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error("Manager changed before resume handoff");
+        if (!stillAssigned || stillAssigned.id !== assignment.id)
+          throw new Error("Project assignment changed before resume handoff");
+        queueResumeHandoff();
+      }
       let lead: any;
       let startedLead = false;
       const verifyLeadCandidate = (candidate: any): boolean => {
@@ -3425,19 +3516,20 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         `Lead ${assignment.id}`,
       );
       assignment = await bindLeadSessionFile(assignment, lead, signal);
-      writeChiefMessage({
-        version: 2,
-        build: HERDSMAN_BUILD,
-        id: assignment.id,
-        leaseId: manager.leaseId,
-        kind: "project_assignment",
-        fromSessionId: manager.piSessionId,
-        toSessionId: leadSessionId,
-        leadSessionId,
-        branch: assignment.branch,
-        text: "Project assignment ready.",
-        createdAt: Date.now(),
-      });
+      if (operation.action !== "resume")
+        writeChiefMessage({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id: assignment.id,
+          leaseId: manager.leaseId,
+          kind: "project_assignment",
+          fromSessionId: manager.piSessionId,
+          toSessionId: leadSessionId,
+          leadSessionId,
+          branch: assignment.branch,
+          text: "Project assignment ready.",
+          createdAt: Date.now(),
+        });
       let rediscovered: any;
       while (Date.now() < deadline) {
         const exact = (await liveLead(ctx, assignment.id)).filter(
@@ -3500,6 +3592,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               workspace_id: workspaceId,
               branch: assignment.branch,
               ...(operation.action === "resume" ? { recovered: true } : {}),
+              ...(operation.action === "resume"
+                ? { message_queued: true, message_id: resumeMessageId }
+                : {}),
             }),
           },
         ],
@@ -3510,11 +3605,37 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           workspace_id: workspaceId,
           branch: assignment.branch,
           ...(operation.action === "resume" ? { recovered: true } : {}),
+          ...(operation.action === "resume"
+            ? { message_queued: true, message_id: resumeMessageId }
+            : {}),
           ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
     } catch (error) {
       appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      if (resumeMessageQueued)
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Recovery was not verified for Lead ${id}. Instruction ${resumeMessageId} remains queued for that exact session; inspect state before resuming or sending it again. ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: {
+            ok: false,
+            action: "resume",
+            branch,
+            session: id,
+            message_queued: true,
+            message_id: resumeMessageId,
+            recovery_verified: false,
+            status: "recovery_unverified",
+          },
+        };
+      if (resumeMessageQueueAttempted)
+        throw new Error(
+          `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. Recovery was not started. ${error instanceof Error ? error.message : String(error)}`,
+        );
       throw error;
     } finally {
       for (const promptPath of promptPaths)

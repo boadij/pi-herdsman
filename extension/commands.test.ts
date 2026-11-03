@@ -3784,12 +3784,17 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     const resume = first.tools.find((tool) => tool.name === "resume_work");
     assert.ok(staff);
     assert.ok(resume);
-    assert.match(resume.description, /when recovery is needed/i);
+    assert.match(resume.description, /required fresh instruction/i);
+    assert.match(resume.description, /without relaunching it/i);
+    assert.match(resume.description, /confirm delivery/i);
     assert.match(
       resume.description,
       /does not recover the Lead's Agents or refresh its progress/i,
     );
-    assert.match(resume.description, /Use message_staff to communicate/i);
+    assert.match(
+      resume.description,
+      /Use message_staff to communicate normally/i,
+    );
     assert.equal(staff.parameters.properties.assignment, undefined);
     assert.match(staff.description, /start a new work assignment/i);
     assert.equal(
@@ -3798,10 +3803,21 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.equal(
       Value.Check(resume.parameters, { branch: "feat/existing" }),
+      false,
+    );
+    assert.equal(
+      Value.Check(resume.parameters, {
+        branch: "feat/existing",
+        message: "continue existing work",
+      }),
       true,
     );
     assert.equal(
-      Value.Check(resume.parameters, { branch: "feat/existing", task: "x" }),
+      Value.Check(resume.parameters, {
+        branch: "feat/existing",
+        message: "continue existing work",
+        task: "x",
+      }),
       false,
     );
     assert.ok(

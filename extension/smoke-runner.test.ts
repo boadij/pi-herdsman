@@ -56,6 +56,7 @@ import {
   managerRecoveryResumeOnlyPrompt,
   managerRecoveryResumeDiagnostics,
   managerRecoveryResumePrompt,
+  managerRecoveryResumeInstruction,
   managerRecoveryRetiredResumePrompt,
   managerRecoveryReviewPrompt,
   continuationResultsForPrompt,
@@ -6822,7 +6823,7 @@ test("manager-recovery uses nonblocking messages only when information cannot wa
   assert.doesNotMatch(managerPrompt, new RegExp(marker));
 });
 
-test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
+test("manager-recovery starts work by task and resumes with fresh instructions", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const prompt = managerRecoveryFreshPrompt(branch);
@@ -6844,9 +6845,10 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.match(prompt, /Only after that delivered message, reply exactly/);
   assert.doesNotMatch(prompt, /MANAGER_RECOVERY_FINISH/);
   const resume = managerRecoveryResumePrompt(branch);
-  assert.match(
-    resume,
-    /resume_work using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
+  assert.ok(
+    resume.includes(
+      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
+    ),
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
   assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
@@ -6866,7 +6868,11 @@ test("manager-recovery stops and resumes by branch", () => {
   assert.doesNotMatch(review, new RegExp(marker));
   const resume = managerRecoveryResumeOnlyPrompt(branch);
   assert.match(resume, /resume_work exactly once/);
-  assert.ok(resume.includes(JSON.stringify({ branch })));
+  assert.ok(
+    resume.includes(
+      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
+    ),
+  );
   assert.match(resume, /exact full branch string/);
   assert.match(resume, /Copy that branch string verbatim/);
   assert.match(resume, /do not shorten, summarize, normalize/);
@@ -6876,7 +6882,11 @@ test("manager-recovery stops and resumes by branch", () => {
 test("manager-recovery verifies retired assignments cannot be resumed", () => {
   const branch = "herdsman/smoke-manager-recovery-retired";
   const prompt = managerRecoveryRetiredResumePrompt(branch);
-  assert.ok(prompt.includes(JSON.stringify({ branch })));
+  assert.ok(
+    prompt.includes(
+      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
+    ),
+  );
   assert.match(prompt, /resume_work exactly once/);
   assert.match(prompt, /Do not delegate new work/);
   assert.match(prompt, /PI_HERDSMAN_MANAGER_RECOVERY_RETIRED/);
@@ -7036,7 +7046,10 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
             type: "toolCall",
             id: "resume-call",
             name: "resume_work",
-            arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
+            arguments: {
+              branch: "herdsman/smoke-manager-recovery-exac",
+              message: managerRecoveryResumeInstruction(),
+            },
           },
         ],
       },
@@ -7058,7 +7071,10 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
   assert.deepEqual(managerRecoveryResumeDiagnostics(contents, prompt), [
     {
       branch: "herdsman/smoke-manager-recovery-exac",
-      arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
+      arguments: {
+        branch: "herdsman/smoke-manager-recovery-exac",
+        message: managerRecoveryResumeInstruction(),
+      },
       result: {
         isError: true,
         details: null,
