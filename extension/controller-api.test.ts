@@ -6414,6 +6414,10 @@ async function runManagerStartupScenario(
           pausedOverview.render(120).join("\n"),
           /smoke\/recover · paused/u,
         );
+        assert.deepEqual(
+          renderedList.items.map((item: any) => item.label),
+          ["smoke/selection", "smoke/recover"],
+        );
         pausedOverview.handleInput("\r");
         await t!.waitFor(() => assert.equal(components.length, 4));
         const pausedActions = components[3];
@@ -6422,7 +6426,7 @@ async function runManagerStartupScenario(
         assert.match(pausedMenu, /Remove worktree…/u);
         pausedActions.handleInput("\x1b");
         await t!.waitFor(() => assert.equal(components.length, 5));
-        components[4].handleInput("\x1b[B");
+        components[4].handleInput("\x1b[A");
         components[4].handleInput("\r");
         await t!.waitFor(() => assert.equal(components.length, 6));
         assert.match(components[5].render(120).join("\n"), /smoke\/selection/u);
@@ -6434,7 +6438,7 @@ async function runManagerStartupScenario(
           "work:smoke/selection",
           "cancelling the action menu must retain the selected project",
         );
-        components[6].handleInput("\x1b[A");
+        components[6].handleInput("\x1b[B");
         components[6].handleInput("\r");
         await t!.waitFor(() => assert.equal(components.length, 8));
         let resolveRemovalInput!: (value: string | undefined) => void;
