@@ -783,8 +783,17 @@ export function createLeadToolState(
   };
 }
 
-const sameToolSelection = (left: readonly string[], right: readonly string[]) =>
-  left.length === right.length && left.every((name, i) => name === right[i]);
+const sameToolSelection = (
+  left: readonly string[],
+  right: readonly string[],
+) => {
+  const leftNames = new Set(left);
+  const rightNames = new Set(right);
+  return (
+    leftNames.size === rightNames.size &&
+    [...leftNames].every((name) => rightNames.has(name))
+  );
+};
 
 export type LeadExecutionSessionState = Readonly<{
   mode: LeadExecutionMode;
