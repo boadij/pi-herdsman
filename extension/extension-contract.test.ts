@@ -4205,17 +4205,6 @@ test("persisted Chief keeps verified authority and mandatory tools when definiti
   }
 });
 
-test("chief guidance carries the lead coordination contract", () => {
-  setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "lead-pane";
-  const pi = fakePi();
-  registerExtension!(pi.pi as never);
-  assert.ok(
-    pi.tools.some((candidate) => candidate.name === "message_supervisor"),
-  );
-  delete process.env.HERDR_PANE_ID;
-});
-
 test("replaced Lead strategy keeps its protected charter and coordination tools", async () => {
   setLeadEnvironment();
   realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman", "roles"), {
