@@ -127,12 +127,12 @@ workflow.
 Pi Herdsman is actively evolving. Core orchestration workflows are available today,
 while other areas are being refined or expanded.
 
-| Area                             | Status                | What to expect                                                                                              |
+| Area                             | Status               | What to expect                                                                                              |
 | -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Lead & Agent orchestration**   | ✅ **Core complete**  | Background and nested delegation, result handoffs, and local peer communication. Ongoing reliability fixes. |
-| **Manager orchestration**        | ✨ **Polishing**      | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability.     |
-| **Chief coordination**           | 🚧 **In progress**    | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed.  |
-| **Federated peer communication** | 🚧 **In progress**    | Cross-machine Manager/ordinary Lead messaging and durable replies work. Reverse initiation is planned.      |
+| **Lead & Agent orchestration**   | ✅ **Core complete** | Background and nested delegation, result handoffs, and local peer communication. Ongoing reliability fixes. |
+| **Manager orchestration**        | ✨ **Polishing**     | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability.     |
+| **Chief coordination**           | 🚧 **In progress**   | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed.  |
+| **Federated peer communication** | 🚧 **In progress**   | Cross-machine Manager/ordinary Lead messaging and durable replies work. Reverse initiation is planned.      |
 
 **Federation limitations:** Independent discovery and initiation currently require
 an SSH route from the initiating machine. Replies work over an existing
