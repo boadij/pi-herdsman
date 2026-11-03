@@ -860,6 +860,9 @@ try {
       "--user",
       "herdsman",
       ...herdrEnv(side),
+      ...(side === "b" && resources.diagnosticsEnabled
+        ? ["-e", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
+        : []),
       resources[side].container,
       "herdr",
       "--session",
@@ -911,6 +914,53 @@ try {
       resources[side].herdrSession,
       ...args,
     ]);
+  const startPeerPi = (side, pane, role) => {
+    try {
+      herdr(side, [
+        "agent",
+        "start",
+        `peer-${role}-${side}`,
+        "--kind",
+        "pi",
+        "--pane",
+        pane,
+        "--timeout",
+        "30000",
+        "--",
+        "--model",
+        `smoke-faux/federated-peer-${side}`,
+        "--extension",
+        `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
+        "--extension",
+        `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
+      ]);
+    } catch (error) {
+      let terminal = "terminal diagnostics unavailable";
+
+      try {
+        terminal = herdr(side, [
+          "pane",
+          "read",
+          pane,
+          "--source",
+          "recent",
+          "--lines",
+          "30",
+        ]);
+      } catch {}
+
+      resources.peerStartupFailure = {
+        side,
+        role,
+        terminal: sanitizeStartupDiagnostics(terminal),
+      };
+      save();
+
+      throw new Error(`${side}: native ${role} Pi startup failed`, {
+        cause: error,
+      });
+    }
+  };
   for (const side of ["a", "b"]) {
     const created = JSON.parse(
       herdr(side, [
@@ -987,27 +1037,7 @@ try {
       ],
       ["--user", "herdsman"],
     );
-    herdr(side, [
-      "pane",
-      "run",
-      pane,
-      "pi",
-      "--model",
-      `smoke-faux/federated-peer-${side}`,
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
-    ]);
-    herdr(side, [
-      "pane",
-      "wait-output",
-      pane,
-      "--match",
-      "Press ctrl+o",
-      "--timeout",
-      "30000",
-    ]);
+    startPeerPi(side, pane, "manager");
     herdr(side, ["pane", "send-text", pane, "/manager"]);
     herdr(side, ["pane", "send-keys", pane, "Enter"]);
     try {
@@ -1073,30 +1103,7 @@ try {
         `${side}: ordinary Lead pane split omitted pane identity`,
       );
     resources[side].ordinaryLeadPaneId = pane;
-    herdr(side, [
-      "pane",
-      "run",
-      pane,
-      ...(side === "b" && resources.diagnosticsEnabled
-        ? ["env", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
-        : []),
-      "pi",
-      "--model",
-      `smoke-faux/federated-peer-${side}`,
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
-      "--extension",
-      `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
-    ]);
-    herdr(side, [
-      "pane",
-      "wait-output",
-      pane,
-      "--match",
-      "Press ctrl+o",
-      "--timeout",
-      "30000",
-    ]);
+    startPeerPi(side, pane, "lead");
     // New sessions start as ordinary Leads; unlike Managers they need no role
     // activation command.
     const output = herdr(side, [
@@ -1112,6 +1119,18 @@ try {
     const sessionId = sessionPath.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1];
     if (!sessionId)
       throw new Error(`${side}: ordinary Lead omitted its exact session ID`);
+    if (
+      side === "b" &&
+      resources.diagnosticsEnabled &&
+      !readBDecisionDiagnostics().some(
+        (event) =>
+          event.branch === "capture_session" &&
+          event.outcome === "model_invocation" &&
+          event.modelExpected === true,
+      )
+    ) {
+      throw new Error("B ordinary Lead decision diagnostics missing");
+    }
     resources[side].ordinaryLead = { pane, sessionPath, sessionId };
     save();
   };
@@ -3331,6 +3350,10 @@ try {
   if (process.env.PEER_SMOKE_KEEP === "1")
     console.log(`Retained exact resource manifest: ${manifestPath}`);
 } finally {
+  if (resources.peerStartupFailure)
+    console.error(
+      `Native peer Pi startup failure diagnostics: ${JSON.stringify(resources.peerStartupFailure)}`,
+    );
   if (process.argv[2] !== "--cleanup" && process.env.PEER_SMOKE_KEEP !== "1")
     cleanup();
 }
