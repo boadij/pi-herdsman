@@ -1375,6 +1375,41 @@ export async function drainCoordinationInbox(
               record.kind === "manager_message")
               ? await options.senderTarget(record)
               : undefined;
+          let hasResumeInstruction = false;
+          if (record.kind === "project_assignment") {
+            for (const candidatePath of allChiefMessagePaths(
+              options.runtime,
+              options.sessionId,
+            )) {
+              try {
+                const candidate = readChiefMessage(candidatePath);
+                if (
+                  candidate.kind !== "manager_message" ||
+                  candidate.leaseId !== record.leaseId ||
+                  candidate.fromSessionId !== record.fromSessionId ||
+                  candidate.toSessionId !== record.toSessionId ||
+                  candidate.leadSessionId !== record.leadSessionId ||
+                  candidate.branch !== record.branch ||
+                  candidate.createdAt !== record.createdAt + 1
+                )
+                  continue;
+                assertChiefMessageNotQuarantined(
+                  options.runtime,
+                  options.sessionId,
+                  candidate.id,
+                );
+                if (
+                  !(await options.isDelivered(candidate.id)) &&
+                  (await options.isAuthorized(candidate))
+                ) {
+                  hasResumeInstruction = true;
+                  break;
+                }
+              } catch {
+                // Invalid, unauthorized, or quarantined messages cannot suppress delivery.
+              }
+            }
+          }
           await options.sendMessage(
             {
               customType: `pi-herdsman-${record.kind}`,
@@ -1393,7 +1428,11 @@ export async function drainCoordinationInbox(
                   : {}),
               },
             },
-            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            {
+              deliverAs: deliverAs ?? "followUp",
+              triggerTurn:
+                record.kind !== "project_assignment" || !hasResumeInstruction,
+            },
             record,
           );
           await options.transaction?.revalidate(token, "after-send");

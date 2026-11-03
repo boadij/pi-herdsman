@@ -2815,19 +2815,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const createdAt = Date.now();
       resumeMessageQueueAttempted = true;
       try {
-        writeChiefMessage({
-          version: 2,
-          build: HERDSMAN_BUILD,
-          id,
-          leaseId: manager.leaseId,
-          kind: "project_assignment",
-          fromSessionId: manager.piSessionId,
-          toSessionId: id,
-          leadSessionId: id,
-          branch: currentAssignment!.branch,
-          text: "Project assignment ready.",
-          createdAt,
-        });
+        // Publish the triggering instruction first. If inbox draining races the
+        // second write, it can only start a turn with the priority instruction.
         writeChiefMessage({
           version: 2,
           build: HERDSMAN_BUILD,
@@ -2843,6 +2832,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ? { resultBindings: preparedResumeMessage.resultBindings }
             : {}),
           createdAt: createdAt + 1,
+        });
+        writeChiefMessage({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id,
+          leaseId: manager.leaseId,
+          kind: "project_assignment",
+          fromSessionId: manager.piSessionId,
+          toSessionId: id,
+          leadSessionId: id,
+          branch: currentAssignment!.branch,
+          text: "Project assignment ready.",
+          createdAt,
         });
       } catch (error) {
         throw new Error(
