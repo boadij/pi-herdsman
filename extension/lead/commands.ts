@@ -428,6 +428,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? (projectSnapshot?.frontmatter[field] ??
                     globalDefinition?.frontmatter[field])
                   : globalDefinition?.frontmatter[field];
+            const effectiveHere = (field: "model" | "thinking" | "enabled") =>
+              field === "enabled"
+                ? host.agentDefinitionEnabled(definition)
+                : definition.frontmatter[field];
             const enabledAtScope = valueAtScope("enabled") ?? true;
             const scopeLabel =
               selectedScope === "private" ? "private repo" : selectedScope;
@@ -469,7 +473,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "model",
                         label: `Model (${scopeLabel})`,
-                        description: `${localValueLabel("model")}${typeof valueAtScope("model") === "string" ? ` · Effective here: ${valueAtScope("model")}` : ""}`,
+                        description: `${localValueLabel("model")}${typeof effectiveHere("model") === "string" ? ` · Effective here: ${effectiveHere("model")}` : ""}`,
                         help: managedDefinition
                           ? "Model for future managed Lead launches. Changes do not affect a running Lead."
                           : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
@@ -481,7 +485,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "thinking",
                         label: `Thinking (${scopeLabel})`,
-                        description: `${snapshotError ? "unavailable" : thinkingValue(localValue("thinking"))}${valueAtScope("thinking") !== undefined ? ` · Effective here: ${thinkingValue(valueAtScope("thinking"))}` : ""}`,
+                        description: `${snapshotError ? "unavailable" : thinkingValue(localValue("thinking"))}${effectiveHere("thinking") !== undefined ? ` · Effective here: ${thinkingValue(effectiveHere("thinking"))}` : ""}`,
                         help: managedDefinition
                           ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
                           : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
@@ -493,7 +497,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "enabled",
                         label: `Enabled (${scopeLabel})`,
-                        description: `${snapshotError ? "unavailable" : localValue("enabled") === undefined ? "inherit" : localValue("enabled") === false ? "off" : "on"}${enabledAtScope !== undefined ? ` · Effective here: ${enabledAtScope === false ? "off" : "on"}` : ""}`,
+                        description: `${snapshotError ? "unavailable" : localValue("enabled") === undefined ? "inherit" : localValue("enabled") === false ? "off" : "on"} · Effective here: ${effectiveHere("enabled") === false ? "off" : "on"}`,
                         help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                       },
                     ]

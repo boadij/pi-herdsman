@@ -19344,7 +19344,7 @@ test("Definitions edits global values without claiming masked project changes", 
   );
   realFs.writeFileSync(
     globalPath,
-    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: false\n---\nglobal",
+    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: true\n---\nglobal",
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -19384,7 +19384,23 @@ test("Definitions edits global values without claiming masked project changes", 
           options.some(
             (option) =>
               option.includes("Thinking (global)") &&
-              option.includes("high · Effective here: high"),
+              option.includes("high · Effective here: off"),
+          ),
+        );
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Model (global)") &&
+              option.includes(
+                "global/model · Effective here: provider/private-model",
+              ),
+          ),
+        );
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Enabled (global)") &&
+              option.includes("on · Effective here: off"),
           ),
         );
         return options.find((option) => option.startsWith("Model (global)"));
@@ -19409,7 +19425,7 @@ test("Definitions edits global values without claiming masked project changes", 
     );
     assert.match(notices.join("\n"), /Updated global implementer model/u);
     assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
-    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: true/);
     assert.match(
       notices.join("\n"),
       /Effective here: provider\/private-model/u,
