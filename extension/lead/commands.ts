@@ -408,23 +408,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               (candidate) => candidate.scope === selectedScope,
             )!;
             let snapshot;
+            let snapshotError: unknown;
             try {
               snapshot = readDefinitionEditSnapshot(definition, target);
             } catch (error) {
-              ctx.ui.notify(String(error), "warning");
-              break;
+              snapshotError = error;
             }
             const globalDefinition = isReservedRoleDefinition(definition.name)
               ? (await loadDefinitions("roles", false)).find(
                   (candidate) => candidate.name === definition.name,
                 )
               : discoverGlobalAgentDefinition(definition.name);
-            const projectTarget = targets.find(
-              (candidate) => candidate.scope === "project",
-            );
-            const projectSnapshot = projectTarget
-              ? readDefinitionEditSnapshot(definition, projectTarget)
-              : undefined;
+            const projectSnapshot =
+              selectedScope === "project" ? snapshot : undefined;
             const valueAtScope = (field: "model" | "thinking" | "enabled") =>
               selectedScope === "private"
                 ? definition.frontmatter[field]
@@ -432,7 +428,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? (projectSnapshot?.frontmatter[field] ??
                     globalDefinition?.frontmatter[field])
                   : globalDefinition?.frontmatter[field];
-            const enabledAtScope = valueAtScope("enabled");
+            const enabledAtScope = valueAtScope("enabled") ?? true;
             const scopeLabel =
               selectedScope === "private" ? "private repo" : selectedScope;
             const thinkingValue = (value: unknown) =>
@@ -440,6 +436,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? "off"
                 : typeof value === "string"
                   ? value
+                  : "inherit";
+            const localValue = (field: "model" | "thinking" | "enabled") =>
+              snapshot ? snapshot.frontmatter[field] : undefined;
+            const localValueLabel = (
+              field: "model" | "thinking" | "enabled",
+            ) =>
+              snapshotError
+                ? "unavailable"
+                : typeof localValue(field) === "string" ||
+                    typeof localValue(field) === "boolean"
+                  ? String(localValue(field))
                   : "inherit";
             const managedDefinition =
               definition.name === MANAGED_LEAD_DEFINITION_NAME;
@@ -462,7 +469,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "model",
                         label: `Model (${scopeLabel})`,
-                        description: `${typeof valueAtScope("model") === "string" ? valueAtScope("model") : "inherit"}${typeof definition.frontmatter.model === "string" && definition.frontmatter.model !== valueAtScope("model") ? ` · Effective here: ${definition.frontmatter.model}` : ""}`,
+                        description: `${localValueLabel("model")}${typeof valueAtScope("model") === "string" ? ` · Effective here: ${valueAtScope("model")}` : ""}`,
                         help: managedDefinition
                           ? "Model for future managed Lead launches. Changes do not affect a running Lead."
                           : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
@@ -474,7 +481,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "thinking",
                         label: `Thinking (${scopeLabel})`,
-                        description: `${thinkingValue(valueAtScope("thinking"))}${definition.frontmatter.thinking !== valueAtScope("thinking") ? ` · Effective here: ${thinkingValue(definition.frontmatter.thinking)}` : ""}`,
+                        description: `${snapshotError ? "unavailable" : thinkingValue(localValue("thinking"))}${valueAtScope("thinking") !== undefined ? ` · Effective here: ${thinkingValue(valueAtScope("thinking"))}` : ""}`,
                         help: managedDefinition
                           ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
                           : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
@@ -486,7 +493,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "enabled",
                         label: `Enabled (${scopeLabel})`,
-                        description: `${enabledAtScope === false ? "off" : "on"}${host.agentDefinitionEnabled(definition) !== enabledAtScope ? ` · Effective here: ${host.agentDefinitionEnabled(definition) ? "on" : "off"}` : ""}`,
+                        description: `${snapshotError ? "unavailable" : localValue("enabled") === undefined ? "inherit" : localValue("enabled") === false ? "off" : "on"}${enabledAtScope !== undefined ? ` · Effective here: ${enabledAtScope === false ? "off" : "on"}` : ""}`,
                         help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                       },
                     ]
@@ -564,6 +571,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               }
               continue;
             }
+            if (snapshotError) {
+              ctx.ui.notify(String(snapshotError), "warning");
+              continue;
+            }
             let field: "model" | "thinking" | "enabled";
             let value: string | boolean | undefined;
             if (action === "model") {
@@ -574,8 +585,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ...new Set(models.map((item: Model) => modelToken(item))),
               ].sort();
               const configured =
-                typeof valueAtScope("model") === "string"
-                  ? (valueAtScope("model") as string)
+                typeof localValue("model") === "string"
+                  ? (localValue("model") as string)
                   : undefined;
               if (configured && !tokens.includes(configured)) {
                 const resolved = this.resolveConfiguredModel(ctx, configured);
@@ -641,10 +652,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? getSupportedThinkingLevels(model)
                 : [...host.validThinkingLevels];
               const configuredThinking =
-                valueAtScope("thinking") === false
+                localValue("thinking") === false
                   ? "off"
-                  : typeof valueAtScope("thinking") === "string"
-                    ? (valueAtScope("thinking") as string)
+                  : typeof localValue("thinking") === "string"
+                    ? (localValue("thinking") as string)
                     : undefined;
               const thinkingItems = [
                 { value: "inherit", label: "Remove local override" },

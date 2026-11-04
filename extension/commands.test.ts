@@ -19284,7 +19284,11 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
           ),
         );
         assert.ok(
-          options.some((option) => /^Enabled \(global\)\s+on\b/u.test(option)),
+          options.some((option) =>
+            /^Enabled \(global\)\s+inherit · Effective here: on\b/u.test(
+              option,
+            ),
+          ),
         );
         return options.find((option) => option.startsWith("Enabled"));
       case 3:
@@ -19377,11 +19381,10 @@ test("Definitions edits global values without claiming masked project changes", 
       case 4:
         assert.ok(options.some((option) => option.includes("global/model")));
         assert.ok(
-          options.some((option) => option.includes("provider/private-model")),
-        );
-        assert.ok(
-          options.some((option) =>
-            option.includes("high · Effective here: off"),
+          options.some(
+            (option) =>
+              option.includes("Thinking (global)") &&
+              option.includes("high · Effective here: high"),
           ),
         );
         return options.find((option) => option.startsWith("Model (global)"));
@@ -19404,6 +19407,7 @@ test("Definitions edits global values without claiming masked project changes", 
         .enabled,
       false,
     );
+    assert.match(notices.join("\n"), /Updated global implementer model/u);
     assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
     assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
     assert.match(
@@ -19417,6 +19421,93 @@ test("Definitions edits global values without claiming masked project changes", 
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(globalPath, { force: true });
+  }
+});
+
+test("Definitions shows inherited private values and keeps scope selection available around symlinks", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  realFs.writeFileSync(
+    join(privateDir, "implementer.md"),
+    "---\nname: implementer\ntools: [read, grep]\n---\nprivate",
+  );
+  const globalPath = join(PI_AGENTS_DIR, "implementer.md");
+  realFs.writeFileSync(
+    globalPath,
+    "---\nname: implementer\nmodel: provider/global\nthinking: high\n---\nglobal",
+  );
+  const projectPath = join(project, ".pi", "agents", "implementer.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.symlinkSync(globalPath, projectPath);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (_label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("implementer"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Thinking (private repo)") &&
+              option.includes("inherit · Effective here: high"),
+          ),
+        );
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Model (private repo)") &&
+              option.includes("inherit · Effective here: provider/global"),
+          ),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    await command.handler("definitions", context);
+    assert.ok(selection >= 5);
+    assert.match(notices.join("\n"), /not a regular file/u);
+    assert.equal(realFs.lstatSync(projectPath).isSymbolicLink(), true);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
     realFs.rmSync(globalPath, { force: true });
   }
 });
