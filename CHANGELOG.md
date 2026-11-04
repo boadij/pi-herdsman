@@ -10,6 +10,41 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.39.0](https://github.com/boadij/pi-herdsman/compare/v0.38.1...v0.39.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** prioritize trusted project definition overlays ([#813](https://github.com/boadij/pi-herdsman/issues/813))
+* **manager:** require instructions when resuming work ([#804](https://github.com/boadij/pi-herdsman/issues/804))
+
+### Features
+
+* **manager:** require instructions when resuming work ([#804](https://github.com/boadij/pi-herdsman/issues/804)) ([bda3c3f](https://github.com/boadij/pi-herdsman/commit/bda3c3f1910f68bcad8a828ee4979688c208fd2e))
+* **manager:** support evidence handoffs in resume_work ([#810](https://github.com/boadij/pi-herdsman/issues/810)) ([0ba2d9c](https://github.com/boadij/pi-herdsman/commit/0ba2d9c7d0435ee529c1944f95a72459578888a4))
+* **ui:** place paused Manager work last ([#808](https://github.com/boadij/pi-herdsman/issues/808)) ([9d152ba](https://github.com/boadij/pi-herdsman/commit/9d152ba1aeac063b1f4ebece4ce8a814f13ef3eb))
+
+
+### Fixes
+
+* **ci:** use native Herdr startup in peer federation smoke ([#796](https://github.com/boadij/pi-herdsman/issues/796)) ([62628eb](https://github.com/boadij/pi-herdsman/commit/62628eb95d7d0427cdb1c97b734aa102ed1d524f))
+* **ui:** prioritize Manager Git diffs on narrow screens ([#800](https://github.com/boadij/pi-herdsman/issues/800)) ([75be9c5](https://github.com/boadij/pi-herdsman/commit/75be9c5cf6c8e82a7ce0cce31fb4a68735d3fd08))
+
+
+### Refactoring
+
+* **config:** prioritize trusted project definition overlays ([#813](https://github.com/boadij/pi-herdsman/issues/813)) ([4c14646](https://github.com/boadij/pi-herdsman/commit/4c1464602551ea709c2f13fb123b81d97a829815))
+
+
+### Documentation
+
+* **readme:** clarify federated peer communication status ([#799](https://github.com/boadij/pi-herdsman/issues/799)) ([c57e147](https://github.com/boadij/pi-herdsman/commit/c57e14749a297e666c4ecf34b277200ca95aad88))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.0 ([#809](https://github.com/boadij/pi-herdsman/issues/809)) ([fc7ba70](https://github.com/boadij/pi-herdsman/commit/fc7ba7040bdfc229d792d5fe25b11eb23ed21d4c))
+
 ## [0.38.1](https://github.com/boadij/pi-herdsman/compare/v0.38.0...v0.38.1) (2026-11-03)
 
 
