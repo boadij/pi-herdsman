@@ -19512,6 +19512,100 @@ test("Definitions shows inherited private values and keeps scope selection avail
   }
 });
 
+test("Definitions can edit a regular lower scope when the default source is a symlink", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  const privateTarget = join(project, "private-definition.md");
+  const privatePath = join(privateDir, "scope-test.md");
+  realFs.writeFileSync(
+    privateTarget,
+    "---\nname: scope-test\nmodel: provider/private\n---\nprivate",
+  );
+  realFs.symlinkSync(privateTarget, privatePath);
+  const projectPath = join(project, ".pi", "agents", "scope-test.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.writeFileSync(
+    projectPath,
+    "---\nname: scope-test\nmodel: provider/project\n---\nproject",
+  );
+
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => [{ provider: "new", id: "model" }],
+    getAvailable: () => [{ provider: "new", id: "model" }],
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("scope-test"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return options.find((option) => option === "model");
+      case 6:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+
+  try {
+    await command.handler("definitions", context);
+    assert.match(
+      realFs.readFileSync(projectPath, "utf8"),
+      /model: new\/model/u,
+      `${selection}: ${notices.join(" | ")}`,
+    );
+    assert.match(
+      realFs.readFileSync(privateTarget, "utf8"),
+      /model: provider\/private/u,
+    );
+    assert.equal(realFs.lstatSync(privatePath).isSymbolicLink(), true);
+    assert.match(notices.join("\n"), /Updated project scope-test model/u);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
+  }
+});
+
 test("Definitions settings remain available when a global Agent references a project-only Agent", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
