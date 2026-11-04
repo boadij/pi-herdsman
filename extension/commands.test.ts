@@ -17414,7 +17414,7 @@ test("definition pickers preselect configured values and honor cancellation", as
   for (const scenario of [
     {
       field: "Model",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "model",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -17436,7 +17436,7 @@ test("definition pickers preselect configured values and honor cancellation", as
     },
     {
       field: "Thinking",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "thinking",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -18657,7 +18657,7 @@ test("Definitions edits standalone definitions through the shared override write
       return options.find((option) => option.startsWith("Model"));
     if (selection === 4)
       return options.find((option) =>
-        option.startsWith("Inherit current session"),
+        option.startsWith("Remove local override"),
       );
     return undefined;
   };
@@ -19234,7 +19234,7 @@ test("Definitions applies model and thinking overrides independently", async () 
           return options.find((option) => option.startsWith(scenario.field));
         case 5:
           return options.find((option) =>
-            option.startsWith("Inherit current session"),
+            option.startsWith("Remove local override"),
           );
         default:
           return undefined;
@@ -19284,7 +19284,11 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
           ),
         );
         assert.ok(
-          options.some((option) => /^Enabled \(global\)\s+on\b/u.test(option)),
+          options.some((option) =>
+            /^Enabled \(global\)\s+inherit · Effective here: on\b/u.test(
+              option,
+            ),
+          ),
         );
         return options.find((option) => option.startsWith("Enabled"));
       case 3:
@@ -19340,7 +19344,7 @@ test("Definitions edits global values without claiming masked project changes", 
   );
   realFs.writeFileSync(
     globalPath,
-    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: false\n---\nglobal",
+    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: true\n---\nglobal",
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -19366,27 +19370,43 @@ test("Definitions edits global values without claiming masked project changes", 
         assert.ok(options.some((option) => option.includes("private repo")));
         return options.find((option) => option.includes("implementer"));
       case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Global"));
+      case 4:
         assert.ok(options.some((option) => option.includes("global/model")));
         assert.ok(
-          options.some((option) => option.includes("provider/private-model")),
-        );
-        assert.ok(
-          options.some((option) =>
-            option.includes("high · Effective here: off"),
+          options.some(
+            (option) =>
+              option.includes("Thinking (global)") &&
+              option.includes("high · Effective here: off"),
           ),
         );
-        return options.find((option) => option.startsWith("Model"));
-      case 3:
-        return options.find((option) => option.includes("new/model"));
-      case 4:
-        assert.equal(label, "implementer");
         assert.ok(
-          options.some((option) =>
-            /^Enabled \(global\)\s+off · Effective here: off\b/u.test(option),
+          options.some(
+            (option) =>
+              option.includes("Model (global)") &&
+              option.includes(
+                "global/model · Effective here: provider/private-model",
+              ),
           ),
         );
-        return options.find((option) => option.startsWith("Enabled"));
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Enabled (global)") &&
+              option.includes("on · Effective here: off"),
+          ),
+        );
+        return options.find((option) => option.startsWith("Model (global)"));
       case 5:
+        return options.find((option) => option.includes("new/model"));
+      case 6:
         return undefined;
       default:
         return undefined;
@@ -19403,11 +19423,12 @@ test("Definitions edits global values without claiming masked project changes", 
         .enabled,
       false,
     );
+    assert.match(notices.join("\n"), /Updated global implementer model/u);
     assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
-    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: true/);
     assert.match(
       notices.join("\n"),
-      /Effective in this project: provider\/private-model/u,
+      /Effective here: provider\/private-model/u,
     );
     assert.doesNotMatch(
       realFs.readFileSync(projectPath, "utf8"),
@@ -19417,6 +19438,187 @@ test("Definitions edits global values without claiming masked project changes", 
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
     realFs.rmSync(globalPath, { force: true });
+  }
+});
+
+test("Definitions shows inherited private values and keeps scope selection available around symlinks", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  realFs.writeFileSync(
+    join(privateDir, "implementer.md"),
+    "---\nname: implementer\ntools: [read, grep]\n---\nprivate",
+  );
+  const globalPath = join(PI_AGENTS_DIR, "implementer.md");
+  realFs.writeFileSync(
+    globalPath,
+    "---\nname: implementer\nmodel: provider/global\nthinking: high\n---\nglobal",
+  );
+  const projectPath = join(project, ".pi", "agents", "implementer.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.symlinkSync(globalPath, projectPath);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (_label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("implementer"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Thinking (private repo)") &&
+              option.includes("inherit · Effective here: high"),
+          ),
+        );
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Model (private repo)") &&
+              option.includes("inherit · Effective here: provider/global"),
+          ),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    await command.handler("definitions", context);
+    assert.ok(selection >= 5);
+    assert.match(notices.join("\n"), /not a regular file/u);
+    assert.equal(realFs.lstatSync(projectPath).isSymbolicLink(), true);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
+    realFs.rmSync(globalPath, { force: true });
+  }
+});
+
+test("Definitions can edit a regular lower scope when the default source is a symlink", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  const privateTarget = join(project, "private-definition.md");
+  const privatePath = join(privateDir, "scope-test.md");
+  realFs.writeFileSync(
+    privateTarget,
+    "---\nname: scope-test\nmodel: provider/private\n---\nprivate",
+  );
+  realFs.symlinkSync(privateTarget, privatePath);
+  const projectPath = join(project, ".pi", "agents", "scope-test.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.writeFileSync(
+    projectPath,
+    "---\nname: scope-test\nmodel: provider/project\n---\nproject",
+  );
+
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => [{ provider: "new", id: "model" }],
+    getAvailable: () => [{ provider: "new", id: "model" }],
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("scope-test"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return options.find((option) => option === "model");
+      case 6:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+
+  try {
+    await command.handler("definitions", context);
+    assert.match(
+      realFs.readFileSync(projectPath, "utf8"),
+      /model: new\/model/u,
+      `${selection}: ${notices.join(" | ")}`,
+    );
+    assert.match(
+      realFs.readFileSync(privateTarget, "utf8"),
+      /model: provider\/private/u,
+    );
+    assert.equal(realFs.lstatSync(privatePath).isSymbolicLink(), true);
+    assert.match(notices.join("\n"), /Updated project scope-test model/u);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
   }
 });
 
@@ -19641,7 +19843,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
           return options.find((option) => option.startsWith("Thinking"));
         case 3:
           assert.deepEqual(options, [
-            "Inherit current session",
+            "Remove local override",
             ...scenario.levels,
           ]);
           return undefined;

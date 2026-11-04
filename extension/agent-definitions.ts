@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   renameSync,
   readFileSync,
@@ -786,26 +787,108 @@ export function agentDefinitionMetadata(
 
 export type AgentOverrideField = "model" | "thinking" | "enabled";
 
+export type DefinitionEditScope = "global" | "project" | "private";
+export type DefinitionEditTarget = { scope: DefinitionEditScope; path: string };
+export type DefinitionEditSnapshot = {
+  target: DefinitionEditTarget;
+  content: string | null;
+  frontmatter: Frontmatter;
+};
+
+function globalOverridePath(definition: AgentDefinition): string {
+  return join(
+    getAgentDir(),
+    ...(isReservedRoleDefinition(definition.name)
+      ? ["pi-herdsman", "roles"]
+      : ["agents"]),
+    `${encodeURIComponent(definition.name)}.md`,
+  );
+}
+
+export function definitionEditTargets(
+  definition: AgentDefinition,
+): DefinitionEditTarget[] {
+  const targets: DefinitionEditTarget[] = [];
+  if (definition.privateRepositorySource)
+    targets.push({
+      scope: "private",
+      path: definition.privateRepositorySource,
+    });
+  if (definition.projectSource)
+    targets.push({ scope: "project", path: definition.projectSource });
+  if (definition.overrideSource)
+    targets.push({ scope: "global", path: definition.overrideSource });
+  if (!targets.length && definition.extensionSource)
+    targets.push({ scope: "global", path: globalOverridePath(definition) });
+  return targets;
+}
+
+export function readDefinitionEditSnapshot(
+  definition: AgentDefinition,
+  target: DefinitionEditTarget,
+): DefinitionEditSnapshot {
+  const expected = definitionEditTargets(definition).find(
+    (candidate) => candidate.scope === target.scope,
+  );
+  if (!expected || expected.path !== target.path)
+    throw new Error(
+      `definition edit source is no longer available: ${target.path}`,
+    );
+  const info = lstatSync(target.path, { throwIfNoEntry: false });
+  if (!info) {
+    if (
+      definition.extensionSource &&
+      target.scope === "global" &&
+      !definition.overrideSource
+    )
+      return { target, content: null, frontmatter: {} };
+    throw new Error(`definition source is no longer available: ${target.path}`);
+  }
+  if (!info.isFile())
+    throw new Error(`definition source is not a regular file: ${target.path}`);
+  const content = readFileSync(target.path, "utf8");
+  const parsed = parsePiFrontmatter<Record<string, unknown>>(
+    content.replace(/^\uFEFF/u, ""),
+  );
+  if (parsed.frontmatter.name !== definition.name)
+    throw new Error(
+      `definition source name does not match ${definition.name}: ${target.path}`,
+    );
+  return { target, content, frontmatter: parsed.frontmatter as Frontmatter };
+}
+
 export function updateAgentOverride(
   definition: AgentDefinition,
   field: AgentOverrideField,
   value: string | boolean | undefined,
+  options: {
+    scope?: DefinitionEditScope;
+    expectedContent?: string | null;
+  } = {},
 ): { path: string; changed: boolean; content: string } {
-  const path =
-    definition.overrideSource ??
-    join(
-      getAgentDir(),
-      ...(isReservedRoleDefinition(definition.name)
-        ? ["pi-herdsman", "roles"]
-        : ["agents"]),
-      `${encodeURIComponent(definition.name)}.md`,
+  const targets = definitionEditTargets(definition);
+  const target = targets.find(
+    (candidate) => candidate.scope === (options.scope ?? "global"),
+  );
+  if (!target)
+    throw new Error(
+      `definition has no eligible ${options.scope ?? "global"} edit source`,
     );
+  const path = target.path;
+  const link = lstatSync(path, { throwIfNoEntry: false });
+  if (link?.isSymbolicLink())
+    throw new Error(`refusing to replace symlinked definition: ${path}`);
   const exists = statSync(path, { throwIfNoEntry: false });
+  if (
+    options.expectedContent !== undefined &&
+    (exists ? readFileSync(path, "utf8") : null) !== options.expectedContent
+  )
+    throw new Error(
+      `Definition changed while editing: ${path}. Reopen the setting.`,
+    );
   if (value === undefined && !exists) {
     return { path, changed: false, content: "" };
   }
-  if (value === undefined && definition.overrideSource === undefined)
-    return { path, changed: false, content: readFileSync(path, "utf8") };
 
   let content: string;
   let mode = 0o600;
@@ -813,6 +896,14 @@ export function updateAgentOverride(
     if (!exists.isFile())
       throw new Error(`agent override is not a file: ${path}`);
     content = readFileSync(path, "utf8");
+    if (
+      parsePiFrontmatter<Record<string, unknown>>(
+        content.replace(/^\uFEFF/u, ""),
+      ).frontmatter.name !== definition.name
+    )
+      throw new Error(
+        `definition source name does not match ${definition.name}: ${path}`,
+      );
     mode = exists.mode & 0o777;
   } else {
     mkdirSync(dirname(path), { recursive: true });
@@ -822,7 +913,12 @@ export function updateAgentOverride(
   const lines = [...content.matchAll(/.*(?:\r\n|\n|\r|$)/g)].filter(
     (match) => match[0].length > 0,
   );
-  if (lines[0]?.[0].replace(/\r?\n|\r$/u, "").trim() !== "---")
+  if (
+    lines[0]?.[0]
+      .replace(/^\uFEFF/u, "")
+      .replace(/\r?\n|\r$/u, "")
+      .trim() !== "---"
+  )
     throw new Error(`invalid agent override frontmatter: ${path}`);
   const closing = lines.findIndex(
     (match, index) =>
@@ -885,6 +981,16 @@ export function updateAgentOverride(
       flush: true,
     });
     chmodSync(temporary, mode);
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    if (current?.isSymbolicLink())
+      throw new Error(`refusing to replace symlinked definition: ${path}`);
+    if (
+      (current ? readFileSync(path, "utf8") : null) !==
+      (exists ? content : null)
+    )
+      throw new Error(
+        `Definition changed while editing: ${path}. Reopen the setting.`,
+      );
     renameSync(temporary, path);
     return { path, changed: true, content: readFileSync(path, "utf8") };
   } finally {

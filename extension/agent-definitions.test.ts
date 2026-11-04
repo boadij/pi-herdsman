@@ -24,6 +24,8 @@ import {
   discoverAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
+  definitionEditTargets,
+  readDefinitionEditSnapshot,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
   isReservedRoleDefinition,
@@ -2720,6 +2722,68 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
   );
   assert.equal(enabledReset.changed, true);
   assert.doesNotMatch(readFileSync(disabled.path, "utf8"), /^enabled:/m);
+});
+
+test("definition edits target existing sources and reject stale or linked files", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-edit-targets-"));
+  const projectPath = join(root, "renamed-source.md");
+  const privatePath = join(root, "private.md");
+  const globalPath = join(root, "global.md");
+  const projectText = "---\nname: actual-name\nthinking: high\n---\nproject\n";
+  writeFileSync(projectPath, projectText);
+  writeFileSync(privatePath, "---\nname: actual-name\n---\nprivate\n");
+  writeFileSync(
+    globalPath,
+    "---\nname: actual-name\nmodel: global/model\n---\nglobal\n",
+  );
+  const definition = {
+    name: "actual-name",
+    path: privatePath,
+    frontmatter: { name: "actual-name" },
+    body: "",
+    extensionSource: "/bundled/default.md",
+    projectSource: projectPath,
+    privateRepositorySource: privatePath,
+    overrideSource: globalPath,
+  };
+  const targets = definitionEditTargets(definition);
+  assert.deepEqual(
+    targets.map(({ scope }) => scope),
+    ["private", "project", "global"],
+  );
+  const snapshot = readDefinitionEditSnapshot(definition, targets[0]!);
+  assert.equal(snapshot.frontmatter.name, "actual-name");
+  const changed = updateAgentOverride(definition, "thinking", "medium", {
+    scope: "private",
+    expectedContent: snapshot.content,
+  });
+  assert.equal(changed.path, privatePath);
+  assert.match(readFileSync(privatePath, "utf8"), /thinking: medium/u);
+  assert.match(readFileSync(projectPath, "utf8"), /thinking: high/u);
+  assert.match(readFileSync(globalPath, "utf8"), /model: global\/model/u);
+  assert.throws(
+    () =>
+      updateAgentOverride(definition, "model", "new/model", {
+        scope: "project",
+        expectedContent: projectText.replace("high", "low"),
+      }),
+    /changed while editing/u,
+  );
+  const symlinkPath = join(root, "symlink.md");
+  symlinkSync(privatePath, symlinkPath);
+  assert.throws(
+    () =>
+      updateAgentOverride(
+        { ...definition, privateRepositorySource: symlinkPath },
+        "model",
+        "new/model",
+        {
+          scope: "private",
+          expectedContent: readFileSync(privatePath, "utf8"),
+        },
+      ),
+    /symlinked definition/u,
+  );
 });
 
 const noForeignProviders = () => false;
