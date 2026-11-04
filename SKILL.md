@@ -42,8 +42,8 @@ Use these high-salience rules for the model-facing agent boundary:
   evidence is also supplied to eligible descendants automatically. Use `files` for relevant evidence
   not registered as retained or specific to one recipient. When forwarding
   evidence that must remain available downstream, set `retain: true` on
-  `message_staff` (Manager, retaining its message text and files for the
-  target project assignment) or `delegate_agent` (retaining its files for
+  `message_staff` or `resume_work` (Manager, retaining its message text and
+  files for the target project assignment) or `delegate_agent` (retaining its files for
   eligible managed Agents' own descendants).
   Retained evidence is available to eligible descendants; inspect relevant
   references as needed, not every entry.
@@ -482,9 +482,12 @@ Pi Herdsman uses one durable vocabulary:
   session. Its branch is the work handle. A
   Manager uses `delegate_work` with a task and optional branch to start new
   project work, and `resume_work` with its branch and required fresh instruction
-  to resume an existing assignment. The instruction is queued separately and
-  does not replace the saved task; queueing does not prove delivery. Already
-  running Leads are not relaunched; use `message_staff` for ordinary
+  to resume an existing assignment. Resume accepts optional `files` for
+  explicit evidence handoff and optional `retain` (default `false`) to add the
+  instruction and supplied files to the assignment's continuing requirements;
+  this does not replace the saved task. The instruction is queued separately
+  and queueing does not prove delivery. Confirmed retention is distinct from
+  enqueue and recovery outcomes. Already running Leads are not relaunched; use `message_staff` for ordinary
   communication with known running Leads. A successful matching Herdr removal event or verified Git
   worktree inventory showing the checkout absent retires that assignment and
   pending project messages. Unavailable or ambiguous inventory preserves the

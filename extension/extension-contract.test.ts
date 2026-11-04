@@ -358,8 +358,15 @@ test("Pi validates Herdsman coordination schemas", async () => {
       validate("resume_work", {
         branch: "feat/existing",
         message: "continue existing work",
+        files: ["startup.log"],
+        retain: true,
       }),
-      { branch: "feat/existing", message: "continue existing work" },
+      {
+        branch: "feat/existing",
+        message: "continue existing work",
+        files: ["startup.log"],
+        retain: true,
+      },
     );
     assert.throws(
       () => validate("resume_work", { branch: "feat/existing" }),
