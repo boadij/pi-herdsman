@@ -890,6 +890,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   let launches = 0;
   let preparedFiles: unknown[] = [];
   let changePlacementDuringPreparation = false;
+  let placementRaceRequested = false;
   let failPreparation = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
@@ -977,12 +978,25 @@ test("resume revalidates checkout placement after async preparation", async () =
     ) => {
       preparedFiles = files;
       if (failPreparation) throw new Error("resume preparation failed");
-      if (message === "placement race") changePlacementDuringPreparation = true;
+      if (message === "placement race") placementRaceRequested = true;
       return {
         text: `${message} ${files.join(" ")}`,
         resultBindings: [],
       };
     },
+    managerEvidence: async () => ({
+      roots: new Set(),
+      retained: [],
+      verify: () => {},
+      verifyProvenance: () => {},
+      revalidate: async (operation: () => unknown) => {
+        if (placementRaceRequested) {
+          placementRaceRequested = false;
+          changePlacementDuringPreparation = true;
+        }
+        await operation();
+      },
+    }),
     writeChiefMessage: () => {
       if (++writes === 1) throw new Error("disk write failed");
     },
@@ -1048,6 +1062,7 @@ test("resume revalidates checkout placement after async preparation", async () =
         action: "resume",
         branch: assignment.branch,
         message: "placement race",
+        files: ["evidence:placement"],
       },
       ctx,
       new AbortController().signal,

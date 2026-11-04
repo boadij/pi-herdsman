@@ -2901,11 +2901,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             });
         };
         if (resumeEvidenceScope)
-          await resumeEvidenceScope.revalidate(() => {
+          await resumeEvidenceScope.revalidate(async () => {
             resumeEvidenceScope!.verify();
+            await assertResumePlacement();
             publish();
           });
-        else publish();
+        else {
+          await assertResumePlacement();
+          publish();
+        }
       } catch (error) {
         throw new Error(
           `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. ${error instanceof Error ? error.message : String(error)}`,
