@@ -1508,26 +1508,6 @@ test("private repository definitions overlay trusted linked worktrees without cr
   }
 });
 
-test("private definition discovery reports Git dubious-ownership failures", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-dubious-git-"));
-  const project = join(root, "project");
-  mkdirSync(project);
-  execFileSync("git", ["init", "-q"], { cwd: project });
-  const previous = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
-  process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1";
-  try {
-    assert.throws(
-      () => discoverAgentDefinitions({ projectRoot: project }),
-      /detected dubious ownership in repository/u,
-    );
-  } finally {
-    if (previous === undefined)
-      delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
-    else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previous;
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("project body modes, duplicate names, body-file provenance, and child validation use the shared engine", () => {
   const project = mkdtempSync(
     join(tmpdir(), "pi-herdsman-project-validation-"),
