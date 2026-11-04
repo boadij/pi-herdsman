@@ -219,6 +219,56 @@ test(
 );
 
 test(
+  "timeout diagnostic records ordered snapshot, cleanup, close, and active stage",
+  { timeout: 15_000 },
+  async () => {
+    const result = await runTestRunner(
+      ["-e", "setInterval(() => {}, 1000)"],
+      Date.now() + 250,
+      "diagnostic fixture",
+      async () => "check: Windows timeout snapshot unavailable",
+    );
+
+    const lines = result.diagnostic.split("\n");
+    const lineIndex = (line: string) => lines.indexOf(line);
+    assert.match(
+      lines[1],
+      /^check: timeout active stage=diagnostic fixture elapsed=\d+ms$/,
+    );
+    assert.ok(
+      lineIndex(lines.find((line) => /timeout cleanup started/.test(line))!) <
+        lineIndex(
+          lines.find((line) => /timeout cleanup completed/.test(line))!,
+        ),
+    );
+    assert.ok(
+      lineIndex(
+        lines.find((line) => /timeout snapshot capture started/.test(line))!,
+      ) <
+        lineIndex(
+          lines.find((line) =>
+            /timeout snapshot capture completed/.test(line),
+          )!,
+        ),
+    );
+    assert.ok(
+      lineIndex(lines.find((line) => /timeout cleanup started/.test(line))!) <
+        lineIndex(
+          lines.find((line) => /timeout snapshot capture started/.test(line))!,
+        ),
+    );
+    assert.match(
+      result.diagnostic,
+      /check: timeout runner close code=(?:null|\d+) signal=(?:null|SIG[A-Z]+) elapsed=\d+ms/,
+    );
+    assert.equal(
+      result.workerDiagnostic,
+      "check: Windows timeout snapshot unavailable",
+    );
+  },
+);
+
+test(
   "Windows detached survivor is not reported as verified cleanup",
   { timeout: 45_000, skip: process.platform !== "win32" },
   async (t) => {

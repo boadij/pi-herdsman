@@ -368,9 +368,15 @@ export async function runTestRunner(
 
   const pid = child.pid;
   const finishTimedOut = async () => {
+    const timeoutStartedAt = Date.now();
+    const recordStage = (stage) =>
+      `check: timeout ${stage} elapsed=${Date.now() - timeoutStartedAt}ms`;
+    const timeoutStages = [recordStage(`active stage=${label}`)];
     const cleanupPromise = terminateProcessTree(pid);
+    timeoutStages.push(recordStage("cleanup started"));
     const snapshotPromise = (async () => {
       if (!snapshot) return undefined;
+      timeoutStages.push(recordStage("snapshot capture started"));
       const controller = new AbortController();
       try {
         return await Promise.race([
@@ -384,9 +390,18 @@ export async function runTestRunner(
       } finally {
         controller.abort();
       }
-    })();
+    })().finally(() => {
+      if (snapshot)
+        timeoutStages.push(recordStage("snapshot capture completed"));
+    });
     const cleanup = await cleanupPromise;
+    timeoutStages.push(recordStage("cleanup completed"));
     const close = await awaitClose(closePromise);
+    timeoutStages.push(
+      recordStage(
+        `runner close code=${close?.code ?? "null"} signal=${close?.signal ?? "null"}`,
+      ),
+    );
     const workerDiagnostic = await snapshotPromise;
     const cleanupComplete =
       cleanup.cleanupError === undefined &&
@@ -401,7 +416,10 @@ export async function runTestRunner(
       ...cleanup,
       close,
       workerDiagnostic,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
+      diagnostic: [
+        timeoutDiagnostic(label, pid, cleanup, close),
+        ...timeoutStages,
+      ].join("\n"),
     };
   };
   let testDeadline;
