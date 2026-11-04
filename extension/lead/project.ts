@@ -3029,27 +3029,27 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error("Manager changed during project activation");
       const partial = await prepareResumeHandoff();
       if (partial) return partial;
-      const postPrepareManager = await currentManager(ctx);
-      const postPrepareAssignment = readProjectAssignment(
-        runtime,
-        manager.repoKey,
-        branch,
-      );
-      const postPrepareLive = await liveAgent(ctx, id);
-      if (
-        !postPrepareManager ||
-        !sameManagerDescriptor(postPrepareManager, manager) ||
-        !postPrepareAssignment ||
-        postPrepareAssignment.id !== id ||
-        postPrepareLive.length !== 1 ||
-        postPrepareLive[0].workspace_id !==
-          branchWorktrees[0]?.open_workspace_id
-      )
-        throw new Error(
-          "Manager, assignment, or running Lead changed during resume handoff preparation",
-        );
-      await assertResumePlacement();
       try {
+        const postPrepareManager = await currentManager(ctx);
+        const postPrepareAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        const postPrepareLive = await liveAgent(ctx, id);
+        if (
+          !postPrepareManager ||
+          !sameManagerDescriptor(postPrepareManager, manager) ||
+          !postPrepareAssignment ||
+          postPrepareAssignment.id !== id ||
+          postPrepareLive.length !== 1 ||
+          postPrepareLive[0].workspace_id !==
+            branchWorktrees[0]?.open_workspace_id
+        )
+          throw new Error(
+            "Manager, assignment, or running Lead changed during resume handoff preparation",
+          );
+        await assertResumePlacement();
         await queueResumeHandoff(false);
       } catch (error) {
         if (!evidenceRetained) throw error;

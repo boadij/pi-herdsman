@@ -892,6 +892,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   let changePlacementDuringPreparation = false;
   let placementRaceRequested = false;
   let failPreparation = false;
+  let failPostPrepareManagerRevalidation = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -918,7 +919,13 @@ test("resume revalidates checkout placement after async preparation", async () =
     } as any,
     leadRuntime: { managerLease: { descriptor: manager } },
     activeRole: () => "manager",
-    currentManager: async () => manager,
+    currentManager: async () => {
+      if (failPostPrepareManagerRevalidation) {
+        failPostPrepareManagerRevalidation = false;
+        throw new Error("Manager changed after evidence retention");
+      }
+      return manager;
+    },
     managerLease: () => ({ descriptor: manager }),
     sameManagerDescriptor: () => true,
     supervisionRuntime: () => supervision,
@@ -978,6 +985,8 @@ test("resume revalidates checkout placement after async preparation", async () =
     ) => {
       preparedFiles = files;
       if (failPreparation) throw new Error("resume preparation failed");
+      if (message === "retain then fail revalidation")
+        failPostPrepareManagerRevalidation = true;
       if (message === "placement race") placementRaceRequested = true;
       return {
         text: `${message} ${files.join(" ")}`,
@@ -1052,6 +1061,22 @@ test("resume revalidates checkout placement after async preparation", async () =
       (evidence: any) => evidence.name === "assignment-note.md",
     ),
   );
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+
+  const revalidationResult = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "retain then fail revalidation",
+      retain: true,
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(revalidationResult.details.evidence_retained, true);
+  assert.equal(revalidationResult.details.message_queued, false);
+  assert.equal(revalidationResult.details.status, "handoff_incomplete");
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 
