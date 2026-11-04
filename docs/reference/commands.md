@@ -112,17 +112,18 @@ Ordinary usage retains its owned-session warning.
 
 ## `/herdsman definitions`
 
-Opens the native `Agents & Roles` category menu with `Agents` and `Roles`.
-Each category lists effective definitions; reserved roles appear in their
-canonical role order. Project definitions are included when Pi considers the
-project trusted. Each definition shows its contributing sources. Settings
-default to the most specific existing editable source (private repository,
-project, then global); bundled-only definitions create a global override. When
-multiple sources exist, `Edit scope` lets you choose among them. Project edits
-affect the current worktree and may be included in a Git commit; private edits
-are shared by trusted linked worktrees in the same clone.
+Opens the native `Agents & Coordinators` category menu with `Agents` and
+`Coordinators`. Each category lists effective definitions; reserved profiles
+appear in their canonical order. Project definitions are included when Pi
+considers the project trusted. Each definition shows contributing `bundled`,
+`global`, `project`, and/or `private repo` sources. Settings default to the
+most specific existing editable source (private repository, project, then
+global); bundled-only definitions create a global override. When multiple
+sources exist, `Edit scope` lets you choose among them. Project edits affect
+the current worktree and may be included in a Git commit; private edits are
+shared by trusted linked worktrees in the same clone.
 
-All five reserved role definitions are not Agents and remain excluded as
+All five reserved Coordinator profiles are not Agents and remain excluded as
 delegation targets. Manager/Chief profiles may nevertheless list ordinary
 Agent definitions in `agents` to authorize their own direct delegation.
 Runtime profiles support `Details` only;

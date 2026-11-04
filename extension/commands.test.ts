@@ -1482,11 +1482,11 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-flexible-profile-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\ntools: [read]\n---\nrestricted flexible\n",
   );
   const baseline = ["read", "bash", "edit", "write"];
@@ -1519,11 +1519,11 @@ test("live Flexible tool changes survive order-preserving projection while exclu
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1602,11 +1602,11 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-failure-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1685,16 +1685,10 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
-  const definition = join(
-    cwd,
-    ".pi",
-    "pi-herdsman",
-    "roles",
-    "flexible-lead.md",
-  );
+  const definition = join(cwd, ".pi", "coordinators", "flexible-lead.md");
   writeFileSync(definition, "---\nname: flexible-lead\n---\nflexible\n");
   const entries: any[] = [];
   const pi = fakeChiefPi({
@@ -1837,12 +1831,7 @@ test("session startup restores execution from the selected branch only", async (
 
 test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
   setLeadEnvironment();
-  const managerOverride = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "manager.md",
-  );
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
   mkdirSync(dirname(managerOverride), { recursive: true });
   process.env.HERDR_PANE_ID = "manager-baseline-pane";
   process.env.HERDR_TAB_ID = "manager-baseline-tab";
@@ -3415,12 +3404,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
 
 test("root Lead explicitly enters Manager; a competing root session stays Lead", async (t) => {
   setLeadEnvironment();
-  const managerOverride = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "manager.md",
-  );
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
   mkdirSync(dirname(managerOverride), { recursive: true });
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
   const previousManagerOverride = realFs.existsSync(managerOverride)
@@ -8388,7 +8372,7 @@ async function managerDelegateAssignmentTest(
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   const targetTrusted = (targetDecision ?? ancestorDecision) === true;
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  const managedLeadDir = join(childCwd, ".pi", "pi-herdsman", "roles");
+  const managedLeadDir = join(childCwd, ".pi", "coordinators");
   realFs.mkdirSync(managedLeadDir, { recursive: true });
   realFs.writeFileSync(
     join(managedLeadDir, "managed-lead.md"),
@@ -14067,7 +14051,7 @@ test("/agents placement subtree writes flat config outside project settings", as
 
 test("Chief profile drives the turn-start tools, prompt, and tool-call guard", async (t) => {
   setLeadEnvironment();
-  const overridePath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const overridePath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(overridePath), { recursive: true });
   const previousOverride = realFs.existsSync(overridePath)
     ? readFileSync(overridePath, "utf8")
@@ -14221,7 +14205,7 @@ test("root assignment rejects a role generation changed during preflight", async
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14307,7 +14291,7 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14450,12 +14434,7 @@ test("Lead profile switch during Agent startup rejects and rolls back stale assi
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "orchestrator-lead.md",
-  );
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14596,12 +14575,7 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
     tmpdir(),
     `owned-policy-${randomUUID()}.sock`,
   );
-  const rolePath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "orchestrator-lead.md",
-  );
+  const rolePath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
   mkdirSync(dirname(rolePath), { recursive: true });
   const previousRole = realFs.existsSync(rolePath)
     ? readFileSync(rolePath, "utf8")
@@ -16863,7 +16837,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
 
 test("persisted chief collision is suspended and has no lead authority", async () => {
   setLeadEnvironment();
-  const chiefOverride = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefOverride = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefOverride), { recursive: true });
   const scoutDefinition = join(PI_AGENTS_DIR, "scout.md");
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
@@ -18685,12 +18659,7 @@ test("Definitions edits standalone definitions through the shared override write
 
 test("Definitions exposes managed Lead settings without Agent discovery", async () => {
   setLeadEnvironment();
-  const overridePath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "managed-lead.md",
-  );
+  const overridePath = join(PI_AGENT_ROOT, "coordinators", "managed-lead.md");
   mkdirSync(dirname(overridePath), { recursive: true });
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -18709,8 +18678,9 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     prompts.push({ label, options });
     const visit = visits.get(label) ?? 0;
     visits.set(label, visit + 1);
-    if (label === "Agents & Roles") return visit === 0 ? "Roles" : undefined;
-    if (label === "Roles")
+    if (label === "Agents & Coordinators")
+      return visit === 0 ? "Coordinators" : undefined;
+    if (label === "Coordinators")
       return visit === 0
         ? options.find((option) => option.includes("managed-lead"))
         : undefined;
@@ -18729,10 +18699,12 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   try {
     await command.handler("definitions", context);
     const categoryMenu = prompts.find(
-      ({ label }) => label === "Agents & Roles",
+      ({ label }) => label === "Agents & Coordinators",
     );
-    const definitionMenu = prompts.find(({ label }) => label === "Roles");
-    assert.deepEqual(categoryMenu?.options, ["Agents", "Roles"]);
+    const definitionMenu = prompts.find(
+      ({ label }) => label === "Coordinators",
+    );
+    assert.deepEqual(categoryMenu?.options, ["Agents", "Coordinators"]);
     assert.deepEqual(
       definitionMenu?.options
         .slice(0, 5)
@@ -18812,7 +18784,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
       };
       if (customCall === 0) {
         customCall++;
-        selectTuiItem(component, "Roles");
+        selectTuiItem(component, "Coordinators");
       } else if (customCall === 1) {
         customCall++;
         selectTuiItem(component, "managed-lead");
@@ -19175,7 +19147,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
-        "Agents & Roles",
+        "Agents & Coordinators",
         "Agents",
         "implementer",
         "Model",
@@ -19183,7 +19155,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
         "Thinking",
         "implementer",
         "Agents",
-        "Agents & Roles",
+        "Agents & Coordinators",
       ],
     );
   } finally {
@@ -19884,7 +19856,7 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
   context.mode = "rpc";
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push(options);
-    if (label === "Agents & Roles" && categorySelections++ === 0)
+    if (label === "Agents & Coordinators" && categorySelections++ === 0)
       return "Agents";
     return undefined;
   };
@@ -19941,7 +19913,13 @@ test("Definitions separates Agent definitions and preserves provenance", async (
     await command.handler("definitions", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
-      ["Agents & Roles", "Agents", "group:Custom", "Agents", "Agents & Roles"],
+      [
+        "Agents & Coordinators",
+        "Agents",
+        "group:Custom",
+        "Agents",
+        "Agents & Coordinators",
+      ],
     );
     const definitions = prompts[1]!.options;
     assert.ok(

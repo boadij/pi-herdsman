@@ -1,6 +1,6 @@
 ---
 name: agent-definitions
-description: Manage Pi Herdsman Agent definitions and reserved role profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition descriptions, models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
+description: Manage Pi Herdsman Agent definitions and reserved Coordinator profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition descriptions, models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
 ---
 
 # Pi Herdsman Agent definitions
@@ -27,7 +27,7 @@ repository`), including which files contribute to the effective
      complete configuration. It cannot establish effective configuration by
      itself.
    - Disabled definitions, definitions with unavailable required children,
-     and reserved role profiles are not included in the runtime definition
+     and reserved Coordinator profiles are not included in the runtime definition
      capability list; inspect their Markdown layers directly. Reserved role
      definitions have special restrictions. Chief is global-only;
      project and private repository Chief definitions are rejected.
@@ -39,20 +39,41 @@ repository`), including which files contribute to the effective
 2. Choose the configuration layer from the requested scope.
    - Agent project policy: `<cwd>/.pi/agents/`; global policy:
      `<agentDir>/agents/`.
-   - Role project policy: `<cwd>/.pi/pi-herdsman/roles/`; global
-     policy: `<agentDir>/pi-herdsman/roles/`. Pi's agent directory
+   - Coordinator project policy: `<cwd>/.pi/coordinators/`; global
+     policy: `<agentDir>/coordinators/`. Pi's agent directory
      normally is `~/.pi/agent`. Managed Lead project policy resolves from
      the trusted delegated worktree.
-   - Private repository Agent/role policy: find the Git common directory with
+   - Private repository Agent/Coordinator policy: find the Git common directory with
      `git rev-parse --path-format=absolute --git-common-dir`, then use its
-     `pi-herdsman/agents/` or `pi-herdsman/roles/` subdirectory. It is shared
-     by linked worktrees in one clone only. Referenced skills and scripts need
-     their own accessible paths and are not synchronized.
-   - Reserved role names are invalid in Agent directories; non-role names are
-     invalid in role-profile directories.
+     `pi-herdsman/agents/` or `pi-herdsman/coordinators/` subdirectory. It is
+     shared by linked worktrees in one clone only. Referenced skills and
+     scripts need their own accessible paths and are not synchronized.
+   - Reserved Coordinator names are invalid in Agent directories; ordinary
+     Agent names are invalid in Coordinator directories.
+   - Coordinator profiles use sibling directories: bundled
+     `dist/coordinators/`, global `<agentDir>/coordinators/`, trusted project
+     `<cwd>/.pi/coordinators/`, and private repository
+     `<git-common-dir>/pi-herdsman/coordinators/`. They overlay in the same
+     `bundled < global < trusted project < private repository` order as Agents.
+   - Old profile files are not loaded from legacy `roles/` paths. If
+     Coordinator discovery reports an actionable migration error, do not
+     bypass it or create a fallback: move the profiles and referenced relative
+     prompt assets to these canonical destinations, preserving their contents;
+     update symlink-managed definitions too. The exact moves are:
+
+     ```text
+     <agentDir>/pi-herdsman/roles/       -> <agentDir>/coordinators/
+     <project>/.pi/pi-herdsman/roles/    -> <project>/.pi/coordinators/
+     <git-common-dir>/pi-herdsman/roles/ -> <git-common-dir>/pi-herdsman/coordinators/
+     ```
+
+     Only applicable global, trusted-project, or resolved private repository
+     scopes are checked. Agent discovery is independent. Do not automatically
+     move, copy, or delete user files.
+
    - If scope is genuinely ambiguous and materially changes the result, ask.
    - Never edit bundled files under `dist/agents/` or
-     `dist/roles/`. The Definitions UI defaults to the most specific existing
+     `dist/coordinators/`. The Definitions UI defaults to the most specific existing
      editable source (private repository, project, global); bundled-only
      definitions create global overrides. It can select another existing
      scope, but does not create missing project/private files. Project edits
@@ -76,7 +97,7 @@ repository`), including which files contribute to the effective
      effective capabilities; follow the Agent-definitions guide.
    - Herdsman preserves `permission:` for compatible extensions but does not
      enforce its contents itself.
-   - Before editing a reserved role definition, read the canonical schema for
+   - Before editing a reserved Coordinator profile, read the canonical schema for
      its restrictions and authority boundaries.
    - Lead, Manager, and Chief runtime profiles are not launch definitions. They
      support only `name`, `description`, `body`, `bodyMode` on overlays,
@@ -97,8 +118,9 @@ repository`), including which files contribute to the effective
    - After an edit in a Lead session, call `list_agents` again. Treat any
      discovery or validation failure as a failed edit and repair or restore the
      target file. Its returned summary can confirm discoverability and
-     validation, not the complete effective configuration or role-profile
-     validation. Validate role profiles through the relevant role resolution;
+     validation, not the complete effective configuration or Coordinator
+     profile validation. Validate Coordinator profiles through the relevant
+     runtime resolution;
      Active role allowlist references must resolve against the Agent roster.
    - If `list_agents` is unavailable, do not claim that the effective Herdsman
      definition set was runtime-validated. The next normal definition discovery

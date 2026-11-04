@@ -39,8 +39,8 @@ bundled < global < trusted project < private repository
 For trusted Git worktrees, the optional private layer is stored under the Git
 common directory shared by linked worktrees. Find it by running
 `git rev-parse --path-format=absolute --git-common-dir` from the worktree, then
-put Agent files in its `pi-herdsman/agents/` directory and role profiles in
-`pi-herdsman/roles/`. Do not assume `<worktree>/.git` is a directory; linked
+put Agent files in its `pi-herdsman/agents/` directory and Coordinator profiles
+in `pi-herdsman/coordinators/`. Do not assume `<worktree>/.git` is a directory; linked
 worktrees use a `.git` file. Private definitions belong to one clone and do
 not reach independent clones. Referenced skills or scripts need accessible
 paths of their own and are not synchronized by this feature.
@@ -66,14 +66,35 @@ private files are not created. Project edits may appear in Git changes.
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
 
-Role profiles use separate directories: `dist/roles/` for bundled
-profiles, `<cwd>/.pi/pi-herdsman/roles/` for trusted project overlays,
-`<agentDir>/pi-herdsman/roles/` for global overlays, and
-`<git-common-dir>/pi-herdsman/roles/` for private repository overlays. `<agentDir>`
-is Pi's agent directory (normally `~/.pi/agent`). The same precedence applies.
-Reserved role names are invalid in Agent directories, and other names are
-invalid in role-profile directories. Chief is global-only; project and private
-repository Chief profiles are errors.
+Coordinator profiles use sibling directories: `dist/coordinators/` for bundled
+profiles, `<cwd>/.pi/coordinators/` for trusted project overlays,
+`<agentDir>/coordinators/` for global overlays, and
+`<git-common-dir>/pi-herdsman/coordinators/` for private repository overlays.
+`<agentDir>` is Pi's agent directory (normally `~/.pi/agent`). The same
+precedence applies. Reserved Coordinator names are invalid in Agent directories,
+and ordinary Agent names are invalid in Coordinator directories. Chief is
+global-only; project and private repository Chief profiles are errors.
+
+Coordinator discovery rejects active Markdown profiles left at the former
+locations; it does not load them as fallback. Move customized profiles and
+their relative prompt assets, preserving both file contents and the assets'
+relative paths, as follows:
+
+```text
+<agentDir>/pi-herdsman/roles/
+    -> <agentDir>/coordinators/
+
+<project>/.pi/pi-herdsman/roles/
+    -> <project>/.pi/coordinators/
+
+<git-common-dir>/pi-herdsman/roles/
+    -> <git-common-dir>/pi-herdsman/coordinators/
+```
+
+Update symlinks that manage these definitions so they point to the canonical
+directories. Files left under an applicable legacy `roles/` path cause an
+actionable Coordinator-discovery error; Agent discovery is independent. No
+configuration files are automatically copied, moved, or deleted.
 
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
@@ -86,18 +107,19 @@ controller, not source paths or complete frontmatter. They support runtime
 selection and validation, not configuration management. Identify definitions
 by frontmatter `name`, inspect contributing files, and resolve effective
 overlays when changing them; never infer identity from filenames.
-`list_agents` validates Agent discovery, not the complete role-profile
+`list_agents` validates Agent discovery, not the complete Coordinator
 configuration.
 
 `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
-are reserved role definitions. They use the layered definition engine but are
+are reserved Coordinator definitions. They use the layered definition engine but are
 not Agents available through discovery or delegation. The first two configure
 ordinary Lead runtime instructions and ordinary tools; `managed-lead` configures
 launch policy for Manager-assigned project Leads; `manager` and `chief`
-customize supervisory role instructions and ordinary tools. They appear under `Roles` in canonical role
-order; ordinary definitions appear under `Agents`. Runtime profiles offer Details only;
+customize supervisory role instructions and ordinary tools. They appear under
+`Coordinators` in canonical order; ordinary definitions appear under `Agents`.
+Runtime profiles offer Details only;
 `managed-lead` offers Model, Thinking, and Details. See
-[customizing role profiles](customizing-agents.md#manager-and-chief-profiles).
+[customizing Coordinator profiles](customizing-agents.md#manager-and-chief-profiles).
 
 ### Permission-aware extensions
 
@@ -328,7 +350,7 @@ or the model can use:
 ```
 
 Both use effective definition discovery, but the Definitions UI exposes
-configuration (including disabled definitions and reserved role profiles where
+configuration (including disabled definitions and reserved Coordinator profiles where
 applicable), while `list_agents` returns only currently available capabilities
 within the caller's scope.
 
@@ -337,10 +359,10 @@ For model-assisted definition management, ask Pi directly or explicitly invoke
 project/global Markdown definitions and existing Herdsman validation rather than
 a separate configuration interface.
 
-The human `Agents & Roles` menu separates ordinary definitions under `Agents`
-from reserved profiles under `Roles` (in canonical role
-order). Runtime profiles provide Details only. Each row identifies its contributing source or
-sources as `bundled`, `project`, `global`, and/or `private repository`. Model,
+The human `Agents & Coordinators` menu separates ordinary definitions under
+`Agents` from reserved profiles under `Coordinators` (in canonical order).
+Runtime profiles provide Details only. Each row identifies its contributing
+sources as `bundled`, `global`, `project`, and/or `private repo`. Model,
 thinking, and enabled settings default to the most specific existing editable
 source; `Edit scope` selects another existing source. `Remove local override`
 removes only that source's field. Unset model and
