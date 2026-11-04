@@ -841,10 +841,12 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
 });
 
-test("resume queue failure does not launch a Lead and reports enqueue unconfirmed", async () => {
+test("resume revalidates checkout placement after async preparation", async () => {
   const repoKey = realFs.realpathSync(process.cwd());
   const checkout = join(tmpdir(), `resume-${randomUUID()}`);
   mkdirSync(checkout);
+  const movedCheckout = join(tmpdir(), `resume-moved-${randomUUID()}`);
+  mkdirSync(movedCheckout);
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
   mkdirSync(assignmentRoot);
   const id = randomUUID();
@@ -862,6 +864,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     text: "original",
     checkoutPath: checkout,
   };
+  let currentAssignment = assignment;
   writeProjectAssignment(
     { root: assignmentRoot, assignments: assignmentRoot } as any,
     assignment as any,
@@ -869,6 +872,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
   let writes = 0;
   let launches = 0;
   let preparedFiles: unknown[] = [];
+  let changePlacementDuringPreparation = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -913,7 +917,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
           source: { repo_key: repoKey, source_checkout_path: repoKey },
           worktrees: [
             {
-              path: checkout,
+              path: changePlacementDuringPreparation ? movedCheckout : checkout,
               branch: assignment.branch,
               is_linked_worktree: true,
               open_workspace_id: "resume-workspace",
@@ -933,7 +937,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
         return { process_info: { foreground_processes: [] } };
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
-    readProjectAssignment: () => assignment,
+    readProjectAssignment: () => currentAssignment,
     listProjectAssignments: () => [assignment],
     reconcileProjectAssignments: async () => {},
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
@@ -956,6 +960,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
       files: unknown[],
     ) => {
       preparedFiles = files;
+      if (message === "placement race") changePlacementDuringPreparation = true;
       return {
         text: `${message} ${files.join(" ")}`,
         resultBindings: [],
@@ -982,6 +987,21 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
   assert.equal(result.details.enqueue_uncertain, true);
   assert.equal(result.details.status, "enqueue_unconfirmed");
   assert.deepEqual(preparedFiles, ["startup.log"]);
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+
+  await assert.rejects(
+    runtime.activateProjectLead(
+      {
+        action: "resume",
+        branch: assignment.branch,
+        message: "placement race",
+      },
+      ctx,
+      new AbortController().signal,
+    ),
+    /placement changed during resume handoff/,
+  );
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 });

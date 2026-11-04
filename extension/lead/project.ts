@@ -2943,6 +2943,38 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : topology.worktrees.filter(
             (worktree: any) => worktree?.branch === branch,
           );
+    const assertResumePlacement = async () => {
+      if (operation.action !== "resume" || !placement) return;
+      const latest = readProjectAssignment(runtime, manager.repoKey, branch);
+      if (
+        !latest ||
+        latest.id !== currentAssignment!.id ||
+        latest.branch !== currentAssignment!.branch
+      )
+        throw new Error(
+          "Project assignment checkout changed during resume handoff",
+        );
+      const currentTopology = await runHerdr(pi, ctx, ["worktree", "list"], {
+        signal,
+      });
+      if (
+        currentTopology?.source?.repo_key !== manager.repoKey ||
+        !Array.isArray(currentTopology?.worktrees)
+      )
+        throw new Error("Herdr worktree topology is not authoritative");
+      const currentPlacement = resolveAssignmentCheckout(
+        latest,
+        currentTopology.worktrees,
+        savedSessionCwd,
+      );
+      if (
+        currentPlacement.status !== "matched" ||
+        !sameDirectory(currentPlacement.path, placement.path)
+      )
+        throw new Error(
+          "Assigned checkout placement changed during resume handoff",
+        );
+    };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
     const live =
@@ -3012,6 +3044,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(
           "Manager, assignment, or running Lead changed during resume handoff preparation",
         );
+      await assertResumePlacement();
       try {
         await queueResumeHandoff(false);
       } catch (error) {
@@ -3403,6 +3436,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Manager or project assignment changed during resume handoff preparation",
           );
+        await assertResumePlacement();
         if (branchWorktrees[0]?.open_workspace_id)
           await assertUnoccupied(branchWorktrees[0].open_workspace_id);
         await queueResumeHandoff(true);
@@ -3472,6 +3506,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
             }));
         if (!piAlreadyRunning) {
+          await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
           const projectTrusted =
             new ProjectTrustStore(getAgentDir()).get(cwd!) === true;
