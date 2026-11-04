@@ -893,6 +893,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   let placementRaceRequested = false;
   let failPreparation = false;
   let failPostPrepareManagerRevalidation = false;
+  let liveLead = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -971,7 +972,11 @@ test("resume revalidates checkout placement after async preparation", async () =
       op: () => unknown,
     ) => op(),
     herdrSessionSnapshot: async () => ({ agents: [] }),
-    liveAgent: async () => [],
+    liveAgent: async () =>
+      liveLead ? [{ workspace_id: "resume-workspace" }] : [],
+    readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
+    requireCompatibleBuild: () => {},
+    supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
     resolveMessageFiles: (_ctx: unknown, files: string[] = []) => files,
     messageLimits: async () => ({
@@ -1064,6 +1069,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 
+  liveLead = true;
   const revalidationResult = (await runtime.activateProjectLead(
     {
       action: "resume",
@@ -1077,6 +1083,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   assert.equal(revalidationResult.details.evidence_retained, true);
   assert.equal(revalidationResult.details.message_queued, false);
   assert.equal(revalidationResult.details.status, "handoff_incomplete");
+  assert.equal(revalidationResult.details.session, id);
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 
