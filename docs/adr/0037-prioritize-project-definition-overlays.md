@@ -22,6 +22,9 @@ Herdsman-owned authority boundaries remain unchanged. In particular, this
 decision supersedes ADR 0015's ordering statement only; it does not alter its
 managed-Lead architecture.
 
+The precedence order is extended by [ADR 0038](0038-private-repository-definition-overlays.md),
+which adds a trusted private-repository layer after the project layer.
+
 ## Consequences
 
 Conflicting trusted project values now override global values. Global

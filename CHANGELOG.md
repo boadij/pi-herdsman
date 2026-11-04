@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Features
+
+* **config:** Add a private repository definition overlay shared by trusted
+  linked worktrees in one clone (`bundled < global < trusted project < private
+  repository`).
+
 ### Breaking changes
 
 * **config:** Trusted project Agent and role-profile definitions now override global definitions (`bundled < global < trusted project`). Projects may override global `enabled`, `tools`, `agents`, and `permission` values; review trusted project files accordingly.

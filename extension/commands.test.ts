@@ -19315,6 +19315,22 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
 test("Definitions edits global values without claiming masked project changes", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  realFs.writeFileSync(
+    join(privateDir, "implementer.md"),
+    "---\nname: implementer\nmodel: provider/private-model\nenabled: false\n---\nprivate",
+  );
   const projectPath = join(project, ".pi", "agents", "implementer.md");
   const globalPath = join(PI_AGENTS_DIR, "implementer.md");
   realFs.mkdirSync(dirname(projectPath), { recursive: true });
@@ -19347,10 +19363,13 @@ test("Definitions edits global values without claiming masked project changes", 
       case 0:
         return "Agents";
       case 1:
+        assert.ok(options.some((option) => option.includes("private repo")));
         return options.find((option) => option.includes("implementer"));
       case 2:
         assert.ok(options.some((option) => option.includes("global/model")));
-        assert.ok(options.some((option) => option.includes("project/model")));
+        assert.ok(
+          options.some((option) => option.includes("provider/private-model")),
+        );
         assert.ok(
           options.some((option) =>
             option.includes("high · Effective here: off"),
@@ -19363,7 +19382,7 @@ test("Definitions edits global values without claiming masked project changes", 
         assert.equal(label, "implementer");
         assert.ok(
           options.some((option) =>
-            /^Enabled \(global\)\s+off · Effective here: on\b/u.test(option),
+            /^Enabled \(global\)\s+off · Effective here: off\b/u.test(option),
           ),
         );
         return options.find((option) => option.startsWith("Enabled"));
@@ -19377,18 +19396,18 @@ test("Definitions edits global values without claiming masked project changes", 
     await command.handler("definitions", context);
     assert.equal(
       discoverAgent("implementer", { projectRoot: project }).frontmatter.model,
-      "project/model",
+      "provider/private-model",
     );
     assert.equal(
       discoverAgent("implementer", { projectRoot: project }).frontmatter
         .enabled,
-      true,
+      false,
     );
     assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
-    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: true/);
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
     assert.match(
       notices.join("\n"),
-      /Effective in this project: project\/model/u,
+      /Effective in this project: provider\/private-model/u,
     );
     assert.doesNotMatch(
       realFs.readFileSync(projectPath, "utf8"),

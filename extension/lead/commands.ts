@@ -347,6 +347,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               definition.extensionSource ? "bundled" : undefined,
               definition.overrideSource ? "global" : undefined,
               definition.projectSource ? "project" : undefined,
+              definition.privateRepositorySource ? "private repo" : undefined,
             ]
               .filter(Boolean)
               .join(" + ");

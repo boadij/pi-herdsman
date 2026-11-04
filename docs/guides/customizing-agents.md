@@ -2,14 +2,19 @@
 
 [Documentation index](../README.md)
 
-Matching project and global definitions partially overlay lower-precedence
-roles, in the order `bundled < global < trusted project`. Global definitions
+Matching project, global, and private repository definitions partially overlay
+lower-precedence roles, in the order
+`bundled < global < trusted project < private repository`. Global definitions
 are user-wide defaults; a trusted project can specialize even explicit global
 values, including Agent enablement and capability allowlists. Herdsman-owned
 authority and required coordination tools remain protected.
 
-Role profiles live under `<project>/.pi/pi-herdsman/roles/` and
-`<agentDir>/pi-herdsman/roles/`, not the Agent directories. Project
+Role profiles live under `<project>/.pi/pi-herdsman/roles/`,
+`<agentDir>/pi-herdsman/roles/`, and the optional
+`<git-common-dir>/pi-herdsman/roles/`, not the Agent directories. Find the
+common directory with `git rev-parse --path-format=absolute --git-common-dir`;
+linked worktrees share it. The private layer is local to one clone, and
+referenced skills or scripts need their own accessible paths. Project
 profiles require project trust; the global agent directory is normally
 `~/.pi/agent`.
 

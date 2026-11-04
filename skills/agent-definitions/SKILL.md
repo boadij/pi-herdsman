@@ -13,14 +13,15 @@ this skill does not define a second schema or management API.
 
 1. Inspect the Markdown definition layers before changing configuration.
    - Identify a definition by its frontmatter `name`, never by its filename.
-     Inspect bundled, trusted project, and global layers in precedence order
-     (`bundled < global < trusted project`), including which files contribute to the
-     effective definition. Project definitions apply only when Pi trusts the
+     Inspect bundled, global, trusted project, and private repository layers
+     in precedence order (`bundled < global < trusted project < private
+repository`), including which files contribute to the effective
+     definition. Project and private definitions apply only when Pi trusts the
      project.
    - Resolve matching overlays and effective field values before choosing the
      requested project or global edit scope. The Definitions UI edits global
      files only; compare its global editable values with effective project
-     values and report masked changes accurately. `list_agents` is useful after an
+     or private values and report masked changes accurately. `list_agents` is useful after an
      edit to invoke Herdsman's existing discovery and validation, but its
      enabled-definition capability summary does not expose source paths or
      complete configuration. It cannot establish effective configuration by
@@ -29,7 +30,7 @@ this skill does not define a second schema or management API.
      and reserved role profiles are not included in the runtime definition
      capability list; inspect their Markdown layers directly. Reserved role
      definitions have special restrictions. Chief is global-only;
-     project-local Chief definitions are rejected.
+     project and private repository Chief definitions are rejected.
    - Read the canonical contract when exact field behavior matters:
      - `../../docs/reference/agent-definition-schema.md`
      - `../../docs/guides/agent-definitions.md`
@@ -42,6 +43,11 @@ this skill does not define a second schema or management API.
      policy: `<agentDir>/pi-herdsman/roles/`. Pi's agent directory
      normally is `~/.pi/agent`. Managed Lead project policy resolves from
      the trusted delegated worktree.
+   - Private repository Agent/role policy: find the Git common directory with
+     `git rev-parse --path-format=absolute --git-common-dir`, then use its
+     `pi-herdsman/agents/` or `pi-herdsman/roles/` subdirectory. It is shared
+     by linked worktrees in one clone only. Referenced skills and scripts need
+     their own accessible paths and are not synchronized.
    - Reserved role names are invalid in Agent directories; non-role names are
      invalid in role-profile directories.
    - If scope is genuinely ambiguous and materially changes the result, ask.

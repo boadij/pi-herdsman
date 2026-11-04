@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import {
   mkdtempSync,
   mkdirSync,
+  rmSync,
   readFileSync,
   realpathSync,
   statSync,
@@ -11,6 +12,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
   agentDefinitionDelegationEnabled,
@@ -1387,6 +1389,125 @@ test("composes all definition layers with provenance and whole-array replacement
   assert.equal(effective.overrideSource, globalPath);
 });
 
+test("private repository definitions overlay trusted linked worktrees without crossing clones", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-private-repo-"));
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  const write = (path: string, content: string) => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, content);
+  };
+  try {
+    const primary = join(root, "primary");
+    mkdirSync(primary);
+    run(primary, "init", "-b", "main");
+    run(primary, "config", "user.name", "Test");
+    run(primary, "config", "user.email", "test@example.invalid");
+    write(join(primary, "tracked"), "base");
+    write(
+      join(primary, ".pi", "agents", "reviewer.md"),
+      "---\nname: reviewer\nmodel: project/model\nenabled: false\ntools: [read, grep]\nbodyMode: append\n---\nProject body",
+    );
+    run(primary, "add", "tracked");
+    run(primary, "add", ".pi/agents/reviewer.md");
+    run(primary, "commit", "-m", "base");
+    const linked = join(root, "linked");
+    run(primary, "worktree", "add", "-b", "linked", linked);
+    const clone = join(root, "clone");
+    run(root, "clone", primary, clone);
+
+    const privateRoot = join(
+      run(primary, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      "pi-herdsman",
+    );
+    const global = join(root, "global");
+    mkdirSync(global);
+    const globalAgents = join(global, "agents");
+    const globalRoles = join(global, "pi-herdsman", "roles");
+    mkdirSync(globalAgents);
+    mkdirSync(globalRoles, { recursive: true });
+    const projectReviewer = join(primary, ".pi", "agents", "reviewer.md");
+    const globalReviewer = join(globalAgents, "reviewer.md");
+    const privateReviewer = join(privateRoot, "agents", "reviewer.md");
+    write(
+      globalReviewer,
+      "---\nname: reviewer\nmodel: global/model\ntools: [read]\nagents: [private-only]\nbodyMode: append\n---\nGlobal body",
+    );
+    write(
+      privateReviewer,
+      "---\nname: reviewer\nmodel: private/model\nenabled: true\ntools: []\nbodyMode: append\n---\nPrivate body",
+    );
+    const privateOnly = join(privateRoot, "agents", "private-only.md");
+    write(privateOnly, "---\nname: private-only\n---\n@./prompt.txt");
+    write(join(privateRoot, "agents", "prompt.txt"), "private prompt");
+    const privateRole = join(privateRoot, "roles", "managed-lead.md");
+    write(
+      privateRole,
+      "---\nname: managed-lead\nagents: [private-only]\nbodyMode: append\n---\nPrivate role",
+    );
+
+    const worktreeDefinitions = (projectRoot: string) =>
+      withPiAgentDir(global, () => discoverAgent("reviewer", { projectRoot }));
+    for (const worktree of [primary, linked]) {
+      const effective = worktreeDefinitions(worktree);
+      assert.equal(effective.frontmatter.model, "private/model");
+      assert.equal(effective.frontmatter.enabled, true);
+      assert.deepEqual(effective.frontmatter.tools, []);
+      assert.deepEqual(effective.frontmatter.agents, ["private-only"]);
+      assert.match(
+        effective.body,
+        /Global body\n\nProject body\n\nPrivate body/u,
+      );
+      assert.equal(effective.privateRepositorySource, privateReviewer);
+      assert.ok(discoverAgent("private-only", { projectRoot: worktree }));
+      assert.equal(
+        discoverAgent("private-only", { projectRoot: worktree }).body,
+        `@${join(privateRoot, "agents", "prompt.txt")}`,
+      );
+      const role = withPiAgentDir(global, () =>
+        discoverRoleDefinition("managed-lead", { projectRoot: worktree }),
+      );
+      assert.deepEqual(role.frontmatter.agents, ["private-only"]);
+      assert.match(role.body, /Private role/u);
+    }
+    const cloneGlobal = join(root, "clone-global");
+    mkdirSync(join(cloneGlobal, "agents"), { recursive: true });
+    assert.equal(
+      withPiAgentDir(cloneGlobal, () =>
+        discoverAgent("reviewer", { projectRoot: clone }),
+      ).privateRepositorySource,
+      undefined,
+    );
+    assert.equal(
+      worktreeDefinitions(primary).extensionSource,
+      withPiAgentDir(cloneGlobal, () => discoverAgent("reviewer"))
+        .extensionSource,
+    );
+    assert.throws(() => {
+      write(join(privateRoot, "roles", "chief.md"), "---\nname: chief\n---\n");
+      withPiAgentDir(global, () =>
+        discoverRoleDefinitions({ projectRoot: linked }),
+      );
+    }, /chief definition: private repository overrides are not supported/u);
+
+    const nonGit = mkdtempSync(join(root, "non-git-"));
+    withPiAgentDir(cloneGlobal, () =>
+      assert.equal(
+        discoverAgentDefinitions({ projectRoot: nonGit }).some(
+          ({ privateRepositorySource }) => privateRepositorySource,
+        ),
+        false,
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("project body modes, duplicate names, body-file provenance, and child validation use the shared engine", () => {
   const project = mkdtempSync(
     join(tmpdir(), "pi-herdsman-project-validation-"),
@@ -2055,6 +2176,19 @@ test("preserves current definition metadata", () => {
     model: "provider/model",
     thinking: "high",
   });
+  assert.deepEqual(
+    agentDefinitionMetadata({
+      name: "private",
+      path: "/agents/private.md",
+      frontmatter: {},
+      body: "",
+      privateRepositorySource: "/git/pi-herdsman/agents/private.md",
+    }),
+    {
+      name: "private",
+      privateRepositorySource: "/git/pi-herdsman/agents/private.md",
+    },
+  );
   assert.deepEqual(
     agentDefinitionMetadata({
       name: "agent",
