@@ -5,7 +5,13 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { sameDirectory } from "../herdr.ts";
-import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
+import {
+  AGENT_ID,
+  HERDSMAN_BUILD,
+  WORKSPACE,
+  fakeContext,
+  realFs,
+} from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
 import {
   persistRequiredEvidenceSnapshot,
@@ -16,6 +22,7 @@ const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
+const { claimManagerLease } = await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -850,12 +857,18 @@ test("resume revalidates checkout placement after async preparation", async () =
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
   mkdirSync(assignmentRoot);
   const id = randomUUID();
-  const manager = {
-    repoKey,
-    workspaceId: WORKSPACE,
-    leaseId: randomUUID(),
-    piSessionId: randomUUID(),
-  };
+  const managerLease = claimManagerLease(
+    {
+      build: HERDSMAN_BUILD,
+      piSessionId: randomUUID(),
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      workspaceId: WORKSPACE,
+      repoKey,
+    },
+    { managers: join(assignmentRoot, "managers") } as any,
+  );
+  const manager = managerLease.descriptor;
   const assignment = {
     version: 2,
     id,
@@ -864,15 +877,20 @@ test("resume revalidates checkout placement after async preparation", async () =
     text: "original",
     checkoutPath: checkout,
   };
-  let currentAssignment = assignment;
   writeProjectAssignment(
     { root: assignmentRoot, assignments: assignmentRoot } as any,
     assignment as any,
   );
+  const supervision = {
+    root: assignmentRoot,
+    assignments: assignmentRoot,
+    managers: join(assignmentRoot, "managers"),
+  };
   let writes = 0;
   let launches = 0;
   let preparedFiles: unknown[] = [];
   let changePlacementDuringPreparation = false;
+  let failPreparation = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -902,10 +920,7 @@ test("resume revalidates checkout placement after async preparation", async () =
     currentManager: async () => manager,
     managerLease: () => ({ descriptor: manager }),
     sameManagerDescriptor: () => true,
-    supervisionRuntime: () => ({
-      root: assignmentRoot,
-      assignments: assignmentRoot,
-    }),
+    supervisionRuntime: () => supervision,
     worktreeGroupScope: async () => ({
       repoKey,
       primaryWorkspaceId: WORKSPACE,
@@ -937,7 +952,8 @@ test("resume revalidates checkout placement after async preparation", async () =
         return { process_info: { foreground_processes: [] } };
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
-    readProjectAssignment: () => currentAssignment,
+    readProjectAssignment: () =>
+      readProjectAssignment(supervision as any, repoKey, assignment.branch),
     listProjectAssignments: () => [assignment],
     reconcileProjectAssignments: async () => {},
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
@@ -960,6 +976,7 @@ test("resume revalidates checkout placement after async preparation", async () =
       files: unknown[],
     ) => {
       preparedFiles = files;
+      if (failPreparation) throw new Error("resume preparation failed");
       if (message === "placement race") changePlacementDuringPreparation = true;
       return {
         text: `${message} ${files.join(" ")}`,
@@ -990,6 +1007,41 @@ test("resume revalidates checkout placement after async preparation", async () =
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 
+  failPreparation = true;
+  const retainedResult = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "retain this requirement",
+      retain: true,
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(retainedResult.details.evidence_retained, true);
+  assert.equal(retainedResult.details.message_queued, false);
+  assert.equal(retainedResult.details.recovery_verified, false);
+  assert.equal(retainedResult.details.status, "handoff_incomplete");
+  assert.match(
+    retainedResult.content[0].text,
+    /not prepared, queued, or recovered/,
+  );
+  const retainedAssignment = readProjectAssignment(
+    supervision as any,
+    repoKey,
+    assignment.branch,
+  )!;
+  assert.equal(retainedAssignment.id, assignment.id);
+  assert.equal(retainedAssignment.text, assignment.text);
+  assert.ok(
+    retainedAssignment.requiredEvidence?.some(
+      (evidence: any) => evidence.name === "assignment-note.md",
+    ),
+  );
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+
+  failPreparation = false;
   await assert.rejects(
     runtime.activateProjectLead(
       {
@@ -1004,6 +1056,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   );
   assert.equal(writes, 1);
   assert.equal(launches, 0);
+  managerLease.release();
 });
 
 test("resume preserves queued manager message when controlled recovery fails", async () => {
