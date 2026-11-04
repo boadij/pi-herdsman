@@ -5,7 +5,13 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { sameDirectory } from "../herdr.ts";
-import { AGENT_ID, WORKSPACE, fakeContext, realFs } from "../support.ts";
+import {
+  AGENT_ID,
+  HERDSMAN_BUILD,
+  WORKSPACE,
+  fakeContext,
+  realFs,
+} from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
 import {
   persistRequiredEvidenceSnapshot,
@@ -16,6 +22,7 @@ const { createLeadProjectRuntime, parseGitWorktreeInventory } =
   await import("./project.ts");
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
+const { claimManagerLease } = await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -841,19 +848,27 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
 });
 
-test("resume queue failure does not launch a Lead and reports enqueue unconfirmed", async () => {
+test("resume revalidates checkout placement after async preparation", async () => {
   const repoKey = realFs.realpathSync(process.cwd());
   const checkout = join(tmpdir(), `resume-${randomUUID()}`);
   mkdirSync(checkout);
+  const movedCheckout = join(tmpdir(), `resume-moved-${randomUUID()}`);
+  mkdirSync(movedCheckout);
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
   mkdirSync(assignmentRoot);
   const id = randomUUID();
-  const manager = {
-    repoKey,
-    workspaceId: WORKSPACE,
-    leaseId: randomUUID(),
-    piSessionId: randomUUID(),
-  };
+  const managerLease = claimManagerLease(
+    {
+      build: HERDSMAN_BUILD,
+      piSessionId: randomUUID(),
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      workspaceId: WORKSPACE,
+      repoKey,
+    },
+    { managers: join(assignmentRoot, "managers") } as any,
+  );
+  const manager = managerLease.descriptor;
   const assignment = {
     version: 2,
     id,
@@ -866,8 +881,19 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     { root: assignmentRoot, assignments: assignmentRoot } as any,
     assignment as any,
   );
+  const supervision = {
+    root: assignmentRoot,
+    assignments: assignmentRoot,
+    managers: join(assignmentRoot, "managers"),
+  };
   let writes = 0;
   let launches = 0;
+  let preparedFiles: unknown[] = [];
+  let changePlacementDuringPreparation = false;
+  let placementRaceRequested = false;
+  let failPreparation = false;
+  let failPostPrepareManagerRevalidation = false;
+  let liveLead = false;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -894,13 +920,16 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     } as any,
     leadRuntime: { managerLease: { descriptor: manager } },
     activeRole: () => "manager",
-    currentManager: async () => manager,
+    currentManager: async () => {
+      if (failPostPrepareManagerRevalidation) {
+        failPostPrepareManagerRevalidation = false;
+        throw new Error("Manager changed after evidence retention");
+      }
+      return manager;
+    },
     managerLease: () => ({ descriptor: manager }),
     sameManagerDescriptor: () => true,
-    supervisionRuntime: () => ({
-      root: assignmentRoot,
-      assignments: assignmentRoot,
-    }),
+    supervisionRuntime: () => supervision,
     worktreeGroupScope: async () => ({
       repoKey,
       primaryWorkspaceId: WORKSPACE,
@@ -912,7 +941,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
           source: { repo_key: repoKey, source_checkout_path: repoKey },
           worktrees: [
             {
-              path: checkout,
+              path: changePlacementDuringPreparation ? movedCheckout : checkout,
               branch: assignment.branch,
               is_linked_worktree: true,
               open_workspace_id: "resume-workspace",
@@ -932,7 +961,8 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
         return { process_info: { foreground_processes: [] } };
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
-    readProjectAssignment: () => assignment,
+    readProjectAssignment: () =>
+      readProjectAssignment(supervision as any, repoKey, assignment.branch),
     listProjectAssignments: () => [assignment],
     reconcileProjectAssignments: async () => {},
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
@@ -942,15 +972,44 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
       op: () => unknown,
     ) => op(),
     herdrSessionSnapshot: async () => ({ agents: [] }),
-    liveAgent: async () => [],
+    liveAgent: async () =>
+      liveLead ? [{ workspace_id: "resume-workspace" }] : [],
+    readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
+    requireCompatibleBuild: () => {},
+    supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
+    resolveMessageFiles: (_ctx: unknown, files: string[] = []) => files,
     messageLimits: async () => ({
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },
     }),
-    prepareCoordinationInput: async (message: string) => ({
-      text: message,
-      resultBindings: [],
+    prepareCoordinationInput: async (
+      _ctx: unknown,
+      message: string,
+      files: unknown[],
+    ) => {
+      preparedFiles = files;
+      if (failPreparation) throw new Error("resume preparation failed");
+      if (message === "retain then fail revalidation")
+        failPostPrepareManagerRevalidation = true;
+      if (message === "placement race") placementRaceRequested = true;
+      return {
+        text: `${message} ${files.join(" ")}`,
+        resultBindings: [],
+      };
+    },
+    managerEvidence: async () => ({
+      roots: new Set(),
+      retained: [],
+      verify: () => {},
+      verifyProvenance: () => {},
+      revalidate: async (operation: () => unknown) => {
+        if (placementRaceRequested) {
+          placementRaceRequested = false;
+          changePlacementDuringPreparation = true;
+        }
+        await operation();
+      },
     }),
     writeChiefMessage: () => {
       if (++writes === 1) throw new Error("disk write failed");
@@ -960,16 +1019,91 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     },
     appendDurableError: () => {},
   } as any);
-  await assert.rejects(
-    runtime.activateProjectLead(
-      { action: "resume", branch: assignment.branch, message: "continue" },
-      ctx,
-      new AbortController().signal,
+  const result = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "continue",
+      files: ["startup.log"],
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(result.details.enqueue_uncertain, true);
+  assert.equal(result.details.status, "enqueue_unconfirmed");
+  assert.deepEqual(preparedFiles, ["startup.log"]);
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+
+  failPreparation = true;
+  const retainedResult = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "retain this requirement",
+      retain: true,
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(retainedResult.details.evidence_retained, true);
+  assert.equal(retainedResult.details.message_queued, false);
+  assert.equal(retainedResult.details.recovery_verified, false);
+  assert.equal(retainedResult.details.status, "handoff_incomplete");
+  assert.match(
+    retainedResult.content[0].text,
+    /not prepared, queued, or recovered/,
+  );
+  const retainedAssignment = readProjectAssignment(
+    supervision as any,
+    repoKey,
+    assignment.branch,
+  )!;
+  assert.equal(retainedAssignment.id, assignment.id);
+  assert.equal(retainedAssignment.text, assignment.text);
+  assert.ok(
+    retainedAssignment.requiredEvidence?.some(
+      (evidence: any) => evidence.name === "assignment-note.md",
     ),
-    /enqueue could not be confirmed/,
   );
   assert.equal(writes, 1);
   assert.equal(launches, 0);
+
+  liveLead = true;
+  const revalidationResult = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "retain then fail revalidation",
+      retain: true,
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(revalidationResult.details.evidence_retained, true);
+  assert.equal(revalidationResult.details.message_queued, false);
+  assert.equal(revalidationResult.details.status, "handoff_incomplete");
+  assert.equal(revalidationResult.details.session, id);
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+
+  failPreparation = false;
+  await assert.rejects(
+    runtime.activateProjectLead(
+      {
+        action: "resume",
+        branch: assignment.branch,
+        message: "placement race",
+        files: ["evidence:placement"],
+      },
+      ctx,
+      new AbortController().signal,
+    ),
+    /placement changed during resume handoff/,
+  );
+  assert.equal(writes, 1);
+  assert.equal(launches, 0);
+  managerLease.release();
 });
 
 test("resume preserves queued manager message when controlled recovery fails", async () => {
@@ -1080,6 +1214,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
+    resolveMessageFiles: () => [],
     messageLimits: async () => ({
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },

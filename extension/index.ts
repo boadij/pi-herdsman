@@ -1185,6 +1185,8 @@ function registerExtensionImpl(
         description:
           "Required instruction for continuing the existing assignment. Does not replace its original task.",
       }),
+      files: FILES_SCHEMA,
+      retain: staffMessageParameters.properties.retain,
     },
     { additionalProperties: false },
   );
@@ -2208,6 +2210,7 @@ function registerExtensionImpl(
             "Resume an existing assignment by its original branch handle with a required fresh instruction, including an explicit continuation instruction when priorities have not changed. Reuse the exact saved Lead and checkout. Queue the instruction even if the Lead is already running, without relaunching it. This does not recover the Lead's Agents or refresh its progress, and does not confirm delivery. Use message_staff to communicate normally with known running Leads; do not repeatedly resume work after staff-action failures.",
           parameters: staffResumeParameters,
           promptSnippet: undefined,
+          promptGuidelines: [FILE_HANDOFF_GUIDANCE],
           execute: (
             id: string,
             p: any,
@@ -2217,7 +2220,13 @@ function registerExtensionImpl(
           ) =>
             staffTool.execute(
               id,
-              { action: "resume", branch: p.branch, message: p.message },
+              {
+                action: "resume",
+                branch: p.branch,
+                message: p.message,
+                files: p.files,
+                retain: p.retain,
+              },
               signal,
               update,
               ctx,

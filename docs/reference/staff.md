@@ -201,9 +201,23 @@ assignment branch handle and a required fresh instruction:
 ```json
 {
   "branch": "feat/example",
-  "message": "Continue the existing work and prioritize the startup regression."
+  "message": "Continue the existing work and prioritize the startup regression.",
+  "files": ["startup.log"],
+  "retain": false
 }
 ```
+
+`files` is optional and defaults to no attachments; it accepts the same
+Manager-accessible paths and evidence references as `message_staff`. Complete
+supported UTF-8 text and semantic result bindings are included in the queued
+instruction. `retain` is optional and defaults to `false`. When `true`, the
+message text and supplied files are added to the existing assignment's required
+evidence; the original task is unchanged. Retention requires verified Manager
+authority and eligible evidence. Retained snapshots are also used for the
+immediate handoff. If retention succeeds but message preparation, enqueue, or
+recovery later fails, the result reports confirmed retention separately from
+whether the message was queued or the Lead recovered. `message_queued` means
+durable enqueue acceptance, not delivery or acknowledgment.
 
 The assignment must already exist; resume does not create or replace it. The
 message adds direction within the assignment without changing its saved task.
