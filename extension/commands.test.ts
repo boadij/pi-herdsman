@@ -19401,6 +19401,59 @@ test("Definitions edits global values without claiming masked project changes", 
   }
 });
 
+test("Definitions settings remain available when a global Agent references a project-only Agent", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const childPath = join(project, ".pi", "agents", "project-helper.md");
+  const parentPath = join(PI_AGENTS_DIR, "parent.md");
+  realFs.mkdirSync(dirname(childPath), { recursive: true });
+  realFs.writeFileSync(childPath, "---\nname: project-helper\n---\nhelper");
+  realFs.writeFileSync(
+    parentPath,
+    "---\nname: parent\nagents: [project-helper]\nmodel: provider/model\n---\nparent",
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  let selection = 0;
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.select = async (label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        assert.ok(options.some((option) => option.includes("parent")));
+        return options.find((option) => option.includes("parent"));
+      case 2:
+        assert.equal(label, "parent");
+        assert.ok(options.some((option) => option.includes("provider/model")));
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    assert.throws(
+      () => discoverAgentDefinitions(),
+      /agent parent references missing agent definition project-helper/u,
+    );
+    assert.ok(
+      discoverAgentDefinitions({ projectRoot: project }).some(
+        (definition) => definition.name === "parent",
+      ),
+    );
+    await command.handler("definitions", context);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(parentPath, { force: true });
+  }
+});
+
 test("Definitions refreshes the model registry before post-model thinking choices", async () => {
   setLeadEnvironment();
   const pi = fakePi({ thinkingLevel: "high" });

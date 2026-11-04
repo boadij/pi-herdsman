@@ -11,7 +11,7 @@ import {
   setManagerMergeOverride,
 } from "../config.ts";
 import {
-  discoverAgentDefinitions,
+  discoverGlobalAgentDefinition,
   discoverRoleDefinitions,
   isReservedRoleDefinition,
   isRuntimeRoleDefinition,
@@ -301,9 +301,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       const selectedDefinitions: Record<string, string | undefined> = {};
       const loadDefinitions = async (section: string, includeProject = true) =>
         section === "agents"
-          ? includeProject
-            ? (await host.contextAgentDefinitions(ctx)).definitions
-            : discoverAgentDefinitions()
+          ? (await host.contextAgentDefinitions(ctx)).definitions
           : discoverRoleDefinitions(
               includeProject && ctx.isProjectTrusted()
                 ? { projectRoot: ctx.cwd }
@@ -389,12 +387,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const selectedName = definition.name;
           let selectedAction = "model";
           while (true) {
-            const globalDefinition = (
-              await loadDefinitions(
-                isReservedRoleDefinition(definition.name) ? "roles" : "agents",
-                false,
-              )
-            ).find((candidate) => candidate.name === definition.name);
+            const globalDefinition = isReservedRoleDefinition(definition.name)
+              ? (await loadDefinitions("roles", false)).find(
+                  (candidate) => candidate.name === definition.name,
+                )
+              : discoverGlobalAgentDefinition(definition.name);
             const globalEnabled = globalDefinition
               ? host.agentDefinitionEnabled(globalDefinition)
               : true;
@@ -598,12 +595,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             } else continue;
             const result = host.updateAgentOverride(definition, field, value);
             const verified = await resolveDefinition(definition.name);
-            const verifiedGlobal = (
-              await loadDefinitions(
-                isReservedRoleDefinition(definition.name) ? "roles" : "agents",
-                false,
-              )
-            ).find((candidate) => candidate.name === definition.name);
+            const verifiedGlobal = isReservedRoleDefinition(definition.name)
+              ? (await loadDefinitions("roles", false)).find(
+                  (candidate) => candidate.name === definition.name,
+                )
+              : discoverGlobalAgentDefinition(definition.name);
             if (!verified)
               throw new Error(
                 `definition ${definition.name} is no longer available`,
