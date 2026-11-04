@@ -33,10 +33,13 @@ Pi Herdsman discovers project definitions when Pi considers the project
 trusted. Precedence is:
 
 ```text
-bundled < project < global
+bundled < global < trusted project
 ```
 
-Global definitions remain final user policy. For example:
+Global definitions are reusable defaults, not immutable policy: a trusted
+project can override `enabled`, `tools`, `agents`, and opaque `permission`
+values. Herdsman-owned authority and required coordination tools remain
+protected by runtime policy. For example:
 
 ```text
 .pi/
@@ -44,8 +47,10 @@ Global definitions remain final user policy. For example:
     └── reviewer.md
 ```
 
-Project definitions apply only to their project cwd, and the Definitions UI
-writes global overrides, never project files.
+Project definitions apply only to their project cwd. The Definitions UI edits
+global files only, labels editable values as global, and distinguishes a
+masked global edit from the effective value in the current project; it never
+writes project files.
 
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
@@ -278,7 +283,7 @@ complete configuration view. For their exact contract, see the
 below to inspect and manage definition configuration.
 
 For configuration management, inspect bundled, trusted project, and global
-Markdown layers in precedence order (`bundled < project < global`), identify
+Markdown layers in precedence order (`bundled < global < trusted project`), identify
 the target by frontmatter `name`, resolve overlays, and edit the smallest
 correct project or global file. Never edit bundled definitions. Use
 `list_agents` after an edit when available to invoke normal discovery and

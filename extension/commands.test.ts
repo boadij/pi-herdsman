@@ -19299,6 +19299,86 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   }
 });
 
+test("Definitions edits global values without claiming masked project changes", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const projectPath = join(project, ".pi", "agents", "implementer.md");
+  const globalPath = join(PI_AGENTS_DIR, "implementer.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.writeFileSync(
+    projectPath,
+    "---\nname: implementer\nmodel: project/model\nenabled: true\n---\nproject",
+  );
+  realFs.writeFileSync(
+    globalPath,
+    "---\nname: implementer\nmodel: global/model\nenabled: false\n---\nglobal",
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  let selection = 0;
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => [{ provider: "new", id: "model" }],
+    getAvailable: () => [{ provider: "new", id: "model" }],
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  context.ui.select = async (label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("implementer"));
+      case 2:
+        assert.ok(options.some((option) => option.includes("global/model")));
+        assert.ok(options.some((option) => option.includes("project/model")));
+        return options.find((option) => option.startsWith("Model"));
+      case 3:
+        return options.find((option) => option.includes("new/model"));
+      case 4:
+        assert.equal(label, "implementer");
+        assert.ok(options.some((option) => /^Enabled\s+off\b/u.test(option)));
+        return options.find((option) => option.startsWith("Enabled"));
+      case 5:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    await command.handler("definitions", context);
+    assert.equal(
+      discoverAgent("implementer", { projectRoot: project }).frontmatter.model,
+      "project/model",
+    );
+    assert.equal(
+      discoverAgent("implementer", { projectRoot: project }).frontmatter
+        .enabled,
+      true,
+    );
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: true/);
+    assert.match(
+      notices.join("\n"),
+      /Effective in this project: project\/model/u,
+    );
+    assert.doesNotMatch(
+      realFs.readFileSync(projectPath, "utf8"),
+      /new\/model/u,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(globalPath, { force: true });
+  }
+});
+
 test("Definitions refreshes the model registry before post-model thinking choices", async () => {
   setLeadEnvironment();
   const pi = fakePi({ thinkingLevel: "high" });

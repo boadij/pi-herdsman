@@ -11,6 +11,7 @@ import {
   setManagerMergeOverride,
 } from "../config.ts";
 import {
+  discoverAgentDefinitions,
   discoverRoleDefinitions,
   isReservedRoleDefinition,
   isRuntimeRoleDefinition,
@@ -298,11 +299,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "agents";
       const selectedDefinitions: Record<string, string | undefined> = {};
-      const loadDefinitions = async (section: string) =>
+      const loadDefinitions = async (section: string, includeProject = true) =>
         section === "agents"
-          ? (await host.contextAgentDefinitions(ctx)).definitions
+          ? includeProject
+            ? (await host.contextAgentDefinitions(ctx)).definitions
+            : discoverAgentDefinitions()
           : discoverRoleDefinitions(
-              ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+              includeProject && ctx.isProjectTrusted()
+                ? { projectRoot: ctx.cwd }
+                : {},
             );
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions(
@@ -342,8 +347,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             const { model, thinking } = this.executionSettings(ctx, definition);
             const sources = [
               definition.extensionSource ? "bundled" : undefined,
-              definition.projectSource ? "project" : undefined,
               definition.overrideSource ? "global" : undefined,
+              definition.projectSource ? "project" : undefined,
             ]
               .filter(Boolean)
               .join(" + ");
@@ -384,7 +389,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const selectedName = definition.name;
           let selectedAction = "model";
           while (true) {
-            const { model, thinking } = this.executionSettings(ctx, definition);
+            const globalDefinition = (
+              await loadDefinitions(
+                isReservedRoleDefinition(definition.name) ? "roles" : "agents",
+                false,
+              )
+            ).find((candidate) => candidate.name === definition.name);
+            const globalEnabled = globalDefinition
+              ? host.agentDefinitionEnabled(globalDefinition)
+              : true;
             const managedDefinition =
               definition.name === MANAGED_LEAD_DEFINITION_NAME;
             const runtimeProfile = isRuntimeRoleDefinition(definition.name);
@@ -396,8 +409,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? [
                       {
                         value: "model",
-                        label: "Model",
-                        description: model,
+                        label: "Model (global)",
+                        description: `${typeof globalDefinition?.frontmatter.model === "string" ? globalDefinition.frontmatter.model : "inherit"}${typeof definition.frontmatter.model === "string" && definition.frontmatter.model !== globalDefinition?.frontmatter.model ? ` · Effective here: ${definition.frontmatter.model}` : ""}`,
                         help: managedDefinition
                           ? "Model for future managed Lead launches. Changes do not affect a running Lead."
                           : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
@@ -408,8 +421,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? [
                       {
                         value: "thinking",
-                        label: "Thinking",
-                        description: thinking,
+                        label: "Thinking (global)",
+                        description: `${typeof globalDefinition?.frontmatter.thinking === "string" ? globalDefinition.frontmatter.thinking : "inherit"}${typeof definition.frontmatter.thinking === "string" && definition.frontmatter.thinking !== globalDefinition?.frontmatter.thinking ? ` · Effective here: ${definition.frontmatter.thinking}` : ""}`,
                         help: managedDefinition
                           ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
                           : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
@@ -421,9 +434,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "enabled",
                         label: "Enabled",
-                        description: host.agentDefinitionEnabled(definition)
-                          ? "on"
-                          : "off",
+                        description: globalEnabled ? "on" : "off",
                         help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                       },
                     ]
@@ -482,8 +493,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ...new Set(models.map((item: Model) => modelToken(item))),
               ].sort();
               const configured =
-                typeof definition.frontmatter.model === "string"
-                  ? definition.frontmatter.model
+                typeof globalDefinition?.frontmatter.model === "string"
+                  ? globalDefinition.frontmatter.model
                   : undefined;
               if (configured && !tokens.includes(configured)) {
                 const resolved = this.resolveConfiguredModel(ctx, configured);
@@ -539,8 +550,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               field = "thinking";
               await ctx.modelRegistry.refresh();
               const configured =
-                typeof definition.frontmatter.model === "string"
-                  ? definition.frontmatter.model
+                typeof globalDefinition?.frontmatter.model === "string"
+                  ? globalDefinition.frontmatter.model
                   : undefined;
               const model = configured
                 ? this.resolveConfiguredModel(ctx, configured)
@@ -549,10 +560,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? getSupportedThinkingLevels(model)
                 : [...host.validThinkingLevels];
               const configuredThinking =
-                definition.frontmatter.thinking === false
+                globalDefinition?.frontmatter.thinking === false
                   ? "off"
-                  : typeof definition.frontmatter.thinking === "string"
-                    ? definition.frontmatter.thinking
+                  : typeof globalDefinition?.frontmatter.thinking === "string"
+                    ? globalDefinition.frontmatter.thinking
                     : undefined;
               const thinkingItems = [
                 { value: "inherit", label: "Inherit current session" },
@@ -577,10 +588,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 selectedThinking === "inherit" ? undefined : selectedThinking;
             } else if (action === "enabled") {
               field = "enabled";
-              value = !host.agentDefinitionEnabled(definition);
+              value = !globalEnabled;
             } else continue;
             const result = host.updateAgentOverride(definition, field, value);
             const verified = await resolveDefinition(definition.name);
+            const verifiedGlobal = (
+              await loadDefinitions(
+                isReservedRoleDefinition(definition.name) ? "roles" : "agents",
+                false,
+              )
+            ).find((candidate) => candidate.name === definition.name);
             if (!verified)
               throw new Error(
                 `definition ${definition.name} is no longer available`,
@@ -589,11 +606,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               throw new Error(
                 `agent ${definition.name} override verification failed`,
               );
+            const globalValue =
+              field === "enabled"
+                ? verifiedGlobal
+                  ? host.agentDefinitionEnabled(verifiedGlobal)
+                  : true
+                : verifiedGlobal?.frontmatter[field];
+            const effectiveValue =
+              field === "enabled"
+                ? host.agentDefinitionEnabled(verified)
+                : verified.frontmatter[field];
             ctx.ui.notify(
               result.changed
-                ? field === "enabled"
-                  ? `${definition.name} ${value ? "enabled" : "disabled"}.`
-                  : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
+                ? `Global ${definition.name} ${field} ${globalValue === undefined ? "inherited" : `set to ${globalValue}`}.${globalValue !== effectiveValue ? ` Effective in this project: ${effectiveValue ?? "inherited"}.` : ""}`
                 : `${definition.name} ${field} is already inherited; no change made.`,
             );
             definition = verified;

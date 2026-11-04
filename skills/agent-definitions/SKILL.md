@@ -14,11 +14,13 @@ this skill does not define a second schema or management API.
 1. Inspect the Markdown definition layers before changing configuration.
    - Identify a definition by its frontmatter `name`, never by its filename.
      Inspect bundled, trusted project, and global layers in precedence order
-     (`bundled < project < global`), including which files contribute to the
+     (`bundled < global < trusted project`), including which files contribute to the
      effective definition. Project definitions apply only when Pi trusts the
      project.
    - Resolve matching overlays and effective field values before choosing the
-     requested project or global edit scope. `list_agents` is useful after an
+     requested project or global edit scope. The Definitions UI edits global
+     files only; compare its global editable values with effective project
+     values and report masked changes accurately. `list_agents` is useful after an
      edit to invoke Herdsman's existing discovery and validation, but its
      enabled-definition capability summary does not expose source paths or
      complete configuration. It cannot establish effective configuration by

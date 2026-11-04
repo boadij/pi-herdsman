@@ -511,8 +511,8 @@ function discoverEffectiveDefinitions(
     throw new Error(
       `${projectChief.path} chief definition: project overrides are not supported; configure chief globally instead`,
     );
-  applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
+  applyDefinitionLayer(definitions, project, "projectSource");
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
