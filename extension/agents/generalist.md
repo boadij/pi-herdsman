@@ -9,7 +9,7 @@ noExtensions: true
 noSkills: true
 skills: []
 systemPromptMode: append
-tools: [read, bash, edit, write]
+tools: [read, bash, powershell, edit, write]
 ---
 
 You are generalist, a general-purpose execution agent for one explicitly assigned

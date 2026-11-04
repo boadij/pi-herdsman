@@ -186,6 +186,14 @@ Extension code itself is not sandboxed by the callable-tool allowlist.
 Independent read-only internal team reviewer. Findings inform the delegator's
 decisions, not user or supervisor approval.
 
+### `validator`
+
+Verification-only execution of focused tests, checks, and isolated smoke
+scenarios for existing changes. It reports observed results without authoring
+fixes or reviewing design. Like `implementer` and `generalist`, it offers both
+Pi's `bash` and Windows-only `powershell` tools; shell execution is not a
+read-only sandbox.
+
 ### `scout`
 
 Fast read-only codebase reconnaissance.
