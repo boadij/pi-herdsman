@@ -868,6 +868,7 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
   );
   let writes = 0;
   let launches = 0;
+  let preparedFiles: unknown[] = [];
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -944,14 +945,22 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     herdrSessionSnapshot: async () => ({ agents: [] }),
     liveAgent: async () => [],
     scanAgentStates: () => ({ states: [] }),
+    resolveMessageFiles: (_ctx: unknown, files: string[] = []) => files,
     messageLimits: async () => ({
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },
     }),
-    prepareCoordinationInput: async (message: string) => ({
-      text: message,
-      resultBindings: [],
-    }),
+    prepareCoordinationInput: async (
+      _ctx: unknown,
+      message: string,
+      files: unknown[],
+    ) => {
+      preparedFiles = files;
+      return {
+        text: `${message} ${files.join(" ")}`,
+        resultBindings: [],
+      };
+    },
     writeChiefMessage: () => {
       if (++writes === 1) throw new Error("disk write failed");
     },
@@ -960,14 +969,19 @@ test("resume queue failure does not launch a Lead and reports enqueue unconfirme
     },
     appendDurableError: () => {},
   } as any);
-  await assert.rejects(
-    runtime.activateProjectLead(
-      { action: "resume", branch: assignment.branch, message: "continue" },
-      ctx,
-      new AbortController().signal,
-    ),
-    /enqueue could not be confirmed/,
-  );
+  const result = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "continue",
+      files: ["startup.log"],
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(result.details.enqueue_uncertain, true);
+  assert.equal(result.details.status, "enqueue_unconfirmed");
+  assert.deepEqual(preparedFiles, ["startup.log"]);
   assert.equal(writes, 1);
   assert.equal(launches, 0);
 });
@@ -1080,6 +1094,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
+    resolveMessageFiles: () => [],
     messageLimits: async () => ({
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },

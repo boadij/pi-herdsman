@@ -95,6 +95,15 @@ pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
 the remaining Git branch. Retirement does not delete branches or Pi sessions.
 
+Resume also accepts optional `files` for explicit evidence handoff and
+`retain: true` to add the instruction and supplied files to the assignment's
+continuing required evidence. By default, attachments are handoff-only and
+retention is disabled. Retention does not replace the original task. Confirmed
+retention is reported separately if message enqueue or Lead recovery fails;
+queue acceptance does not prove delivery. A stopped Lead receives the Manager
+instruction before its assignment notice and launch, while an already-running
+Lead receives only the fresh Manager instruction without restart.
+
 For paused legacy assignments without usable checkout provenance, an active
 Manager can choose `Forget orphaned assignment…` in the overview or run
 `/manager forget <branch>`. This explicitly relinquishes Manager authority; it
@@ -119,9 +128,9 @@ See [`delegate_work`](../reference/staff.md#delegate_work) and
 
 Files supplied to `delegate_work` are retained as required evidence for the
 assignment and delivered to future delegated descendants. To make later
-review material a continuing requirement while sending it to an assigned
-Lead, a Manager uses `message_staff` with `retain: true`; the message text and
-files then become required evidence for that assignment. The Manager alone controls
+review material a continuing requirement while messaging an assigned Lead, a
+Manager can use `message_staff` or `resume_work` with `retain: true`; the
+message text and files then become required evidence for that assignment. The Manager alone controls
 its requirements; sibling Lead assignments do not automatically share evidence.
 Leads delegate corrections with recipient-specific
 `files` and send continuing findings through `message_supervisor.files` for
@@ -130,7 +139,8 @@ files limited to that handoff. Retention
 requires verified assignment authority and eligible evidence, and failure is
 explicit rather than falling back to an ordinary handoff. Ordinary Leads have
 no automatic evidence scope. See [required assignment evidence](handoffs.md#required-assignment-evidence)
-and the [`message_staff`](../reference/staff.md#message_staff) and
+and the [`message_staff`](../reference/staff.md#message_staff),
+[`resume_work`](../reference/staff.md#resume_work), and
 [`delegate_agent`](../reference/agent.md#delegate_agent) references.
 To remove assignment-owned requirements, open the project assignment action menu,
 choose **Retained evidence**, select the entry by ID, name, and origin, then

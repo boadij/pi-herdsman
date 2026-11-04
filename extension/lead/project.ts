@@ -1897,7 +1897,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         base?: string;
         files?: string[];
       }
-    | { action: "resume"; branch: string; message: string };
+    | {
+        action: "resume";
+        branch: string;
+        message: string;
+        files?: string[];
+        retain?: boolean;
+      };
   type StaffOperation =
     | { action: "list" }
     | {
@@ -1907,7 +1913,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         base?: string;
         files?: string[];
       }
-    | { action: "resume"; branch: string; message: string }
+    | {
+        action: "resume";
+        branch: string;
+        message: string;
+        files?: string[];
+        retain?: boolean;
+      }
     | { action: "remove"; branch: string }
     | { action: "merge"; branch: string; expected_head: string }
     | { action: "stop"; branch: string }
@@ -1930,7 +1942,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           base?: string;
           files?: string[];
         }
-      | { action: "resume"; branch: string; message: string },
+      | {
+          action: "resume";
+          branch: string;
+          message: string;
+          files?: string[];
+          retain?: boolean;
+        },
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
@@ -2703,6 +2721,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let resumeMessageId: string | undefined;
     let resumeMessageQueued = false;
     let resumeMessageQueueAttempted = false;
+    let evidenceRetained = false;
     const operationName =
       operation.action === "resume" ? "resume_work" : "delegate_work";
     const manager = await currentManager(ctx);
@@ -2781,72 +2800,112 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : undefined;
     const id =
       operation.action === "resume" ? currentAssignment!.id : operation.id;
+    const resumeRecord = (
+      text: string,
+      resultBindings: readonly import("../storage.ts").ResultBinding[],
+      createdAt: number,
+    ): ChiefMessageRecord => ({
+      version: 2,
+      build: HERDSMAN_BUILD,
+      id: resumeMessageId!,
+      leaseId: manager.leaseId,
+      kind: "manager_message",
+      fromSessionId: manager.piSessionId,
+      toSessionId: id,
+      leadSessionId: id,
+      branch: currentAssignment!.branch,
+      text,
+      ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+      createdAt,
+    });
     let preparedResumeMessage:
       Awaited<ReturnType<typeof prepareCoordinationInput>> | undefined;
-    if (operation.action === "resume") {
-      resumeMessageId = randomUUID();
-      preparedResumeMessage = await prepareCoordinationInput(
-        ctx,
-        operation.message,
-        [],
-        "resume_work",
-        "Message",
-        (candidate, resultBindings) => ({
-          version: 2,
-          build: HERDSMAN_BUILD,
-          id: resumeMessageId!,
-          leaseId: manager.leaseId,
-          kind: "manager_message",
-          fromSessionId: manager.piSessionId,
-          toSessionId: id,
-          leadSessionId: id,
-          branch: currentAssignment!.branch,
-          text: candidate,
-          ...(resultBindings.length
-            ? { resultBindings: [...resultBindings] }
-            : {}),
-          createdAt: Date.now(),
-        }),
-      );
-    }
-    const queueResumeHandoff = (includeAssignment: boolean) => {
+    let resumeEvidenceScope: Awaited<ReturnType<ManagerEvidence>> | undefined;
+    const prepareResumeHandoff = async () => {
+      if (operation.action !== "resume") return;
+      resumeMessageId ??= randomUUID();
+      try {
+        const handoff = await prepareStaffHandoffEvidence(
+          ctx,
+          operation.message,
+          operation.files,
+          operation.retain === true,
+          "resume_work",
+          currentAssignment!,
+          undefined,
+          () => {
+            evidenceRetained = true;
+          },
+        );
+        resumeEvidenceScope = handoff.evidenceScope;
+        preparedResumeMessage = await prepareCoordinationInput(
+          ctx,
+          operation.message,
+          handoff.files,
+          "resume_work",
+          "Message",
+          (candidate, resultBindings) =>
+            resumeRecord(candidate, resultBindings, Date.now()),
+        );
+      } catch (error) {
+        if (!evidenceRetained) throw error;
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Required evidence was retained, but the resume instruction was not prepared, queued, or recovered. ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: {
+            ok: false,
+            action: "resume",
+            branch,
+            session: id,
+            message_queued: false,
+            recovery_verified: false,
+            evidence_retained: true,
+            status: "handoff_incomplete",
+          },
+        };
+      }
+    };
+    const queueResumeHandoff = async (includeAssignment: boolean) => {
       if (operation.action !== "resume" || !preparedResumeMessage)
         throw new Error("Resume handoff was not prepared");
       const createdAt = Date.now();
-      resumeMessageQueueAttempted = true;
       try {
         // Publish the triggering instruction first so an inbox drain racing
         // the assignment write cannot start a turn with stale task context.
-        writeChiefMessage({
-          version: 2,
-          build: HERDSMAN_BUILD,
-          id: resumeMessageId!,
-          leaseId: manager.leaseId,
-          kind: "manager_message",
-          fromSessionId: manager.piSessionId,
-          toSessionId: id,
-          leadSessionId: id,
-          branch: currentAssignment!.branch,
-          text: preparedResumeMessage.text,
-          ...(preparedResumeMessage.resultBindings.length
-            ? { resultBindings: preparedResumeMessage.resultBindings }
-            : {}),
-          createdAt: createdAt + 1,
-        });
-        if (includeAssignment)
-          writeChiefMessage({
-            version: 2,
-            build: HERDSMAN_BUILD,
-            id,
-            leaseId: manager.leaseId,
-            kind: "project_assignment",
-            fromSessionId: manager.piSessionId,
-            toSessionId: id,
-            leadSessionId: id,
-            branch: currentAssignment!.branch,
-            text: "Project assignment ready.",
-            createdAt,
+        const publish = () => {
+          resumeMessageQueueAttempted = true;
+          writeChiefMessage(
+            resumeRecord(
+              preparedResumeMessage.text,
+              preparedResumeMessage.resultBindings,
+              createdAt + 1,
+            ),
+          );
+          if (includeAssignment)
+            writeChiefMessage({
+              version: 2,
+              build: HERDSMAN_BUILD,
+              id,
+              leaseId: manager.leaseId,
+              kind: "project_assignment",
+              fromSessionId: manager.piSessionId,
+              toSessionId: id,
+              leadSessionId: id,
+              branch: currentAssignment!.branch,
+              text: "Project assignment ready.",
+              createdAt,
+            });
+        };
+        if (resumeEvidenceScope)
+          await resumeEvidenceScope.revalidate(() => {
+            resumeEvidenceScope!.verify();
+            publish();
           });
+        else publish();
       } catch (error) {
         throw new Error(
           `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. ${error instanceof Error ? error.message : String(error)}`,
@@ -2932,7 +2991,53 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const current = await currentManager(ctx);
       if (!current || !sameManagerDescriptor(current, manager))
         throw new Error("Manager changed during project activation");
-      queueResumeHandoff(false);
+      const partial = await prepareResumeHandoff();
+      if (partial) return partial;
+      const postPrepareManager = await currentManager(ctx);
+      const postPrepareAssignment = readProjectAssignment(
+        runtime,
+        manager.repoKey,
+        branch,
+      );
+      const postPrepareLive = await liveAgent(ctx, id);
+      if (
+        !postPrepareManager ||
+        !sameManagerDescriptor(postPrepareManager, manager) ||
+        !postPrepareAssignment ||
+        postPrepareAssignment.id !== id ||
+        postPrepareLive.length !== 1 ||
+        postPrepareLive[0].workspace_id !==
+          branchWorktrees[0]?.open_workspace_id
+      )
+        throw new Error(
+          "Manager, assignment, or running Lead changed during resume handoff preparation",
+        );
+      try {
+        await queueResumeHandoff(false);
+      } catch (error) {
+        if (!evidenceRetained) throw error;
+        const uncertain = resumeMessageQueueAttempted;
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${uncertain ? "Resume instruction enqueue could not be confirmed; inspect the exact Lead inbox before retrying." : "The resume instruction was not queued."} Required evidence was retained. ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: {
+            ok: false,
+            action: "resume",
+            branch,
+            session: id,
+            ...(uncertain
+              ? { enqueue_uncertain: true }
+              : { message_queued: false }),
+            recovery_verified: false,
+            evidence_retained: true,
+            status: uncertain ? "enqueue_unconfirmed" : "handoff_incomplete",
+          },
+        };
+      }
       return {
         content: [
           {
@@ -2949,6 +3054,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           already_running: true,
           message_queued: true,
           message_id: resumeMessageId,
+          ...(operation.retain === true ? { evidence_retained: true } : {}),
           ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
@@ -3280,7 +3386,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error("Manager changed before resume handoff");
         if (!stillAssigned || stillAssigned.id !== assignment.id)
           throw new Error("Project assignment changed before resume handoff");
-        queueResumeHandoff(true);
+        const partial = await prepareResumeHandoff();
+        if (partial) return partial;
+        const postPrepareManager = await currentManager(ctx);
+        const postPrepareAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (
+          !postPrepareManager ||
+          !sameManagerDescriptor(postPrepareManager, manager) ||
+          !postPrepareAssignment ||
+          postPrepareAssignment.id !== assignment.id
+        )
+          throw new Error(
+            "Manager or project assignment changed during resume handoff preparation",
+          );
+        if (branchWorktrees[0]?.open_workspace_id)
+          await assertUnoccupied(branchWorktrees[0].open_workspace_id);
+        await queueResumeHandoff(true);
       }
       let lead: any;
       let startedLead = false;
@@ -3611,6 +3736,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ...(operation.action === "resume"
             ? { message_queued: true, message_id: resumeMessageId }
             : {}),
+          ...(operation.action === "resume" && operation.retain === true
+            ? { evidence_retained: evidenceRetained }
+            : {}),
           ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
@@ -3633,12 +3761,51 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             message_id: resumeMessageId,
             recovery_verified: false,
             status: "recovery_unverified",
+            ...(operation.retain === true
+              ? { evidence_retained: evidenceRetained }
+              : {}),
           },
         };
       if (resumeMessageQueueAttempted)
-        throw new Error(
-          `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. Recovery was not started. ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. Recovery was not started.${evidenceRetained ? " Required evidence was retained." : ""} ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: {
+            ok: false,
+            action: "resume",
+            branch,
+            session: id,
+            enqueue_uncertain: true,
+            recovery_verified: false,
+            status: "enqueue_unconfirmed",
+            ...(operation.retain === true
+              ? { evidence_retained: evidenceRetained }
+              : {}),
+          },
+        };
+      if (evidenceRetained)
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Required evidence was retained, but the resume instruction was not queued and recovery was not started. ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          details: {
+            ok: false,
+            action: "resume",
+            branch,
+            session: id,
+            message_queued: false,
+            recovery_verified: false,
+            evidence_retained: true,
+            status: "handoff_incomplete",
+          },
+        };
       throw error;
     } finally {
       for (const promptPath of promptPaths)
@@ -4249,59 +4416,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (lead.relationship === "assigned") !== !!initialAssignment
     )
       throw new Error("Lead assignment changed before the message was queued");
-    let retainedFiles: RequiredEvidence[] = [];
-    let evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
-      ? await host.managerEvidence?.(ctx, params.files ?? [])
-      : undefined;
-    if (params.retain === true) {
-      if (activeRole() !== "manager" || !initialAssignment)
-        throw new Error(
-          "Required evidence can be retained only by a Manager forwarding to an assigned project Lead",
-        );
-      const supplied = resolveMessageFiles(
+    let evidenceRetained = false;
+    let handoff: Awaited<ReturnType<typeof prepareStaffHandoffEvidence>>;
+    try {
+      handoff = await prepareStaffHandoffEvidence(
         ctx,
+        params.message,
         params.files,
+        params.retain === true,
         `staff.${params.action}`,
-        evidenceScope?.retained,
-        evidenceScope?.roots,
-      );
-      await updateAssignmentEvidence(
-        _id,
-        {
-          branch: initialAssignment.branch,
-          add: params.files,
-          resolvedAdd: supplied,
-          evidenceScope,
-          text: params.message,
-          expectedAssignment: selectedAssignment,
-        },
-        undefined,
-        undefined,
-        ctx,
-        (files) => {
-          retainedFiles = files;
+        initialAssignment,
+        selectedAssignment,
+        () => {
+          evidenceRetained = true;
         },
       );
+    } catch (error) {
+      if (evidenceRetained)
+        throw new Error(
+          `Required evidence was retained, but the staff handoff failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      throw error;
     }
     try {
-      if (params.retain === true)
-        evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
-          ? await host.managerEvidence?.(ctx, params.files ?? [])
-          : undefined;
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
-        params.retain === true
-          ? retainedFiles.flatMap((file) =>
-              "result" in file ? [file.result] : [file.path],
-            )
-          : resolveMessageFiles(
-              ctx,
-              params.files,
-              `staff.${params.action}`,
-              evidenceScope?.retained,
-              evidenceScope?.roots,
-            ),
+        handoff.files,
         `staff.${params.action}`,
         "Message",
         (candidate, resultBindings) => ({
@@ -4382,10 +4523,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         createdAt,
       };
       const runtime = supervisionRuntime();
-      if (evidenceScope)
-        await evidenceScope.revalidate(() =>
+      if (handoff.evidenceScope)
+        await handoff.evidenceScope.revalidate(() =>
           withProjectAssignmentAuthority(() => {
-            evidenceScope.verify();
+            handoff.evidenceScope!.verify();
             writeChiefMessage(record, runtime);
           }),
         );
@@ -4401,7 +4542,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
       });
     } catch (error) {
-      if (params.retain === true)
+      if (evidenceRetained)
         throw new Error(
           `Required evidence was retained, but the staff handoff failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -4686,6 +4827,69 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           name,
         })),
       },
+    };
+  };
+  const prepareStaffHandoffEvidence = async (
+    ctx: ExtensionContext,
+    message: string,
+    files: string[] | undefined,
+    retain: boolean,
+    operation: string,
+    assignment: ProjectAssignment | undefined,
+    expectedAssignment?: ProjectAssignment,
+    onPersisted?: () => void,
+  ) => {
+    let evidenceScope = hasManagerEvidenceSelectors(files ?? [])
+      ? await host.managerEvidence?.(ctx, files ?? [])
+      : undefined;
+    const supplied = resolveMessageFiles(
+      ctx,
+      files,
+      operation,
+      evidenceScope?.retained,
+      evidenceScope?.roots,
+    );
+    if (!retain) return { files: supplied, evidenceScope };
+    if (!assignment)
+      throw new Error(
+        "Required evidence can be retained only by a Manager forwarding to an assigned project Lead",
+      );
+    const currentAssignment =
+      expectedAssignment ??
+      host.readProjectAssignment(
+        host.supervisionRuntime(),
+        assignment.repoKey,
+        assignment.branch,
+      );
+    if (!currentAssignment || currentAssignment.id !== assignment.id)
+      throw new Error("Project assignment changed before evidence retention");
+    let retainedFiles: RequiredEvidence[] = [];
+    await updateAssignmentEvidence(
+      assignment.id,
+      {
+        branch: assignment.branch,
+        add: files,
+        resolvedAdd: supplied,
+        evidenceScope,
+        text: message,
+        expectedAssignment: currentAssignment,
+      },
+      undefined,
+      undefined,
+      ctx,
+      (accepted) => {
+        retainedFiles = accepted;
+        onPersisted?.();
+      },
+    );
+    evidenceScope = hasManagerEvidenceSelectors(files ?? [])
+      ? await host.managerEvidence?.(ctx, files ?? [])
+      : undefined;
+    return {
+      files: retainedFiles.flatMap((file) =>
+        "result" in file ? [file.result] : [file.path],
+      ),
+      evidenceScope,
     };
   };
   const inspectRequiredEvidence = async (
