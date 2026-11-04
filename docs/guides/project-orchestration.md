@@ -15,7 +15,8 @@ regardless of an ordinary Lead's saved execution preference. The bundled
 default keeps direct Lead work read-only and delegates executable project work
 to managed Agents while the Lead retains decomposition,
 architecture, scope, technical direction, integration, conflict resolution,
-acceptance, and final technical decisions. Project and global overlays can
+acceptance, and final technical decisions. Project, global, and trusted private
+repository overlays can
 deliberately customize that launch policy; see
 [Customizing bundled agents](customizing-agents.md#managed-project-lead).
 

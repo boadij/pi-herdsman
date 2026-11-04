@@ -5296,6 +5296,13 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
       "agents",
       "overridden.md",
     );
+    const privateRepositorySource = join(
+      tmpdir(),
+      "git-common",
+      "pi-herdsman",
+      "agents",
+      "overridden.md",
+    );
     const customSource = join(home, ".pi", "agent", "agents", "custom.md");
     const tokens: string[] = [];
     const theme = {
@@ -5325,6 +5332,7 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
           extensionSource: "/extension/agents/overridden.md",
           projectSource,
           overrideSource,
+          privateRepositorySource,
           model: "provider/model",
           thinking: "high",
           skills: [
@@ -5365,6 +5373,19 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
       new RegExp(
         `<muted>project\\s+<\\/muted><dim>${escapedRegExp(nativeDisplay(projectSource))}<\\/dim>`,
       ),
+    );
+    assert.match(
+      output,
+      new RegExp(
+        `<muted>private repo\\s+<\\/muted><dim>${escapedRegExp(nativeDisplay(privateRepositorySource))}<\\/dim>`,
+      ),
+    );
+    assert.ok(
+      output.indexOf(nativeDisplay(overrideSource)) <
+        output.indexOf(nativeDisplay(projectSource)) &&
+        output.indexOf(nativeDisplay(projectSource)) <
+          output.indexOf(nativeDisplay(privateRepositorySource)),
+      "sources follow global, project, then private repository composition order",
     );
     assert.match(
       output,

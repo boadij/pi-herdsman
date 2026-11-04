@@ -33,8 +33,17 @@ Pi Herdsman discovers project definitions when Pi considers the project
 trusted. Precedence is:
 
 ```text
-bundled < global < trusted project
+bundled < global < trusted project < private repository
 ```
+
+For trusted Git worktrees, the optional private layer is stored under the Git
+common directory shared by linked worktrees. Find it by running
+`git rev-parse --path-format=absolute --git-common-dir` from the worktree, then
+put Agent files in its `pi-herdsman/agents/` directory and role profiles in
+`pi-herdsman/roles/`. Do not assume `<worktree>/.git` is a directory; linked
+worktrees use a `.git` file. Private definitions belong to one clone and do
+not reach independent clones. Referenced skills or scripts need accessible
+paths of their own and are not synchronized by this feature.
 
 Global definitions are reusable defaults, not immutable policy: a trusted
 project can override `enabled`, `tools`, `agents`, and opaque `permission`
@@ -47,21 +56,23 @@ protected by runtime policy. For example:
     └── reviewer.md
 ```
 
-Project definitions apply only to their project cwd. The Definitions UI edits
+Project definitions apply only to their project cwd; private definitions apply
+to trusted worktrees in their local Git clone. The Definitions UI edits
 global files only, labels editable values as global, and distinguishes a
-masked global edit from the effective value in the current project; it never
-writes project files.
+masked global edit from the effective value in the current project or private
+repository; it never writes project or private files.
 
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
 
 Role profiles use separate directories: `dist/roles/` for bundled
 profiles, `<cwd>/.pi/pi-herdsman/roles/` for trusted project overlays,
-and `<agentDir>/pi-herdsman/roles/` for global overlays. `<agentDir>`
+`<agentDir>/pi-herdsman/roles/` for global overlays, and
+`<git-common-dir>/pi-herdsman/roles/` for private repository overlays. `<agentDir>`
 is Pi's agent directory (normally `~/.pi/agent`). The same precedence applies.
 Reserved role names are invalid in Agent directories, and other names are
-invalid in role-profile directories. Chief is global-only; a project Chief
-profile is an error.
+invalid in role-profile directories. Chief is global-only; project and private
+repository Chief profiles are errors.
 
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.

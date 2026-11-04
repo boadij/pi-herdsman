@@ -7,7 +7,9 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  realpathSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -139,6 +141,7 @@ export type AgentDefinition = {
   extensionSource?: string;
   projectSource?: string;
   overrideSource?: string;
+  privateRepositorySource?: string;
 };
 
 export const AGENT_COORDINATION_TOOLS = [
@@ -232,10 +235,8 @@ function validateDefinition(
   definition: AgentDefinition,
   options: { allowBodyMode?: boolean } = {},
 ): void {
-  const { frontmatter, name, overrideSource, projectSource, extensionSource } =
-    definition;
-  const source =
-    overrideSource ?? projectSource ?? extensionSource ?? definition.path;
+  const { frontmatter, name } = definition;
+  const source = definition.path;
   const invalid = (field: string, reason: string): never => {
     throw new Error(
       `${source}${name ? ` agent ${name}` : ""} field ${field}: ${reason}`,
@@ -380,7 +381,52 @@ function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
   return readAgentDefinitions(root);
 }
 
-type DefinitionLayerSource = "projectSource" | "overrideSource";
+function privateRepositoryRoot(projectRoot: string): string | undefined {
+  let output: string;
+  try {
+    output = execFileSync(
+      "git",
+      [
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        timeout: 2_000,
+        maxBuffer: 8_192,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    const failure = error as Error & {
+      code?: string;
+      status?: number | null;
+      stderr?: Buffer | string;
+    };
+    const diagnostic = failure.stderr?.toString() ?? "";
+    if (
+      failure.code === "ENOENT" ||
+      (failure.status === 128 && /not a git repository/u.test(diagnostic))
+    )
+      return undefined;
+    throw new Error(
+      `Cannot resolve private definitions for ${projectRoot}: ${diagnostic.trimEnd() || failure.message}`,
+      { cause: error },
+    );
+  }
+  const [inside, commonDir, ...extra] = output.trimEnd().split(/\r?\n/u);
+  if (inside === "false") return undefined;
+  if (inside !== "true" || !commonDir || !isAbsolute(commonDir) || extra.length)
+    throw new Error(`Invalid Git common-directory result for ${projectRoot}`);
+  return join(realpathSync(commonDir), "pi-herdsman");
+}
+
+type DefinitionLayerSource =
+  "projectSource" | "overrideSource" | "privateRepositorySource";
 
 function applyDefinitionLayer(
   definitions: Map<string, AgentDefinition>,
@@ -406,6 +452,7 @@ function applyDefinitionLayer(
       extensionSource: base.extensionSource,
       projectSource: base.projectSource,
       overrideSource: base.overrideSource,
+      privateRepositorySource: base.privateRepositorySource,
       [sourceField]: definition.path,
     };
     validateDefinition(effective);
@@ -486,8 +533,19 @@ function discoverEffectiveDefinitions(
         join(options.projectRoot, CONFIG_DIR_NAME, ...directory),
       )
     : [];
+  const privateRoot = options.projectRoot
+    ? privateRepositoryRoot(options.projectRoot)
+    : undefined;
+  const privateRepository = privateRoot
+    ? readOptionalAgentDefinitions(join(privateRoot, role ? "roles" : "agents"))
+    : [];
   const user = readOptionalAgentDefinitions(join(getAgentDir(), ...directory));
-  for (const definition of [...bundled, ...project, ...user]) {
+  for (const definition of [
+    ...bundled,
+    ...project,
+    ...user,
+    ...privateRepository,
+  ]) {
     if (isReservedRoleDefinition(definition.name) !== role)
       throw new Error(
         `${definition.path}: ${role ? "non-role name in pi-herdsman/roles directory" : "reserved role name in agents directory; use pi-herdsman/roles"}`,
@@ -501,7 +559,12 @@ function discoverEffectiveDefinitions(
       definition.extensionSource = definition.path;
     validateDefinition(definition);
   }
-  for (const definition of [...bundled, ...project, ...user]) {
+  for (const definition of [
+    ...bundled,
+    ...project,
+    ...user,
+    ...privateRepository,
+  ]) {
     validateManagedLeadLayer(definition);
     validateRuntimeRoleLayer(definition);
   }
@@ -512,8 +575,20 @@ function discoverEffectiveDefinitions(
     throw new Error(
       `${projectChief.path} chief definition: project overrides are not supported; configure chief globally instead`,
     );
+  const privateChief = privateRepository.find(
+    ({ name }) => name === CHIEF_DEFINITION_NAME,
+  );
+  if (privateChief)
+    throw new Error(
+      `${privateChief.path} chief definition: private repository overrides are not supported; configure chief globally instead`,
+    );
   applyDefinitionLayer(definitions, user, "overrideSource");
   applyDefinitionLayer(definitions, project, "projectSource");
+  applyDefinitionLayer(
+    definitions,
+    privateRepository,
+    "privateRepositorySource",
+  );
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
@@ -676,6 +751,9 @@ export function agentDefinitionMetadata(
     ...(agent.overrideSource === undefined
       ? {}
       : { overrideSource: agent.overrideSource }),
+    ...(agent.privateRepositorySource === undefined
+      ? {}
+      : { privateRepositorySource: agent.privateRepositorySource }),
     ...(typeof description === "string" ? { description } : {}),
     ...(model === undefined ? {} : { model }),
     ...(thinking === undefined ? {} : { thinking }),

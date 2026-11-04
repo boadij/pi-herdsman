@@ -2361,7 +2361,9 @@ function humanDefinitionSource(
   definition: Record<string, unknown>,
 ): HumanDefinitionSource {
   if (value(definition.extensionSource))
-    return value(definition.overrideSource) || value(definition.projectSource)
+    return value(definition.overrideSource) ||
+      value(definition.projectSource) ||
+      value(definition.privateRepositorySource)
       ? "overridden"
       : "bundled";
   return "custom";
@@ -2518,6 +2520,18 @@ export function renderAgentDefinitionsOverview(
     if (projectSourcePath)
       lines.push(
         humanRow(theme, "project", displayHomePath(projectSourcePath), "dim"),
+      );
+    const privateRepositorySourcePath = value(
+      definition.privateRepositorySource,
+    );
+    if (privateRepositorySourcePath)
+      lines.push(
+        humanRow(
+          theme,
+          "private repo",
+          displayHomePath(privateRepositorySourcePath),
+          "dim",
+        ),
       );
   });
   if (typeof options.instructions === "string" && options.expanded !== true) {

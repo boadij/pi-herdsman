@@ -54,9 +54,10 @@ dist/agents/
 
 Bundled role profiles are in `dist/roles/`. Global role profiles are
 in `<agentDir>/pi-herdsman/roles/`, and trusted project role profiles
-are in `<cwd>/.pi/pi-herdsman/roles/`. Pi's agent directory defaults
-to `~/.pi/agent`. The same precedence and overlay rules apply independently
-to each category. Reserved role names are rejected in Agent directories;
+are in `<cwd>/.pi/pi-herdsman/roles/`. Trusted Git worktrees also load
+repository-private definitions from `<git-common-dir>/pi-herdsman/agents/`
+or `roles/`. Pi's agent directory defaults to `~/.pi/agent`. The same
+precedence and overlay rules apply independently to each category. Reserved role names are rejected in Agent directories;
 non-role names are rejected in role-profile directories.
 
 Global definitions by default:
@@ -65,14 +66,23 @@ Global definitions by default:
 ~/.pi/agent/agents/
 ```
 
-A matching project or global name overlays the lower-precedence definition.
+A matching definition overlays the lower-precedence definition in the order
+`bundled < global < trusted project < private repository`.
 
 An unmatched project or global definition is standalone. Project definitions
 are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
-Precedence is `bundled < global < trusted project`.
+Private Agent definitions are loaded from
+`<git-common-dir>/pi-herdsman/agents/` only when a trusted project root is
+available and is a Git worktree. Find the common directory from the worktree
+with `git rev-parse --path-format=absolute --git-common-dir`. Linked worktrees
+use a `.git` file, not a directory. A missing private directory or non-Git
+workspace adds no private layer; private files are local to one clone, not
+independent clones. Referenced skills and scripts need their own accessible
+paths and are not synchronized.
 Global definitions provide reusable defaults, not non-overridable policy: a
 trusted project may replace `enabled`, `tools`, `agents`, and the opaque
-`permission` mapping. Herdsman-owned authority and required coordination tools
+`permission` mapping; private definitions can specialize the project layer.
+Herdsman-owned authority and required coordination tools
 remain protected by runtime policy.
 
 All effective Agent definitions are sorted and validated together, including
