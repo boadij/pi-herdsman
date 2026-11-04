@@ -4,6 +4,7 @@
 
 ### Breaking changes
 
+* **config:** Trusted project Agent and role-profile definitions now override global definitions (`bundled < global < trusted project`). Projects may override global `enabled`, `tools`, `agents`, and `permission` values; review trusted project files accordingly.
 * **config:** Role profiles now use `pi-herdsman/roles/` under the Pi
   agent directory and trusted project `.pi/`, separate from Agent definitions.
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the

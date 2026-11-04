@@ -474,6 +474,7 @@ function validateRuntimeRoleLayer(definition: AgentDefinition): void {
 function discoverEffectiveDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
   category: "agent" | "role" = "agent",
+  validateReferences = true,
 ): AgentDefinition[] {
   const role = category === "role";
   const bundled = readAgentDefinitions(
@@ -511,12 +512,12 @@ function discoverEffectiveDefinitions(
     throw new Error(
       `${projectChief.path} chief definition: project overrides are not supported; configure chief globally instead`,
     );
-  applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
+  applyDefinitionLayer(definitions, project, "projectSource");
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
-  if (!role) validateEffectiveAgentReferences(effective);
+  if (!role && validateReferences) validateEffectiveAgentReferences(effective);
   return effective;
 }
 
@@ -526,6 +527,16 @@ export function discoverAgentDefinitions(
   return discoverEffectiveDefinitions(options)
     .filter(({ name }) => !isReservedRoleDefinition(name))
     .map((definition) => withDefaultEnabled(definition));
+}
+
+export function discoverGlobalAgentDefinition(
+  name: string,
+): AgentDefinition | undefined {
+  // Global references may resolve only after a trusted project overlay is applied.
+  return discoverEffectiveDefinitions({}, "agent", false)
+    .filter(({ name }) => !isReservedRoleDefinition(name))
+    .map(withDefaultEnabled)
+    .find((definition) => definition.name === name);
 }
 
 function withDefaultEnabled(definition: AgentDefinition): AgentDefinition {

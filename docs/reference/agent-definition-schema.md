@@ -69,7 +69,11 @@ A matching project or global name overlays the lower-precedence definition.
 
 An unmatched project or global definition is standalone. Project definitions
 are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
-Precedence is `bundled < project < global`.
+Precedence is `bundled < global < trusted project`.
+Global definitions provide reusable defaults, not non-overridable policy: a
+trusted project may replace `enabled`, `tools`, `agents`, and the opaque
+`permission` mapping. Herdsman-owned authority and required coordination tools
+remain protected by runtime policy.
 
 All effective Agent definitions are sorted and validated together, including
 every `agents` reference. A selected role's `agents` allowlist is validated

@@ -7,6 +7,10 @@
 
 ## Decision
 
+> Supersession: ADR 0037 replaces only the definition precedence stated below.
+> The managed-Lead architecture, delegated-worktree resolution, and authority
+> boundaries in this ADR remain in force.
+
 Manager-created project Leads use the reserved `managed-lead` definition for
 Pi launch policy.
 

@@ -2361,7 +2361,9 @@ function humanDefinitionSource(
   definition: Record<string, unknown>,
 ): HumanDefinitionSource {
   if (value(definition.extensionSource))
-    return value(definition.overrideSource) ? "overridden" : "bundled";
+    return value(definition.overrideSource) || value(definition.projectSource)
+      ? "overridden"
+      : "bundled";
   return "custom";
 }
 
@@ -2501,12 +2503,6 @@ export function renderAgentDefinitionsOverview(
     if (delegates.length)
       lines.push(humanRow(theme, "delegates", delegates.join(", ")));
 
-    const projectSourcePath = value(definition.projectSource);
-    if (projectSourcePath)
-      lines.push(
-        humanRow(theme, "project", displayHomePath(projectSourcePath), "dim"),
-      );
-
     const sourcePath = value(definition.overrideSource);
     if (sourcePath)
       lines.push(
@@ -2516,6 +2512,12 @@ export function renderAgentDefinitionsOverview(
           displayHomePath(sourcePath),
           "dim",
         ),
+      );
+
+    const projectSourcePath = value(definition.projectSource);
+    if (projectSourcePath)
+      lines.push(
+        humanRow(theme, "project", displayHomePath(projectSourcePath), "dim"),
       );
   });
   if (typeof options.instructions === "string" && options.expanded !== true) {

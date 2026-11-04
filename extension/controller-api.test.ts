@@ -7746,7 +7746,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     assert.ok(
       options.some(
         (value) =>
-          value.includes("project-only") && value.includes("project + global"),
+          value.includes("project-only") && value.includes("global + project"),
       ),
     );
     assert.ok(

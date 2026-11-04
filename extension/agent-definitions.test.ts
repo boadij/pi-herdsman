@@ -589,7 +589,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.equal(effective.frontmatter.thinking, "high");
   assert.equal(
     effective.body,
-    `${bundled.body}\n\nProject policy\n\nGlobal policy`,
+    `${bundled.body}\n\nGlobal policy\n\nProject policy`,
   );
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
@@ -598,12 +598,16 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     globalPath,
     "---\nname: managed-lead\nbodyMode: replace\n---\nCustom strategy",
   );
+  writeFileSync(
+    projectPath,
+    "---\nname: managed-lead\nbodyMode: replace\n---\nProject strategy",
+  );
   const replaced = withPiAgentDir(global, () =>
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
       projectRoot: project,
     }),
   );
-  assert.equal(replaced.body, "Custom strategy");
+  assert.equal(replaced.body, "Project strategy");
   assert.equal(replaced.frontmatter.systemPromptMode, "append");
 
   writeFileSync(projectPath, "---\nname: managed-lead\nenabled: false\n---");
@@ -908,8 +912,9 @@ test("supervisor allowlists use effective overlays and layered Agent targets", (
   const globalAgents = join(global, "pi-herdsman", "roles");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents, { recursive: true });
+  const projectManagerPath = join(projectAgents, "manager.md");
   writeFileSync(
-    join(projectAgents, "manager.md"),
+    projectManagerPath,
     "---\nname: manager\nagents: [missing-project-target]\n---\n",
   );
   writeFileSync(
@@ -928,6 +933,14 @@ test("supervisor allowlists use effective overlays and layered Agent targets", (
   );
 
   withPiAgentDir(global, () => {
+    assert.throws(
+      () => discoverRoleDefinition("manager", { projectRoot: project }),
+      /references missing agent definition missing-project-target/,
+    );
+    writeFileSync(
+      projectManagerPath,
+      "---\nname: manager\nagents: [project-helper]\n---\n",
+    );
     const manager = discoverRoleDefinition("manager", { projectRoot: project });
     const chief = discoverRoleDefinition("chief", { projectRoot: project });
     assert.deepEqual(manager.frontmatter.agents, ["project-helper"]);
@@ -1237,7 +1250,7 @@ test("composes matching bundled bodies with bodyMode", () => {
   );
 });
 
-test("discovers project definitions and gives global overlays final precedence", () => {
+test("discovers project definitions and gives project overlays final precedence", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
   const projectAgentDir = join(root, ".pi", "agents");
   mkdirSync(projectAgentDir, { recursive: true });
@@ -1255,10 +1268,10 @@ test("discovers project definitions and gives global overlays final precedence",
   const definition = withPiAgentDir(globalRoot, () =>
     discoverAgent("project-only", { projectRoot: root }),
   );
-  assert.equal(definition.frontmatter.model, "global-model");
+  assert.equal(definition.frontmatter.model, "project-model");
   assert.equal(definition.projectSource, join(projectAgentDir, "project.md"));
   assert.equal(definition.overrideSource, join(globalAgents, "project.md"));
-  assert.equal(definition.body, "Global policy");
+  assert.equal(definition.body, "Project policy");
 });
 
 test("follows symlinked definitions so dotfile-managed overlays apply", () => {
@@ -1351,21 +1364,23 @@ test("composes all definition layers with provenance and whole-array replacement
   const globalPath = join(globalAgents, "reviewer.md");
   writeFileSync(
     projectPath,
-    '---\nname: reviewer\nmodel: project/model\ntools: ["read", "grep"]\nbodyMode: append\n---\nProject policy',
+    '---\nname: reviewer\nmodel: project/model\nenabled: true\ntools: ["read", "grep"]\npermission: { project: allow }\nbodyMode: append\n---\nProject policy',
   );
   writeFileSync(
     globalPath,
-    '---\nname: reviewer\nmodel: global/model\nthinking: high\ntools: ["read"]\nbodyMode: append\n---\nGlobal policy',
+    '---\nname: reviewer\nmodel: global/model\nthinking: high\nenabled: false\ntools: ["read"]\npermission: { global: deny }\nbodyMode: append\n---\nGlobal policy',
   );
   const effective = withPiAgentDir(global, () =>
     discoverAgent("reviewer", { projectRoot: project }),
   );
-  assert.equal(effective.frontmatter.model, "global/model");
+  assert.equal(effective.frontmatter.model, "project/model");
   assert.equal(effective.frontmatter.thinking, "high");
-  assert.deepEqual(effective.frontmatter.tools, ["read"]);
+  assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
+  assert.equal(effective.frontmatter.enabled, true);
+  assert.deepEqual(effective.frontmatter.permission, { project: "allow" });
   assert.equal(
     effective.body,
-    `${bundled.body}\n\nProject policy\n\nGlobal policy`,
+    `${bundled.body}\n\nGlobal policy\n\nProject policy`,
   );
   assert.equal(effective.extensionSource, bundled.path);
   assert.equal(effective.projectSource, projectPath);
@@ -1388,12 +1403,37 @@ test("project body modes, duplicate names, body-file provenance, and child valid
     "---\nname: standalone\nbodyMode: append\n---\nbody",
   );
   assert.throws(
-    () => discoverAgentDefinitions({ projectRoot: project }),
+    () =>
+      withPiAgentDir(global, () =>
+        discoverAgentDefinitions({ projectRoot: project }),
+      ),
     new RegExp(
       `${standalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
     ),
   );
   unlinkSync(standalone);
+
+  const projectStandalone = join(projectAgentDir, "global-standalone.md");
+  const globalStandalone = join(globalAgents, "global-standalone.md");
+  writeFileSync(
+    projectStandalone,
+    "---\nname: global-standalone\n---\nproject",
+  );
+  writeFileSync(
+    globalStandalone,
+    "---\nname: global-standalone\nbodyMode: append\n---\nglobal",
+  );
+  assert.throws(
+    () =>
+      withPiAgentDir(global, () =>
+        discoverAgentDefinitions({ projectRoot: project }),
+      ),
+    new RegExp(
+      `${globalStandalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
+    ),
+  );
+  unlinkSync(projectStandalone);
+  unlinkSync(globalStandalone);
 
   writeFileSync(
     join(projectAgentDir, "child.md"),

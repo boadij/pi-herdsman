@@ -5422,9 +5422,14 @@ test("Agent definition overview preserves provenance, status, and heading semant
     };
     const rendered = renderAgentDefinitionsOverview(
       [
-        { name: "project-only", projectSource: projectOnly },
+        {
+          name: "project-only",
+          extensionSource: join(tmpdir(), "bundled", "project-only.md"),
+          projectSource: projectOnly,
+        },
         {
           name: "project-global",
+          extensionSource: join(tmpdir(), "bundled", "reviewer.md"),
           projectSource: projectGlobal,
           overrideSource: globalSource,
         },
@@ -5438,13 +5443,19 @@ test("Agent definition overview preserves provenance, status, and heading semant
       normalized,
       new RegExp(`project\\s+${escapedRegExp(nativeDisplay(projectOnly))}`),
     );
+    assert.match(normalized, /project-only\s+overridden/u);
     assert.match(
       normalized,
       new RegExp(`project\\s+${escapedRegExp(nativeDisplay(projectGlobal))}`),
     );
     assert.match(
       normalized,
-      new RegExp(`source\\s+${escapedRegExp(nativeDisplay(globalSource))}`),
+      new RegExp(`override\\s+${escapedRegExp(nativeDisplay(globalSource))}`),
+    );
+    assert.ok(
+      normalized.indexOf(nativeDisplay(globalSource)) <
+        normalized.indexOf(nativeDisplay(projectGlobal)),
+      "global source precedes the project source in composition order",
     );
   }
 

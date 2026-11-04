@@ -3,7 +3,10 @@
 [Documentation index](../README.md)
 
 Matching project and global definitions partially overlay lower-precedence
-roles, in the order `bundled < project < global`.
+roles, in the order `bundled < global < trusted project`. Global definitions
+are user-wide defaults; a trusted project can specialize even explicit global
+values, including Agent enablement and capability allowlists. Herdsman-owned
+authority and required coordination tools remain protected.
 
 Role profiles live under `<project>/.pi/pi-herdsman/roles/` and
 `<agentDir>/pi-herdsman/roles/`, not the Agent directories. Project
@@ -136,7 +139,7 @@ Use the read tool when a supervised decision requires checking a local artifact.
 
 `managed-lead` is the reserved definition for Manager-created/assigned project
 Leads. Every assigned Lead uses it, independently of the ordinary execution
-mode. It follows the same `bundled < project < global` precedence, but it is launch
+mode. It follows the same `bundled < global < trusted project` precedence, but it is launch
 configuration rather than an Agent role: it is excluded from the Agent roster
 and cannot be delegated to. It appears under `Roles`, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
@@ -414,6 +417,11 @@ Thinking
 Enabled
 Details…
 ```
+
+Model, thinking, and enabled edits target global definitions only. Their
+selectors show the global value and, when different, the effective value in
+the current project. A global edit masked by a project overlay is reported as
+a global change, not as a project-effective change.
 
 Model and thinking each offer `Inherit current session` plus their available
 values. Selecting `Inherit current session` removes only that field. The model chooser stores the
