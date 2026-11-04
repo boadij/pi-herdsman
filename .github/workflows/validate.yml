@@ -1,9 +1,6 @@
 name: Validate
 
 on:
-  push:
-    branches:
-      - diag/check-runner-windows-timeout
   pull_request:
 
 permissions:
