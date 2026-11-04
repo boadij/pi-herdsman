@@ -513,13 +513,20 @@ test("managed launches retain the generic active-agent interoperability marker",
   assert.ok(args.includes('<active_agent name="reviewer"/>'));
 });
 
-test("discovers the five portable bundled definitions without a user agents directory", () => {
+test("discovers the six portable bundled definitions without a user agents directory", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agents-"));
   assert.deepEqual(
     withPiAgentDir(root, () =>
       discoverAgentDefinitions().map((definition) => definition.name),
     ),
-    ["generalist", "implementer", "researcher", "reviewer", "scout"],
+    [
+      "generalist",
+      "implementer",
+      "researcher",
+      "reviewer",
+      "scout",
+      "validator",
+    ],
   );
 });
 
@@ -958,7 +965,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    ["implementer", ["read", "bash", "edit", "write"]],
+    ["implementer", ["read", "bash", "powershell", "edit", "write"]],
     [
       "researcher",
       [
@@ -974,7 +981,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     ["reviewer", ["read", "ls", "find", "grep"]],
     ["scout", ["read", "ls", "find", "grep"]],
-    ["generalist", ["read", "bash", "edit", "write"]],
+    ["generalist", ["read", "bash", "powershell", "edit", "write"]],
+    ["validator", ["read", "bash", "powershell"]],
   ]);
   const expectedDescriptions = new Map([
     [
@@ -997,18 +1005,29 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
       "generalist",
       "General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks",
     ],
+    [
+      "validator",
+      "Focused verification agent for running tests, checks, and smoke scenarios against existing changes; use to report observed evidence, not implement fixes or review design",
+    ],
   ]);
   const required = withPiAgentDir(
     root,
     () =>
       new Map(
-        ["generalist", "implementer", "researcher", "reviewer", "scout"].map(
+        [
+          "generalist",
+          "implementer",
+          "researcher",
+          "reviewer",
+          "scout",
+          "validator",
+        ].map(
           (name) =>
             [name, discoverAgent(name).body.replaceAll(/\s+/g, " ")] as const,
         ),
       ),
   );
-  assert.equal(required.size, 5);
+  assert.equal(required.size, 6);
   for (const definition of definitions) {
     assert.equal(definition.frontmatter.systemPromptMode, "append");
     assert.notEqual(definition.body.trim(), "");
@@ -1050,6 +1069,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   assert.match(required.get("implementer")!, /scoped edits and validation/);
   assert.match(required.get("generalist")!, /smallest complete action/);
   assert.match(required.get("reviewer")!, /strictly read-only/);
+  assert.match(required.get("validator")!, /Do not edit source/);
   assert.match(required.get("reviewer")!, /conduct internal reviews/);
   assert.match(required.get("reviewer")!, /preserve its origin/);
   assert.match(required.get("scout")!, /read-only codebase reconnaissance/);
@@ -1058,11 +1078,11 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     /prefer official and primary sources.*active capabilities/i,
   );
   assert.match(required.get("researcher")!, /Do not mutate files/);
-  for (const name of ["generalist", "implementer", "reviewer"])
+  for (const name of ["generalist", "implementer", "reviewer", "validator"])
     assert.doesNotMatch(required.get(name)!, /delegate|orchestrat/i);
   assert.equal(
     definitions.filter((definition) => required.has(definition.name)).length,
-    5,
+    6,
   );
 });
 
@@ -1639,6 +1659,7 @@ test("overlays a bundled definition and extends the roster", () => {
         "researcher",
         "reviewer",
         "scout",
+        "validator",
       ],
     );
     const implementer = discoverAgent("implementer");
@@ -1905,6 +1926,7 @@ test("bundled definitions leave execution settings to the controller", () => {
       "researcher",
       "reviewer",
       "scout",
+      "validator",
     ]) {
       const definition = discoverAgent(name);
       assert.equal(definition.frontmatter.model, undefined);
@@ -1961,6 +1983,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
   assert.deepEqual(generalist.frontmatter.tools, [
     "read",
     "bash",
+    "powershell",
     "edit",
     "write",
   ]);
@@ -1976,6 +1999,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
     [
       "read",
       "bash",
+      "powershell",
       "edit",
       "write",
       ...AGENT_COORDINATION_TOOLS,
@@ -2338,6 +2362,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   assert.deepEqual(effective.get("implementer")?.frontmatter.tools, [
     "read",
     "bash",
+    "powershell",
     "edit",
     "write",
   ]);
