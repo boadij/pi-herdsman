@@ -423,21 +423,21 @@ Enabled
 Details…
 ```
 
-Model, thinking, and enabled edits target global definitions only. Their
-selectors show the global value and, when different, the effective value in
-the current project. A global edit masked by a project overlay is reported as
-a global change, not as a project-effective change.
+Edits default to the most specific existing source (private repository,
+project, then global). When multiple sources exist, choose another existing
+scope with `Edit scope`. Values show the selected scope and effective result.
+Project-file edits may be included in a Git commit; private repository edits
+affect trusted linked worktrees in the same clone. Missing project and private
+files are not created; bundled-only edits create global overrides.
 
-Model and thinking each offer `Inherit current session` plus their available
-values. Selecting `Inherit current session` removes only that field. The model chooser stores the
+Model and thinking each offer `Remove local override` plus their available
+values. Removing the field affects only the selected source, allowing the next
+lower-precedence layer to supply its value. The model chooser stores the
 canonical provider/model token; thinking uses the selected model's supported
 levels when available. `Enabled` toggles the definition.
 
-Edits always write global overrides, and standalone custom definitions can be
-edited through the same flow.
-
-It changes only the selected top-level line in the global Markdown override and
-preserves unrelated frontmatter, line endings, and body content.
+The editor changes only the selected top-level line and preserves unrelated
+frontmatter, line endings, and body content.
 
 Removing a saved model or thinking field inherits the spawning controller for a
 fresh delegation, or the saved session for a continuation. The override file

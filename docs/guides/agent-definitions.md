@@ -57,10 +57,11 @@ protected by runtime policy. For example:
 ```
 
 Project definitions apply only to their project cwd; private definitions apply
-to trusted worktrees in their local Git clone. The Definitions UI edits
-global files only, labels editable values as global, and distinguishes a
-masked global edit from the effective value in the current project or private
-repository; it never writes project or private files.
+to trusted worktrees in their local Git clone. The Definitions UI defaults to
+the most specific existing editable source (private repository, project, then
+global). When multiple sources exist, choose another existing scope with `Edit
+scope`. Bundled-only definitions create global overrides; missing project and
+private files are not created. Project edits may appear in Git changes.
 
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
@@ -339,9 +340,10 @@ a separate configuration interface.
 The human `Agents & Roles` menu separates ordinary definitions under `Agents`
 from reserved profiles under `Roles` (in canonical role
 order). Runtime profiles provide Details only. Each row identifies its contributing source or
-sources as `bundled`, `project`, and/or `global`. Model, thinking, and enabled
-settings can be changed through the menu, but edits always write global
-overrides. `Inherit current session` removes only that field. Unset model and
+sources as `bundled`, `project`, `global`, and/or `private repository`. Model,
+thinking, and enabled settings default to the most specific existing editable
+source; `Edit scope` selects another existing source. `Remove local override`
+removes only that source's field. Unset model and
 thinking fields inherit the spawning controller for fresh delegation, while
 continuation restores the saved session's settings. Contextual help updates for
 the selected row.

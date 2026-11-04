@@ -52,7 +52,12 @@ repository`), including which files contribute to the effective
      invalid in role-profile directories.
    - If scope is genuinely ambiguous and materially changes the result, ask.
    - Never edit bundled files under `dist/agents/` or
-     `dist/roles/`. The Definitions UI writes global overrides only.
+     `dist/roles/`. The Definitions UI defaults to the most specific existing
+     editable source (private repository, project, global); bundled-only
+     definitions create global overrides. It can select another existing
+     scope, but does not create missing project/private files. Project edits
+     may be committed; private files are shared by linked worktrees in one
+     clone.
 
 3. Make the smallest correct Markdown change.
    - Prefer a partial overlay over copying a complete lower-precedence

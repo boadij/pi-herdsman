@@ -13,10 +13,13 @@ import {
 import {
   discoverGlobalAgentDefinition,
   discoverRoleDefinitions,
+  definitionEditTargets,
+  readDefinitionEditSnapshot,
   isReservedRoleDefinition,
   isRuntimeRoleDefinition,
   MANAGED_LEAD_DEFINITION_NAME,
   type AgentDefinition,
+  type DefinitionEditScope,
   type RoleDefinitionName,
 } from "../agent-definitions.ts";
 import type { LeadExecutionMode } from "../core.ts";
@@ -103,6 +106,7 @@ type LeadCommandHost = {
     definition: AgentDefinition,
     field: string,
     value: unknown,
+    options?: { scope?: DefinitionEditScope; expectedContent?: string | null },
   ): { changed: boolean; path?: string };
   placementSettings(ctx: ExtensionContext): Promise<{ effective: string }>;
   updateSpawnPlacement(placement: string): void;
@@ -386,16 +390,51 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           selectedDefinitions[section] = selectedEntry.name;
           let definition = selectedEntry;
           const selectedName = definition.name;
+          let selectedScope =
+            definitionEditTargets(definition)[0]?.scope ?? "global";
           let selectedAction = "model";
           while (true) {
+            const targets = definitionEditTargets(definition);
+            if (
+              !targets.some((candidate) => candidate.scope === selectedScope)
+            ) {
+              ctx.ui.notify(
+                `The ${selectedScope} definition source is no longer available.`,
+                "warning",
+              );
+              break;
+            }
+            const target = targets.find(
+              (candidate) => candidate.scope === selectedScope,
+            )!;
+            let snapshot;
+            try {
+              snapshot = readDefinitionEditSnapshot(definition, target);
+            } catch (error) {
+              ctx.ui.notify(String(error), "warning");
+              break;
+            }
             const globalDefinition = isReservedRoleDefinition(definition.name)
               ? (await loadDefinitions("roles", false)).find(
                   (candidate) => candidate.name === definition.name,
                 )
               : discoverGlobalAgentDefinition(definition.name);
-            const globalEnabled = globalDefinition
-              ? host.agentDefinitionEnabled(globalDefinition)
-              : true;
+            const projectTarget = targets.find(
+              (candidate) => candidate.scope === "project",
+            );
+            const projectSnapshot = projectTarget
+              ? readDefinitionEditSnapshot(definition, projectTarget)
+              : undefined;
+            const valueAtScope = (field: "model" | "thinking" | "enabled") =>
+              selectedScope === "private"
+                ? definition.frontmatter[field]
+                : selectedScope === "project"
+                  ? (projectSnapshot?.frontmatter[field] ??
+                    globalDefinition?.frontmatter[field])
+                  : globalDefinition?.frontmatter[field];
+            const enabledAtScope = valueAtScope("enabled");
+            const scopeLabel =
+              selectedScope === "private" ? "private repo" : selectedScope;
             const thinkingValue = (value: unknown) =>
               value === false
                 ? "off"
@@ -409,12 +448,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ctx,
               definition.name,
               [
+                ...(targets.length > 1
+                  ? [
+                      {
+                        value: "scope",
+                        label: "Edit scope",
+                        description: selectedScope,
+                      },
+                    ]
+                  : []),
                 ...(!runtimeProfile
                   ? [
                       {
                         value: "model",
-                        label: "Model (global)",
-                        description: `${typeof globalDefinition?.frontmatter.model === "string" ? globalDefinition.frontmatter.model : "inherit"}${typeof definition.frontmatter.model === "string" && definition.frontmatter.model !== globalDefinition?.frontmatter.model ? ` · Effective here: ${definition.frontmatter.model}` : ""}`,
+                        label: `Model (${scopeLabel})`,
+                        description: `${typeof valueAtScope("model") === "string" ? valueAtScope("model") : "inherit"}${typeof definition.frontmatter.model === "string" && definition.frontmatter.model !== valueAtScope("model") ? ` · Effective here: ${definition.frontmatter.model}` : ""}`,
                         help: managedDefinition
                           ? "Model for future managed Lead launches. Changes do not affect a running Lead."
                           : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
@@ -425,8 +473,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? [
                       {
                         value: "thinking",
-                        label: "Thinking (global)",
-                        description: `${thinkingValue(globalDefinition?.frontmatter.thinking)}${definition.frontmatter.thinking !== globalDefinition?.frontmatter.thinking ? ` · Effective here: ${thinkingValue(definition.frontmatter.thinking)}` : ""}`,
+                        label: `Thinking (${scopeLabel})`,
+                        description: `${thinkingValue(valueAtScope("thinking"))}${definition.frontmatter.thinking !== valueAtScope("thinking") ? ` · Effective here: ${thinkingValue(definition.frontmatter.thinking)}` : ""}`,
                         help: managedDefinition
                           ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
                           : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
@@ -437,8 +485,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? [
                       {
                         value: "enabled",
-                        label: "Enabled (global)",
-                        description: `${globalEnabled ? "on" : "off"}${host.agentDefinitionEnabled(definition) !== globalEnabled ? ` · Effective here: ${host.agentDefinitionEnabled(definition) ? "on" : "off"}` : ""}`,
+                        label: `Enabled (${scopeLabel})`,
+                        description: `${enabledAtScope === false ? "off" : "on"}${host.agentDefinitionEnabled(definition) !== enabledAtScope ? ` · Effective here: ${host.agentDefinitionEnabled(definition) ? "on" : "off"}` : ""}`,
                         help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                       },
                     ]
@@ -453,6 +501,35 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             );
             if (!action) break;
             selectedAction = action;
+            if (action === "scope") {
+              const chosen = await host.selectMenu(
+                ctx,
+                "Edit scope",
+                targets.map((candidate) => ({
+                  value: candidate.scope,
+                  label:
+                    candidate.scope === "private"
+                      ? "Private repository"
+                      : candidate.scope[0].toUpperCase() +
+                        candidate.scope.slice(1),
+                  description: candidate.path,
+                  help:
+                    candidate.scope === "project"
+                      ? "This worktree's project file may be included in a Git commit."
+                      : candidate.scope === "private"
+                        ? "Private file shared by trusted linked worktrees in this clone."
+                        : "Global user definition.",
+                })),
+                selectedScope,
+              );
+              if (
+                chosen === "private" ||
+                chosen === "project" ||
+                chosen === "global"
+              )
+                selectedScope = chosen;
+              continue;
+            }
             if (action === "details") {
               let current;
               try {
@@ -497,8 +574,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ...new Set(models.map((item: Model) => modelToken(item))),
               ].sort();
               const configured =
-                typeof globalDefinition?.frontmatter.model === "string"
-                  ? globalDefinition.frontmatter.model
+                typeof valueAtScope("model") === "string"
+                  ? (valueAtScope("model") as string)
                   : undefined;
               if (configured && !tokens.includes(configured)) {
                 const resolved = this.resolveConfiguredModel(ctx, configured);
@@ -537,8 +614,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 [
                   {
                     value: "inherit",
-                    label: "Inherit current session",
-                    searchText: "Inherit current session inherit",
+                    label: "Remove local override",
+                    searchText: "Remove local override inherit",
                   },
                   ...modelItems,
                 ],
@@ -554,8 +631,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               field = "thinking";
               await ctx.modelRegistry.refresh();
               const configured =
-                typeof globalDefinition?.frontmatter.model === "string"
-                  ? globalDefinition.frontmatter.model
+                typeof valueAtScope("model") === "string"
+                  ? (valueAtScope("model") as string)
                   : undefined;
               const model = configured
                 ? this.resolveConfiguredModel(ctx, configured)
@@ -564,13 +641,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? getSupportedThinkingLevels(model)
                 : [...host.validThinkingLevels];
               const configuredThinking =
-                globalDefinition?.frontmatter.thinking === false
+                valueAtScope("thinking") === false
                   ? "off"
-                  : typeof globalDefinition?.frontmatter.thinking === "string"
-                    ? globalDefinition.frontmatter.thinking
+                  : typeof valueAtScope("thinking") === "string"
+                    ? (valueAtScope("thinking") as string)
                     : undefined;
               const thinkingItems = [
-                { value: "inherit", label: "Inherit current session" },
+                { value: "inherit", label: "Remove local override" },
                 ...levels.map((level: string) => ({
                   value: level,
                   label: level,
@@ -592,36 +669,50 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 selectedThinking === "inherit" ? undefined : selectedThinking;
             } else if (action === "enabled") {
               field = "enabled";
-              value = !globalEnabled;
+              value = enabledAtScope === false;
             } else continue;
-            const result = host.updateAgentOverride(definition, field, value);
+            const latest = await resolveDefinition(selectedName);
+            if (
+              !latest ||
+              !definitionEditTargets(latest).some(
+                (candidate) =>
+                  candidate.scope === selectedScope &&
+                  candidate.path === target.path,
+              )
+            ) {
+              ctx.ui.notify(
+                `The ${selectedScope} definition source changed; reopen the setting.`,
+                "warning",
+              );
+              break;
+            }
+            const result = host.updateAgentOverride(latest, field, value, {
+              scope: selectedScope,
+              expectedContent: snapshot.content,
+            });
             const verified = await resolveDefinition(definition.name);
-            const verifiedGlobal = isReservedRoleDefinition(definition.name)
-              ? (await loadDefinitions("roles", false)).find(
-                  (candidate) => candidate.name === definition.name,
-                )
-              : discoverGlobalAgentDefinition(definition.name);
             if (!verified)
               throw new Error(
                 `definition ${definition.name} is no longer available`,
               );
-            if (result.changed && verified.overrideSource !== result.path)
+            if (
+              result.changed &&
+              !definitionEditTargets(verified).some(
+                (candidate) =>
+                  candidate.scope === selectedScope &&
+                  candidate.path === result.path,
+              )
+            )
               throw new Error(
                 `agent ${definition.name} override verification failed`,
               );
-            const globalValue =
-              field === "enabled"
-                ? verifiedGlobal
-                  ? host.agentDefinitionEnabled(verifiedGlobal)
-                  : true
-                : verifiedGlobal?.frontmatter[field];
             const effectiveValue =
               field === "enabled"
                 ? host.agentDefinitionEnabled(verified)
                 : verified.frontmatter[field];
             ctx.ui.notify(
               result.changed
-                ? `Global ${definition.name} ${field} ${globalValue === undefined ? "inherited" : `set to ${globalValue}`}.${globalValue !== effectiveValue ? ` Effective in this project: ${effectiveValue ?? "inherited"}.` : ""}`
+                ? `${value === undefined ? "Removed" : "Updated"} ${selectedScope} ${definition.name} ${field}${value === undefined ? " override" : ` to ${value}`}.${(value === undefined ? effectiveValue !== undefined : effectiveValue !== value) ? ` Effective here: ${effectiveValue ?? "inherited"}.` : ""}`
                 : `${definition.name} ${field} is already inherited; no change made.`,
             );
             definition = verified;

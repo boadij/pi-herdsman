@@ -17414,7 +17414,7 @@ test("definition pickers preselect configured values and honor cancellation", as
   for (const scenario of [
     {
       field: "Model",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "model",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -17436,7 +17436,7 @@ test("definition pickers preselect configured values and honor cancellation", as
     },
     {
       field: "Thinking",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "thinking",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -18657,7 +18657,7 @@ test("Definitions edits standalone definitions through the shared override write
       return options.find((option) => option.startsWith("Model"));
     if (selection === 4)
       return options.find((option) =>
-        option.startsWith("Inherit current session"),
+        option.startsWith("Remove local override"),
       );
     return undefined;
   };
@@ -19234,7 +19234,7 @@ test("Definitions applies model and thinking overrides independently", async () 
           return options.find((option) => option.startsWith(scenario.field));
         case 5:
           return options.find((option) =>
-            option.startsWith("Inherit current session"),
+            option.startsWith("Remove local override"),
           );
         default:
           return undefined;
@@ -19366,6 +19366,15 @@ test("Definitions edits global values without claiming masked project changes", 
         assert.ok(options.some((option) => option.includes("private repo")));
         return options.find((option) => option.includes("implementer"));
       case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Global"));
+      case 4:
         assert.ok(options.some((option) => option.includes("global/model")));
         assert.ok(
           options.some((option) => option.includes("provider/private-model")),
@@ -19375,18 +19384,10 @@ test("Definitions edits global values without claiming masked project changes", 
             option.includes("high · Effective here: off"),
           ),
         );
-        return options.find((option) => option.startsWith("Model"));
-      case 3:
-        return options.find((option) => option.includes("new/model"));
-      case 4:
-        assert.equal(label, "implementer");
-        assert.ok(
-          options.some((option) =>
-            /^Enabled \(global\)\s+off · Effective here: off\b/u.test(option),
-          ),
-        );
-        return options.find((option) => option.startsWith("Enabled"));
+        return options.find((option) => option.startsWith("Model (global)"));
       case 5:
+        return options.find((option) => option.includes("new/model"));
+      case 6:
         return undefined;
       default:
         return undefined;
@@ -19407,7 +19408,7 @@ test("Definitions edits global values without claiming masked project changes", 
     assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
     assert.match(
       notices.join("\n"),
-      /Effective in this project: provider\/private-model/u,
+      /Effective here: provider\/private-model/u,
     );
     assert.doesNotMatch(
       realFs.readFileSync(projectPath, "utf8"),
@@ -19641,7 +19642,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
           return options.find((option) => option.startsWith("Thinking"));
         case 3:
           assert.deepEqual(options, [
-            "Inherit current session",
+            "Remove local override",
             ...scenario.levels,
           ]);
           return undefined;
