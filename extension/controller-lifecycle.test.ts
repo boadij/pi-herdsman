@@ -11084,12 +11084,7 @@ test("historical session with its inherited label rejects an active managed repr
   const name = `active-session-${randomUUID().slice(0, 8)}`;
   const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
-  const chiefDefinitionPath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "chief.md",
-  );
+  const chiefDefinitionPath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   realFs.mkdirSync(dirname(chiefDefinitionPath), { recursive: true });
   const previousChiefDefinition = realFs.existsSync(chiefDefinitionPath)
     ? realFs.readFileSync(chiefDefinitionPath, "utf8")
@@ -11843,7 +11838,7 @@ test("automatic prompt failures happen before topology or mailbox mutation", asy
 
 test("Lead allowlist rejects direct continuation of a historical session", async () => {
   setLeadEnvironment();
-  const role = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "flexible-lead.md");
+  const role = join(PI_AGENT_ROOT, "coordinators", "flexible-lead.md");
   realFs.mkdirSync(dirname(role), { recursive: true });
   realFs.writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
   const session = {

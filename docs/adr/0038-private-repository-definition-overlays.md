@@ -37,3 +37,7 @@ Private definitions use the existing schema, overlay engine, provenance, and
 effective validation. The synchronous Git lookup is bounded and uncached.
 Private configuration remains local to the clone and is not portable to a
 fresh clone unless separately recreated.
+
+The Coordinator path recorded here is historical; [ADR 0039](0039-use-coordinator-profile-directories.md)
+supersedes that path description only. The private-layer precedence, trust
+gate, common-directory resolution, and other boundaries remain in force.

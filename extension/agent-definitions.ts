@@ -77,7 +77,9 @@ const BODY_FILE_REFERENCE =
     : /^[ \t]*@((?:\/|~\/|\.\.?\/).+?)[ \t]*$/gmu;
 const BUILTIN_AGENT_DIR = fileURLToPath(new URL("./agents", import.meta.url));
 
-const BUILTIN_ROLE_DIR = fileURLToPath(new URL("./roles", import.meta.url));
+const BUILTIN_ROLE_DIR = fileURLToPath(
+  new URL("./coordinators", import.meta.url),
+);
 
 export const FLEXIBLE_LEAD_DEFINITION_NAME = "flexible-lead";
 export const ORCHESTRATOR_LEAD_DEFINITION_NAME = "orchestrator-lead";
@@ -382,6 +384,26 @@ function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
   return readAgentDefinitions(root);
 }
 
+function assertNoLegacyCoordinatorProfiles(
+  legacy: string,
+  canonical: string,
+): void {
+  const stats = statSync(legacy, { throwIfNoEntry: false });
+  if (!stats) return;
+  if (!stats.isDirectory())
+    throw new Error(
+      `legacy coordinator path is not a directory: ${legacy}; use ${canonical}`,
+    );
+  const file = markdownFiles(legacy).find(
+    (path) => !path.endsWith(".example.md"),
+  );
+  if (file)
+    throw new Error(
+      `${file}: legacy coordinator profile is no longer loaded; ` +
+        `move profiles and their relative assets to ${canonical}`,
+    );
+}
+
 function privateRepositoryRoot(projectRoot: string): string | undefined {
   let output: string;
   try {
@@ -528,19 +550,36 @@ function discoverEffectiveDefinitions(
   const bundled = readAgentDefinitions(
     role ? BUILTIN_ROLE_DIR : BUILTIN_AGENT_DIR,
   );
-  const directory = role ? ["pi-herdsman", "roles"] : ["agents"];
-  const project = options.projectRoot
-    ? readOptionalAgentDefinitions(
-        join(options.projectRoot, CONFIG_DIR_NAME, ...directory),
-      )
-    : [];
+  const directory = role ? "coordinators" : "agents";
   const privateRoot = options.projectRoot
     ? privateRepositoryRoot(options.projectRoot)
     : undefined;
-  const privateRepository = privateRoot
-    ? readOptionalAgentDefinitions(join(privateRoot, role ? "roles" : "agents"))
+  if (role) {
+    const globalDirectory = join(getAgentDir(), directory);
+    assertNoLegacyCoordinatorProfiles(
+      join(getAgentDir(), "pi-herdsman", "roles"),
+      globalDirectory,
+    );
+    if (options.projectRoot)
+      assertNoLegacyCoordinatorProfiles(
+        join(options.projectRoot, CONFIG_DIR_NAME, "pi-herdsman", "roles"),
+        join(options.projectRoot, CONFIG_DIR_NAME, directory),
+      );
+    if (privateRoot)
+      assertNoLegacyCoordinatorProfiles(
+        join(privateRoot, "roles"),
+        join(privateRoot, directory),
+      );
+  }
+  const project = options.projectRoot
+    ? readOptionalAgentDefinitions(
+        join(options.projectRoot, CONFIG_DIR_NAME, directory),
+      )
     : [];
-  const user = readOptionalAgentDefinitions(join(getAgentDir(), ...directory));
+  const privateRepository = privateRoot
+    ? readOptionalAgentDefinitions(join(privateRoot, directory))
+    : [];
+  const user = readOptionalAgentDefinitions(join(getAgentDir(), directory));
   for (const definition of [
     ...bundled,
     ...project,
@@ -549,7 +588,7 @@ function discoverEffectiveDefinitions(
   ]) {
     if (isReservedRoleDefinition(definition.name) !== role)
       throw new Error(
-        `${definition.path}: ${role ? "non-role name in pi-herdsman/roles directory" : "reserved role name in agents directory; use pi-herdsman/roles"}`,
+        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
       );
   }
   const definitions = new Map(
@@ -799,7 +838,7 @@ function globalOverridePath(definition: AgentDefinition): string {
   return join(
     getAgentDir(),
     ...(isReservedRoleDefinition(definition.name)
-      ? ["pi-herdsman", "roles"]
+      ? ["coordinators"]
       : ["agents"]),
     `${encodeURIComponent(definition.name)}.md`,
   );

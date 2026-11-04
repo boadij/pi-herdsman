@@ -28,3 +28,7 @@ runtime authority boundaries are unchanged.
 Separate namespaces make delegation and role configuration distinct without
 duplicating the definition mechanism. Existing role overrides in Agent
 directories are not recognized as role profiles; there is no legacy fallback.
+
+The Coordinator directory names recorded here are historical; [ADR 0039](0039-use-coordinator-profile-directories.md)
+supersedes those path descriptions only. This ADR's separate-namespace,
+shared-engine, validation, and Chief-scope decisions remain in force.

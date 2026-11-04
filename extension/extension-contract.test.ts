@@ -2198,11 +2198,11 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
 
 test("active chief describes authoritative remote ask projection", async () => {
   setLeadEnvironment();
-  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman", "roles"), {
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md"),
+    join(PI_AGENT_ROOT, "coordinators", "chief.md"),
     "---\nname: chief\nbodyMode: replace\n---\nCustom Chief strategy",
   );
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -4049,7 +4049,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
 
 test("Lead empty allowlist hides fresh delegation and the Agent roster", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
@@ -4099,7 +4099,7 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
 
 test("ordinary Lead exposes only allowlisted Agents", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: [agent]\n---\n");
@@ -4136,7 +4136,7 @@ test("ordinary Lead exposes only allowlisted Agents", async () => {
 
 test("role discovery failure denies the Lead Agent roster", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const malformedRole = join(roleDirectory, "malformed-session-role.md");
   writeFileSync(
@@ -4242,15 +4242,10 @@ test("persisted Chief keeps verified authority and mandatory tools when definiti
 
 test("replaced Lead strategy keeps its protected charter and coordination tools", async () => {
   setLeadEnvironment();
-  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman", "roles"), {
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "coordinators"), {
     recursive: true,
   });
-  const overlay = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "orchestrator-lead.md",
-  );
+  const overlay = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `lead-contract-${randomUUID()}.sock`,
@@ -4838,7 +4833,7 @@ test("native managed-Agent restore quarantines malformed and conflicting exact-s
 
 test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "managed-lead.md");
   writeFileSync(role, "---\nname: managed-lead\nagents: [agent]\n---\n");
@@ -5620,7 +5615,7 @@ test("delegating agents receive only their allowed definition roster", async () 
 
 test("Manager disabled allowlist targets do not block other Agent delegation", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "pi-herdsman", "roles");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const managerProfile = join(roleDirectory, "manager.md");
   const priorManagerProfile = realFs.existsSync(managerProfile)

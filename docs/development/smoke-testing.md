@@ -433,13 +433,12 @@ role behavior.
 
 ### `/herdsman definitions`
 
-Verify the native `Agents & Roles` menu shows:
+Verify the native `Agents & Coordinators` menu shows:
 
-- separate `Agents` and `Roles` lists, with reserved
+- separate `Agents` and `Coordinators` lists, with reserved
   `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
   in that canonical role order;
-- contributing source words `bundled`, `project`, `global`, and `private
-repository`, including
+- contributing source words `bundled`, `global`, `project`, and `private repo`, including
   combinations where multiple sources contribute;
 - unpadded definition-name labels, with model, thinking, and provenance as
   secondary metadata, including Unicode names;
@@ -447,7 +446,7 @@ repository`, including
 - `Remove local override` for model and thinking;
 - selected-row contextual help and width-safe layout in narrow panes.
 
-All five reserved role definitions remain non-Agent. The Lead, Manager, and
+All five reserved Coordinator profiles remain non-Agent. The Lead, Manager, and
 Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
 and Details, but no Enabled action. Runtime-profile definitions reject
 launch-only fields such as model, thinking, extensions, skills, and context

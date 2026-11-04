@@ -7718,7 +7718,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     let categorySelection = 0;
     context.ui.select = async (title: string, options: string[]) => {
       selections.push(options);
-      if (title === "Agents & Roles")
+      if (title === "Agents & Coordinators")
         return ++categorySelection % 2 === 1
           ? options.find((option) => option === "Agents")
           : undefined;
@@ -8191,7 +8191,7 @@ test("project-only Definitions edits update the project source", async () => {
   let selection = 0;
   let categorySelected = false;
   context.ui.select = async (title: string, options: string[]) => {
-    if (title === "Agents & Roles") {
+    if (title === "Agents & Coordinators") {
       if (categorySelected) return undefined;
       categorySelected = true;
       return options.find((option) => option === "Agents");

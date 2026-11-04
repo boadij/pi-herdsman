@@ -35,25 +35,25 @@ const expectedRoot = new Set([
   "LICENSE",
   "skills/agent-definitions/SKILL.md",
 ]);
-const roles = new Set([
+const coordinators = new Set([
   "chief.md",
   "manager.md",
   "managed-lead.md",
   "flexible-lead.md",
   "orchestrator-lead.md",
 ]);
-const expectedDefinitions = ["agents", "roles"].flatMap((directory) =>
+const expectedDefinitions = ["agents", "coordinators"].flatMap((directory) =>
   readdirSync(resolve(root, "extension", directory))
     .filter((name) => name.endsWith(".md"))
     .map((name) => {
-      if (roles.has(name) !== (directory === "roles"))
+      if (coordinators.has(name) !== (directory === "coordinators"))
         throw new Error(`misplaced bundled definition: ${directory}/${name}`);
       return `dist/${directory}/${name}`;
     }),
 );
-for (const role of roles)
-  if (!expectedDefinitions.includes(`dist/roles/${role}`))
-    throw new Error(`missing bundled role profile: ${role}`);
+for (const coordinator of coordinators)
+  if (!expectedDefinitions.includes(`dist/coordinators/${coordinator}`))
+    throw new Error(`missing bundled coordinator profile: ${coordinator}`);
 const expectedDist = new Set([
   "dist/index.js",
   "dist/index.js.map",
