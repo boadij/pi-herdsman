@@ -402,10 +402,19 @@ function privateRepositoryRoot(projectRoot: string): string | undefined {
       },
     );
   } catch (error) {
-    const failure = error as Error & { code?: string; status?: number | null };
-    if (failure.code === "ENOENT" || failure.status === 128) return undefined;
+    const failure = error as Error & {
+      code?: string;
+      status?: number | null;
+      stderr?: Buffer | string;
+    };
+    const diagnostic = failure.stderr?.toString() ?? "";
+    if (
+      failure.code === "ENOENT" ||
+      (failure.status === 128 && /not a git repository/u.test(diagnostic))
+    )
+      return undefined;
     throw new Error(
-      `Cannot resolve private definitions for ${projectRoot}: ${failure.message}`,
+      `Cannot resolve private definitions for ${projectRoot}: ${diagnostic.trimEnd() || failure.message}`,
       { cause: error },
     );
   }
