@@ -398,6 +398,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             const globalEnabled = globalDefinition
               ? host.agentDefinitionEnabled(globalDefinition)
               : true;
+            const thinkingValue = (value: unknown) =>
+              value === false
+                ? "off"
+                : typeof value === "string"
+                  ? value
+                  : "inherit";
             const managedDefinition =
               definition.name === MANAGED_LEAD_DEFINITION_NAME;
             const runtimeProfile = isRuntimeRoleDefinition(definition.name);
@@ -422,7 +428,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       {
                         value: "thinking",
                         label: "Thinking (global)",
-                        description: `${typeof globalDefinition?.frontmatter.thinking === "string" ? globalDefinition.frontmatter.thinking : "inherit"}${typeof definition.frontmatter.thinking === "string" && definition.frontmatter.thinking !== globalDefinition?.frontmatter.thinking ? ` · Effective here: ${definition.frontmatter.thinking}` : ""}`,
+                        description: `${thinkingValue(globalDefinition?.frontmatter.thinking)}${definition.frontmatter.thinking !== globalDefinition?.frontmatter.thinking ? ` · Effective here: ${thinkingValue(definition.frontmatter.thinking)}` : ""}`,
                         help: managedDefinition
                           ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
                           : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
@@ -433,8 +439,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? [
                       {
                         value: "enabled",
-                        label: "Enabled",
-                        description: globalEnabled ? "on" : "off",
+                        label: "Enabled (global)",
+                        description: `${globalEnabled ? "on" : "off"}${host.agentDefinitionEnabled(definition) !== globalEnabled ? ` · Effective here: ${host.agentDefinitionEnabled(definition) ? "on" : "off"}` : ""}`,
                         help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                       },
                     ]

@@ -19262,6 +19262,10 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
+  realFs.writeFileSync(
+    definitionPath,
+    "---\nname: implementer\nthinking: false\n---\n",
+  );
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -19274,11 +19278,20 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
         return options.find((option) => option.includes("implementer"));
       case 2:
         assert.equal(label, "implementer");
-        assert.ok(options.some((option) => /^Enabled\s+on\b/u.test(option)));
+        assert.ok(
+          options.some((option) =>
+            /^Thinking \(global\)\s+off\b/u.test(option),
+          ),
+        );
+        assert.ok(
+          options.some((option) => /^Enabled \(global\)\s+on\b/u.test(option)),
+        );
         return options.find((option) => option.startsWith("Enabled"));
       case 3:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, false);
-        assert.ok(options.some((option) => /^Enabled\s+off\b/u.test(option)));
+        assert.ok(
+          options.some((option) => /^Enabled \(global\)\s+off\b/u.test(option)),
+        );
         return options.find((option) => option.startsWith("Enabled"));
       case 4:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, true);
@@ -19307,11 +19320,11 @@ test("Definitions edits global values without claiming masked project changes", 
   realFs.mkdirSync(dirname(projectPath), { recursive: true });
   realFs.writeFileSync(
     projectPath,
-    "---\nname: implementer\nmodel: project/model\nenabled: true\n---\nproject",
+    "---\nname: implementer\nmodel: project/model\nthinking: false\nenabled: true\n---\nproject",
   );
   realFs.writeFileSync(
     globalPath,
-    "---\nname: implementer\nmodel: global/model\nenabled: false\n---\nglobal",
+    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: false\n---\nglobal",
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -19338,12 +19351,21 @@ test("Definitions edits global values without claiming masked project changes", 
       case 2:
         assert.ok(options.some((option) => option.includes("global/model")));
         assert.ok(options.some((option) => option.includes("project/model")));
+        assert.ok(
+          options.some((option) =>
+            option.includes("high · Effective here: off"),
+          ),
+        );
         return options.find((option) => option.startsWith("Model"));
       case 3:
         return options.find((option) => option.includes("new/model"));
       case 4:
         assert.equal(label, "implementer");
-        assert.ok(options.some((option) => /^Enabled\s+off\b/u.test(option)));
+        assert.ok(
+          options.some((option) =>
+            /^Enabled \(global\)\s+off · Effective here: on\b/u.test(option),
+          ),
+        );
         return options.find((option) => option.startsWith("Enabled"));
       case 5:
         return undefined;
