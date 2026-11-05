@@ -3,7 +3,8 @@ import { realpathSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CHECK_TIMEOUT_MS = 240_000;
+export const CHECK_TIMEOUT_MS =
+  process.platform === "win32" ? 360_000 : 240_000;
 const TERM_GRACE_MS = 1_000;
 const TASKKILL_TIMEOUT_MS = 1_000;
 const TREE_GONE_TIMEOUT_MS = 5_000;

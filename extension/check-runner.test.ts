@@ -12,8 +12,11 @@ import {
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-test("check suite deadline allows 240 seconds", () => {
-  assert.equal(CHECK_TIMEOUT_MS, 240_000);
+test("check suite deadline allows extra time on Windows", () => {
+  assert.equal(
+    CHECK_TIMEOUT_MS,
+    process.platform === "win32" ? 360_000 : 240_000,
+  );
 });
 
 test("Windows worker attribution accepts only existing repository test paths", () => {
