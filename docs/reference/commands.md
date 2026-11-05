@@ -112,13 +112,18 @@ Ordinary usage retains its owned-session warning.
 
 ## `/herdsman definitions`
 
-Opens the native `Agents & Roles` category menu with `Agents` and `Roles`.
-Each category lists effective definitions; reserved roles appear in their
-canonical role order. Project definitions are included when Pi considers the
-project trusted. Each definition shows contributing `bundled`, `project`, and/or
-`global` sources. Edits write global overrides only.
+Opens the native `Agents & Coordinators` category menu with `Agents` and
+`Coordinators`. Each category lists effective definitions; reserved profiles
+appear in their canonical order. Project definitions are included when Pi
+considers the project trusted. Each definition shows contributing `bundled`,
+`global`, `project`, and/or `private repo` sources. Settings default to the
+most specific existing editable source (private repository, project, then
+global); bundled-only definitions create a global override. When multiple
+sources exist, `Edit scope` lets you choose among them. Project edits affect
+the current worktree and may be included in a Git commit; private edits are
+shared by trusted linked worktrees in the same clone.
 
-All five reserved role definitions are not Agents and remain excluded as
+All five reserved Coordinator profiles are not Agents and remain excluded as
 delegation targets. Manager/Chief profiles may nevertheless list ordinary
 Agent definitions in `agents` to authorize their own direct delegation.
 Runtime profiles support `Details` only;
@@ -173,9 +178,9 @@ Thinking options use the effective model's supported levels when resolvable,
 or Pi Herdsman's validated vocabulary when not.
 
 The command edits only the selected supported top-level `model`, `thinking`,
-or `enabled` line in the global Markdown override. Runtime profiles have no
-editable frontmatter action. Edits preserve unrelated frontmatter and the
-complete body.
+or `enabled` line in the selected Markdown source. Values reflect the chosen
+scope and effective result. Runtime profiles have no editable frontmatter
+action. Edits preserve unrelated frontmatter and the complete body.
 
 Details re-resolves the selected definition when opened, so it reflects current
 overlays and body references even if the menu remained open while configuration
@@ -186,9 +191,9 @@ already-running agents or the lead Pi session. Fresh `delegate` assignments inhe
 current settings when fields are unset; `continue` restores the saved
 session's settings.
 
-Standalone global definitions are editable too. Removing a model or thinking
-field selects `Inherit current session`; removing any other field inherits its
-lower-precedence value.
+`Remove local override` removes only that source's field, allowing the next
+lower-precedence value to become effective. It does not necessarily inherit
+the active session's setting.
 
 ## `/herdsman` → Agents → Running
 

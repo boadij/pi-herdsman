@@ -1482,11 +1482,11 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-flexible-profile-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\ntools: [read]\n---\nrestricted flexible\n",
   );
   const baseline = ["read", "bash", "edit", "write"];
@@ -1519,11 +1519,11 @@ test("live Flexible tool changes survive order-preserving projection while exclu
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1602,11 +1602,11 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-failure-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "pi-herdsman", "roles", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1685,16 +1685,10 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "pi-herdsman", "roles"), {
+  mkdirSync(join(cwd, ".pi", "coordinators"), {
     recursive: true,
   });
-  const definition = join(
-    cwd,
-    ".pi",
-    "pi-herdsman",
-    "roles",
-    "flexible-lead.md",
-  );
+  const definition = join(cwd, ".pi", "coordinators", "flexible-lead.md");
   writeFileSync(definition, "---\nname: flexible-lead\n---\nflexible\n");
   const entries: any[] = [];
   const pi = fakeChiefPi({
@@ -1837,12 +1831,7 @@ test("session startup restores execution from the selected branch only", async (
 
 test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
   setLeadEnvironment();
-  const managerOverride = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "manager.md",
-  );
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
   mkdirSync(dirname(managerOverride), { recursive: true });
   process.env.HERDR_PANE_ID = "manager-baseline-pane";
   process.env.HERDR_TAB_ID = "manager-baseline-tab";
@@ -3415,12 +3404,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
 
 test("root Lead explicitly enters Manager; a competing root session stays Lead", async (t) => {
   setLeadEnvironment();
-  const managerOverride = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "manager.md",
-  );
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
   mkdirSync(dirname(managerOverride), { recursive: true });
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
   const previousManagerOverride = realFs.existsSync(managerOverride)
@@ -8481,7 +8465,7 @@ async function managerDelegateAssignmentTest(
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   const targetTrusted = (targetDecision ?? ancestorDecision) === true;
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  const managedLeadDir = join(childCwd, ".pi", "pi-herdsman", "roles");
+  const managedLeadDir = join(childCwd, ".pi", "coordinators");
   realFs.mkdirSync(managedLeadDir, { recursive: true });
   realFs.writeFileSync(
     join(managedLeadDir, "managed-lead.md"),
@@ -14160,7 +14144,7 @@ test("/agents placement subtree writes flat config outside project settings", as
 
 test("Chief profile drives the turn-start tools, prompt, and tool-call guard", async (t) => {
   setLeadEnvironment();
-  const overridePath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const overridePath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(overridePath), { recursive: true });
   const previousOverride = realFs.existsSync(overridePath)
     ? readFileSync(overridePath, "utf8")
@@ -14314,7 +14298,7 @@ test("root assignment rejects a role generation changed during preflight", async
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14400,7 +14384,7 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14543,12 +14527,7 @@ test("Lead profile switch during Agent startup rejects and rolls back stale assi
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "orchestrator-lead.md",
-  );
+  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -14689,12 +14668,7 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
     tmpdir(),
     `owned-policy-${randomUUID()}.sock`,
   );
-  const rolePath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "orchestrator-lead.md",
-  );
+  const rolePath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
   mkdirSync(dirname(rolePath), { recursive: true });
   const previousRole = realFs.existsSync(rolePath)
     ? readFileSync(rolePath, "utf8")
@@ -16956,7 +16930,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
 
 test("persisted chief collision is suspended and has no lead authority", async () => {
   setLeadEnvironment();
-  const chiefOverride = join(PI_AGENT_ROOT, "pi-herdsman", "roles", "chief.md");
+  const chiefOverride = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(chiefOverride), { recursive: true });
   const scoutDefinition = join(PI_AGENTS_DIR, "scout.md");
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
@@ -17507,7 +17481,7 @@ test("definition pickers preselect configured values and honor cancellation", as
   for (const scenario of [
     {
       field: "Model",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "model",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -17529,7 +17503,7 @@ test("definition pickers preselect configured values and honor cancellation", as
     },
     {
       field: "Thinking",
-      picker: "Inherit current session",
+      picker: "Remove local override",
       property: "thinking",
       source: "---\nname: preselect-agent\n---\n",
       expected: undefined,
@@ -18750,7 +18724,7 @@ test("Definitions edits standalone definitions through the shared override write
       return options.find((option) => option.startsWith("Model"));
     if (selection === 4)
       return options.find((option) =>
-        option.startsWith("Inherit current session"),
+        option.startsWith("Remove local override"),
       );
     return undefined;
   };
@@ -18778,12 +18752,7 @@ test("Definitions edits standalone definitions through the shared override write
 
 test("Definitions exposes managed Lead settings without Agent discovery", async () => {
   setLeadEnvironment();
-  const overridePath = join(
-    PI_AGENT_ROOT,
-    "pi-herdsman",
-    "roles",
-    "managed-lead.md",
-  );
+  const overridePath = join(PI_AGENT_ROOT, "coordinators", "managed-lead.md");
   mkdirSync(dirname(overridePath), { recursive: true });
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -18802,8 +18771,9 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     prompts.push({ label, options });
     const visit = visits.get(label) ?? 0;
     visits.set(label, visit + 1);
-    if (label === "Agents & Roles") return visit === 0 ? "Roles" : undefined;
-    if (label === "Roles")
+    if (label === "Agents & Coordinators")
+      return visit === 0 ? "Coordinators" : undefined;
+    if (label === "Coordinators")
       return visit === 0
         ? options.find((option) => option.includes("managed-lead"))
         : undefined;
@@ -18822,10 +18792,12 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   try {
     await command.handler("definitions", context);
     const categoryMenu = prompts.find(
-      ({ label }) => label === "Agents & Roles",
+      ({ label }) => label === "Agents & Coordinators",
     );
-    const definitionMenu = prompts.find(({ label }) => label === "Roles");
-    assert.deepEqual(categoryMenu?.options, ["Agents", "Roles"]);
+    const definitionMenu = prompts.find(
+      ({ label }) => label === "Coordinators",
+    );
+    assert.deepEqual(categoryMenu?.options, ["Agents", "Coordinators"]);
     assert.deepEqual(
       definitionMenu?.options
         .slice(0, 5)
@@ -18905,7 +18877,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
       };
       if (customCall === 0) {
         customCall++;
-        selectTuiItem(component, "Roles");
+        selectTuiItem(component, "Coordinators");
       } else if (customCall === 1) {
         customCall++;
         selectTuiItem(component, "managed-lead");
@@ -19268,7 +19240,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
-        "Agents & Roles",
+        "Agents & Coordinators",
         "Agents",
         "implementer",
         "Model",
@@ -19276,7 +19248,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
         "Thinking",
         "implementer",
         "Agents",
-        "Agents & Roles",
+        "Agents & Coordinators",
       ],
     );
   } finally {
@@ -19327,7 +19299,7 @@ test("Definitions applies model and thinking overrides independently", async () 
           return options.find((option) => option.startsWith(scenario.field));
         case 5:
           return options.find((option) =>
-            option.startsWith("Inherit current session"),
+            option.startsWith("Remove local override"),
           );
         default:
           return undefined;
@@ -19377,7 +19349,11 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
           ),
         );
         assert.ok(
-          options.some((option) => /^Enabled \(global\)\s+on\b/u.test(option)),
+          options.some((option) =>
+            /^Enabled \(global\)\s+inherit · Effective here: on\b/u.test(
+              option,
+            ),
+          ),
         );
         return options.find((option) => option.startsWith("Enabled"));
       case 3:
@@ -19433,7 +19409,7 @@ test("Definitions edits global values without claiming masked project changes", 
   );
   realFs.writeFileSync(
     globalPath,
-    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: false\n---\nglobal",
+    "---\nname: implementer\nmodel: global/model\nthinking: high\nenabled: true\n---\nglobal",
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -19459,27 +19435,43 @@ test("Definitions edits global values without claiming masked project changes", 
         assert.ok(options.some((option) => option.includes("private repo")));
         return options.find((option) => option.includes("implementer"));
       case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Global"));
+      case 4:
         assert.ok(options.some((option) => option.includes("global/model")));
         assert.ok(
-          options.some((option) => option.includes("provider/private-model")),
-        );
-        assert.ok(
-          options.some((option) =>
-            option.includes("high · Effective here: off"),
+          options.some(
+            (option) =>
+              option.includes("Thinking (global)") &&
+              option.includes("high · Effective here: off"),
           ),
         );
-        return options.find((option) => option.startsWith("Model"));
-      case 3:
-        return options.find((option) => option.includes("new/model"));
-      case 4:
-        assert.equal(label, "implementer");
         assert.ok(
-          options.some((option) =>
-            /^Enabled \(global\)\s+off · Effective here: off\b/u.test(option),
+          options.some(
+            (option) =>
+              option.includes("Model (global)") &&
+              option.includes(
+                "global/model · Effective here: provider/private-model",
+              ),
           ),
         );
-        return options.find((option) => option.startsWith("Enabled"));
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Enabled (global)") &&
+              option.includes("on · Effective here: off"),
+          ),
+        );
+        return options.find((option) => option.startsWith("Model (global)"));
       case 5:
+        return options.find((option) => option.includes("new/model"));
+      case 6:
         return undefined;
       default:
         return undefined;
@@ -19496,11 +19488,12 @@ test("Definitions edits global values without claiming masked project changes", 
         .enabled,
       false,
     );
+    assert.match(notices.join("\n"), /Updated global implementer model/u);
     assert.match(realFs.readFileSync(globalPath, "utf8"), /model: new\/model/);
-    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: false/);
+    assert.match(realFs.readFileSync(globalPath, "utf8"), /enabled: true/);
     assert.match(
       notices.join("\n"),
-      /Effective in this project: provider\/private-model/u,
+      /Effective here: provider\/private-model/u,
     );
     assert.doesNotMatch(
       realFs.readFileSync(projectPath, "utf8"),
@@ -19510,6 +19503,187 @@ test("Definitions edits global values without claiming masked project changes", 
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
     realFs.rmSync(globalPath, { force: true });
+  }
+});
+
+test("Definitions shows inherited private values and keeps scope selection available around symlinks", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  realFs.writeFileSync(
+    join(privateDir, "implementer.md"),
+    "---\nname: implementer\ntools: [read, grep]\n---\nprivate",
+  );
+  const globalPath = join(PI_AGENTS_DIR, "implementer.md");
+  realFs.writeFileSync(
+    globalPath,
+    "---\nname: implementer\nmodel: provider/global\nthinking: high\n---\nglobal",
+  );
+  const projectPath = join(project, ".pi", "agents", "implementer.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.symlinkSync(globalPath, projectPath);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (_label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("implementer"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Thinking (private repo)") &&
+              option.includes("inherit · Effective here: high"),
+          ),
+        );
+        assert.ok(
+          options.some(
+            (option) =>
+              option.includes("Model (private repo)") &&
+              option.includes("inherit · Effective here: provider/global"),
+          ),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    await command.handler("definitions", context);
+    assert.ok(selection >= 5);
+    assert.match(notices.join("\n"), /not a regular file/u);
+    assert.equal(realFs.lstatSync(projectPath).isSymbolicLink(), true);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
+    realFs.rmSync(globalPath, { force: true });
+  }
+});
+
+test("Definitions can edit a regular lower scope when the default source is a symlink", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(join(tmpdir(), "definitions-project-"));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: project, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-b", "main"]);
+  const privateDir = join(
+    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    "pi-herdsman",
+    "agents",
+  );
+  realFs.mkdirSync(privateDir, { recursive: true });
+  const privateTarget = join(project, "private-definition.md");
+  const privatePath = join(privateDir, "scope-test.md");
+  realFs.writeFileSync(
+    privateTarget,
+    "---\nname: scope-test\nmodel: provider/private\n---\nprivate",
+  );
+  realFs.symlinkSync(privateTarget, privatePath);
+  const projectPath = join(project, ".pi", "agents", "scope-test.md");
+  realFs.mkdirSync(dirname(projectPath), { recursive: true });
+  realFs.writeFileSync(
+    projectPath,
+    "---\nname: scope-test\nmodel: provider/project\n---\nproject",
+  );
+
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.cwd = project;
+  context.isProjectTrusted = () => true;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => [{ provider: "new", id: "model" }],
+    getAvailable: () => [{ provider: "new", id: "model" }],
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        return "Agents";
+      case 1:
+        return options.find((option) => option.includes("scope-test"));
+      case 2:
+        assert.ok(options.some((option) => option.startsWith("Edit scope")));
+        assert.ok(
+          options.some((option) => option.startsWith("Model (private repo)")),
+        );
+        return options.find((option) => option.startsWith("Edit scope"));
+      case 3:
+        assert.equal(label, "Edit scope");
+        return options.find((option) => option.startsWith("Project"));
+      case 4:
+        assert.ok(
+          options.some((option) => option.startsWith("Model (project)")),
+        );
+        return options.find((option) => option.startsWith("Model (project)"));
+      case 5:
+        return options.find((option) => option === "model");
+      case 6:
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+
+  try {
+    await command.handler("definitions", context);
+    assert.match(
+      realFs.readFileSync(projectPath, "utf8"),
+      /model: new\/model/u,
+      `${selection}: ${notices.join(" | ")}`,
+    );
+    assert.match(
+      realFs.readFileSync(privateTarget, "utf8"),
+      /model: provider\/private/u,
+    );
+    assert.equal(realFs.lstatSync(privatePath).isSymbolicLink(), true);
+    assert.match(notices.join("\n"), /Updated project scope-test model/u);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(privateDir, { recursive: true, force: true });
   }
 });
 
@@ -19734,7 +19908,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
           return options.find((option) => option.startsWith("Thinking"));
         case 3:
           assert.deepEqual(options, [
-            "Inherit current session",
+            "Remove local override",
             ...scenario.levels,
           ]);
           return undefined;
@@ -19775,7 +19949,7 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
   context.mode = "rpc";
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push(options);
-    if (label === "Agents & Roles" && categorySelections++ === 0)
+    if (label === "Agents & Coordinators" && categorySelections++ === 0)
       return "Agents";
     return undefined;
   };
@@ -19832,7 +20006,13 @@ test("Definitions separates Agent definitions and preserves provenance", async (
     await command.handler("definitions", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
-      ["Agents & Roles", "Agents", "group:Custom", "Agents", "Agents & Roles"],
+      [
+        "Agents & Coordinators",
+        "Agents",
+        "group:Custom",
+        "Agents",
+        "Agents & Coordinators",
+      ],
     );
     const definitions = prompts[1]!.options;
     assert.ok(

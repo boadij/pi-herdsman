@@ -4,6 +4,8 @@
 
 ### Features
 
+* **config:** Edit Agent settings in the most specific existing definition
+  source, with explicit scope selection and source-local reset behavior.
 * **config:** Add a private repository definition overlay shared by trusted
   linked worktrees in one clone (`bundled < global < trusted project < private
   repository`).

@@ -433,20 +433,20 @@ role behavior.
 
 ### `/herdsman definitions`
 
-Verify the native `Agents & Roles` menu shows:
+Verify the native `Agents & Coordinators` menu shows:
 
-- separate `Agents` and `Roles` lists, with reserved
+- separate `Agents` and `Coordinators` lists, with reserved
   `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
   in that canonical role order;
-- contributing source words `bundled`, `project`, and `global`, including
+- contributing source words `bundled`, `global`, `project`, and `private repo`, including
   combinations where multiple sources contribute;
 - unpadded definition-name labels, with model, thinking, and provenance as
   secondary metadata, including Unicode names;
 - model, thinking, enabled, and details actions for a selected ordinary Agent;
-- `Inherit current session` for model and thinking;
+- `Remove local override` for model and thinking;
 - selected-row contextual help and width-safe layout in narrow panes.
 
-All five reserved role definitions remain non-Agent. The Lead, Manager, and
+All five reserved Coordinator profiles remain non-Agent. The Lead, Manager, and
 Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
 and Details, but no Enabled action. Runtime-profile definitions reject
 launch-only fields such as model, thinking, extensions, skills, and context
@@ -455,13 +455,15 @@ after the current turn becomes idle.
 
 Structured `list_agents` should still retain exact deterministic metadata.
 
-Select a disposable bundled, project, or global definition and change its
-model, thinking, and enabled state. Confirm that project discovery requires Pi
-project trust and that these edits write global overrides only, not project
+Select disposable definitions with bundled, project, global, and private
+sources and change their settings. Confirm that project discovery requires Pi
+project trust, edits default to the most specific existing source, and users
+can choose another existing scope. Missing project/private sources must not be
+created. Project edits target worktree files; private edits target clone-shared
 files.
 
-Verify unrelated frontmatter and body remain unchanged, `Inherit current session`
-removes only the selected field, fresh definition delegations inherit the
+Verify unrelated frontmatter and body remain unchanged, `Remove local override`
+removes only the selected source's field, fresh definition delegations inherit the
 spawning controller's current value, continuations restore the saved session's
 value, and running agents are not mutated.
 

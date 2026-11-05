@@ -24,6 +24,8 @@ import {
   discoverAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
+  definitionEditTargets,
+  readDefinitionEditSnapshot,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
   isReservedRoleDefinition,
@@ -534,11 +536,11 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   const project = mkdtempSync(
     join(tmpdir(), "pi-herdsman-managed-lead-project-"),
   );
-  const projectAgents = join(project, ".pi", "pi-herdsman", "roles");
+  const projectAgents = join(project, ".pi", "coordinators");
   const global = mkdtempSync(
     join(tmpdir(), "pi-herdsman-managed-lead-global-"),
   );
-  const globalAgents = join(global, "pi-herdsman", "roles");
+  const globalAgents = join(global, "coordinators");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents, { recursive: true });
 
@@ -675,7 +677,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
 
 test("reserves independent runtime role profiles with narrow fields", () => {
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-lead-profiles-"));
-  const agents = join(global, "pi-herdsman", "roles");
+  const agents = join(global, "coordinators");
   mkdirSync(agents, { recursive: true });
   const names = withPiAgentDir(global, () =>
     discoverRoleDefinitions().map(({ name }) => name),
@@ -760,9 +762,9 @@ test("reserves independent runtime role profiles with narrow fields", () => {
 
 test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-role-project-"));
-  const projectAgents = join(project, ".pi", "pi-herdsman", "roles");
+  const projectAgents = join(project, ".pi", "coordinators");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-role-global-"));
-  const globalAgents = join(global, "pi-herdsman", "roles");
+  const globalAgents = join(global, "coordinators");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents, { recursive: true });
   const managerProject = join(projectAgents, "manager.md");
@@ -833,7 +835,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
 
 test("role agent allowlists validate effective targets", () => {
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-agents-"));
-  const agents = join(global, "pi-herdsman", "roles");
+  const agents = join(global, "coordinators");
   mkdirSync(agents, { recursive: true });
   writeFileSync(
     join(agents, "manager.md"),
@@ -916,9 +918,9 @@ test("supervisor allowlists use effective overlays and layered Agent targets", (
   const project = mkdtempSync(
     join(tmpdir(), "pi-herdsman-supervisor-project-"),
   );
-  const projectAgents = join(project, ".pi", "pi-herdsman", "roles");
+  const projectAgents = join(project, ".pi", "coordinators");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-global-"));
-  const globalAgents = join(global, "pi-herdsman", "roles");
+  const globalAgents = join(global, "coordinators");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents, { recursive: true });
   const projectManagerPath = join(projectAgents, "manager.md");
@@ -1447,7 +1449,7 @@ test("private repository definitions overlay trusted linked worktrees without cr
     const global = join(root, "global");
     mkdirSync(global);
     const globalAgents = join(global, "agents");
-    const globalRoles = join(global, "pi-herdsman", "roles");
+    const globalRoles = join(global, "coordinators");
     mkdirSync(globalAgents);
     mkdirSync(globalRoles, { recursive: true });
     const projectReviewer = join(primary, ".pi", "agents", "reviewer.md");
@@ -1464,7 +1466,7 @@ test("private repository definitions overlay trusted linked worktrees without cr
     const privateOnly = join(privateRoot, "agents", "private-only.md");
     write(privateOnly, "---\nname: private-only\n---\n@./prompt.txt");
     write(join(privateRoot, "agents", "prompt.txt"), "private prompt");
-    const privateRole = join(privateRoot, "roles", "managed-lead.md");
+    const privateRole = join(privateRoot, "coordinators", "managed-lead.md");
     write(
       privateRole,
       "---\nname: managed-lead\nagents: [private-only]\nbodyMode: append\n---\nPrivate role",
@@ -1508,7 +1510,10 @@ test("private repository definitions overlay trusted linked worktrees without cr
         .extensionSource,
     );
     assert.throws(() => {
-      write(join(privateRoot, "roles", "chief.md"), "---\nname: chief\n---\n");
+      write(
+        join(privateRoot, "coordinators", "chief.md"),
+        "---\nname: chief\n---\n",
+      );
       withPiAgentDir(global, () =>
         discoverRoleDefinitions({ projectRoot: linked }),
       );
@@ -2685,6 +2690,27 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     readFileSync(result.path, "utf8"),
     '---\nname: "custom/name"\nthinking: off\n---\n',
   );
+  const coordinator = withPiAgentDir(createRoot, () =>
+    updateAgentOverride(
+      {
+        name: "manager",
+        path: "/bundled/manager.md",
+        extensionSource: "/bundled/manager.md",
+        frontmatter: { name: "manager" },
+        body: "",
+      },
+      "thinking",
+      "off",
+    ),
+  );
+  assert.equal(
+    coordinator.path,
+    join(createRoot, "coordinators", "manager.md"),
+  );
+  assert.equal(
+    readFileSync(coordinator.path, "utf8"),
+    '---\nname: "manager"\nthinking: off\n---\n',
+  );
   const noop = withPiAgentDir(createRoot, () =>
     updateAgentOverride(
       { ...createDefinition, overrideSource: result.path },
@@ -2720,6 +2746,68 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
   );
   assert.equal(enabledReset.changed, true);
   assert.doesNotMatch(readFileSync(disabled.path, "utf8"), /^enabled:/m);
+});
+
+test("definition edits target existing sources and reject stale or linked files", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-edit-targets-"));
+  const projectPath = join(root, "renamed-source.md");
+  const privatePath = join(root, "private.md");
+  const globalPath = join(root, "global.md");
+  const projectText = "---\nname: actual-name\nthinking: high\n---\nproject\n";
+  writeFileSync(projectPath, projectText);
+  writeFileSync(privatePath, "---\nname: actual-name\n---\nprivate\n");
+  writeFileSync(
+    globalPath,
+    "---\nname: actual-name\nmodel: global/model\n---\nglobal\n",
+  );
+  const definition = {
+    name: "actual-name",
+    path: privatePath,
+    frontmatter: { name: "actual-name" },
+    body: "",
+    extensionSource: "/bundled/default.md",
+    projectSource: projectPath,
+    privateRepositorySource: privatePath,
+    overrideSource: globalPath,
+  };
+  const targets = definitionEditTargets(definition);
+  assert.deepEqual(
+    targets.map(({ scope }) => scope),
+    ["private", "project", "global"],
+  );
+  const snapshot = readDefinitionEditSnapshot(definition, targets[0]!);
+  assert.equal(snapshot.frontmatter.name, "actual-name");
+  const changed = updateAgentOverride(definition, "thinking", "medium", {
+    scope: "private",
+    expectedContent: snapshot.content,
+  });
+  assert.equal(changed.path, privatePath);
+  assert.match(readFileSync(privatePath, "utf8"), /thinking: medium/u);
+  assert.match(readFileSync(projectPath, "utf8"), /thinking: high/u);
+  assert.match(readFileSync(globalPath, "utf8"), /model: global\/model/u);
+  assert.throws(
+    () =>
+      updateAgentOverride(definition, "model", "new/model", {
+        scope: "project",
+        expectedContent: projectText.replace("high", "low"),
+      }),
+    /changed while editing/u,
+  );
+  const symlinkPath = join(root, "symlink.md");
+  symlinkSync(privatePath, symlinkPath);
+  assert.throws(
+    () =>
+      updateAgentOverride(
+        { ...definition, privateRepositorySource: symlinkPath },
+        "model",
+        "new/model",
+        {
+          scope: "private",
+          expectedContent: readFileSync(privatePath, "utf8"),
+        },
+      ),
+    /symlinked definition/u,
+  );
 });
 
 const noForeignProviders = () => false;
@@ -2971,7 +3059,7 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
 test("Agent and role namespaces are independent and reject misplaced names", () => {
   const root = mkdtempSync(join(tmpdir(), "herdsman-namespaces-"));
   const agents = join(root, "agents");
-  const roles = join(root, "pi-herdsman", "roles");
+  const roles = join(root, "coordinators");
   mkdirSync(agents, { recursive: true });
   mkdirSync(roles, { recursive: true });
   withPiAgentDir(root, () => {
@@ -2979,14 +3067,85 @@ test("Agent and role namespaces are independent and reject misplaced names", () 
     assert.ok(discoverAgentDefinitions().length);
     assert.throws(
       () => discoverRoleDefinitions(),
-      /non-role name in pi-herdsman\/roles directory/,
+      /non-coordinator name in coordinators directory/,
     );
     unlinkSync(join(roles, "bad.md"));
     writeFileSync(join(agents, "bad.md"), "---\nname: manager\n---\n");
     assert.ok(discoverRoleDefinitions().length);
     assert.throws(
       () => discoverAgentDefinitions(),
-      /reserved role name in agents directory; use pi-herdsman\/roles/,
+      /reserved coordinator name in agents directory; use coordinators/,
     );
+  });
+});
+
+test("legacy coordinator profiles diagnose only applicable trusted scopes", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-legacy-coordinators-"));
+  const global = join(root, "global");
+  const project = join(root, "project");
+  mkdirSync(global);
+  mkdirSync(project);
+  const legacyGlobal = join(global, "pi-herdsman", "roles");
+  const canonicalGlobal = join(global, "coordinators");
+  const legacyProject = join(project, ".pi", "pi-herdsman", "roles");
+  const canonicalProject = join(project, ".pi", "coordinators");
+  const put = (path: string, body: string) => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, body);
+  };
+  const manager = "---\nname: manager\n---\nCustom manager";
+
+  mkdirSync(legacyGlobal, { recursive: true });
+  put(join(legacyGlobal, "manager.md"), manager);
+  withPiAgentDir(global, () => {
+    assert.throws(
+      () => discoverRoleDefinition("manager"),
+      (error: Error) => {
+        assert.ok(error.message.includes(legacyGlobal));
+        assert.ok(error.message.includes(canonicalGlobal));
+        return true;
+      },
+    );
+    assert.ok(discoverAgentDefinitions().length);
+  });
+  unlinkSync(join(legacyGlobal, "manager.md"));
+  put(join(legacyGlobal, "manager.example.md"), "not parsed");
+  mkdirSync(canonicalGlobal, { recursive: true });
+  put(join(canonicalGlobal, "manager.md"), manager);
+  withPiAgentDir(global, () => {
+    assert.equal(
+      discoverRoleDefinition("manager").overrideSource,
+      join(canonicalGlobal, "manager.md"),
+    );
+    assert.ok(discoverRoleDefinition("manager", { projectRoot: project }));
+  });
+
+  put(join(legacyProject, "manager.md"), manager);
+  withPiAgentDir(global, () => {
+    assert.ok(discoverAgentDefinitions());
+    assert.throws(
+      () => discoverRoleDefinition("manager", { projectRoot: project }),
+      /legacy coordinator profile is no longer loaded/u,
+    );
+  });
+  rmSync(legacyProject, { recursive: true, force: true });
+  mkdirSync(canonicalProject, { recursive: true });
+
+  const git = join(root, "git");
+  mkdirSync(git);
+  execFileSync("git", ["init", "-b", "main"], { cwd: git, stdio: "ignore" });
+  const common = execFileSync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: git, encoding: "utf8" },
+  ).trim();
+  const legacyPrivate = join(common, "pi-herdsman", "roles");
+  put(join(legacyPrivate, "manager.md"), manager);
+  withPiAgentDir(global, () => {
+    assert.throws(
+      () => discoverRoleDefinition("manager", { projectRoot: git }),
+      /legacy coordinator profile is no longer loaded/u,
+    );
+    assert.ok(discoverRoleDefinition("manager"));
   });
 });

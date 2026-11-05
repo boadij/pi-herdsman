@@ -3,7 +3,7 @@
 [Documentation index](../README.md)
 
 This page is the canonical public schema for Markdown Agent definitions and
-role profiles.
+Coordinator profiles.
 
 ## File format
 
@@ -52,13 +52,19 @@ Bundled definitions:
 dist/agents/
 ```
 
-Bundled role profiles are in `dist/roles/`. Global role profiles are
-in `<agentDir>/pi-herdsman/roles/`, and trusted project role profiles
-are in `<cwd>/.pi/pi-herdsman/roles/`. Trusted Git worktrees also load
-repository-private definitions from `<git-common-dir>/pi-herdsman/agents/`
-or `roles/`. Pi's agent directory defaults to `~/.pi/agent`. The same
-precedence and overlay rules apply independently to each category. Reserved role names are rejected in Agent directories;
-non-role names are rejected in role-profile directories.
+The two definition categories use sibling directories:
+
+| Scope              | Agents                                 | Coordinators                                 |
+| ------------------ | -------------------------------------- | -------------------------------------------- |
+| Bundled package    | `dist/agents/`                         | `dist/coordinators/`                         |
+| Global             | `<agentDir>/agents/`                   | `<agentDir>/coordinators/`                   |
+| Trusted project    | `<cwd>/.pi/agents/`                    | `<cwd>/.pi/coordinators/`                    |
+| Private repository | `<git-common-dir>/pi-herdsman/agents/` | `<git-common-dir>/pi-herdsman/coordinators/` |
+
+Pi's agent directory defaults to `~/.pi/agent`. The same precedence and
+overlay rules apply independently to each category. Reserved Coordinator
+names are rejected in Agent directories; ordinary Agent names are rejected in
+Coordinator directories.
 
 Global definitions by default:
 
@@ -86,20 +92,29 @@ Herdsman-owned authority and required coordination tools
 remain protected by runtime policy.
 
 All effective Agent definitions are sorted and validated together, including
-every `agents` reference. A selected role's `agents` allowlist is validated
+every `agents` reference. A selected Coordinator profile's `agents` allowlist is validated
 against the effective Agent roster; invalid references are not silently
-discarded. Agent discovery does not validate every role-profile configuration.
+discarded. Agent discovery does not validate every Coordinator profile.
 
-### Reserved role definitions
+### Reserved Coordinator definitions
 
 `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
-are reserved role definitions, not Agents. They are excluded from the Agent
+are reserved Coordinator definitions, not Agents. They are excluded from the Agent
 roster and cannot be selected by `delegate_agent`, referenced as delegation
-targets from `agents`, or disabled. Each role may declare `agents` to
-allowlist direct ordinary Agent targets. The `Agents & Roles` menu lists reserved roles under `Roles`, separately from
-ordinary `Agents`. Runtime profiles
+targets from `agents`, or disabled. Each profile may declare `agents` to
+allowlist direct ordinary Agent targets. The `Agents & Coordinators` menu
+lists these profiles under `Coordinators`, separately from ordinary `Agents`.
+Runtime profiles
 provide `Details` only; `managed-lead` additionally provides `Model` and
 `Thinking`.
+
+Coordinator discovery does not load profile files left in the former
+`roles/` directories. Active Markdown files at an applicable legacy global,
+trusted-project, or private-repository path produce an actionable migration
+error; Agent discovery remains independent. Move files and any relative prompt
+assets to the corresponding canonical `coordinators/` directory. Empty legacy
+directories and `.example.md` templates do not block discovery. No files are
+moved or deleted automatically.
 
 Ordinary unassigned Leads use their persisted execution choice: `flexible`
 selects `flexible-lead` and `orchestrate` selects `orchestrator-lead`. A future

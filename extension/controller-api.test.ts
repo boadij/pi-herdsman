@@ -7782,7 +7782,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     let categorySelection = 0;
     context.ui.select = async (title: string, options: string[]) => {
       selections.push(options);
-      if (title === "Agents & Roles")
+      if (title === "Agents & Coordinators")
         return ++categorySelection % 2 === 1
           ? options.find((option) => option === "Agents")
           : undefined;
@@ -8231,7 +8231,7 @@ test("untrusted assignments omit project approval", async () => {
   }
 });
 
-test("project-only Definitions edits create a global override", async () => {
+test("project-only Definitions edits update the project source", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(
     join(tmpdir(), "pi-herdsman-project-edit-"),
@@ -8255,7 +8255,7 @@ test("project-only Definitions edits create a global override", async () => {
   let selection = 0;
   let categorySelected = false;
   context.ui.select = async (title: string, options: string[]) => {
-    if (title === "Agents & Roles") {
+    if (title === "Agents & Coordinators") {
       if (categorySelected) return undefined;
       categorySelected = true;
       return options.find((option) => option === "Agents");
@@ -8273,17 +8273,16 @@ test("project-only Definitions edits create a global override", async () => {
   };
   try {
     await command.handler("definitions", context);
-    const globalPath = join(PI_AGENTS_DIR, "project-only.md");
-    assert.equal(realFs.readFileSync(projectPath, "utf8"), original);
     assert.match(
-      realFs.readFileSync(globalPath, "utf8"),
+      realFs.readFileSync(projectPath, "utf8"),
       /^model: provider\/edited-model$/m,
     );
+    const globalPath = join(PI_AGENTS_DIR, "project-only.md");
+    assert.equal(realFs.existsSync(globalPath), false);
     const effective = discoverAgent("project-only", { projectRoot: project });
     assert.equal(effective.frontmatter.model, "provider/edited-model");
     assert.equal(effective.projectSource, projectPath);
-    assert.equal(effective.overrideSource, globalPath);
-    realFs.rmSync(globalPath, { force: true });
+    assert.equal(effective.overrideSource, undefined);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
