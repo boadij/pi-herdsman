@@ -94,6 +94,49 @@ export function windowsTestFile(command) {
   return files.size === 1 ? [...files][0] : undefined;
 }
 
+export const windowsTestFileClassifierScript = String.raw`
+function Resolve-TestFile($process, $repoRoot) {
+  $command = $process.CommandLine
+  if ($null -eq $command) { return @{ file = $null; category = 'command-line-unavailable' } }
+  $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $testArguments = 0
+  $failureCategory = $null
+  foreach ($match in [regex]::Matches($command, '(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)')) {
+    $argument = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    if ($argument -match '^file:.*\.test\.(?:[cm]?[jt]s)$') { $testArguments++; if ($null -eq $failureCategory) { $failureCategory = 'file-uri-argument' }; continue }
+    if ($argument -notmatch '\.test\.(?:[cm]?[jt]s)$') { continue }
+    $testArguments++
+    try {
+      $candidate = if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $repoRoot $argument }
+      $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+    } catch {
+      $lookupCategory = $_.CategoryInfo.Category
+      $reason = switch ($lookupCategory) {
+        'ObjectNotFound' { 'resolve-path-not-found' }
+        'InvalidArgument' { 'resolve-path-invalid-form' }
+        'InvalidData' { 'resolve-path-invalid-form' }
+        default { 'resolve-path-other-error' }
+      }
+      if ($null -eq $failureCategory) { $failureCategory = $reason }
+      continue
+    }
+    if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { if ($null -eq $failureCategory) { $failureCategory = 'resolved-outside-repo' }; continue }
+    $name = $resolved.Substring($repoRoot.Length).Replace('\', '/')
+    try { $isDirectory = (Get-Item -LiteralPath $resolved -ErrorAction Stop).PSIsContainer } catch { $isDirectory = $true }
+    if ($name -match '^(?!\.\.?/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$' -and -not $isDirectory) {
+      [void]$files.Add($name)
+    } elseif ($null -eq $failureCategory) { $failureCategory = 'in-repo-path-validation-failure' }
+  }
+  if ($files.Count -eq 1 -and $null -eq $failureCategory) { return @{ file = @($files)[0]; category = $null } }
+  if ($files.Count -gt 1) { return @{ file = $null; category = 'ambiguous-test-path' } }
+  if ($testArguments -gt 0) {
+    if ($null -ne $failureCategory) { return @{ file = $null; category = $failureCategory } }
+    return @{ file = $null; category = 'in-repo-path-validation-failure' }
+  }
+  return @{ file = $null; category = 'unrecognized-arguments' }
+}
+`;
+
 export function snapshotWindowsTestWorkers(
   pid,
   signal,
@@ -114,36 +157,7 @@ $seen = [System.Collections.Generic.HashSet[int]]::new()
 $rows = [System.Collections.Generic.List[object]]::new()
 $truncated = $false
 $repoRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
-function Resolve-TestFile($command) {
-  if ($null -eq $command) { return @{ file = $null; category = 'command-line-unavailable' } }
-  $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-  $testArguments = 0
-  $failureCategory = $null
-  foreach ($match in [regex]::Matches($command, '(?:^|\\s)(?:"([^"\\r\\n]+)"|([^\\s"]+))(?=\\s|$)')) {
-    $argument = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
-    if ($argument -match '^file:.*\\.test\\.(?:[cm]?[jt]s)$') { $testArguments++; if ($null -eq $failureCategory) { $failureCategory = 'file-uri-argument' }; continue }
-    if ($argument -notmatch '\\.test\\.(?:[cm]?[jt]s)$') { continue }
-    $testArguments++
-    try {
-      $candidate = if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $repoRoot $argument }
-      $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
-      if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { if ($null -eq $failureCategory) { $failureCategory = 'resolved-outside-repo' }; continue }
-      $name = $resolved.Substring($repoRoot.Length).Replace('\', '/')
-      if ($name -match '^(?!\\.\\.?/)[a-z0-9_./-]+\\.test\\.(?:[cm]?[jt]s)$' -and -not (Get-Item -LiteralPath $resolved).PSIsContainer) {
-        [void]$files.Add($name)
-      } elseif ($null -eq $failureCategory) { $failureCategory = 'in-repo-path-validation-failure' }
-    } catch {
-      if ($null -eq $failureCategory) { $failureCategory = 'resolve-path-failure' }
-    }
-  }
-  if ($files.Count -eq 1 -and $null -eq $failureCategory) { return @{ file = @($files)[0]; category = $null } }
-  if ($files.Count -gt 1) { return @{ file = $null; category = 'ambiguous-test-path' } }
-  if ($testArguments -gt 0) {
-    if ($null -ne $failureCategory) { return @{ file = $null; category = $failureCategory } }
-    return @{ file = $null; category = 'in-repo-path-validation-failure' }
-  }
-  return @{ file = $null; category = 'unrecognized-arguments' }
-}
+${windowsTestFileClassifierScript}
 while ($queue.Count -gt 0) {
   $parent = $queue.Dequeue()
   foreach ($process in $all) {
@@ -153,7 +167,7 @@ while ($queue.Count -gt 0) {
     [void]$seen.Add([int]$process.ProcessId)
     $queue.Enqueue($process)
     $node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe')
-    $attribution = if ($node) { Resolve-TestFile $process.CommandLine } else { @{ file = $null; category = $null } }
+    $attribution = if ($node) { Resolve-TestFile $process $repoRoot } else { @{ file = $null; category = $null } }
     $rows.Add([pscustomobject]@{ node = $node; file = $attribution.file; category = $attribution.category })
   }
 }
@@ -179,7 +193,9 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
         "command-line-unavailable",
         "unrecognized-arguments",
         "file-uri-argument",
-        "resolve-path-failure",
+        "resolve-path-invalid-form",
+        "resolve-path-not-found",
+        "resolve-path-other-error",
         "resolved-outside-repo",
         "in-repo-path-validation-failure",
         "ambiguous-test-path",

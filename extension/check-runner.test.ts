@@ -10,11 +10,49 @@ import {
   CHECK_TIMEOUT_MS,
   runTestRunner,
   snapshotWindowsTestWorkers,
+  windowsTestFileClassifierScript,
   windowsTestFile,
 } from "../scripts/check.mjs";
 
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+function runPowerShell(script: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { windowsHide: true, timeout: 5_000, maxBuffer: 8 * 1024 },
+      (error, stdout) => {
+        if (error) reject(new Error("bounded PowerShell fixture failed"));
+        else resolvePromise(stdout.trim());
+      },
+    );
+  });
+}
+
+function waitForChildClose(closed: Promise<void>): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("test-owned child cleanup exceeded its bound")),
+      5_000,
+    );
+    closed.then(() => {
+      clearTimeout(timer);
+      resolvePromise();
+    });
+  });
+}
+
+function childIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw new Error("test-owned child process state unavailable");
+  }
+}
 
 test("check suite deadline allows extra time on Windows", () => {
   assert.equal(
@@ -155,7 +193,7 @@ test("Windows snapshot attribution uses the repository root outside the checkout
   );
   assert.equal(
     workerDiagnostic,
-    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers file-uri-argument=0\ncheck: unattributed workers in-repo-path-validation-failure=0\ncheck: unattributed workers resolve-path-failure=0\ncheck: unattributed workers resolved-outside-repo=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
+    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers file-uri-argument=0\ncheck: unattributed workers in-repo-path-validation-failure=0\ncheck: unattributed workers resolve-path-invalid-form=0\ncheck: unattributed workers resolve-path-not-found=0\ncheck: unattributed workers resolve-path-other-error=0\ncheck: unattributed workers resolved-outside-repo=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
   );
 });
 
@@ -164,7 +202,9 @@ test("Windows worker snapshot reports only allowlisted unattributed categories",
     ["command-line-unavailable", "command-line-unavailable"],
     ["unrecognized-arguments", "unrecognized-arguments"],
     ["file-uri-argument", "file-uri-argument"],
-    ["resolve-path-failure", "resolve-path-failure"],
+    ["resolve-path-not-found", "resolve-path-not-found"],
+    ["resolve-path-invalid-form", "resolve-path-invalid-form"],
+    ["resolve-path-other-error", "resolve-path-other-error"],
     ["resolved-outside-repo", "resolved-outside-repo"],
     ["in-repo-path-validation-failure", "in-repo-path-validation-failure"],
     ["ambiguous-test-path", "ambiguous-test-path"],
@@ -197,8 +237,8 @@ test("Windows worker snapshot reports only allowlisted unattributed categories",
 
 test(
   "Windows PowerShell classifier distinguishes sanitized worker path reasons",
-  { skip: process.platform !== "win32", timeout: 20_000 },
-  async (t) => {
+  { skip: process.platform !== "win32", timeout: 15_000 },
+  async () => {
     const repositoryRoot = process.cwd();
     const repositoryFixtureDir = await mkdtemp(
       join(repositoryRoot, ".check-worker-reasons-"),
@@ -210,95 +250,101 @@ test(
     const outsideFile = join(outsideFixtureDir, "outside.test.ts");
     await writeFile(invalidName, "");
     await writeFile(outsideFile, "");
-    t.after(async () => {
+    try {
+      const quote = (value: string) => `"${value}"`;
+      const inputs = [
+        null,
+        "node.exe --worker-mode",
+        `node.exe ${quote(pathToFileURL(invalidName).href)}`,
+        `node.exe ${quote(join(repositoryFixtureDir, "missing.test.ts"))}`,
+        `node.exe ${quote(join(repositoryFixtureDir, "mock-invalid.test.ts"))}`,
+        `node.exe ${quote(join(repositoryFixtureDir, "mock-other.test.ts"))}`,
+        `node.exe ${quote(outsideFile)}`,
+        `node.exe ${quote(invalidName)}`,
+        `node.exe ${quote(join(repositoryRoot, "extension", "check-runner.test.ts"))} ${quote(join(repositoryRoot, "scripts", "node-target.test.mjs"))}`,
+      ];
+      const payload = Buffer.from(JSON.stringify(inputs), "utf16le").toString(
+        "base64",
+      );
+      const root = Buffer.from(repositoryRoot, "utf16le").toString("base64");
+      const script = `
+$ErrorActionPreference = 'Stop'
+$repoRoot = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${root}'))
+$inputs = ConvertFrom-Json ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${payload}')))
+function Resolve-Path {
+  [CmdletBinding()]
+  param([string]$LiteralPath)
+  if ($LiteralPath -like '*mock-invalid.test.ts') { Write-Error -Message 'synthetic invalid form' -Category InvalidArgument -ErrorAction Stop }
+  if ($LiteralPath -like '*mock-other.test.ts') { throw [InvalidOperationException]::new('synthetic') }
+  Microsoft.PowerShell.Management\\Resolve-Path @PSBoundParameters
+}
+${windowsTestFileClassifierScript}
+$results = foreach ($inputCommand in $inputs) {
+  (Resolve-TestFile ([pscustomobject]@{ CommandLine = $inputCommand }) $repoRoot).category
+}
+$success = Resolve-TestFile ([pscustomobject]@{ CommandLine = ('node.exe "' + (Join-Path $repoRoot 'extension\check-runner.test.ts') + '"') }) $repoRoot
+ConvertTo-Json -InputObject @{ categories = @($results); file = $success.file; category = $success.category } -Compress
+`;
+      const result = await runPowerShell(script);
+      const classification = JSON.parse(result);
+      assert.deepEqual(classification.categories, [
+        "command-line-unavailable",
+        "unrecognized-arguments",
+        "file-uri-argument",
+        "resolve-path-not-found",
+        "resolve-path-invalid-form",
+        "resolve-path-other-error",
+        "resolved-outside-repo",
+        "in-repo-path-validation-failure",
+        "ambiguous-test-path",
+      ]);
+      assert.deepEqual(
+        { file: classification.file, category: classification.category },
+        { file: "extension/check-runner.test.ts", category: null },
+      );
+      assert.doesNotMatch(result, /[A-Za-z]:\\|file:\/\/|node\.exe/i);
+    } finally {
       await Promise.all([
         rm(repositoryFixtureDir, { recursive: true, force: true }),
         rm(outsideFixtureDir, { recursive: true, force: true }),
       ]);
-    });
+    }
+  },
+);
 
-    const missingFile = join(repositoryFixtureDir, "missing.test.ts");
-    const cases = [
-      ["file-uri-argument", pathToFileURL(invalidName).href],
-      ["resolve-path-failure", missingFile],
-      ["resolved-outside-repo", outsideFile],
-      ["in-repo-path-validation-failure", invalidName],
-    ] as const;
-    const workers: Array<{
-      child: ChildProcess;
-      pid?: number;
-      closed: Promise<void>;
-    }> = [];
+test(
+  "Windows targeted CIM query identifies and cleans its exact test child",
+  { skip: process.platform !== "win32", timeout: 15_000 },
+  async () => {
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore", windowsHide: true },
+    );
+    const closed = new Promise<void>((resolvePromise) =>
+      child.once("close", () => resolvePromise()),
+    );
+    let pid: number | undefined;
     try {
-      for (const [, argument] of cases) {
-        const child = spawn(
-          process.execPath,
-          ["-e", "setInterval(() => {}, 1000)", "--", argument],
-          { stdio: "ignore", windowsHide: true },
-        );
-        const worker = {
-          child,
-          closed: new Promise<void>((resolvePromise) =>
-            child.once("close", () => resolvePromise()),
-          ),
-        };
-        workers.push(worker);
-        const pid = await new Promise<number>((resolvePromise, reject) => {
-          child.once("error", reject);
-          child.once("spawn", () => {
-            if (child.pid === undefined)
-              reject(new Error("worker PID unavailable"));
-            else resolvePromise(child.pid);
-          });
+      pid = await new Promise<number>((resolvePromise, reject) => {
+        child.once("error", reject);
+        child.once("spawn", () => {
+          if (child.pid === undefined)
+            reject(new Error("worker PID unavailable"));
+          else resolvePromise(child.pid);
         });
-        worker.pid = pid;
-      }
-
-      const { promise } = snapshotWindowsTestWorkers(
-        process.pid,
-        new AbortController().signal,
-      );
-      const diagnostic = await promise;
-      for (const [category] of cases)
-        assert.match(
-          diagnostic,
-          new RegExp(`unattributed workers ${category}=1`),
-        );
-      assert.doesNotMatch(diagnostic, /[A-Za-z]:\\|file:\/\/|node\.exe/i);
+      });
+      const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pid}'; ConvertTo-Json -InputObject @{ found = ($null -ne $p); node = ($null -ne $p -and $p.Name -ieq 'node.exe'); parent = ($null -ne $p -and $p.ParentProcessId -eq ${process.pid}) } -Compress`;
+      const result = await runPowerShell(script);
+      assert.deepEqual(JSON.parse(result), {
+        found: true,
+        node: true,
+        parent: true,
+      });
     } finally {
-      let cleanupVerified = true;
-      for (const { child, pid, closed } of workers) {
-        if (pid === undefined) continue;
-        try {
-          if (child.exitCode === null && child.signalCode === null)
-            child.kill();
-          await new Promise<void>((resolvePromise, reject) => {
-            const timer = setTimeout(
-              () => reject(new Error("worker cleanup exceeded its bound")),
-              5_000,
-            );
-            closed.then(() => {
-              clearTimeout(timer);
-              resolvePromise();
-            });
-          });
-          let running = true;
-          try {
-            process.kill(pid, 0);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ESRCH")
-              running = false;
-          }
-          if (running) cleanupVerified = false;
-        } catch {
-          cleanupVerified = false;
-        }
-      }
-      assert.equal(
-        cleanupVerified,
-        true,
-        "test-owned workers exited after cleanup",
-      );
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await waitForChildClose(closed);
+      if (pid !== undefined) assert.equal(childIsRunning(pid), false);
     }
   },
 );
