@@ -2851,7 +2851,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       topology?.source?.repo_key !== manager.repoKey ||
       !Array.isArray(topology?.worktrees)
     )
-      throw new Error("Herdr worktree topology is not authoritative");
+      throw new Error(
+        "Herdr worktree topology is not authoritative during project activation",
+      );
     if (operation.action === "resume")
       await host.reconcileProjectAssignments(
         ctx,
@@ -3057,14 +3059,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(
           "Project assignment checkout changed during resume handoff",
         );
-      const currentTopology = await runHerdr(pi, ctx, ["worktree", "list"], {
-        signal,
-      });
+      const currentTopology = await runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--cwd", localScope.checkoutPath],
+        { signal },
+      );
       if (
         currentTopology?.source?.repo_key !== manager.repoKey ||
         !Array.isArray(currentTopology?.worktrees)
       )
-        throw new Error("Herdr worktree topology is not authoritative");
+        throw new Error(
+          "Herdr worktree topology is not authoritative during resume handoff revalidation",
+        );
       const currentPlacement = resolveAssignmentCheckout(
         latest,
         currentTopology.worktrees,
