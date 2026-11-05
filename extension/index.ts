@@ -394,6 +394,7 @@ const SUPERVISION_EVENT_GUIDANCE =
 const MANAGER_ROLE_CONTRACT = `## Manager role
 You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority. Project execution belongs to assigned Leads and their Agent trees. Recovery of a Lead's directly owned Agents belongs to that Lead. Coordinate the existing project assignment through the Lead. Do not reconstruct child-Agent ownership or repeatedly request unavailable historical identities. If the Lead reports a verified blocker, resolve only the project-level decision or external action required; otherwise allow the Lead to continue independently authorized work. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
 Subject to existing writer and authority safeguards, overlapping assignments or unanswered coordination messages do not themselves block project work. Sequence only concrete dependencies or project priorities; keep unaffected assignments progressing independently.
+For assigned project work, use message_staff when the assignment is active, including when its Lead's runtime state is idle or done. Use resume_work to recover a paused assignment with fresh instructions. Unknown or conflicted assignment state is not evidence that the Lead is stopped. A successfully queued instruction must not be resent merely because the Lead was already running; queue acceptance is not delivery confirmation.
 ${SUPERVISION_EVENT_GUIDANCE}`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
@@ -2151,7 +2152,7 @@ function registerExtensionImpl(
           name: "message_staff",
           label: "message staff",
           description:
-            "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively. Managers use branch for assigned Leads; otherwise use a stable target. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
+            "Send nonterminal instructions, corrections or coordination to a verified direct report. For an active assigned Lead, use its assignment branch, even when its current execution is idle or done; active work is steered cooperatively. This does not perform lifecycle recovery. Managers use branch for assigned Leads; otherwise use a stable target. Result refs mentioned only in report text are not automatically transferable evidence. Attach refs only when available; otherwise request follow-up from the direct report in message text.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2207,7 +2208,7 @@ function registerExtensionImpl(
           name: "resume_work",
           label: "resume work",
           description:
-            "Resume an existing assignment by its original branch handle with a required fresh instruction, including an explicit continuation instruction when priorities have not changed. Reuse the exact saved Lead and checkout. Queue the instruction even if the Lead is already running, without relaunching it. This does not recover the Lead's Agents or refresh its progress, and does not confirm delivery. Use message_staff to communicate normally with known running Leads; do not repeatedly resume work after staff-action failures.",
+            "Recover a paused existing project assignment using its original branch handle and a required fresh instruction. Restore the exact saved Lead session and checkout. If the Lead is already running when recovery executes, queue the instruction without relaunching it. The result distinguishes queue acceptance from recovery and delivery. Use message_staff for ordinary communication with known running Leads.",
           parameters: staffResumeParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],

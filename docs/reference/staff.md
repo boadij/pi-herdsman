@@ -163,6 +163,10 @@ model-facing removal tool. See [Project orchestration](../guides/project-orchest
 for the procedure; assigned Leads use delegation `files` for recipient-specific
 evidence.
 
+For an active assigned Lead, use its `branch` even when its current runtime
+state is idle or done. Active describes the assignment, not whether the Lead is
+currently executing; `message_staff` does not perform lifecycle recovery.
+
 ## `delegate_work`
 
 Manager only. Start new project work with a required `task` and optional
@@ -195,7 +199,7 @@ decision for that run; this does not modify Pi's persistent trust store.
 
 ## `resume_work`
 
-Manager only. Resume existing unresolved project work using its original
+Manager only. Recover paused existing project work using its original
 assignment branch handle and a required fresh instruction:
 
 ```json
@@ -222,14 +226,18 @@ durable enqueue acceptance, not delivery or acknowledgment.
 The assignment must already exist; resume does not create or replace it. The
 message adds direction within the assignment without changing its saved task.
 It is queued as a separate Manager message through the normal authorized,
-durable channel; queueing does not guarantee receipt. Resuming already-running
-work queues the instruction for that exact Lead without relaunching it. A
+durable channel; queueing does not guarantee receipt. If state changes and the
+exact Lead is already running when resume executes, it safely queues the
+instruction without relaunching it. A
 stopped Lead is relaunched with the same exact session in its existing verified
 checkout, with the assignment notification and instruction queued before the
 controlled launch. If recovery fails after queueing, the result reports that
 the instruction remains queued; inspect state before resuming or sending it
 again. Resume does not recover the Lead's Agents or refresh its progress; use
-`message_staff` for ordinary communication with known running Leads.
+`message_staff` for ordinary communication with known running Leads. If the
+result reports `message_queued: true`, do not send the same instruction again
+merely because the Lead was already running; queue acceptance does not prove
+delivery.
 `resume_work` is not a general progress-refresh mechanism. The current branch
 is not reset to the assignment handle.
 Verified checkout absence retires the assignment rather than recreating it. A
