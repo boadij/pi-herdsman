@@ -9,6 +9,10 @@ const TERM_GRACE_MS = 1_000;
 const TASKKILL_TIMEOUT_MS = 1_000;
 const TREE_GONE_TIMEOUT_MS = 5_000;
 const TREE_POLL_MS = 25;
+const WORKER_SNAPSHOT_TIMEOUT_MS = 5_000;
+export const WORKER_SNAPSHOT_AT_MS = CHECK_TIMEOUT_MS - 25_000;
+const SNAPSHOT_CANCEL_TIMEOUT_MS =
+  2 * TASKKILL_TIMEOUT_MS + TREE_GONE_TIMEOUT_MS + 2 * TERM_GRACE_MS;
 const isWindows = process.platform === "win32";
 const repoRoot = resolve(fileURLToPath(import.meta.url), "..", "..");
 const testRunnerArgs = [
@@ -90,7 +94,55 @@ export function windowsTestFile(command) {
   return files.size === 1 ? [...files][0] : undefined;
 }
 
-function snapshotWindowsTestWorkers(pid, signal) {
+export const windowsTestFileClassifierScript = String.raw`
+function Resolve-TestFile($process, $repoRoot) {
+  $command = $process.CommandLine
+  if ($null -eq $command) { return @{ file = $null; category = 'command-line-unavailable' } }
+  $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $testArguments = 0
+  $failureCategory = $null
+  foreach ($match in [regex]::Matches($command, '(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)')) {
+    $argument = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    if ($argument -match '^file:.*\.test\.(?:[cm]?[jt]s)$') { $testArguments++; if ($null -eq $failureCategory) { $failureCategory = 'file-uri-argument' }; continue }
+    if ($argument -notmatch '\.test\.(?:[cm]?[jt]s)$') { continue }
+    $testArguments++
+    try {
+      $candidate = if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $repoRoot $argument }
+      $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+    } catch {
+      $lookupCategory = $_.CategoryInfo.Category
+      $reason = switch ($lookupCategory) {
+        'ObjectNotFound' { 'resolve-path-not-found' }
+        'InvalidArgument' { 'resolve-path-invalid-form' }
+        'InvalidData' { 'resolve-path-invalid-form' }
+        default { 'resolve-path-other-error' }
+      }
+      if ($null -eq $failureCategory) { $failureCategory = $reason }
+      continue
+    }
+    if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { if ($null -eq $failureCategory) { $failureCategory = 'resolved-outside-repo' }; continue }
+    $name = $resolved.Substring($repoRoot.Length).Replace('\', '/')
+    try { $isDirectory = (Get-Item -LiteralPath $resolved -ErrorAction Stop).PSIsContainer } catch { $isDirectory = $true }
+    if ($name -match '^(?!\.\.?/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$' -and -not $isDirectory) {
+      [void]$files.Add($name)
+    } elseif ($null -eq $failureCategory) { $failureCategory = 'in-repo-path-validation-failure' }
+  }
+  if ($files.Count -eq 1 -and $null -eq $failureCategory) { return @{ file = @($files)[0]; category = $null } }
+  if ($files.Count -gt 1) { return @{ file = $null; category = 'ambiguous-test-path' } }
+  if ($testArguments -gt 0) {
+    if ($null -ne $failureCategory) { return @{ file = $null; category = $failureCategory } }
+    return @{ file = $null; category = 'in-repo-path-validation-failure' }
+  }
+  return @{ file = $null; category = 'unrecognized-arguments' }
+}
+`;
+
+export function snapshotWindowsTestWorkers(
+  pid,
+  signal,
+  execFileImpl = execFile,
+  terminateTree = terminateProcessTree,
+) {
   const unavailable = "check: Windows timeout snapshot unavailable";
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -104,6 +156,8 @@ $seen = [System.Collections.Generic.HashSet[int]]::new()
 [void]$seen.Add($runnerPid)
 $rows = [System.Collections.Generic.List[object]]::new()
 $truncated = $false
+$repoRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
+${windowsTestFileClassifierScript}
 while ($queue.Count -gt 0) {
   $parent = $queue.Dequeue()
   foreach ($process in $all) {
@@ -112,68 +166,226 @@ while ($queue.Count -gt 0) {
     if ($rows.Count -ge 24) { $truncated = $true; continue }
     [void]$seen.Add([int]$process.ProcessId)
     $queue.Enqueue($process)
-    $command = ''
-    if ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe') {
-      if ($null -eq $process.CommandLine) { throw 'command unavailable' }
-      $command = [string]$process.CommandLine
-    }
-    $rows.Add([pscustomobject]@{ pid = [int]$process.ProcessId; parent = [int]$parent.ProcessId; node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe'); command = $command })
+    $node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe')
+    $attribution = if ($node) { Resolve-TestFile $process $repoRoot } else { @{ file = $null; category = $null } }
+    $rows.Add([pscustomobject]@{ node = $node; file = $attribution.file; category = $attribution.category })
   }
 }
+
 if (-not (Get-Process -Id $runnerPid -ErrorAction SilentlyContinue)) { throw 'runner exited' }
 ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated } -Compress -Depth 3
 `;
-  return new Promise((resolvePromise) => {
+  const formatSnapshot = (error, stdout) => {
     try {
-      execFile(
+      if (error)
+        return `${unavailable} (${error.killed ? "deadline" : "process error"})`;
+      const snapshot = JSON.parse(stdout);
+      if (
+        !Array.isArray(snapshot.rows) ||
+        snapshot.rows.length > 24 ||
+        typeof snapshot.truncated !== "boolean"
+      )
+        throw new Error();
+      const lines = ["check: Windows timeout snapshot"];
+      let unattributedNodeWorkers = 0;
+      let otherDescendants = 0;
+      const categories = new Set([
+        "command-line-unavailable",
+        "unrecognized-arguments",
+        "file-uri-argument",
+        "resolve-path-invalid-form",
+        "resolve-path-not-found",
+        "resolve-path-other-error",
+        "resolved-outside-repo",
+        "in-repo-path-validation-failure",
+        "ambiguous-test-path",
+      ]);
+      const categoryCounts = new Map();
+      for (const row of snapshot.rows) {
+        if (
+          typeof row.node !== "boolean" ||
+          (row.file !== null && typeof row.file !== "string") ||
+          (row.category !== null && !categories.has(row.category))
+        )
+          throw new Error();
+        const file =
+          row.node && row.file ? windowsTestFile(row.file) : undefined;
+        if (file) lines.push(`check: candidate test worker file=${file}`);
+        else if (row.node) {
+          unattributedNodeWorkers++;
+          if (row.category)
+            categoryCounts.set(
+              row.category,
+              (categoryCounts.get(row.category) ?? 0) + 1,
+            );
+        } else otherDescendants++;
+      }
+      lines.push(`check: unattributed node workers=${unattributedNodeWorkers}`);
+      for (const category of [...categories].sort())
+        lines.push(
+          `check: unattributed workers ${category}=${categoryCounts.get(category) ?? 0}`,
+        );
+      lines.push(`check: other descendants=${otherDescendants}`);
+      lines.push(`check: snapshot truncated=${snapshot.truncated}`);
+      return lines.join("\n");
+    } catch {
+      return `${unavailable} (invalid snapshot)`;
+    }
+  };
+  let child;
+  let closeResolve;
+  const closePromise = new Promise((resolvePromise) => {
+    closeResolve = resolvePromise;
+  });
+  const promise = new Promise((resolvePromise) => {
+    let callbackResult;
+    let callbackFinished = false;
+    let processClosed = false;
+    const settleCapture = () => {
+      if (callbackFinished && processClosed) resolvePromise(callbackResult);
+    };
+    try {
+      child = execFileImpl(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
-        { windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024, signal },
+        {
+          cwd: repoRoot,
+          windowsHide: true,
+          timeout: WORKER_SNAPSHOT_TIMEOUT_MS,
+          maxBuffer: 32 * 1024,
+          signal,
+        },
         (error, stdout) => {
-          try {
-            if (error)
-              return resolvePromise(
-                `${unavailable} (${error.killed ? "deadline" : "process error"})`,
-              );
-            const snapshot = JSON.parse(stdout);
-            if (
-              !Array.isArray(snapshot.rows) ||
-              snapshot.rows.length > 24 ||
-              typeof snapshot.truncated !== "boolean"
-            )
-              throw new Error();
-            const lines = ["check: Windows timeout snapshot"];
-            for (const row of snapshot.rows) {
-              if (
-                !Number.isSafeInteger(row.pid) ||
-                row.pid <= 0 ||
-                !Number.isSafeInteger(row.parent) ||
-                row.parent <= 0 ||
-                typeof row.node !== "boolean" ||
-                typeof row.command !== "string"
-              )
-                throw new Error();
-              const file =
-                row.node && row.parent === pid
-                  ? windowsTestFile(row.command)
-                  : undefined;
-              lines.push(
-                file
-                  ? `check: candidate test worker pid=${row.pid} file=${file}`
-                  : `check: descendant pid=${row.pid} parent=${row.parent} type=other`,
-              );
-            }
-            lines.push(`check: snapshot truncated=${snapshot.truncated}`);
-            resolvePromise(lines.join("\n"));
-          } catch {
-            resolvePromise(`${unavailable} (invalid snapshot)`);
-          }
+          callbackResult = formatSnapshot(error, stdout);
+          callbackFinished = true;
+          settleCapture();
         },
       );
+      child.once("close", () => {
+        processClosed = true;
+        closeResolve();
+        settleCapture();
+      });
+      child.once("error", () => {
+        if (!child.pid) {
+          processClosed = true;
+          closeResolve();
+          settleCapture();
+        }
+      });
     } catch {
+      closeResolve();
       resolvePromise(`${unavailable} (process error)`);
     }
   });
+  const waitForCaptureClose = async (timeoutMs) => {
+    let timeoutId;
+    try {
+      return await Promise.race([
+        closePromise.then(() => true),
+        new Promise((resolvePromise) => {
+          timeoutId = setTimeout(() => resolvePromise(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+  return {
+    promise,
+    cancelAndWait: async () => {
+      if (!child?.pid) return waitForCaptureClose(TASKKILL_TIMEOUT_MS);
+      try {
+        child.kill();
+      } catch {
+        // The forced tree termination below is the fallback.
+      }
+      if (await waitForCaptureClose(TASKKILL_TIMEOUT_MS)) return true;
+      await terminateTree(child.pid);
+      return waitForCaptureClose(TASKKILL_TIMEOUT_MS);
+    },
+  };
+}
+
+async function snapshotWindowsTestWorkersBeforeTermination(
+  pid,
+  closePromise,
+  snapshot,
+) {
+  const controller = new AbortController();
+  let timeoutId;
+  let capture;
+  try {
+    capture = snapshot(pid, controller.signal);
+  } catch (error) {
+    capture = Promise.reject(error);
+  }
+  const snapshotValue =
+    capture && typeof capture === "object" && "promise" in capture
+      ? capture.promise
+      : capture;
+  const snapshotPromise = Promise.resolve()
+    .then(() => snapshotValue)
+    .then(
+      (workerDiagnostic) => ({ workerDiagnostic }),
+      () => ({
+        workerDiagnostic: "check: Windows timeout snapshot unavailable",
+      }),
+    );
+  try {
+    const result = await Promise.race([
+      snapshotPromise.then((snapshotResult) => ({
+        kind: "snapshot",
+        workerDiagnostic: snapshotResult.workerDiagnostic,
+      })),
+      closePromise.then(() => ({
+        kind: "runner-exited",
+        workerDiagnostic:
+          "check: Windows timeout snapshot unavailable (runner exited)",
+      })),
+      new Promise((resolvePromise) => {
+        timeoutId = setTimeout(
+          () =>
+            resolvePromise({
+              kind: "capture-timeout",
+              workerDiagnostic:
+                "check: Windows timeout snapshot unavailable (capture deadline)",
+            }),
+          WORKER_SNAPSHOT_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    let workerDiagnostic = result.workerDiagnostic;
+    if (result.kind !== "snapshot") {
+      controller.abort();
+      if (
+        capture &&
+        typeof capture === "object" &&
+        "cancelAndWait" in capture &&
+        typeof capture.cancelAndWait === "function"
+      ) {
+        let cancelTimeoutId;
+        const stopped = await Promise.race([
+          Promise.resolve()
+            .then(() => capture.cancelAndWait())
+            .then(Boolean, () => false),
+          new Promise((resolvePromise) => {
+            cancelTimeoutId = setTimeout(
+              () => resolvePromise(false),
+              SNAPSHOT_CANCEL_TIMEOUT_MS,
+            );
+          }),
+        ]).finally(() => clearTimeout(cancelTimeoutId));
+        if (!stopped)
+          workerDiagnostic =
+            "check: Windows timeout snapshot unavailable (capture stop unconfirmed)";
+      }
+    }
+    return workerDiagnostic;
+  } finally {
+    clearTimeout(timeoutId);
+    controller.abort();
+  }
 }
 
 function isAlreadyGoneTaskkillError(error) {
@@ -255,6 +467,8 @@ export async function runTestRunner(
   deadline,
   label = "tests",
   snapshot = isWindows ? snapshotWindowsTestWorkers : undefined,
+  stdio = "inherit",
+  diagnosticOptions = {},
 ) {
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
@@ -270,7 +484,7 @@ export async function runTestRunner(
     child = spawn(process.execPath, args, {
       cwd: repoRoot,
       ...(isWindows ? { windowsHide: true } : { detached: true }),
-      stdio: "inherit",
+      stdio,
     });
   } catch (error) {
     return {
@@ -321,6 +535,9 @@ export async function runTestRunner(
   };
 
   const finishClosed = async (close) => {
+    clearTimeout(snapshotTimer);
+    if (closeCapture)
+      await Promise.race([closeCapture, sleep(SNAPSHOT_CANCEL_TIMEOUT_MS)]);
     // ponytail: post-parent Windows descendant accounting needs a Job Object;
     // timeout-tree cleanup is attempted, but a Job Object is not implemented.
     const treeRemains = isWindows
@@ -368,41 +585,98 @@ export async function runTestRunner(
   }
 
   const pid = child.pid;
-  const finishTimedOut = async () => {
-    const cleanupPromise = terminateProcessTree(pid);
-    const snapshotPromise = (async () => {
-      if (!snapshot) return undefined;
-      const controller = new AbortController();
-      try {
-        return await Promise.race([
-          snapshot(pid, controller.signal),
-          closePromise.then(
-            () => "check: Windows timeout snapshot unavailable (runner exited)",
-          ),
-        ]);
-      } catch {
-        return "check: Windows timeout snapshot unavailable";
-      } finally {
-        controller.abort();
+  let proactiveSnapshot;
+  let snapshotTimer;
+  const snapshotAt = diagnosticOptions.snapshotAt ?? WORKER_SNAPSHOT_AT_MS;
+  if (snapshot && Number.isFinite(snapshotAt)) {
+    snapshotTimer = setTimeout(
+      () => {
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        let capture;
+        try {
+          capture = snapshot(pid, controller.signal);
+        } catch {
+          capture = undefined;
+        }
+        const value =
+          capture && typeof capture === "object" && "promise" in capture
+            ? capture.promise
+            : capture;
+        proactiveSnapshot = Promise.resolve(value).then(
+          (diagnostic) => {
+            const safeDiagnostic =
+              typeof diagnostic === "string"
+                ? diagnostic
+                : "check: Windows timeout snapshot unavailable";
+            if (!runnerClosed)
+              (diagnosticOptions.emit ?? console.log)(
+                `check: Windows worker snapshot phase=pre-deadline elapsed=${Date.now() - startedAt}ms\n${safeDiagnostic}`,
+              );
+            return safeDiagnostic;
+          },
+          () => undefined,
+        );
+        proactiveSnapshot.controller = controller;
+        proactiveSnapshot.capture = capture;
+      },
+      Math.max(0, snapshotAt),
+    );
+    snapshotTimer.unref?.();
+  }
+  let runnerClosed = false;
+  let closeCapture;
+  closePromise.then(() => {
+    runnerClosed = true;
+    clearTimeout(snapshotTimer);
+    if (proactiveSnapshot) {
+      proactiveSnapshot.controller.abort();
+      if (proactiveSnapshot.capture?.cancelAndWait) {
+        closeCapture = Promise.resolve()
+          .then(() => proactiveSnapshot.capture.cancelAndWait())
+          .catch(() => false);
       }
-    })();
-    const cleanup = await cleanupPromise;
+    }
+  });
+  const finishTimedOut = async () => {
+    clearTimeout(snapshotTimer);
+    const workerDiagnostic = proactiveSnapshot
+      ? await snapshotWindowsTestWorkersBeforeTermination(
+          pid,
+          closePromise,
+          () => ({
+            promise: proactiveSnapshot,
+            cancelAndWait: proactiveSnapshot.capture?.cancelAndWait,
+          }),
+        )
+      : snapshot
+        ? await snapshotWindowsTestWorkersBeforeTermination(
+            pid,
+            closePromise,
+            snapshot,
+          )
+        : undefined;
+    const cleanup = await terminateProcessTree(pid);
     const close = await awaitClose(closePromise);
-    const workerDiagnostic = await snapshotPromise;
     const cleanupComplete =
       cleanup.cleanupError === undefined &&
       (isWindows ? cleanup.runnerGone : cleanup.treeGone) &&
+      !workerDiagnostic?.endsWith("(capture stop unconfirmed)") &&
       close !== undefined;
+    const captureStopUnconfirmed = workerDiagnostic?.endsWith(
+      "(capture stop unconfirmed)",
+    );
     return {
       ok: false,
       kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
       label,
       pid,
       timedOut: true,
+      ...(captureStopUnconfirmed ? { captureStopUnconfirmed: true } : {}),
       ...cleanup,
       close,
       workerDiagnostic,
-      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
+      diagnostic: `${timeoutDiagnostic(label, pid, cleanup, close)}${captureStopUnconfirmed ? "; Windows snapshot capture stop unconfirmed; suite cleanup proceeded without confirmed capture closure" : ""}`,
     };
   };
   let testDeadline;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { performance } from "node:perf_hooks";
 import {
   AGENT_ID,
   DEFAULT_PI_SESSION_ID,
@@ -20,6 +21,35 @@ import {
   writeAgentStartupOutcome,
 } from "./support.ts";
 
+function safeHerdrOperation(
+  command: string,
+  args: string[],
+): string | undefined {
+  if (command !== "herdr") return;
+  const operation = args.slice(0, 2).join(" ");
+  return (
+    {
+      "agent start": "agent-start",
+      "agent list": "agent-list",
+      "agent get": "agent-get",
+      "agent send-keys": "agent-send-keys",
+      "api snapshot": "api-snapshot",
+      "pane close": "pane-close",
+      "pane get": "pane-get",
+      "pane layout": "pane-layout",
+      "pane list": "pane-list",
+      "pane process-info": "pane-process-info",
+      "pane read": "pane-read",
+      "pane run": "pane-run",
+      "pane split": "pane-split",
+      "pane wait-output": "pane-wait-output",
+      "tab close": "tab-close",
+      "tab list": "tab-list",
+      "worktree list": "worktree-list",
+    }[operation] ?? undefined
+  );
+}
+
 for (const scenario of [
   "failed",
   "conflicting",
@@ -30,32 +60,58 @@ for (const scenario of [
     setLeadEnvironment();
     const label = `startup-${scenario}`;
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const timing = {
+      startupExecMs: 0,
+      afterStartupCalls: [] as {
+        operation: string;
+        offset_ms: number;
+        elapsed_ms: number;
+      }[],
+    };
+    let startupReturnedAt: number | undefined;
     const pi = fakePi({
       exec: async (command, args, options) => {
-        const result = await startup.exec(command, args, options);
-        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
-          const outcome = readAgentStartupOutcome(startup.mailbox)!;
-          if (scenario === "failed")
-            writeAgentStartupOutcome(startup.mailbox, {
-              ...outcome,
-              status: "failed",
-              error: "bootstrap failed",
-              stage: "bootstrap",
+        const operation = safeHerdrOperation(command, args);
+        const startedAt = performance.now();
+        try {
+          const result = await startup.exec(command, args, options);
+          if (operation === "agent-start") {
+            const outcome = readAgentStartupOutcome(startup.mailbox)!;
+            if (scenario === "failed")
+              writeAgentStartupOutcome(startup.mailbox, {
+                ...outcome,
+                status: "failed",
+                error: "bootstrap failed",
+                stage: "bootstrap",
+              });
+            if (scenario === "conflicting")
+              writeAgentStartupOutcome(startup.mailbox, {
+                ...outcome,
+                paneId: "other-pane",
+              });
+            if (scenario === "conflicting-state")
+              writeAgentState(startup.mailbox, {
+                ...readAgentState(startup.mailbox)!,
+                runId: "11111111-1111-4111-8111-111111111111",
+              });
+            if (scenario === "missing-state")
+              realFs.unlinkSync(`${startup.mailbox}/state.json`);
+          }
+          return result;
+        } finally {
+          const finishedAt = performance.now();
+          const elapsedMs = finishedAt - startedAt;
+          if (operation === "agent-start") {
+            timing.startupExecMs += elapsedMs;
+            startupReturnedAt = finishedAt;
+          } else if (operation && startupReturnedAt !== undefined) {
+            timing.afterStartupCalls.push({
+              operation,
+              offset_ms: Number((finishedAt - startupReturnedAt).toFixed(3)),
+              elapsed_ms: Number(elapsedMs.toFixed(3)),
             });
-          if (scenario === "conflicting")
-            writeAgentStartupOutcome(startup.mailbox, {
-              ...outcome,
-              paneId: "other-pane",
-            });
-          if (scenario === "conflicting-state")
-            writeAgentState(startup.mailbox, {
-              ...readAgentState(startup.mailbox)!,
-              runId: "11111111-1111-4111-8111-111111111111",
-            });
-          if (scenario === "missing-state")
-            realFs.unlinkSync(`${startup.mailbox}/state.json`);
+          }
         }
-        return result;
       },
     });
     registerExtension!(pi.pi as never);
@@ -66,13 +122,27 @@ for (const scenario of [
     );
     try {
       const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
-      const result = await delegate.execute(
-        "id",
-        { definition: "agent", label, task: "test" },
-        undefined,
-        undefined,
-        fakeContext(pi.entries),
-      );
+      const operationStartedAt = performance.now();
+      let result: Awaited<ReturnType<typeof delegate.execute>>;
+      try {
+        result = await delegate.execute(
+          "id",
+          { definition: "agent", label, task: "test" },
+          undefined,
+          undefined,
+          fakeContext(pi.entries),
+        );
+      } finally {
+        if (process.env.HERDSMAN_STARTUP_DIAGNOSTICS === "1") {
+          const afterStartupElapsedMs =
+            startupReturnedAt === undefined
+              ? "unobserved"
+              : (performance.now() - startupReturnedAt).toFixed(1);
+          console.log(
+            `[startup-timing] ${scenario} delegate_elapsed_ms=${(performance.now() - operationStartedAt).toFixed(1)} startup_exec_elapsed_ms=${timing.startupExecMs.toFixed(1)} after_startup_elapsed_ms=${afterStartupElapsedMs} herdr_calls=${JSON.stringify(timing.afterStartupCalls)}`,
+          );
+        }
+      }
       assert.equal(
         result.details.error.category,
         "rollback_failure",
