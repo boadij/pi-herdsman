@@ -10,6 +10,7 @@ const TASKKILL_TIMEOUT_MS = 1_000;
 const TREE_GONE_TIMEOUT_MS = 5_000;
 const TREE_POLL_MS = 25;
 const WORKER_SNAPSHOT_TIMEOUT_MS = 5_000;
+const WORKER_SNAPSHOT_AT_MS = 215_000;
 const SNAPSHOT_CANCEL_TIMEOUT_MS =
   2 * TASKKILL_TIMEOUT_MS + TREE_GONE_TIMEOUT_MS + 2 * TERM_GRACE_MS;
 const isWindows = process.platform === "win32";
@@ -420,6 +421,7 @@ export async function runTestRunner(
   label = "tests",
   snapshot = isWindows ? snapshotWindowsTestWorkers : undefined,
   stdio = "inherit",
+  diagnosticOptions = {},
 ) {
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
@@ -486,6 +488,9 @@ export async function runTestRunner(
   };
 
   const finishClosed = async (close) => {
+    clearTimeout(snapshotTimer);
+    if (closeCapture)
+      await Promise.race([closeCapture, sleep(SNAPSHOT_CANCEL_TIMEOUT_MS)]);
     // ponytail: post-parent Windows descendant accounting needs a Job Object;
     // timeout-tree cleanup is attempted, but a Job Object is not implemented.
     const treeRemains = isWindows
@@ -533,14 +538,77 @@ export async function runTestRunner(
   }
 
   const pid = child.pid;
+  let proactiveSnapshot;
+  let snapshotTimer;
+  const snapshotAt = diagnosticOptions.snapshotAt ?? WORKER_SNAPSHOT_AT_MS;
+  if (snapshot && Number.isFinite(snapshotAt)) {
+    snapshotTimer = setTimeout(
+      () => {
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        let capture;
+        try {
+          capture = snapshot(pid, controller.signal);
+        } catch {
+          capture = undefined;
+        }
+        const value =
+          capture && typeof capture === "object" && "promise" in capture
+            ? capture.promise
+            : capture;
+        proactiveSnapshot = Promise.resolve(value).then(
+          (diagnostic) => {
+            const safeDiagnostic =
+              typeof diagnostic === "string"
+                ? diagnostic
+                : "check: Windows timeout snapshot unavailable";
+            if (!runnerClosed)
+              (diagnosticOptions.emit ?? console.log)(
+                `check: Windows worker snapshot phase=pre-deadline elapsed=${Date.now() - startedAt}ms\n${safeDiagnostic}`,
+              );
+            return safeDiagnostic;
+          },
+          () => undefined,
+        );
+        proactiveSnapshot.controller = controller;
+        proactiveSnapshot.capture = capture;
+      },
+      Math.max(0, snapshotAt),
+    );
+    snapshotTimer.unref?.();
+  }
+  let runnerClosed = false;
+  let closeCapture;
+  closePromise.then(() => {
+    runnerClosed = true;
+    clearTimeout(snapshotTimer);
+    if (proactiveSnapshot) {
+      proactiveSnapshot.controller.abort();
+      if (proactiveSnapshot.capture?.cancelAndWait) {
+        closeCapture = Promise.resolve()
+          .then(() => proactiveSnapshot.capture.cancelAndWait())
+          .catch(() => false);
+      }
+    }
+  });
   const finishTimedOut = async () => {
-    const workerDiagnostic = snapshot
+    clearTimeout(snapshotTimer);
+    const workerDiagnostic = proactiveSnapshot
       ? await snapshotWindowsTestWorkersBeforeTermination(
           pid,
           closePromise,
-          snapshot,
+          () => ({
+            promise: proactiveSnapshot,
+            cancelAndWait: proactiveSnapshot.capture?.cancelAndWait,
+          }),
         )
-      : undefined;
+      : snapshot
+        ? await snapshotWindowsTestWorkersBeforeTermination(
+            pid,
+            closePromise,
+            snapshot,
+          )
+        : undefined;
     const cleanup = await terminateProcessTree(pid);
     const close = await awaitClose(closePromise);
     const cleanupComplete =

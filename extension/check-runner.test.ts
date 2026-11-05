@@ -23,6 +23,77 @@ test("check suite deadline allows extra time on Windows", () => {
   );
 });
 
+test("proactive worker snapshot is scheduled and emitted when it completes", async () => {
+  let emitted = "";
+  let started = false;
+  const result = await runTestRunner(
+    ["-e", "setTimeout(() => {}, 150)"],
+    Date.now() + 1_000,
+    "snapshot fixture",
+    async () => {
+      started = true;
+      return "check: Windows worker snapshot\ncheck: unattributed node workers=1";
+    },
+    "ignore",
+    { snapshotAt: 20, emit: (text: string) => (emitted = text) },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(started, true);
+  assert.match(
+    emitted,
+    /^check: Windows worker snapshot phase=pre-deadline elapsed=\d+ms\n/,
+  );
+  assert.match(emitted, /unattributed node workers=1/);
+  assert.doesNotMatch(emitted, /(?:pid|node\.exe|[A-Za-z]:\\)/i);
+});
+
+test("proactive capture is cancelled without timeout attribution when runner exits", async () => {
+  let cancelled = false;
+  let emitted = false;
+  const result = await runTestRunner(
+    ["-e", "setTimeout(() => {}, 75)"],
+    Date.now() + 1_000,
+    "snapshot fixture",
+    (_pid: number, signal: AbortSignal) => ({
+      promise: new Promise<string>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), {
+          once: true,
+        }),
+      ),
+      cancelAndWait: async () => {
+        cancelled = true;
+        return true;
+      },
+    }),
+    "ignore",
+    { snapshotAt: 10, emit: () => (emitted = true) },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(cancelled, true);
+  assert.equal(emitted, false);
+  assert.equal(result.workerDiagnostic, undefined);
+});
+
+test("suite timeout reuses the completed proactive snapshot", async () => {
+  let starts = 0;
+  let emitted = "";
+  const result = await runTestRunner(
+    ["-e", "setInterval(() => {}, 1000)"],
+    Date.now() + 100,
+    "snapshot fixture",
+    async () => {
+      starts++;
+      return "check: Windows worker snapshot\ncheck: unattributed node workers=1";
+    },
+    "ignore",
+    { snapshotAt: 10, emit: (text: string) => (emitted = text) },
+  );
+  assert.equal(result.kind, "suite-timeout");
+  assert.equal(starts, 1);
+  assert.match(emitted, /phase=pre-deadline elapsed=/);
+  assert.match(result.workerDiagnostic, /unattributed node workers=1/);
+});
+
 test("Windows worker attribution accepts only existing repository test paths", () => {
   const file = join(process.cwd(), "extension", "check-runner.test.ts");
   assert.equal(
