@@ -4347,7 +4347,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     resultRef = "result:fixture#1",
   ) => ({
     role: "user",
-    content: `Agent result · agent=${label} · definition=implementer · session=${session} · status=completed\n\nResult ref: ${resultRef}\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+    content: `Agent result · agent=${label} · definition=implementer · status=completed\n\nResult ref: ${resultRef}\n\nTo continue this session, use continue_agent with session="${resultRef}".\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
   });
   const rootPrompt =
     "Do not read package.json yourself. Delegate and return PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1.";
@@ -4606,6 +4606,150 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     decide("continuation", { messages: resumedWithEvidence }).content[0].text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
+});
+
+test("supervisor-agent accepts only its current-format completed result", () => {
+  const prompt = { role: "user", content: "SMOKE_SUPERVISOR_AGENT_DELEGATE" };
+  const call = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "supervisor-call",
+        name: "delegate_agent",
+        arguments: { label: "smoke-supervisor-agent" },
+      },
+    ],
+  };
+  const delegated = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "supervisor-call",
+    isError: false,
+    content: "Session: supervisor-session\nRequest: supervisor-request",
+  };
+  const completed = {
+    role: "user",
+    content:
+      "Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · status=completed\n\nResult ref: result:smoke-supervisor-agent#1\n\nSMOKE_SUPERVISOR_AGENT_COMPLETED",
+    details: {
+      agentLabel: "smoke-supervisor-agent",
+      agentDefinition: "smoke-agent",
+      status: "completed",
+      piSessionId: "supervisor-session",
+      requestId: "supervisor-request",
+    },
+  };
+  const accept = decideSmokeFaux("supervisor-agent", {
+    messages: [prompt, call, delegated, completed],
+  });
+  assert.equal(
+    accept.content[0].text,
+    "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED",
+  );
+  const unrelated = decideSmokeFaux("supervisor-agent", {
+    messages: [
+      prompt,
+      call,
+      delegated,
+      {
+        ...completed,
+        content: completed.content.replace(
+          "smoke-supervisor-agent",
+          "unrelated-agent",
+        ),
+      },
+    ],
+  });
+  assert.match(
+    unrelated.content[0].text,
+    /Waiting for the completed Agent result/,
+  );
+});
+
+test("crash-recovery accepts only the resumed target's marked completion", () => {
+  const prefix = [
+    {
+      role: "user",
+      content:
+        "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART PI_HERDSMAN_CRASH_RECOVERY_CONTINUE",
+    },
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "list", name: "list_agents", arguments: {} },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "list_agents",
+      toolCallId: "list",
+      isError: false,
+      content: "",
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "close",
+          name: "close_agent",
+          arguments: { agent: "smoke-crash-target" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "close_agent",
+      toolCallId: "close",
+      isError: false,
+      details: { closed_assignment: { session_path: "/saved/target.jsonl" } },
+      content: "closed",
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "continue",
+          name: "continue_agent",
+          arguments: { session: "/saved/target.jsonl" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "continue_agent",
+      toolCallId: "continue",
+      isError: false,
+      content: "continued",
+    },
+  ];
+  const unrelated = decideSmokeFaux("agent-crash-root", {
+    messages: [
+      ...prefix,
+      {
+        role: "user",
+        content:
+          "Agent result · agent=unrelated-agent · definition=implementer · status=completed\n\nUnrelated work completed.",
+      },
+    ],
+  });
+  assert.match(
+    unrelated.content[0].text,
+    /Waiting for the continued exact session result/,
+  );
+  const resumed = decideSmokeFaux("agent-crash-root", {
+    messages: [
+      ...prefix,
+      {
+        role: "user",
+        content:
+          "Agent result · agent=smoke-crash-target · definition=implementer · status=completed\n\nPI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+      },
+    ],
+  });
+  assert.equal(resumed.content[0].text, "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED");
 });
 
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
@@ -5157,7 +5301,7 @@ test("continuation first-generation stalls if completed child retires before obs
   };
   const delivered = {
     role: "user",
-    content: `Agent result · agent=smoke-continuation-implementer · definition=implementer · session=fixture-child · status=completed\n\nResult ref: result:fixture#1\n\n${completedChild.content}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+    content: `Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\nResult ref: result:fixture#1\n\nTo continue this session, use continue_agent with session="result:fixture#1".\n\n${completedChild.content}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
   };
   const answer = decide("continuation", {
     messages: [{ role: "user", content: prompt }, call, result, delivered],
