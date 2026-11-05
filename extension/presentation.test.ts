@@ -2032,6 +2032,24 @@ test("expanded staff project results show resolved branches and resume scope", (
     ),
   );
   assert.match(alreadyRunning, /^work already running/m);
+  const queued = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      {
+        details: {
+          ok: true,
+          already_running: true,
+          message_queued: true,
+          branch: "feat/recovery",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "resume" } },
+    ),
+  );
+  assert.match(queued, /^work already running · instruction queued/m);
 });
 
 test("compact Manager lifecycle results distinguish project outcomes", () => {
@@ -2059,9 +2077,39 @@ test("compact Manager lifecycle results distinguish project outcomes", () => {
     /work already running · feat\/recovery/,
   );
   assert.match(
+    render("resume", {
+      ok: true,
+      branch: "feat/recovery",
+      already_running: true,
+      message_queued: true,
+    }),
+    /work already running · instruction queued · feat\/recovery/,
+  );
+  assert.match(
     render("resume", { ok: true, branch: "feat/recovery" }),
     /work resumed · feat\/recovery/,
   );
+  const partialFailure = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      {
+        content: [{ type: "text", text: "Recovery could not be verified" }],
+        details: {
+          ok: false,
+          status: "recovery_unverified",
+          branch: "feat/recovery",
+          already_running: true,
+          message_queued: true,
+        },
+      },
+      {},
+      presentationTheme,
+      { args: { branch: "feat/recovery" } },
+    ),
+  );
+  assert.match(partialFailure, /Recovery could not be verified/);
+  assert.doesNotMatch(partialFailure, /work already running|work resumed/);
   assert.match(
     render("stop", { ok: true, branch: "feat/recovery" }),
     /Lead stopped · feat\/recovery preserved/,

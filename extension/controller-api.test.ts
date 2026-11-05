@@ -2662,12 +2662,24 @@ for (const reachable of [true, false]) {
           false,
         );
         ctx.isIdle = () => true;
-        await pi.events.get("before_agent_start")![0](
-          {
-            systemPrompt: "base",
-            systemPromptOptions: { contextFiles: [] },
-          },
-          ctx,
+        const managerStart: any = {
+          systemPrompt: "base",
+          systemPromptOptions: { contextFiles: [] as string[] },
+        };
+        await pi.events.get("before_agent_start")![0](managerStart, ctx);
+        const managerPrompt =
+          managerStart.systemPromptOptions.sections?.pi_herdsman_role;
+        assert.match(
+          managerPrompt,
+          /use message_staff when the assignment is active/i,
+        );
+        assert.match(
+          managerPrompt,
+          /use resume_work to recover a paused assignment/i,
+        );
+        assert.match(
+          managerPrompt,
+          /unknown or conflicted assignment state is not evidence that the Lead is stopped/i,
         );
         await new Promise((resolve) => setTimeout(resolve, 650));
         assert.equal(projectDeliveries(liveRecord.id).length, 1);
@@ -5061,6 +5073,22 @@ async function runManagerStartupScenario(
     const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
     const staffResume = pi.tools.find((tool) => tool.name === "resume_work")!;
     const staleId = randomUUID();
+    if (mode === "active-live") {
+      const messageStaff = pi.tools.find(
+        (tool) => tool.name === "message_staff",
+      )!;
+      assert.match(messageStaff.description, /active assigned Lead/i);
+      assert.match(messageStaff.description, /idle or done/i);
+      assert.match(
+        messageStaff.description,
+        /does not perform lifecycle recovery/i,
+      );
+      assert.match(staffResume.description, /Recover a paused/i);
+      assert.match(
+        staffResume.description,
+        /queue acceptance from recovery and delivery/i,
+      );
+    }
     const activeMode = [
       "active-loss",
       "active-live",
@@ -5651,6 +5679,10 @@ async function runManagerStartupScenario(
         assert.equal(running.details.session, staleId);
         assert.equal(running.details.message_queued, true);
         assert.ok(running.details.message_id);
+        const resumeText = (running.content[0] as { text: string }).text;
+        assert.match(resumeText, /instruction was queued/i);
+        assert.match(resumeText, /no relaunch occurred/i);
+        assert.match(resumeText, /does not confirm delivery/i);
         assert.ok(
           listChiefMessagePaths(supervisionRuntime(), staleId)
             .map((path) => readChiefMessage(path))
