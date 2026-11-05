@@ -89,6 +89,7 @@ import {
   resolveRemotePeerOutboundRetry,
   tryClaimRemotePeerOutbound,
   runPeerEndpoint,
+  exchangePeerEndpoint,
   tryPollPeerReplies,
   type SavedPeerMachine,
 } from "../peer-transport.ts";
@@ -1171,6 +1172,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   >();
   const ambiguousRemoteSessions = new Set<string>();
   const lastPeerCorrespondenceErrors = new Map<string, string>();
+  const peerExchangeCursors = new Map<string, string>();
   const matchesReturnRecipient = (
     correspondence: PeerCorrespondence,
     recipient: PeerLeadRecord,
@@ -1779,20 +1781,166 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                   releaseOutbound();
                 }
               }
+              // Recover every exact correspondence before constructing the
+              // exchange capability list: the remote endpoint validates the
+              // current generations, not the stale inventory snapshot.
+              const recoveredCorrespondenceIds = new Set<string>();
               for (const candidate of (pendingCorrespondences ??=
                 listPeerCorrespondences())) {
                 if (
                   candidate.originSession !== self ||
-                  (candidate.role ?? "manager") !== activeRole()
+                  (candidate.role ?? "manager") !== activeRole() ||
+                  candidate.finalized
                 )
                   continue;
                 const remote = snapshot.peers.find(
                   (peer) =>
+                    peer.piSessionId === candidate.recipientSession &&
                     peer.role === (candidate.role ?? "manager") &&
                     ((candidate.role ?? "manager") !== "lead" ||
                       (snapshot.ordinaryLeadsComplete === true &&
-                        peer.sessionKind === "ordinary")) &&
-                    peer.piSessionId === candidate.recipientSession,
+                        peer.sessionKind === "ordinary")),
+                );
+                if (!remote) continue;
+                try {
+                  const correspondence = readPeerCorrespondence(candidate.id);
+                  if (
+                    !correspondence ||
+                    correspondence.finalized ||
+                    correspondence.capability !== candidate.capability ||
+                    correspondence.originSession !== candidate.originSession ||
+                    correspondence.recipientSession !==
+                      candidate.recipientSession ||
+                    (correspondence.role ?? "manager") !==
+                      (candidate.role ?? "manager")
+                  )
+                    continue;
+                  if (remote.claim.id !== correspondence.recipientGeneration) {
+                    const recovery = JSON.parse(
+                      await runPeerEndpoint(
+                        machine,
+                        "recover-recipient",
+                        JSON.stringify({
+                          id: correspondence.id,
+                          expectedDataRoot: snapshot.dataRoot,
+                          capability: correspondence.capability,
+                          originSession: correspondence.originSession,
+                          originGeneration: correspondence.originGeneration,
+                          recipientSession: correspondence.recipientSession,
+                          recipientGeneration:
+                            correspondence.recipientGeneration,
+                          newRecipientGeneration: remote.claim.id,
+                        }),
+                        signal,
+                      ),
+                    ) as { recovered?: unknown };
+                    if (recovery.recovered !== true) continue;
+                    updatePeerRecipientGeneration(
+                      correspondence.id,
+                      correspondence.capability,
+                      correspondence.recipientSession,
+                      correspondence.recipientGeneration,
+                      remote.claim.id,
+                    );
+                    correspondence.recipientGeneration = remote.claim.id;
+                    candidate.recipientGeneration = remote.claim.id;
+                    recoveredCorrespondenceIds.add(candidate.id);
+                  }
+                  if (correspondence.originGeneration !== own.claim.id) {
+                    const recovery = JSON.parse(
+                      await runPeerEndpoint(
+                        machine,
+                        "recover",
+                        peerRecoveryRequest(
+                          {
+                            id: correspondence.id,
+                            capability: correspondence.capability,
+                            originSession: correspondence.originSession,
+                            originGeneration: own.claim.id,
+                            previousOriginGeneration:
+                              correspondence.originGeneration,
+                            recipientSession: correspondence.recipientSession,
+                            recipientGeneration:
+                              correspondence.recipientGeneration,
+                          },
+                          snapshot.dataRoot,
+                        ),
+                        signal,
+                      ),
+                    ) as { recovered?: unknown };
+                    if (recovery.recovered !== true) continue;
+                    updatePeerOriginGeneration(
+                      correspondence.id,
+                      correspondence.capability,
+                      self,
+                      correspondence.originGeneration,
+                      own.claim.id,
+                    );
+                    candidate.originGeneration = own.claim.id;
+                    recoveredCorrespondenceIds.add(candidate.id);
+                  }
+                } catch {
+                  if (signal?.aborted) break;
+                  // The normal per-correspondence pass records and isolates failures.
+                }
+              }
+              if (signal?.aborted) break;
+              // Exchange only persisted capabilities for this exact local
+              // origin and a currently discovered eligible recipient.
+              const knownCorrespondences = (pendingCorrespondences ??=
+                listPeerCorrespondences()).filter(
+                (candidate) =>
+                  candidate.originSession === self &&
+                  (candidate.role ?? "manager") === activeRole() &&
+                  !candidate.finalized &&
+                  snapshot.peers.some(
+                    (peer) =>
+                      peer.piSessionId === candidate.recipientSession &&
+                      peer.role === (candidate.role ?? "manager") &&
+                      ((candidate.role ?? "manager") !== "lead" ||
+                        (snapshot.ordinaryLeadsComplete === true &&
+                          peer.sessionKind === "ordinary")),
+                  ),
+              );
+              let exchange:
+                Awaited<ReturnType<typeof exchangePeerEndpoint>> | undefined;
+              if (knownCorrespondences.length) {
+                try {
+                  exchange = await exchangePeerEndpoint(
+                    machine,
+                    JSON.stringify({
+                      expectedDataRoot: snapshot.dataRoot,
+                      known: knownCorrespondences.map((item) => ({
+                        id: item.id,
+                        capability: item.capability,
+                        originSession: item.originSession,
+                        recipientSession: item.recipientSession,
+                        recipientGeneration: item.recipientGeneration,
+                        originGeneration: item.originGeneration,
+                      })),
+                      ...(peerExchangeCursors.has(machine.id)
+                        ? { cursor: peerExchangeCursors.get(machine.id) }
+                        : {}),
+                    }),
+                    signal,
+                  );
+                } catch {
+                  if (signal?.aborted) break;
+                  // A failed batch must not delay independently authorized replies.
+                }
+              }
+              if (exchange) {
+                assertPeerDataRoot(
+                  exchange.snapshot.dataRoot,
+                  snapshot.dataRoot,
+                );
+                if (exchange.nextCursor === undefined)
+                  peerExchangeCursors.delete(machine.id);
+                else peerExchangeCursors.set(machine.id, exchange.nextCursor);
+              }
+              for (const candidate of knownCorrespondences) {
+                const remote = snapshot.peers.find(
+                  (peer) => peer.piSessionId === candidate.recipientSession,
                 );
                 if (!remote) continue;
                 let correspondence: PeerCorrespondence | undefined;
@@ -1884,9 +2032,27 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     recipientSession: correspondence.recipientSession,
                     recipientGeneration: correspondence.recipientGeneration,
                   });
-                  const polled = await tryPollPeerReplies(() =>
-                    runPeerEndpoint(machine, "poll", request, signal),
-                  );
+                  const exchanged = exchange?.messages
+                    .filter(
+                      (item) => item.correspondenceId === correspondence!.id,
+                    )
+                    .map((item) => item.reply);
+                  const useIndividualPoll =
+                    exchange?.oversized?.includes(correspondence.id) ||
+                    exchange?.errors?.some(
+                      (error) => error.correspondenceId === correspondence!.id,
+                    );
+                  const polled =
+                    exchange &&
+                    !useIndividualPoll &&
+                    !recoveredCorrespondenceIds.has(correspondence.id)
+                      ? JSON.stringify({
+                          dataRoot: exchange.snapshot.dataRoot,
+                          replies: exchanged ?? [],
+                        })
+                      : await tryPollPeerReplies(() =>
+                          runPeerEndpoint(machine, "poll", request, signal),
+                        );
                   if (polled === undefined) continue;
                   const response = JSON.parse(polled) as {
                     dataRoot?: unknown;
@@ -1895,6 +2061,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                       id?: unknown;
                       digest?: unknown;
                       text?: unknown;
+                      senderGeneration?: unknown;
                       attachments?: unknown;
                       resultBindings?: unknown;
                       createdAt?: unknown;
@@ -1915,6 +2082,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                       typeof reply.digest !== "string" ||
                       typeof reply.createdAt !== "number" ||
                       !Number.isFinite(reply.createdAt) ||
+                      (reply.senderGeneration !== undefined &&
+                        (typeof reply.senderGeneration !== "string" ||
+                          reply.senderGeneration.length === 0 ||
+                          reply.senderGeneration.length > 512)) ||
                       (reply.attachments !== undefined &&
                         !Array.isArray(reply.attachments)) ||
                       (reply.resultBindings !== undefined &&
@@ -2000,7 +2171,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                       version: 2,
                       build: HERDSMAN_BUILD,
                       id: reply.id,
-                      leaseId: correspondence.recipientGeneration,
+                      leaseId:
+                        (reply.senderGeneration as string | undefined) ??
+                        correspondence.recipientGeneration,
                       kind: "peer_message",
                       fromSessionId: correspondence.recipientSession,
                       toSessionId: self,

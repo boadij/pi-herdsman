@@ -1213,6 +1213,454 @@ test("Lead correspondence commands reject a recipient transitioned to Manager", 
   }
 });
 
+test("exchange polls only exact known capabilities and returns a peer snapshot", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-exchange-"));
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const recipient = id();
+  const origin = id();
+  const originGeneration = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), recipient), {
+    name: "exchange Manager",
+  });
+  try {
+    writePeerLeadRecord(peerRuntime(), {
+      version: 2,
+      build: HERDSMAN_BUILD,
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: recipient,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    });
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "e".repeat(64),
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      acceptanceId: id(),
+      replies: [
+        {
+          id: id(),
+          digest: "f".repeat(64),
+          text: "queued",
+          createdAt: Date.now(),
+          acknowledged: false,
+        },
+      ],
+    };
+    storePeerCorrespondence(correspondence);
+    const run = (known: unknown[]) =>
+      spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", "exchange"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify({ expectedDataRoot: herdsmanDataRoot(), known })}\n`,
+          encoding: "utf8",
+          maxBuffer: 3 * 1024 * 1024,
+        },
+      );
+    const good = {
+      id: correspondence.id,
+      capability: correspondence.capability,
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+    };
+    const result = run([good]);
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    assert.equal(response.snapshot.dataRoot, herdsmanDataRoot());
+    assert.equal(response.messages[0].reply.text, "queued");
+    assert.equal(response.errors, undefined);
+    assert.ok(Buffer.byteLength(result.stdout, "utf8") <= 2 * 1024 * 1024);
+    const secondCorrespondence: PeerCorrespondence = {
+      id: id(),
+      capability: "d".repeat(64),
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+      acceptanceId: id(),
+      replies: [
+        {
+          id: id(),
+          digest: "c".repeat(64),
+          text: "second",
+          createdAt: Date.now(),
+          acknowledged: false,
+        },
+      ],
+    };
+    storePeerCorrespondence(secondCorrespondence);
+    const second = {
+      id: secondCorrespondence.id,
+      capability: secondCorrespondence.capability,
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+    };
+    const fair = run([good, second]);
+    assert.equal(fair.status, 0, fair.stderr);
+    const fairResponse = JSON.parse(fair.stdout);
+    assert.deepEqual(
+      fairResponse.messages.map(
+        (item: { correspondenceId: string }) => item.correspondenceId,
+      ),
+      [correspondence.id, secondCorrespondence.id],
+    );
+    assert.equal(
+      fairResponse.nextCursor,
+      "0",
+      "a complete scan wraps back to its starting correspondence",
+    );
+    const unauthorized = run([{ ...good, originSession: id() }]);
+    assert.equal(unauthorized.status, 0, unauthorized.stderr);
+    assert.deepEqual(JSON.parse(unauthorized.stdout).messages, []);
+    assert.equal(JSON.parse(unauthorized.stdout).errors.length, 1);
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("exchange bounds metadata and resumes fairly after a capacity stop", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(
+    join(tmpdir(), "peer-bridge-exchange-capacity-"),
+  );
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const recipient = id();
+  const origin = id();
+  const originGeneration = id();
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), recipient), {
+    name: "exchange capacity Manager",
+  });
+  try {
+    writePeerLeadRecord(peerRuntime(), {
+      version: 2,
+      build: HERDSMAN_BUILD,
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: recipient,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: claim.claim,
+      updatedAt: Date.now(),
+    });
+    const known: Array<Record<string, string>> = [];
+    const correspondences: PeerCorrespondence[] = [];
+    for (let index = 0; index < 3; index++) {
+      const correspondence: PeerCorrespondence = {
+        id: id(),
+        capability: String(index).repeat(64),
+        originSession: origin,
+        originGeneration,
+        recipientSession: recipient,
+        recipientGeneration: claim.claim.id,
+        acceptanceId: id(),
+        replies: [
+          {
+            id: id(),
+            digest: "b".repeat(64),
+            text: "x".repeat(850_000),
+            createdAt: Date.now(),
+            acknowledged: false,
+          },
+        ],
+      };
+      storePeerCorrespondence(correspondence);
+      correspondences.push(correspondence);
+      known.push({
+        id: correspondence.id,
+        capability: correspondence.capability,
+        originSession: origin,
+        originGeneration,
+        recipientSession: recipient,
+        recipientGeneration: claim.claim.id,
+      });
+    }
+    const deferredErrors = Array.from({ length: 4000 }, () => ({
+      id: id(),
+      capability: "z".repeat(64),
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: claim.claim.id,
+    }));
+    known.push(...deferredErrors);
+    const run = (known: unknown[], cursor?: string) =>
+      spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", "exchange"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            HERDR_SOCKET_PATH: socket,
+            SSH_CONNECTION: "test-ssh-connection",
+          },
+          input: `${JSON.stringify({ expectedDataRoot: herdsmanDataRoot(), known, ...(cursor ? { cursor } : {}) })}\n`,
+          encoding: "utf8",
+          maxBuffer: 3 * 1024 * 1024,
+        },
+      );
+    const first = run(known);
+    assert.equal(first.status, 0, first.stderr);
+    const firstResponse = JSON.parse(first.stdout);
+    assert.deepEqual(
+      firstResponse.messages.map(
+        (item: { correspondenceId: string }) => item.correspondenceId,
+      ),
+      [correspondences[0]!.id, correspondences[1]!.id],
+    );
+    assert.deepEqual(
+      firstResponse.oversized,
+      [correspondences[2]!.id],
+      "a reply that cannot fit is explicitly delegated to individual poll fallback",
+    );
+    assert.ok(
+      Number(firstResponse.nextCursor) > 3 &&
+        Number(firstResponse.nextCursor) < known.length,
+      "metadata capacity stops before the remaining errors and advances only past processed entries",
+    );
+    assert.ok(
+      firstResponse.errors.length > 0 &&
+        firstResponse.errors.length < deferredErrors.length,
+    );
+    assert.ok(Buffer.byteLength(first.stdout, "utf8") <= 2 * 1024 * 1024);
+    const resumed = run(known, firstResponse.nextCursor);
+    assert.equal(resumed.status, 0, resumed.stderr);
+    const resumedResponse = JSON.parse(resumed.stdout);
+    assert.ok(
+      resumedResponse.errors.length > 0,
+      "the next call resumes by processing deferred metadata entries",
+    );
+    assert.notEqual(
+      resumedResponse.nextCursor,
+      firstResponse.nextCursor,
+      "continuation makes progress",
+    );
+    assert.ok(Buffer.byteLength(resumed.stdout, "utf8") <= 2 * 1024 * 1024);
+  } finally {
+    claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("exchange fails when the snapshot leaves no room for first oversized metadata", () => {
+  const previousData = process.env.PI_CODING_AGENT_DIR;
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  const previousConnection = process.env.SSH_CONNECTION;
+  const agentDir = mkdtempSync(
+    join(tmpdir(), "peer-bridge-exchange-first-metadata-"),
+  );
+  const socket = join(agentDir, "herdr.sock");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.SSH_CONNECTION = "test-ssh-connection";
+  const recipient = id();
+  const origin = id();
+  const originGeneration = id();
+  const claims: ReturnType<typeof acquireProcessLock>[] = [];
+  const frameLimit = 2 * 1024 * 1024;
+  try {
+    const recipientClaim = acquireProcessLock(
+      peerLeadLockPath(peerRuntime(), recipient),
+      { name: "exchange first metadata Manager" },
+    );
+    claims.push(recipientClaim);
+    const runtime = peerRuntime();
+    writePeerLeadRecord(runtime, {
+      version: 2,
+      build: HERDSMAN_BUILD,
+      role: "manager",
+      sessionKind: "ordinary",
+      piSessionId: recipient,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      socket,
+      claim: recipientClaim.claim,
+      updatedAt: Date.now(),
+    });
+
+    const correspondence: PeerCorrespondence = {
+      id: id(),
+      capability: "a".repeat(64),
+      originSession: origin,
+      originGeneration,
+      recipientSession: recipient,
+      recipientGeneration: recipientClaim.claim.id,
+      acceptanceId: id(),
+      replies: [
+        {
+          id: id(),
+          digest: "b".repeat(64),
+          text: "x".repeat(1_900_000),
+          createdAt: Date.now(),
+          acknowledged: false,
+        },
+      ],
+    };
+    storePeerCorrespondence(correspondence);
+    const known = [
+      {
+        id: correspondence.id,
+        capability: correspondence.capability,
+        originSession: origin,
+        originGeneration,
+        recipientSession: recipient,
+        recipientGeneration: recipientClaim.claim.id,
+      },
+    ];
+
+    // Make the valid manager snapshot fill the frame to within 20 bytes.
+    // The reply cannot fit, and even its small `oversized` fallback ID cannot
+    // fit after the snapshot, so the bridge must fail instead of succeeding
+    // without advancing this first correspondence.
+    const peerRecords = [
+      {
+        version: 2 as const,
+        build: HERDSMAN_BUILD,
+        role: "manager" as const,
+        sessionKind: "ordinary" as const,
+        piSessionId: recipient,
+        paneId: "pane",
+        tabId: "tab",
+        workspaceId: "workspace",
+        socket,
+        claim: recipientClaim.claim,
+        updatedAt: Date.now(),
+      },
+    ];
+    const responseBytes = (peers: typeof peerRecords) =>
+      Buffer.byteLength(
+        `${JSON.stringify({ snapshot: { dataRoot: herdsmanDataRoot(), peers, ordinaryLeadsComplete: true }, messages: [], oversized: [], nextCursor: "0" })}\n`,
+        "utf8",
+      );
+    const target = frameLimit - 20;
+    while (true) {
+      const session = id();
+      const candidateClaim = acquireProcessLock(
+        peerLeadLockPath(runtime, session),
+        { name: "exchange snapshot padding Manager" },
+      );
+      claims.push(candidateClaim);
+      const candidate = {
+        version: 2 as const,
+        build: HERDSMAN_BUILD,
+        role: "manager" as const,
+        sessionKind: "ordinary" as const,
+        piSessionId: session,
+        paneId: "p".repeat(512),
+        tabId: "t".repeat(512),
+        workspaceId: "w".repeat(512),
+        socket,
+        claim: candidateClaim.claim,
+        updatedAt: Date.now(),
+      };
+      let candidateSize = responseBytes([...peerRecords, candidate]);
+      if (candidateSize > target) {
+        let excess = candidateSize - target;
+        for (const field of ["workspaceId", "paneId", "tabId"] as const) {
+          const reduction = Math.min(excess, candidate[field].length - 1);
+          candidate[field] = candidate[field].slice(
+            0,
+            candidate[field].length - reduction,
+          );
+          excess -= reduction;
+        }
+        candidateSize = responseBytes([...peerRecords, candidate]);
+      }
+      assert.ok(
+        candidateSize <= target,
+        "snapshot can be padded to the intended frame boundary",
+      );
+      writePeerLeadRecord(runtime, candidate);
+      peerRecords.push(candidate);
+      if (candidateSize >= target) break;
+    }
+    assert.equal(responseBytes(peerRecords), target);
+
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", "bin/peer-bridge.ts", "exchange"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          HERDR_SOCKET_PATH: socket,
+          SSH_CONNECTION: "test-ssh-connection",
+        },
+        input: `${JSON.stringify({ expectedDataRoot: herdsmanDataRoot(), known })}\n`,
+        encoding: "utf8",
+        maxBuffer: 3 * 1024 * 1024,
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.equal(
+      result.stdout,
+      "",
+      "no successful-looking response or stuck cursor is emitted",
+    );
+    assert.match(
+      result.stderr,
+      /cannot fit the next entry metadata; retry with individual polls/,
+    );
+  } finally {
+    for (const claim of claims.reverse()) claim.release();
+    if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousData;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+    if (previousConnection === undefined) delete process.env.SSH_CONNECTION;
+    else process.env.SSH_CONNECTION = previousConnection;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
 test("live replacement Manager cannot recover prior Manager correspondence", () => {
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;

@@ -24,6 +24,7 @@ const diagnostics: unknown[] = [];
 const deliveredReplies: any[] = [];
 let diagnosticAttempts = 0;
 let failNextDiagnosticAppend = false;
+let failNextPeerAck = false;
 let nextSnapshots: Snapshot[] = [];
 let failRecoveryForB = false;
 let abortRecoveryForB: (() => void) | undefined;
@@ -32,11 +33,23 @@ const cReply = {
   id: "reply-C",
   text: "reply from C",
   digest: realTransport.peerPayloadDigest({ text: "reply from C" }),
+  senderGeneration: "peer-C-generation",
   createdAt: 1,
 };
 const endpointCalls: { action: string; recipientSession?: string }[] = [];
 const acceptedEnvelopes: string[] = [];
+let exchangeResult:
+  | ((request: {
+      known?: Array<{
+        id: string;
+        originSession: string;
+        recipientSession: string;
+      }>;
+    }) => unknown)
+  | undefined;
 let outboundStatus: unknown;
+let writePeerMessage: (record: unknown) => void = (record) =>
+  deliveredReplies.push(record);
 let probeImpl: (machine: Machine) => Promise<Snapshot> = async () => {
   const snapshot = nextSnapshots.shift();
   if (!snapshot) throw new Error("missing test snapshot");
@@ -57,6 +70,36 @@ mock.module("./peer-transport.ts", {
     },
     listSavedPeerMachines: () => listMachinesImpl(),
     probePeerEndpoint: (machine: Machine) => probeImpl(machine),
+    exchangePeerEndpoint: async (_machine: Machine, input: string) => {
+      onEndpointCall("exchange");
+      const request = JSON.parse(input) as {
+        known?: Array<{
+          id: string;
+          originSession: string;
+          recipientSession: string;
+        }>;
+      };
+      endpointCalls.push({ action: "exchange" });
+      if (exchangeResult) return exchangeResult(request);
+      return {
+        snapshot: {
+          dataRoot,
+          peers: (request.known ?? []).map((item) =>
+            remote(
+              item.recipientSession,
+              `${item.recipientSession}-generation`,
+            ),
+          ),
+        },
+        messages: !cReplyAcknowledged
+          ? (request.known ?? [])
+              .filter((item) =>
+                ["peer-B", "peer-C"].includes(item.recipientSession),
+              )
+              .map((item) => ({ correspondenceId: item.id, reply: cReply }))
+          : [],
+      };
+    },
     runPeerEndpoint: async (
       _machine: Machine,
       action: string,
@@ -69,6 +112,11 @@ mock.module("./peer-transport.ts", {
         replyId?: string;
         record?: { id?: string };
         correspondence?: unknown;
+        known?: Array<{
+          id: string;
+          originSession: string;
+          recipientSession: string;
+        }>;
       };
       if (request.correspondence)
         outboundCorrespondence = request.correspondence;
@@ -85,6 +133,25 @@ mock.module("./peer-transport.ts", {
         return JSON.stringify({ recovered: true });
       }
       if (action === "recover") return JSON.stringify({ recovered: true });
+      if (action === "exchange")
+        return JSON.stringify({
+          snapshot: {
+            dataRoot,
+            peers: (request.known ?? []).map((item) =>
+              remote(
+                item.recipientSession,
+                `${item.recipientSession}-generation`,
+              ),
+            ),
+          },
+          messages: !cReplyAcknowledged
+            ? (request.known ?? [])
+                .filter((item) =>
+                  ["peer-B", "peer-C"].includes(item.recipientSession),
+                )
+                .map((item) => ({ correspondenceId: item.id, reply: cReply }))
+            : [],
+        });
       if (action === "status")
         return JSON.stringify(
           typeof outboundStatus === "function"
@@ -95,16 +162,17 @@ mock.module("./peer-transport.ts", {
         return JSON.stringify({
           dataRoot,
           replies:
-            request.recipientSession === "peer-C" && !cReplyAcknowledged
+            ["peer-B", "peer-C"].includes(request.recipientSession ?? "") &&
+            !cReplyAcknowledged
               ? [cReply]
               : [],
         });
       if (action === "ack") {
-        if (
-          request.recipientSession === "peer-C" &&
-          request.replyId === cReply.id
-        )
-          cReplyAcknowledged = true;
+        if (failNextPeerAck) {
+          failNextPeerAck = false;
+          throw new Error("injected lost ACK");
+        }
+        if (request.replyId === cReply.id) cReplyAcknowledged = true;
         return JSON.stringify({ acknowledged: true });
       }
       const id = request.record?.id;
@@ -225,12 +293,19 @@ function fixture(
   deliveredReplies.length = 0;
   diagnosticAttempts = 0;
   failNextDiagnosticAppend = false;
+  failNextPeerAck = false;
   endpointCalls.length = 0;
+  exchangeResult = undefined;
   acceptedEnvelopes.length = 0;
+  writePeerMessage = (record) => deliveredReplies.push(record);
   outboundStatus = {};
   failRecoveryForB = false;
   abortRecoveryForB = undefined;
   cReplyAcknowledged = false;
+  cReply.id = "reply-C";
+  cReply.text = "reply from C";
+  cReply.digest = realTransport.peerPayloadDigest({ text: cReply.text });
+  cReply.senderGeneration = "peer-C-generation";
   nextSnapshots = [];
   deliveries.length = 0;
   outboundCorrespondence = undefined;
@@ -307,8 +382,7 @@ function fixture(
       }
       diagnostics.push(error);
     },
-    writeCoordinationMessage: (record: unknown) =>
-      deliveredReplies.push(record),
+    writeCoordinationMessage: (record: unknown) => writePeerMessage(record),
     importResultBindings: () => {},
     messageLimits: async () => ({
       inline: { bytes: 10000 },
@@ -440,6 +514,195 @@ test("stale correspondence inventory entries are revalidated before polling", as
   );
 });
 
+test("machine exchange retrieves pending replies for multiple correspondences without individual polls", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const peers = ["peer-B", "peer-C", "peer-D"];
+  nextSnapshots = [snapshot(peers.map((peer) => remote(peer)))];
+  correspondences.push(
+    ...peers.map((peer) => ({
+      id: `correspondence-${peer}`,
+      capability: `capability-${peer}`,
+      acceptanceId: `acceptance-${peer}`,
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: peer,
+      recipientGeneration: `${peer}-generation`,
+      finalized: false,
+    })),
+  );
+  let sentKnown: Array<{
+    id: string;
+    originSession: string;
+    recipientSession: string;
+  }> = [];
+  exchangeResult = (request) => {
+    sentKnown = request.known ?? [];
+    return {
+      snapshot: snapshot(peers.map((peer) => remote(peer))),
+      messages: sentKnown.map((known) => {
+        const peer = known.recipientSession;
+        const text = `reply from ${peer}`;
+        return {
+          correspondenceId: known.id,
+          reply: {
+            id: `reply-${peer}`,
+            text,
+            digest: realTransport.peerPayloadDigest({ text }),
+            senderGeneration: `${peer}-generation`,
+            createdAt: 1,
+          },
+        };
+      }),
+    };
+  };
+
+  await list(f.runtime, f.context);
+
+  assert.equal(
+    endpointCalls.filter((call) => call.action === "exchange").length,
+    1,
+  );
+  assert.deepEqual(
+    sentKnown.map(({ id, originSession, recipientSession }) => ({
+      id,
+      originSession,
+      recipientSession,
+    })),
+    peers.map((peer) => ({
+      id: `correspondence-${peer}`,
+      originSession: self,
+      recipientSession: peer,
+    })),
+  );
+  assert.equal(
+    endpointCalls.filter((call) => call.action === "poll").length,
+    0,
+  );
+  assert.deepEqual(
+    deliveredReplies.map((reply) => reply.id).sort(),
+    peers.map((peer) => `reply-${peer}`).sort(),
+  );
+});
+
+test("exchange transport failure falls back to authorized individual polling", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-B")])];
+  correspondences.push(
+    {
+      id: "correspondence-B",
+      capability: "capability-B",
+      acceptanceId: "acceptance-B",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-B",
+      recipientGeneration: "peer-B-generation",
+      finalized: false,
+    },
+    {
+      id: "unauthorized-correspondence",
+      capability: "unauthorized-capability",
+      acceptanceId: "unauthorized-acceptance",
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: "peer-not-discovered",
+      recipientGeneration: "peer-not-discovered-generation",
+      finalized: false,
+    },
+  );
+  exchangeResult = () => {
+    throw new Error("transient exchange failure");
+  };
+
+  await list(f.runtime, f.context);
+
+  assert.equal(
+    endpointCalls.filter((call) => call.action === "exchange").length,
+    1,
+  );
+  assert.deepEqual(
+    endpointCalls
+      .filter((call) => call.action === "poll")
+      .map((call) => call.recipientSession),
+    ["peer-B"],
+  );
+  assert.ok(
+    endpointCalls.some(
+      (call) => call.action === "ack" && call.recipientSession === "peer-B",
+    ),
+  );
+  assert.ok(deliveredReplies.some((reply) => reply.id === cReply.id));
+  assert.equal(
+    endpointCalls.some(
+      (call) =>
+        call.action === "poll" &&
+        call.recipientSession === "peer-not-discovered",
+    ),
+    false,
+  );
+});
+
+test("oversized exchange correspondence falls back to exactly one individual poll", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const peers = ["peer-B", "peer-C", "peer-D"];
+  nextSnapshots = [snapshot(peers.map((peer) => remote(peer)))];
+  correspondences.push(
+    ...peers.map((peer) => ({
+      id: `correspondence-${peer}`,
+      capability: `capability-${peer}`,
+      acceptanceId: `acceptance-${peer}`,
+      originSession: self,
+      originGeneration: claim.id,
+      recipientSession: peer,
+      recipientGeneration: `${peer}-generation`,
+      finalized: false,
+    })),
+  );
+  exchangeResult = (request) => ({
+    snapshot: snapshot(peers.map((peer) => remote(peer))),
+    messages: (request.known ?? [])
+      .filter((known) => known.recipientSession !== "peer-B")
+      .map((known) => ({
+        correspondenceId: known.id,
+        reply: {
+          ...cReply,
+          id: `reply-${known.recipientSession}`,
+          text: `reply from ${known.recipientSession}`,
+          digest: realTransport.peerPayloadDigest({
+            text: `reply from ${known.recipientSession}`,
+          }),
+        },
+      })),
+    oversized: ["correspondence-peer-B"],
+  });
+
+  await list(f.runtime, f.context);
+
+  assert.equal(
+    endpointCalls.filter((call) => call.action === "exchange").length,
+    1,
+  );
+  assert.equal(
+    endpointCalls.filter((call) => call.action === "poll").length,
+    1,
+  );
+  assert.equal(
+    endpointCalls.filter(
+      (call) => call.action === "poll" && call.recipientSession === "peer-B",
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    deliveredReplies.map((reply) => reply.id).sort(),
+    ["reply-C", "reply-peer-C", "reply-peer-D"].sort(),
+  );
+});
+
 test("later machine skips correspondence finalized during earlier machine processing", async (t) => {
   const f = fixture();
   t.after(f.close);
@@ -471,7 +734,7 @@ test("later machine skips correspondence finalized during earlier machine proces
   ]);
   currentCorrespondence = (id) => durable.get(id);
   onEndpointCall = (action) => {
-    if (action === "poll") {
+    if (action === "exchange" || action === "poll") {
       const current = durable.get(later.id);
       if (current) durable.set(later.id, { ...current, finalized: true });
     }
@@ -485,9 +748,7 @@ test("later machine skips correspondence finalized during earlier machine proces
 
   assert.equal(correspondenceListCalls, 2);
   assert.ok(
-    endpointCalls.some(
-      (call) => call.action === "poll" && call.recipientSession === "peer-B",
-    ),
+    endpointCalls.some((call) => call.action === "exchange"),
     "machine one processes the first correspondence and finalizes the later durable record",
   );
   assert.equal(
@@ -1193,11 +1454,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   assert.equal(diagnostics.length, 0, "failed diagnostic append is contained");
   assert.equal(deliveredReplies.length, 1);
   assert.equal(deliveredReplies[0].id, cReply.id);
-  assert.ok(
-    endpointCalls.some(
-      (call) => call.action === "poll" && call.recipientSession === "peer-C",
-    ),
-  );
+  assert.ok(endpointCalls.some((call) => call.action === "exchange"));
   assert.ok(
     endpointCalls.some(
       (call) => call.action === "ack" && call.recipientSession === "peer-C",
@@ -1237,6 +1494,163 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   );
   const sent = await send(f.runtime, f.context, "peer-B");
   assert.equal(sent.details?.accepted, true);
+});
+
+test("replayed replies retain captured sender generation after recipient recovery", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  correspondences.push({
+    id: "correspondence-B",
+    capability: "capability-B",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-B",
+    recipientGeneration: "generation-1",
+    finalized: false,
+  });
+  nextSnapshots = [snapshot([remote("peer-B", "generation-2")])];
+  cReply.id = "reply-B";
+  cReply.text = "reply from B";
+  cReply.digest = realTransport.peerPayloadDigest({ text: cReply.text });
+  cReply.senderGeneration = "generation-1";
+
+  await list(f.runtime, f.context);
+
+  assert.equal(correspondences[0].recipientGeneration, "generation-2");
+  assert.equal(deliveredReplies.length, 1);
+  assert.equal(deliveredReplies[0].id, "reply-B");
+  assert.equal(deliveredReplies[0].leaseId, "generation-1");
+  assert.ok(endpointCalls.some((call) => call.action === "recover-recipient"));
+  assert.ok(endpointCalls.some((call) => call.action === "ack"));
+});
+
+test("lost ACK replays an identical durable inbox message without duplicate delivery", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const peerSession = "22222222-2222-4222-8222-222222222222";
+  const peerGeneration = "44444444-4444-4444-8444-444444444444";
+  correspondences.push({
+    id: "correspondence-B",
+    capability: "capability-B",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: peerSession,
+    recipientGeneration: peerGeneration,
+    finalized: false,
+  });
+  nextSnapshots = [
+    snapshot([remote(peerSession, peerGeneration)]),
+    snapshot([remote(peerSession, peerGeneration)]),
+  ];
+  exchangeResult = (request) => ({
+    snapshot: {
+      dataRoot,
+      peers: (request.known ?? []).map((item) =>
+        remote(item.recipientSession, peerGeneration),
+      ),
+    },
+    messages: !cReplyAcknowledged
+      ? (request.known ?? []).map((item) => ({
+          correspondenceId: item.id,
+          reply: cReply,
+        }))
+      : [],
+  });
+  cReply.id = "33333333-3333-4333-8333-333333333333";
+  cReply.text = "durably queued before ACK";
+  cReply.digest = realTransport.peerPayloadDigest({ text: cReply.text });
+  cReply.senderGeneration = peerGeneration;
+  const runtime = supervision.supervisionRuntime();
+
+  // Use the real durable inbox writer at the coordination integration boundary.
+  // The fixture still records each attempted write for the replay assertion.
+  const writes: unknown[] = [];
+  writePeerMessage = (record) => {
+    writes.push(record);
+    supervision.writeCoordinationMessage(record as any, runtime);
+  };
+
+  // Reconciliation persists before the injected ACK transport failure.
+  failNextPeerAck = true;
+  await list(f.runtime, f.context);
+  assert.equal(endpointCalls.filter((call) => call.action === "ack").length, 1);
+  assert.equal(
+    cReplyAcknowledged,
+    false,
+    "the remote message remains pending after lost ACK",
+  );
+  assert.equal(
+    supervision.listCoordinationMessagePaths(runtime, self).length,
+    1,
+  );
+  const durableBeforeReplay = supervision.readCoordinationMessage(
+    supervision.listCoordinationMessagePaths(runtime, self)[0],
+  );
+
+  // The still-pending remote reply is replayed unchanged, then ACK succeeds.
+  await list(f.runtime, f.context);
+  assert.equal(endpointCalls.filter((call) => call.action === "ack").length, 2);
+  assert.equal(cReplyAcknowledged, true);
+  assert.equal(
+    supervision.listCoordinationMessagePaths(runtime, self).length,
+    1,
+  );
+  assert.deepEqual(
+    supervision.readCoordinationMessage(
+      supervision.listCoordinationMessagePaths(runtime, self)[0],
+    ),
+    durableBeforeReplay,
+  );
+  assert.equal(writes.length, 2, "both attempts write the same durable record");
+  assert.deepEqual(writes[1], writes[0]);
+
+  const delivered = new Set<string>();
+  const localDeliveries: unknown[] = [];
+  const drain = () =>
+    supervision.drainCoordinationInbox({
+      runtime,
+      sessionId: self,
+      isAuthorized: () => true,
+      isDelivered: (id) => delivered.has(id),
+      sendMessage: (_message, _options, record) => {
+        localDeliveries.push(record);
+        delivered.add(record.id);
+      },
+    });
+  assert.equal(await drain(), 1);
+  assert.equal(await drain(), 0);
+  assert.equal(localDeliveries.length, 1);
+  assert.equal(
+    (localDeliveries[0] as { id: string }).id,
+    "33333333-3333-4333-8333-333333333333",
+  );
+});
+
+test("legacy replies without sender generation retain recipient-generation fallback", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  correspondences.push({
+    id: "correspondence-B",
+    capability: "capability-B",
+    originSession: self,
+    originGeneration: claim.id,
+    recipientSession: "peer-B",
+    recipientGeneration: "generation-1",
+    finalized: false,
+  });
+  nextSnapshots = [snapshot([remote("peer-B", "generation-2")])];
+  cReply.id = "legacy-reply-B";
+  cReply.text = "legacy reply from B";
+  cReply.digest = realTransport.peerPayloadDigest({ text: cReply.text });
+  delete (cReply as { senderGeneration?: string }).senderGeneration;
+
+  await list(f.runtime, f.context);
+
+  assert.equal(deliveredReplies.length, 1);
+  assert.equal(deliveredReplies[0].leaseId, "generation-2");
 });
 
 test("aborted correspondence recovery stops later correspondence processing", async (t) => {

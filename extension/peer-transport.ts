@@ -466,6 +466,7 @@ export async function runPeerEndpoint(
   machine: SavedPeerMachine,
   action:
     | "probe"
+    | "exchange"
     | "accept"
     | "status"
     | "poll"
@@ -536,4 +537,52 @@ export async function probePeerEndpoint(
   )
     throw new Error("Peer endpoint returned invalid probe data");
   return snapshot;
+}
+
+export type PeerExchangeResponse = Readonly<{
+  snapshot: RemotePeerSnapshot;
+  messages: Array<{ correspondenceId: string; reply: Record<string, unknown> }>;
+  oversized?: string[];
+  nextCursor?: string;
+  errors?: Array<{ correspondenceId?: string; reason: string }>;
+}>;
+
+export async function exchangePeerEndpoint(
+  machine: SavedPeerMachine,
+  input: string,
+  signal?: AbortSignal,
+): Promise<PeerExchangeResponse> {
+  const output = await runPeerEndpoint(machine, "exchange", input, signal);
+  const value: unknown = JSON.parse(output);
+  if (!value || typeof value !== "object")
+    throw new Error("Peer endpoint returned invalid exchange data");
+  const response = value as PeerExchangeResponse;
+  if (
+    !response.snapshot ||
+    typeof response.snapshot.dataRoot !== "string" ||
+    !Array.isArray(response.snapshot.peers) ||
+    !Array.isArray(response.messages) ||
+    (response.oversized !== undefined &&
+      (!Array.isArray(response.oversized) ||
+        response.oversized.some((id) => typeof id !== "string"))) ||
+    (response.nextCursor !== undefined &&
+      typeof response.nextCursor !== "string") ||
+    (response.errors !== undefined &&
+      (!Array.isArray(response.errors) ||
+        response.errors.some(
+          (error) => !error || typeof error.reason !== "string",
+        )))
+  )
+    throw new Error("Peer endpoint returned invalid exchange data");
+  if (
+    response.messages.some(
+      (item) =>
+        !item ||
+        typeof item.correspondenceId !== "string" ||
+        !item.reply ||
+        typeof item.reply !== "object",
+    )
+  )
+    throw new Error("Peer endpoint returned invalid exchange data");
+  return response;
 }

@@ -66,6 +66,7 @@ let action = process.argv[2];
 if (
   ![
     "probe",
+    "exchange",
     "accept",
     "poll",
     "ack",
@@ -77,7 +78,7 @@ if (
   process.argv.length !== 3
 ) {
   console.error(
-    "usage: pi-herdsman-peer probe|accept|status|poll|ack|finalize|recover|recover-recipient",
+    "usage: pi-herdsman-peer probe|exchange|accept|status|poll|ack|finalize|recover|recover-recipient",
   );
   process.exit(2);
 }
@@ -177,7 +178,198 @@ if (action === "probe") {
     newRecipientGeneration?: string;
     replyId?: string;
     digest?: string;
+    known?: Array<Record<string, unknown>>;
+    cursor?: string;
   };
+  if (action === "exchange") {
+    assertPeerDataRoot(herdsmanDataRoot(), envelope.expectedDataRoot ?? "");
+    if (!process.env.SSH_CONNECTION || !Array.isArray(envelope.known))
+      throw new Error("invalid peer exchange request");
+    const peers = listPeerLeadRecords(runtime);
+    let ordinaryLeadsComplete = true;
+    let eligibleLeads: typeof peers = [];
+    try {
+      const assignments = globalProjectAssignmentSnapshot();
+      eligibleLeads = peers.filter((peer) =>
+        isRemoteOrdinaryLead(peer, assignments),
+      );
+    } catch {
+      ordinaryLeadsComplete = false;
+    }
+    const snapshot = {
+      dataRoot: herdsmanDataRoot(),
+      peers: [
+        ...peers.filter((peer) => peer.role === "manager"),
+        ...eligibleLeads,
+      ],
+      ordinaryLeadsComplete,
+    };
+    const known = envelope.known;
+    if (
+      known.length > 10_000 ||
+      (envelope.cursor !== undefined &&
+        !/^(0|[1-9][0-9]*)$/u.test(envelope.cursor))
+    )
+      throw new Error("invalid peer exchange request");
+    const start = known.length
+      ? Number(envelope.cursor ?? 0) % known.length
+      : 0;
+    const ordered = known.map(
+      (_, index) => known[(start + index) % known.length]!,
+    );
+    const messages: Array<{
+      correspondenceId: string;
+      reply: PeerCorrespondence["replies"][number];
+    }> = [];
+    const oversized: string[] = [];
+    const errors: Array<{ correspondenceId?: string; reason: string }> = [];
+    let nextCursor = String(start);
+    const fits = (
+      candidateMessages: typeof messages,
+      candidateOversized: string[],
+      candidateErrors: typeof errors,
+      cursor: string,
+    ) =>
+      Buffer.byteLength(
+        JSON.stringify({
+          snapshot,
+          messages: candidateMessages,
+          oversized: candidateOversized,
+          ...(candidateErrors.length ? { errors: candidateErrors } : {}),
+          nextCursor: cursor,
+        }) + "\n",
+        "utf8",
+      ) <= PEER_TRANSPORT_FRAME_LIMIT_BYTES;
+    const requireProgressOrFail = (index: number) => {
+      if (index === 0)
+        throw new Error(
+          "peer exchange cannot fit the next entry metadata; retry with individual polls",
+        );
+    };
+    for (let index = 0; index < ordered.length; index++) {
+      const item = ordered[index]!;
+      const cursorAfter = String(
+        (start + index + 1) % Math.max(known.length, 1),
+      );
+      const {
+        id,
+        capability,
+        originSession,
+        originGeneration,
+        recipientSession,
+        recipientGeneration,
+      } = item;
+      if (
+        [
+          id,
+          capability,
+          originSession,
+          originGeneration,
+          recipientSession,
+          recipientGeneration,
+        ].some((v) => typeof v !== "string" || !v)
+      ) {
+        const error = { reason: "invalid correspondence capability" };
+        if (!fits(messages, oversized, [...errors, error], cursorAfter)) {
+          requireProgressOrFail(index);
+          break;
+        }
+        errors.push(error);
+        nextCursor = cursorAfter;
+        continue;
+      }
+      let capacityStop = false;
+      try {
+        const c = readPeerCorrespondence(id as string);
+        const role = c?.role ?? "manager";
+        const run = (
+          assignments?: Map<
+            string,
+            import("../extension/supervision.ts").GlobalProjectAssignment[]
+          >,
+        ) => {
+          const live = listPeerLeadRecords(runtime).find(
+            (peer) =>
+              peer.piSessionId === recipientSession &&
+              peer.claim.id === recipientGeneration,
+          );
+          if (
+            !c ||
+            c.finalized ||
+            c.id !== id ||
+            c.capability !== capability ||
+            c.originSession !== originSession ||
+            c.originGeneration !== originGeneration ||
+            c.recipientSession !== recipientSession ||
+            c.recipientGeneration !== recipientGeneration ||
+            !live ||
+            (role === "manager"
+              ? live.role !== "manager"
+              : role !== "lead" ||
+                !assignments ||
+                !isRemoteOrdinaryLead(live, assignments))
+          )
+            throw new Error(
+              "exact correspondence recipient is not live or authorized",
+            );
+          const replies = pollPeerReplies(
+            id as string,
+            capability as string,
+            originSession as string,
+            originGeneration as string,
+            recipientSession as string,
+            recipientGeneration as string,
+          );
+          const entries = replies.map((reply) => ({
+            correspondenceId: id as string,
+            reply,
+          }));
+          if (fits([...messages, ...entries], oversized, errors, cursorAfter))
+            messages.push(...entries);
+          else if (
+            !messages.some((message) => message.correspondenceId === id) &&
+            fits(messages, [...oversized, id as string], errors, cursorAfter)
+          )
+            oversized.push(id as string);
+          else capacityStop = true;
+        };
+        role === "lead"
+          ? withProjectAssignmentAuthority((assignments) => run(assignments))
+          : run();
+      } catch {
+        const error = {
+          correspondenceId: id as string,
+          reason: "correspondence unavailable or unauthorized",
+        };
+        if (!fits(messages, oversized, [...errors, error], cursorAfter)) {
+          requireProgressOrFail(index);
+          break;
+        }
+        errors.push(error);
+      }
+      if (capacityStop) {
+        requireProgressOrFail(index);
+        break;
+      }
+      nextCursor = cursorAfter;
+    }
+    const response = {
+      snapshot,
+      messages,
+      oversized,
+      ...(errors.length ? { errors } : {}),
+      nextCursor,
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(response) + "\n", "utf8") >
+      PEER_TRANSPORT_FRAME_LIMIT_BYTES
+    )
+      throw new Error("peer exchange response exceeds the size limit");
+    await new Promise<void>((resolve) =>
+      process.stdout.write(`${JSON.stringify(response)}\n`, resolve),
+    );
+    process.exit(0);
+  }
   if (action === "status") {
     const { id, originSession, recipientSession, digest, expectedDataRoot } =
       envelope;
