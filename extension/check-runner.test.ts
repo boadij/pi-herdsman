@@ -23,7 +23,7 @@ function runPowerShell(script: string): Promise<string> {
     execFile(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", script],
-      { windowsHide: true, timeout: 5_000, maxBuffer: 8 * 1024 },
+      { windowsHide: true, timeout: 10_000, maxBuffer: 8 * 1024 },
       (error, stdout) => {
         if (error) {
           const code = (error as NodeJS.ErrnoException).code;
