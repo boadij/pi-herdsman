@@ -147,14 +147,16 @@ import {
   type AgentDefinition,
 } from "./agent-definitions.ts";
 
+const delegationLockPath = (workspaceId: string, sessionId: string) =>
+  join(
+    herdsmanTempRoot(),
+    "locks",
+    `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
+  );
+
 export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
   try {
-    const path = join(
-      herdsmanTempRoot(),
-      "locks",
-      `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
-    );
-    return claimProcessLock(path, {
+    return claimProcessLock(delegationLockPath(workspaceId, sessionId), {
       name: "delegation lifecycle",
       occupiedMessage: "Delegation lifecycle is already in progress",
     });
@@ -166,6 +168,30 @@ export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
           "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
       });
     throw error;
+  }
+};
+
+const waitForDelegationLock = async (
+  workspaceId: string,
+  sessionId: string,
+  deadline: number,
+  signal?: AbortSignal,
+): Promise<() => void> => {
+  while (true) {
+    signal?.throwIfAborted();
+    try {
+      return claimProcessLock(delegationLockPath(workspaceId, sessionId), {
+        name: "delegation lifecycle",
+        occupiedMessage: "Delegation lifecycle is already in progress",
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ProcessLockOccupiedError) ||
+        Date.now() >= deadline
+      )
+        throw error;
+      await delay(Math.min(50, deadline - Date.now()), undefined, { signal });
+    }
   }
 };
 
@@ -3988,6 +4014,54 @@ export function createAgentController(
       undefined,
       allowTranscriptDefinitionFallback,
     );
+  const withQuiescedTree = async <T>(
+    context: ExtensionContext,
+    ownerSessionId: string,
+    workspaceId: string,
+    operation: (heldLocks: ReadonlySet<string>) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const deadline = Date.now() + 30_000;
+    const releases: Array<() => void> = [];
+    const held = new Set<string>();
+    const freeze = async (sessionId: string): Promise<void> => {
+      const key = `${workspaceId}\0${sessionId}`;
+      if (held.has(key)) throw new Error("Managed Agent ancestry is ambiguous");
+      releases.push(
+        await waitForDelegationLock(workspaceId, sessionId, deadline, signal),
+      );
+      held.add(key);
+      const snapshot = await snapshots(context, signal, true);
+      if (snapshot.stateIssues.length)
+        throw new Error("Owned Agent mailbox state is unresolved");
+      assertUniqueDurableIdentities(
+        snapshot.mailboxes.map(({ state }) => state),
+      );
+      const children = snapshot.agents
+        .filter(
+          ({ state }) =>
+            state.workspaceId === workspaceId &&
+            state.ownerSessionId === sessionId,
+        )
+        .map(({ state }) => state);
+      for (const child of children) {
+        managedAgentCascadePlanFromSnapshot(snapshot, child, sameIdentity);
+        await freeze(child.piSessionId);
+        const fresh = await snapshots(context, signal, true);
+        const matches = fresh.agents.filter(({ state }) =>
+          sameIdentity(state, child),
+        );
+        if (matches.length !== 1)
+          throw new Error("Managed Agent identity changed during shutdown");
+      }
+    };
+    try {
+      await freeze(ownerSessionId);
+      return await operation(held);
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  };
   const snapshot = (
     context: ExtensionContext,
     signal?: AbortSignal,
@@ -5194,9 +5268,14 @@ export function createAgentController(
       onCleanupFailure: (label, message) => warnings.set(label, message),
     };
     try {
-      if (scope?.kind === "root")
-        await closeCascade(context, state, signal, undefined, report);
-      else await closeSnapshot(context, candidate, signal, report);
+      await withQuiescedTree(
+        context,
+        state.piSessionId,
+        state.workspaceId,
+        async (heldLocks) =>
+          closeCascade(context, state, signal, undefined, report, heldLocks),
+        signal,
+      );
     } catch (error) {
       const failure = normalizeCloseFailure(error, {
         label: agentLabel,
@@ -5617,11 +5696,12 @@ export function createAgentController(
     signal?: AbortSignal,
     deliveredRootResultId?: string,
     report?: StopReport,
+    heldLocks?: ReadonlySet<string>,
   ): Promise<void> => {
-    const release = claimDelegationLock(
-      expected.workspaceId,
-      expected.piSessionId,
-    );
+    const lockKey = `${expected.workspaceId}\0${expected.piSessionId}`;
+    const release = heldLocks?.has(lockKey)
+      ? undefined
+      : claimDelegationLock(expected.workspaceId, expected.piSessionId);
     const parentMailbox = agentMailboxPath(
       expected.workspaceId,
       expected.agentLabel,
@@ -5719,7 +5799,7 @@ export function createAgentController(
       );
     } finally {
       parentRelease?.();
-      release();
+      release?.();
     }
   };
 
@@ -5728,6 +5808,7 @@ export function createAgentController(
     owner: string,
     workspaceId: string,
     signal?: AbortSignal,
+    heldLocks?: ReadonlySet<string>,
   ): Promise<StopOwnedAgentsResult> => {
     const snapshot = await snapshots(context, signal, true);
     if (snapshot.stateIssues.length)
@@ -5818,16 +5899,25 @@ export function createAgentController(
             "close",
             { ids: { label: current.agentLabel, paneId: current.paneId } },
           );
-        await closeCascade(context, current, signal, undefined, {
-          onClosed: (outcome) => {
-            if (!closed.some(({ state }) => sameIdentity(state, outcome.state)))
-              closed.push(outcome);
+        await closeCascade(
+          context,
+          current,
+          signal,
+          undefined,
+          {
+            onClosed: (outcome) => {
+              if (
+                !closed.some(({ state }) => sameIdentity(state, outcome.state))
+              )
+                closed.push(outcome);
+            },
+            onCleanupFailure: (label, message) => {
+              cleanupFailureReported = true;
+              recordFailure(label, message);
+            },
           },
-          onCleanupFailure: (label, message) => {
-            cleanupFailureReported = true;
-            recordFailure(label, message);
-          },
-        });
+          heldLocks,
+        );
       } catch (error) {
         const failure = normalizeCloseFailure(error, {
           label: target.state.agentLabel,
@@ -10070,6 +10160,7 @@ export function createAgentController(
     closeSnapshot,
     closeCascade,
     stopOwnedAgentsForSession,
+    withQuiescedTree,
     workspaceId: options.workspaceId,
     recoverRuntimes,
     resolveRuntime,

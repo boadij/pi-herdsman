@@ -41,10 +41,7 @@ import {
   readRequiredEvidenceSnapshot,
   type RequiredEvidence,
 } from "../storage.ts";
-import {
-  acceptedCloseProof,
-  claimDelegationLock,
-} from "../agent-controller.ts";
+import { acceptedCloseProof } from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
 import {
@@ -224,7 +221,15 @@ export type LeadProjectHost = {
     sessionId: string,
     workspaceId: string,
     signal?: AbortSignal,
+    heldLocks?: ReadonlySet<string>,
   ): Promise<import("../agent-controller.ts").StopOwnedAgentsResult>;
+  withQuiescedTree<T>(
+    ctx: ExtensionContext,
+    ownerSessionId: string,
+    workspaceId: string,
+    operation: (heldLocks: ReadonlySet<string>) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
   stopProjectLeadPane(
     ctx: ExtensionContext,
     target: HerdrRecord,
@@ -477,31 +482,28 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     target: HerdrRecord,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    heldLocks?: ReadonlySet<string>,
   ) => {
-    const release = claimDelegationLock(target.workspace_id, session);
-    try {
-      const result = await host.stopOwnedAgentsForSession(
-        ctx,
-        session,
-        target.workspace_id,
-        signal,
-      );
-      if (!result.complete)
-        throw new Error(`Agent-tree cleanup failed: ${result.summary}`);
-      await host.stopProjectLeadPane(ctx, target, session, signal);
-      if ((await host.liveLead(ctx, session)).length)
-        throw new Error("Lead remains live after stop; work was preserved");
-      const persisted = await persistForeignStopClosures(
-        ctx,
-        target,
-        session,
-        result.closures ?? [],
-        signal,
-      );
-      return { result, persisted };
-    } finally {
-      release();
-    }
+    const result = await host.stopOwnedAgentsForSession(
+      ctx,
+      session,
+      target.workspace_id,
+      signal,
+      heldLocks,
+    );
+    if (!result.complete)
+      throw new Error(`Agent-tree cleanup failed: ${result.summary}`);
+    await host.stopProjectLeadPane(ctx, target, session, signal);
+    if ((await host.liveLead(ctx, session)).length)
+      throw new Error("Lead remains live after stop; work was preserved");
+    const persisted = await persistForeignStopClosures(
+      ctx,
+      target,
+      session,
+      result.closures ?? [],
+      signal,
+    );
+    return { result, persisted };
   };
   const stop = async (
     session: string,
@@ -544,7 +546,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         assignment.repoKey !== expected.repoKey)
     )
       throw new Error("Project assignment changed before stop");
-    const close = async () => {
+    const preflight = await host.liveLead(ctx, session);
+    if (preflight.length !== 1)
+      throw new Error("Exact live Lead was not found or is ambiguous");
+    const close = async (heldLocks: ReadonlySet<string>) => {
       if (
         host.readProjectAssignment(
           host.supervisionRuntime(),
@@ -588,7 +593,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         )?.id !== assignment.id
       )
         throw new Error("Manager or project assignment changed before stop");
-      const stopped = await stopExecution(session, live[0], ctx, signal);
+      const stopped = await stopExecution(
+        session,
+        live[0],
+        ctx,
+        signal,
+        heldLocks,
+      );
       return {
         content: [
           {
@@ -607,10 +618,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     return host.withProjectWorkLock(
       `${manager.repoKey}\0${assignment.branch}`,
       () =>
-        host.withProjectAssignmentLock(
-          manager.repoKey,
-          assignment.branch,
-          close,
+        host.withQuiescedTree(
+          ctx,
+          session,
+          preflight[0].workspace_id,
+          (heldLocks) =>
+            host.withProjectAssignmentLock(
+              manager.repoKey,
+              assignment.branch,
+              () => close(heldLocks),
+              signal,
+            ),
           signal,
         ),
     );
@@ -795,6 +813,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Assigned Lead identity is ambiguous; worktree preserved",
       );
+    let leadInstanceId: string | undefined;
     if (leads.length === 1) {
       const lead = leads[0]!;
       const state = host.readLeadCoordinationState(
@@ -817,6 +836,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(
           "Assigned Lead placement is ambiguous; worktree preserved",
         );
+      leadInstanceId = state.instanceId;
     }
     return {
       manager,
@@ -827,7 +847,40 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         typeof worktree.branch === "string" ? worktree.branch : undefined,
       sourceCheckoutPath: topology.source.source_checkout_path,
       liveLead: leads[0],
+      leadInstanceId,
     };
+  };
+  const withCandidateLeadQuiesced = <T>(
+    candidate: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    operation: (heldLocks: ReadonlySet<string> | undefined) => Promise<T>,
+  ) => {
+    if (!candidate.liveLead) return operation(undefined);
+    return host.withQuiescedTree(
+      ctx,
+      candidate.assignment.id,
+      candidate.liveLead.workspace_id,
+      operation as (heldLocks: ReadonlySet<string>) => Promise<T>,
+      signal,
+    );
+  };
+  const assertCandidateLeadUnchanged = (
+    candidate: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+    current: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+  ) => {
+    const before = candidate.liveLead;
+    const after = current.liveLead;
+    if (
+      !!before !== !!after ||
+      (before &&
+        after &&
+        (before.workspace_id !== after.workspace_id ||
+          before.pane_id !== after.pane_id ||
+          before.tab_id !== after.tab_id ||
+          candidate.leadInstanceId !== current.leadInstanceId))
+    )
+      throw new Error("Assigned Lead changed; select the removal target again");
   };
   const assertNoUnrelatedPiExecution = async (
     target: Awaited<ReturnType<typeof inspectRemovalTarget>>,
@@ -1121,208 +1174,232 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       async () => {
         let reopened = false;
         let leadStopped = false;
-        const removed = await host
-          .withProjectAssignmentLock(
-            candidate.manager.repoKey,
-            branch,
-            async () => {
-              operationSignal?.throwIfAborted();
-              const current = await inspectRemovalTarget(
+        const removed = await withCandidateLeadQuiesced(
+          candidate,
+          ctx,
+          operationSignal,
+          (heldLocks) =>
+            host
+              .withProjectAssignmentLock(
+                candidate.manager.repoKey,
                 branch,
-                ctx,
-                operationSignal,
-              );
-              if (
-                current.assignment.id !== candidate.assignment.id ||
-                !sameDirectory(current.checkoutPath, candidate.checkoutPath) ||
-                !host.sameManagerDescriptor(current.manager, candidate.manager)
-              )
-                throw new Error(
-                  "Removal target changed during confirmation; worktree preserved",
-                );
-              if (
-                (usedRemovalPreapproval &&
-                  !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
-                (integrated &&
-                  (!mergeAuthorized() ||
-                    integrated.assignmentId !== current.assignment.id))
-              )
-                throw new Error("Project removal preauthorization was revoked");
-              await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
-              if (current.liveLead) {
-                try {
+                async () => {
+                  operationSignal?.throwIfAborted();
+                  const current = await inspectRemovalTarget(
+                    branch,
+                    ctx,
+                    operationSignal,
+                  );
+                  if (
+                    current.assignment.id !== candidate.assignment.id ||
+                    !sameDirectory(
+                      current.checkoutPath,
+                      candidate.checkoutPath,
+                    ) ||
+                    !host.sameManagerDescriptor(
+                      current.manager,
+                      candidate.manager,
+                    )
+                  )
+                    throw new Error(
+                      "Removal target changed during confirmation; worktree preserved",
+                    );
+                  assertCandidateLeadUnchanged(candidate, current);
                   if (
                     (usedRemovalPreapproval &&
                       !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
-                    (integrated && !mergeAuthorized())
+                    (integrated &&
+                      (!mergeAuthorized() ||
+                        integrated.assignmentId !== current.assignment.id))
                   )
                     throw new Error(
                       "Project removal preauthorization was revoked",
                     );
-                  await stopExecution(
-                    current.assignment.id,
-                    current.liveLead,
+                  await assertNoUnrelatedPiExecution(
+                    current,
                     ctx,
                     operationSignal,
                   );
-                  leadStopped = true;
-                } catch (error) {
-                  throw new Error(
-                    `Managed execution could not be stopped; worktree was preserved: ${error instanceof Error ? error.message : String(error)}`,
-                  );
-                }
-              }
-              const inventory = await host.herdrSessionSnapshot(
-                host.pi,
-                ctx,
-                operationSignal,
-              );
-              const occupants = inventory.agents.filter(
-                (agent) =>
-                  agent.workspace_id === current.worktree.open_workspace_id &&
-                  host.isPiAgent(agent),
-              );
-              if (occupants.length)
-                throw new Error(
-                  `${leadStopped ? "Assigned Lead stopped; " : ""}unrelated or remaining Pi execution occupies the worktree; removal was not attempted`,
-                );
-              let workspaceId = current.worktree.open_workspace_id;
-              if (!workspaceId) {
-                const opened = await host.runHerdr(
-                  host.pi,
-                  ctx,
-                  [
-                    "worktree",
-                    "open",
-                    "--workspace",
-                    current.manager.workspaceId,
-                    "--path",
-                    current.checkoutPath,
-                    "--no-focus",
-                  ],
-                  { signal: operationSignal },
-                );
-                workspaceId = opened?.workspace?.workspace_id;
-                if (
-                  !workspaceId ||
-                  workspaceId === current.manager.workspaceId ||
-                  !sameDirectory(
-                    opened?.worktree?.path ?? "",
-                    current.checkoutPath,
-                  )
-                )
-                  throw new Error(
-                    "Herdr reopened a different or ambiguous worktree; checkout preserved",
-                  );
-                reopened = true;
-              }
-              let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
-              try {
-                final = await inspectRemovalTarget(
-                  branch,
-                  ctx,
-                  operationSignal,
-                );
-              } catch (error) {
-                if (!leadStopped) throw error;
-                throw new Error(
-                  `Assigned Lead stopped; checkout was preserved because final verification failed: ${error instanceof Error ? error.message : String(error)}`,
-                );
-              }
-              if (
-                final.assignment.id !== current.assignment.id ||
-                final.worktree.open_workspace_id !== workspaceId ||
-                !sameDirectory(final.checkoutPath, current.checkoutPath)
-              )
-                throw new Error(
-                  "Removal target changed before native removal; worktree preserved",
-                );
-              try {
-                operationSignal?.throwIfAborted();
-                if (
-                  (usedRemovalPreapproval &&
-                    !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
-                  (integrated &&
-                    (!mergeAuthorized() ||
-                      final.assignment.id !== integrated.assignmentId))
-                )
-                  throw new Error(
-                    "Project removal preauthorization was revoked",
-                  );
-                if (integrated) {
-                  const [source, target, targetBranch] = await Promise.all([
-                    host.pi.exec("git", ["rev-parse", "HEAD"], {
-                      cwd: final.checkoutPath,
-                      signal: operationSignal,
-                      timeout: 10_000,
-                    }),
-                    host.pi.exec(
-                      "git",
-                      [
-                        "merge-base",
-                        "--is-ancestor",
-                        integrated.sourceHead,
-                        "HEAD",
-                      ],
-                      {
-                        cwd: final.sourceCheckoutPath,
-                        signal: operationSignal,
-                        timeout: 10_000,
-                      },
-                    ),
-                    host.pi.exec(
-                      "git",
-                      ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                      {
-                        cwd: final.sourceCheckoutPath,
-                        signal: operationSignal,
-                        timeout: 10_000,
-                      },
-                    ),
-                  ]);
-                  if (
-                    source.code !== 0 ||
-                    source.killed ||
-                    String(source.stdout ?? "").trim() !==
-                      integrated.sourceHead ||
-                    target.code !== 0 ||
-                    target.killed ||
-                    targetBranch.code !== 0 ||
-                    targetBranch.killed ||
-                    targetBranch.stderr?.trim() ||
-                    String(targetBranch.stdout ?? "").trim() !==
-                      integrated.targetBranch
-                  )
-                    throw new Error(
-                      "Integrated source or target changed before removal; worktree preserved",
-                    );
-                }
-                return {
-                  result: await host.runHerdr(
+                  if (current.liveLead) {
+                    try {
+                      if (
+                        (usedRemovalPreapproval &&
+                          !isWorktreeRemovalPreapproved(
+                            current.manager.repoKey,
+                          )) ||
+                        (integrated && !mergeAuthorized())
+                      )
+                        throw new Error(
+                          "Project removal preauthorization was revoked",
+                        );
+                      await stopExecution(
+                        current.assignment.id,
+                        current.liveLead,
+                        ctx,
+                        operationSignal,
+                        heldLocks,
+                      );
+                      leadStopped = true;
+                    } catch (error) {
+                      throw new Error(
+                        `Managed execution could not be stopped; worktree was preserved: ${error instanceof Error ? error.message : String(error)}`,
+                      );
+                    }
+                  }
+                  const inventory = await host.herdrSessionSnapshot(
                     host.pi,
                     ctx,
-                    ["worktree", "remove", "--workspace", workspaceId],
-                    { signal: operationSignal, timeout: 180_000 },
-                  ),
-                };
-              } catch (error) {
-                return {
-                  error: error instanceof Error ? error.message : String(error),
-                  commandInterrupted:
-                    error instanceof OperationError &&
-                    error.detail.details?.killed === true,
-                  reopened,
-                };
-              }
-            },
-            operationSignal,
-          )
-          .catch((error) => {
-            if (!leadStopped && !reopened) throw error;
-            throw new Error(
-              `${leadStopped ? "Assigned Lead stopped; " : ""}${reopened ? "Herdr workspace reopened; " : ""}worktree removal did not complete: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          });
+                    operationSignal,
+                  );
+                  const occupants = inventory.agents.filter(
+                    (agent) =>
+                      agent.workspace_id ===
+                        current.worktree.open_workspace_id &&
+                      host.isPiAgent(agent),
+                  );
+                  if (occupants.length)
+                    throw new Error(
+                      `${leadStopped ? "Assigned Lead stopped; " : ""}unrelated or remaining Pi execution occupies the worktree; removal was not attempted`,
+                    );
+                  let workspaceId = current.worktree.open_workspace_id;
+                  if (!workspaceId) {
+                    const opened = await host.runHerdr(
+                      host.pi,
+                      ctx,
+                      [
+                        "worktree",
+                        "open",
+                        "--workspace",
+                        current.manager.workspaceId,
+                        "--path",
+                        current.checkoutPath,
+                        "--no-focus",
+                      ],
+                      { signal: operationSignal },
+                    );
+                    workspaceId = opened?.workspace?.workspace_id;
+                    if (
+                      !workspaceId ||
+                      workspaceId === current.manager.workspaceId ||
+                      !sameDirectory(
+                        opened?.worktree?.path ?? "",
+                        current.checkoutPath,
+                      )
+                    )
+                      throw new Error(
+                        "Herdr reopened a different or ambiguous worktree; checkout preserved",
+                      );
+                    reopened = true;
+                  }
+                  let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
+                  try {
+                    final = await inspectRemovalTarget(
+                      branch,
+                      ctx,
+                      operationSignal,
+                    );
+                  } catch (error) {
+                    if (!leadStopped) throw error;
+                    throw new Error(
+                      `Assigned Lead stopped; checkout was preserved because final verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                  }
+                  if (
+                    final.assignment.id !== current.assignment.id ||
+                    final.worktree.open_workspace_id !== workspaceId ||
+                    !sameDirectory(final.checkoutPath, current.checkoutPath)
+                  )
+                    throw new Error(
+                      "Removal target changed before native removal; worktree preserved",
+                    );
+                  try {
+                    operationSignal?.throwIfAborted();
+                    if (
+                      (usedRemovalPreapproval &&
+                        !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
+                      (integrated &&
+                        (!mergeAuthorized() ||
+                          final.assignment.id !== integrated.assignmentId))
+                    )
+                      throw new Error(
+                        "Project removal preauthorization was revoked",
+                      );
+                    if (integrated) {
+                      const [source, target, targetBranch] = await Promise.all([
+                        host.pi.exec("git", ["rev-parse", "HEAD"], {
+                          cwd: final.checkoutPath,
+                          signal: operationSignal,
+                          timeout: 10_000,
+                        }),
+                        host.pi.exec(
+                          "git",
+                          [
+                            "merge-base",
+                            "--is-ancestor",
+                            integrated.sourceHead,
+                            "HEAD",
+                          ],
+                          {
+                            cwd: final.sourceCheckoutPath,
+                            signal: operationSignal,
+                            timeout: 10_000,
+                          },
+                        ),
+                        host.pi.exec(
+                          "git",
+                          ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                          {
+                            cwd: final.sourceCheckoutPath,
+                            signal: operationSignal,
+                            timeout: 10_000,
+                          },
+                        ),
+                      ]);
+                      if (
+                        source.code !== 0 ||
+                        source.killed ||
+                        String(source.stdout ?? "").trim() !==
+                          integrated.sourceHead ||
+                        target.code !== 0 ||
+                        target.killed ||
+                        targetBranch.code !== 0 ||
+                        targetBranch.killed ||
+                        targetBranch.stderr?.trim() ||
+                        String(targetBranch.stdout ?? "").trim() !==
+                          integrated.targetBranch
+                      )
+                        throw new Error(
+                          "Integrated source or target changed before removal; worktree preserved",
+                        );
+                    }
+                    return {
+                      result: await host.runHerdr(
+                        host.pi,
+                        ctx,
+                        ["worktree", "remove", "--workspace", workspaceId],
+                        { signal: operationSignal, timeout: 180_000 },
+                      ),
+                    };
+                  } catch (error) {
+                    return {
+                      error:
+                        error instanceof Error ? error.message : String(error),
+                      commandInterrupted:
+                        error instanceof OperationError &&
+                        error.detail.details?.killed === true,
+                      reopened,
+                    };
+                  }
+                },
+                operationSignal,
+              )
+              .catch((error) => {
+                if (!leadStopped && !reopened) throw error;
+                throw new Error(
+                  `${leadStopped ? "Assigned Lead stopped; " : ""}${reopened ? "Herdr workspace reopened; " : ""}worktree removal did not complete: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              }),
+        );
         let assignmentRetired = false;
         let retirementError: string | undefined;
         const checkoutState = gitPathStatus(candidate.checkoutPath);
@@ -2340,270 +2417,289 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const integration = await host.withProjectWorkLock(
       `${candidate.manager.repoKey}\0${branch}`,
       () =>
-        host.withProjectAssignmentLock(
-          candidate.manager.repoKey,
-          branch,
-          async () => {
-            const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
-            const lease = host.acquireProcessLock(lockPath, {
-              name: "repository integration lock",
-            });
-            try {
-              const current = await inspectRemovalTarget(
-                branch,
-                ctx,
-                operationSignal,
-              );
-              if (
-                current.assignment.id !== candidate.assignment.id ||
-                current.checkoutPath !== candidate.checkoutPath ||
-                current.checkedOutBranch !== sourceBranch ||
-                current.sourceCheckoutPath !== targetPath
-              )
-                throw new Error(
-                  "Merge target changed; no integration performed",
-                );
-              if (!permission().enabled)
-                throw new Error("Manager local merge permission was revoked");
-              await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
-              await clean(targetPath);
-              await clean(current.checkoutPath);
-              const preStopTarget = await output(targetPath, [
-                "rev-parse",
-                "HEAD",
-              ]);
-              if (
-                !(await ancestry(expectedHead, preStopTarget)) &&
-                !(await ancestry(preStopTarget, expectedHead))
-              )
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
-                    },
-                  ],
-                  details: {
-                    ok: false,
-                    action: "merge",
-                    branch,
-                    target_branch: targetBranch,
-                    source_head: expectedHead,
-                    target_head: preStopTarget,
-                    status: "needs_update",
-                    integrated: false,
-                    checkout_removed: false,
-                    assignment_retired: false,
-                  },
-                };
-              if (current.liveLead)
-                await stopExecution(
-                  current.assignment.id,
-                  current.liveLead,
-                  ctx,
-                  operationSignal,
-                );
-              const targetOccupantsNow = await host.herdrSessionSnapshot(
-                host.pi,
-                ctx,
-                operationSignal,
-              );
-              const currentTargetOccupants = targetOccupantsNow.agents.filter(
-                (agent) =>
-                  agent.workspace_id === current.manager.workspaceId &&
-                  host.isPiAgent(agent),
-              );
-              if (
-                currentTargetOccupants.filter(isCurrentManager).length !== 1 ||
-                currentTargetOccupants.some((agent) => !isCurrentManager(agent))
-              )
-                throw new Error(
-                  "An active execution occupies the primary target; no integration was attempted",
-                );
-              await clean(targetPath);
-              await clean(current.checkoutPath);
-              const currentSource = await output(current.checkoutPath, [
-                "rev-parse",
-                "HEAD",
-              ]);
-              const currentSourceBranch = await output(current.checkoutPath, [
-                "symbolic-ref",
-                "--short",
-                "HEAD",
-              ]).catch(() => "");
-              const currentTargetBranch = await output(targetPath, [
-                "symbolic-ref",
-                "--short",
-                "HEAD",
-              ]);
-              const currentTarget = await output(targetPath, [
-                "rev-parse",
-                "HEAD",
-              ]);
-              if (
-                currentSource !== expectedHead ||
-                currentSourceBranch !== sourceBranch ||
-                (await output(current.checkoutPath, [
-                  "show-ref",
-                  "--verify",
-                  "--hash",
-                  `refs/heads/${sourceBranch}`,
-                ])) !== expectedHead
-              )
-                throw new Error(
-                  "Accepted source branch or SHA changed before integration",
-                );
-              if (currentTargetBranch !== targetBranch)
-                throw new Error(
-                  "Primary target branch changed before integration",
-                );
-              if (await ancestry(expectedHead, currentTarget))
-                return {
-                  targetHead: currentTarget,
-                  targetBranch,
-                  alreadyIntegrated: true as const,
-                };
-              if (!(await ancestry(currentTarget, expectedHead)))
-                return {
-                  content: [
-                    {
-                      type: "text" as const,
-                      text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
-                    },
-                  ],
-                  details: {
-                    ok: false,
-                    action: "merge",
-                    branch,
-                    target_branch: targetBranch,
-                    source_head: expectedHead,
-                    target_head: currentTarget,
-                    status: "needs_update",
-                    integrated: false,
-                    checkout_removed: false,
-                    assignment_retired: false,
-                  },
-                };
-              if (!permission().enabled)
-                throw new Error("Manager local merge permission was revoked");
-              let mergeError: string | undefined;
-              const merged = await runGit(targetPath, [
-                "merge",
-                "--ff-only",
-                "--no-autostash",
-                "--no-overwrite-ignore",
-                expectedHead,
-              ]).catch((error) => {
-                mergeError =
-                  error instanceof Error ? error.message : String(error);
-                return {
-                  code: -1,
-                  killed: true,
-                  stdout: "",
-                  stderr: mergeError,
-                };
-              });
-              const interrupted =
-                merged.killed === true || operationSignal?.aborted === true;
-              const observed = await host.pi.exec(
-                "git",
-                ["rev-parse", "HEAD"],
-                { cwd: targetPath, timeout: 10_000 },
-              );
-              const index = await host.pi.exec(
-                "git",
-                ["ls-files", "--unmerged"],
-                { cwd: targetPath, timeout: 10_000 },
-              );
-              const status = await host.pi.exec(
-                "git",
-                ["status", "--porcelain=v1", "--untracked-files=all"],
-                { cwd: targetPath, timeout: 10_000 },
-              );
-              const containsAccepted = await host.pi.exec(
-                "git",
-                ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
-                { cwd: targetPath, timeout: 10_000 },
-              );
-              const observedBranch = await host.pi.exec(
-                "git",
-                ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                { cwd: targetPath, timeout: 10_000 },
-              );
-              const operationStates: string[] = [];
-              let stateUnknown = false;
-              for (const state of [
-                "MERGE_HEAD",
-                "REBASE_HEAD",
-                "CHERRY_PICK_HEAD",
-                "rebase-merge",
-                "rebase-apply",
-              ]) {
-                const path = await host.pi.exec(
-                  "git",
-                  ["rev-parse", "--git-path", state],
-                  { cwd: targetPath, timeout: 10_000 },
-                );
-                if (path.code !== 0 || path.killed) {
-                  stateUnknown = true;
-                  continue;
-                }
-                try {
-                  statSync(
-                    resolve(targetPath, String(path.stdout ?? "").trim()),
-                  );
-                  operationStates.push(state);
-                } catch (error) {
-                  if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                    stateUnknown = true;
-                }
-              }
-              const observedHead =
-                observed.code === 0 && !observed.killed
-                  ? String(observed.stdout ?? "").trim()
-                  : "";
-              const integrationVerified =
-                !!observedHead &&
-                containsAccepted.code === 0 &&
-                !containsAccepted.killed &&
-                observedBranch.code === 0 &&
-                !observedBranch.killed &&
-                !observedBranch.stderr?.trim() &&
-                String(observedBranch.stdout ?? "").trim() === targetBranch;
-              const gitStateClean =
-                status.code === 0 &&
-                !status.killed &&
-                !status.stderr?.trim() &&
-                !status.stdout?.trim() &&
-                index.code === 0 &&
-                !index.killed &&
-                !index.stdout?.trim() &&
-                !stateUnknown &&
-                operationStates.length === 0;
-              if (
-                !integrationVerified ||
-                !gitStateClean ||
-                (merged.code !== 0 && !interrupted)
-              )
-                return {
-                  blocked: true as const,
-                  targetHead: observedHead || currentTarget,
-                  targetBranch,
-                  integrated: integrationVerified,
-                  reason: !integrationVerified
-                    ? "accepted_revision_not_verified_after_merge"
-                    : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
-                };
-              return {
-                targetHead: observedHead,
-                targetBranch,
-                alreadyIntegrated: false as const,
-              };
-            } finally {
-              lease.release();
-            }
-          },
+        withCandidateLeadQuiesced(
+          candidate,
+          ctx,
           operationSignal,
+          (heldLocks) =>
+            host.withProjectAssignmentLock(
+              candidate.manager.repoKey,
+              branch,
+              async () => {
+                const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
+                const lease = host.acquireProcessLock(lockPath, {
+                  name: "repository integration lock",
+                });
+                try {
+                  const current = await inspectRemovalTarget(
+                    branch,
+                    ctx,
+                    operationSignal,
+                  );
+                  if (
+                    current.assignment.id !== candidate.assignment.id ||
+                    current.checkoutPath !== candidate.checkoutPath ||
+                    current.checkedOutBranch !== sourceBranch ||
+                    current.sourceCheckoutPath !== targetPath
+                  )
+                    throw new Error(
+                      "Merge target changed; no integration performed",
+                    );
+                  assertCandidateLeadUnchanged(candidate, current);
+                  if (!permission().enabled)
+                    throw new Error(
+                      "Manager local merge permission was revoked",
+                    );
+                  await assertNoUnrelatedPiExecution(
+                    current,
+                    ctx,
+                    operationSignal,
+                  );
+                  await clean(targetPath);
+                  await clean(current.checkoutPath);
+                  const preStopTarget = await output(targetPath, [
+                    "rev-parse",
+                    "HEAD",
+                  ]);
+                  if (
+                    !(await ancestry(expectedHead, preStopTarget)) &&
+                    !(await ancestry(preStopTarget, expectedHead))
+                  )
+                    return {
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                        },
+                      ],
+                      details: {
+                        ok: false,
+                        action: "merge",
+                        branch,
+                        target_branch: targetBranch,
+                        source_head: expectedHead,
+                        target_head: preStopTarget,
+                        status: "needs_update",
+                        integrated: false,
+                        checkout_removed: false,
+                        assignment_retired: false,
+                      },
+                    };
+                  if (current.liveLead)
+                    await stopExecution(
+                      current.assignment.id,
+                      current.liveLead,
+                      ctx,
+                      operationSignal,
+                      heldLocks,
+                    );
+                  const targetOccupantsNow = await host.herdrSessionSnapshot(
+                    host.pi,
+                    ctx,
+                    operationSignal,
+                  );
+                  const currentTargetOccupants =
+                    targetOccupantsNow.agents.filter(
+                      (agent) =>
+                        agent.workspace_id === current.manager.workspaceId &&
+                        host.isPiAgent(agent),
+                    );
+                  if (
+                    currentTargetOccupants.filter(isCurrentManager).length !==
+                      1 ||
+                    currentTargetOccupants.some(
+                      (agent) => !isCurrentManager(agent),
+                    )
+                  )
+                    throw new Error(
+                      "An active execution occupies the primary target; no integration was attempted",
+                    );
+                  await clean(targetPath);
+                  await clean(current.checkoutPath);
+                  const currentSource = await output(current.checkoutPath, [
+                    "rev-parse",
+                    "HEAD",
+                  ]);
+                  const currentSourceBranch = await output(
+                    current.checkoutPath,
+                    ["symbolic-ref", "--short", "HEAD"],
+                  ).catch(() => "");
+                  const currentTargetBranch = await output(targetPath, [
+                    "symbolic-ref",
+                    "--short",
+                    "HEAD",
+                  ]);
+                  const currentTarget = await output(targetPath, [
+                    "rev-parse",
+                    "HEAD",
+                  ]);
+                  if (
+                    currentSource !== expectedHead ||
+                    currentSourceBranch !== sourceBranch ||
+                    (await output(current.checkoutPath, [
+                      "show-ref",
+                      "--verify",
+                      "--hash",
+                      `refs/heads/${sourceBranch}`,
+                    ])) !== expectedHead
+                  )
+                    throw new Error(
+                      "Accepted source branch or SHA changed before integration",
+                    );
+                  if (currentTargetBranch !== targetBranch)
+                    throw new Error(
+                      "Primary target branch changed before integration",
+                    );
+                  if (await ancestry(expectedHead, currentTarget))
+                    return {
+                      targetHead: currentTarget,
+                      targetBranch,
+                      alreadyIntegrated: true as const,
+                    };
+                  if (!(await ancestry(currentTarget, expectedHead)))
+                    return {
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
+                        },
+                      ],
+                      details: {
+                        ok: false,
+                        action: "merge",
+                        branch,
+                        target_branch: targetBranch,
+                        source_head: expectedHead,
+                        target_head: currentTarget,
+                        status: "needs_update",
+                        integrated: false,
+                        checkout_removed: false,
+                        assignment_retired: false,
+                      },
+                    };
+                  if (!permission().enabled)
+                    throw new Error(
+                      "Manager local merge permission was revoked",
+                    );
+                  let mergeError: string | undefined;
+                  const merged = await runGit(targetPath, [
+                    "merge",
+                    "--ff-only",
+                    "--no-autostash",
+                    "--no-overwrite-ignore",
+                    expectedHead,
+                  ]).catch((error) => {
+                    mergeError =
+                      error instanceof Error ? error.message : String(error);
+                    return {
+                      code: -1,
+                      killed: true,
+                      stdout: "",
+                      stderr: mergeError,
+                    };
+                  });
+                  const interrupted =
+                    merged.killed === true || operationSignal?.aborted === true;
+                  const observed = await host.pi.exec(
+                    "git",
+                    ["rev-parse", "HEAD"],
+                    { cwd: targetPath, timeout: 10_000 },
+                  );
+                  const index = await host.pi.exec(
+                    "git",
+                    ["ls-files", "--unmerged"],
+                    { cwd: targetPath, timeout: 10_000 },
+                  );
+                  const status = await host.pi.exec(
+                    "git",
+                    ["status", "--porcelain=v1", "--untracked-files=all"],
+                    { cwd: targetPath, timeout: 10_000 },
+                  );
+                  const containsAccepted = await host.pi.exec(
+                    "git",
+                    ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
+                    { cwd: targetPath, timeout: 10_000 },
+                  );
+                  const observedBranch = await host.pi.exec(
+                    "git",
+                    ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                    { cwd: targetPath, timeout: 10_000 },
+                  );
+                  const operationStates: string[] = [];
+                  let stateUnknown = false;
+                  for (const state of [
+                    "MERGE_HEAD",
+                    "REBASE_HEAD",
+                    "CHERRY_PICK_HEAD",
+                    "rebase-merge",
+                    "rebase-apply",
+                  ]) {
+                    const path = await host.pi.exec(
+                      "git",
+                      ["rev-parse", "--git-path", state],
+                      { cwd: targetPath, timeout: 10_000 },
+                    );
+                    if (path.code !== 0 || path.killed) {
+                      stateUnknown = true;
+                      continue;
+                    }
+                    try {
+                      statSync(
+                        resolve(targetPath, String(path.stdout ?? "").trim()),
+                      );
+                      operationStates.push(state);
+                    } catch (error) {
+                      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                        stateUnknown = true;
+                    }
+                  }
+                  const observedHead =
+                    observed.code === 0 && !observed.killed
+                      ? String(observed.stdout ?? "").trim()
+                      : "";
+                  const integrationVerified =
+                    !!observedHead &&
+                    containsAccepted.code === 0 &&
+                    !containsAccepted.killed &&
+                    observedBranch.code === 0 &&
+                    !observedBranch.killed &&
+                    !observedBranch.stderr?.trim() &&
+                    String(observedBranch.stdout ?? "").trim() === targetBranch;
+                  const gitStateClean =
+                    status.code === 0 &&
+                    !status.killed &&
+                    !status.stderr?.trim() &&
+                    !status.stdout?.trim() &&
+                    index.code === 0 &&
+                    !index.killed &&
+                    !index.stdout?.trim() &&
+                    !stateUnknown &&
+                    operationStates.length === 0;
+                  if (
+                    !integrationVerified ||
+                    !gitStateClean ||
+                    (merged.code !== 0 && !interrupted)
+                  )
+                    return {
+                      blocked: true as const,
+                      targetHead: observedHead || currentTarget,
+                      targetBranch,
+                      integrated: integrationVerified,
+                      reason: !integrationVerified
+                        ? "accepted_revision_not_verified_after_merge"
+                        : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
+                    };
+                  return {
+                    targetHead: observedHead,
+                    targetBranch,
+                    alreadyIntegrated: false as const,
+                  };
+                } finally {
+                  lease.release();
+                }
+              },
+              operationSignal,
+            ),
         ),
     );
     if ("blocked" in integration)

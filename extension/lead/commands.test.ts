@@ -488,6 +488,19 @@ test("lead stop-all does not report an empty inventory while delegation is locke
     controller: {
       workspaceId: () => WORKSPACE,
       sessionSignal: () => new AbortController().signal,
+      withQuiescedTree: async (
+        _ctx: unknown,
+        owner: string,
+        workspace: string,
+        operation: (held: ReadonlySet<string>) => Promise<unknown>,
+      ) => {
+        const release = claimDelegationLock(workspace, owner);
+        try {
+          return await operation(new Set([`${workspace}\0${owner}`]));
+        } finally {
+          release();
+        }
+      },
     },
     presentStopSummary: (summary: string) => summaries.push(summary),
   } as any);
@@ -512,6 +525,19 @@ test("lead stop-all rejects an empty inventory with unresolved mailbox state", a
     controller: {
       workspaceId: () => WORKSPACE,
       sessionSignal: () => new AbortController().signal,
+      withQuiescedTree: async (
+        _ctx: unknown,
+        owner: string,
+        workspace: string,
+        operation: (held: ReadonlySet<string>) => Promise<unknown>,
+      ) => {
+        const release = claimDelegationLock(workspace, owner);
+        try {
+          return await operation(new Set([`${workspace}\0${owner}`]));
+        } finally {
+          release();
+        }
+      },
       agentSnapshotView: async () => ({
         stateIssues: [{ diagnostic: "unreadable mailbox" }],
         visible: [],
@@ -544,6 +570,19 @@ test("Stop all finishes only the Lead herd run", async () => {
       controller: {
         workspaceId: () => WORKSPACE,
         sessionSignal: () => new AbortController().signal,
+        withQuiescedTree: async (
+          _ctx: unknown,
+          owner: string,
+          workspace: string,
+          operation: (held: ReadonlySet<string>) => Promise<unknown>,
+        ) => {
+          const release = claimDelegationLock(workspace, owner);
+          try {
+            return await operation(new Set([`${workspace}\0${owner}`]));
+          } finally {
+            release();
+          }
+        },
         stopOwnedAgentsForSession: async () => ({
           summary: "Stopped",
           closures: [],

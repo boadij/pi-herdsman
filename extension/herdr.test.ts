@@ -11,7 +11,7 @@ import fs, {
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
-import test from "node:test";
+import nodeTest from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
@@ -56,6 +56,29 @@ import {
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+// Settlement-negative fixtures must exercise the 30-second deadline without
+// spending 30 seconds in wall-clock polling. Advance only this test's clock.
+let advanceHerdrTestClock: ((milliseconds: number) => void) | undefined;
+const test: typeof nodeTest = (name: string, ...args: any[]) => {
+  const fn = args.at(-1);
+  const options = args.length > 1 ? args[0] : undefined;
+  return nodeTest(name, ...(options ? [options] : []), async (context) => {
+    if (!/^(preserving stop|.*rollback)/i.test(name)) return fn(context);
+    const originalNow = Date.now;
+    let now = originalNow();
+    Date.now = () => (now += 500);
+    advanceHerdrTestClock = (milliseconds) => {
+      now += milliseconds;
+    };
+    try {
+      return await fn(context);
+    } finally {
+      advanceHerdrTestClock = undefined;
+      Date.now = originalNow;
+    }
+  });
+};
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(
@@ -3353,13 +3376,20 @@ test("preserving stop settles a shell shared with prompt hook children", async (
     stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
-  const stopWith = (markerObservation: unknown, agentStillListed = false) => {
+  const stopWith = (
+    markerObservation: unknown,
+    agentStillListed = false,
+    delaySettlement = false,
+  ) => {
     const calls: string[][] = [];
+    const timeouts: number[] = [];
+    let simulatedDelay = 0;
     let stopped = false;
     let markerAsked = false;
     const pi = {
-      exec: async (_command: string, args: string[]) => {
+      exec: async (_command: string, args: string[], options: any) => {
         calls.push(args);
+        if (options?.timeout !== undefined) timeouts.push(options.timeout);
         const key = args.slice(0, 2).join(" ");
         if (key === "agent get") return response({ agent: pane });
         if (key === "pane get") return response({ pane });
@@ -3375,10 +3405,15 @@ test("preserving stop settles a shell shared with prompt hook children", async (
                 ? running
                 : preserved,
           });
-        if (key === "agent list")
+        if (key === "agent list") {
+          if (stopped && delaySettlement) {
+            simulatedDelay = 2_100;
+            advanceHerdrTestClock?.(simulatedDelay);
+          }
           return response({
             agents: stopped && !agentStillListed ? [] : [pane],
           });
+        }
         if (key === "agent send-keys") {
           stopped = true;
           return { code: 0, stdout: "", stderr: "" };
@@ -3400,11 +3435,23 @@ test("preserving stop settles a shell shared with prompt hook children", async (
         cwd: "/tmp",
         session: { id: "session-1" },
       });
-    return { calls, stop };
+    return {
+      calls,
+      timeouts,
+      get simulatedDelay() {
+        return simulatedDelay;
+      },
+      stop,
+    };
   };
   try {
     const preservedRun = stopWith(undefined);
     await preservedRun.stop();
+    assert.ok(
+      preservedRun.timeouts.some((timeout) => timeout === 30_000),
+      "the first shutdown settlement request receives the shared 30-second budget",
+    );
+    assert.ok(preservedRun.timeouts.every((timeout) => timeout > 0));
     assert.deepEqual(
       preservedRun.calls.filter(
         (args) => args[0] === "agent" && args[1] === "send-keys",
@@ -3418,11 +3465,19 @@ test("preserving stop settles a shell shared with prompt hook children", async (
       "the settled shell still proves readiness",
     );
 
+    const slowRun = stopWith(undefined, false, true);
+    await slowRun.stop();
+    assert.ok(slowRun.simulatedDelay > 2_000);
+    assert.ok(
+      slowRun.timeouts.some((timeout) => timeout < 28_000),
+      "settlement succeeds after more than two seconds of simulated time",
+    );
+
     // A prompt hook in the shell's group must not hide a takeover: the pane
     // ownership proof still fails closed when the agent keeps the terminal.
     await assert.rejects(
       stopWith(running).stop(),
-      /did not become an available shell/,
+      /(did not become an available shell|deadline exhausted)/,
     );
 
     // A tracked agent that still occupies the pane keeps settlement blocked even
@@ -3430,7 +3485,7 @@ test("preserving stop settles a shell shared with prompt hook children", async (
     // agent-list guard, not the relaxed predicate, is what rules the agent out.
     await assert.rejects(
       stopWith(undefined, true).stop(),
-      /did not settle back to its original shell/,
+      /(did not settle back to its original shell|deadline exhausted)/,
     );
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
@@ -3510,7 +3565,10 @@ test("preserving stop does not interrupt an already-restored shell", async () =>
       );
       if (agentDisappears) await stop;
       else
-        await assert.rejects(stop, /did not settle back to its original shell/);
+        await assert.rejects(
+          stop,
+          /(did not settle back to its original shell|deadline exhausted)/,
+        );
       assert.equal(
         calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
         false,
@@ -3718,7 +3776,7 @@ test("preserving stop rejects a surviving original agent process", async () => {
     const settlement = stopWith(surviving);
     await assert.rejects(
       settlement.stop(),
-      /did not settle back to its original shell/,
+      /(did not settle back to its original shell|deadline exhausted)/,
     );
     assert.deepEqual(
       settlement.calls.filter(
@@ -3747,7 +3805,7 @@ test("preserving stop rejects a surviving original agent process", async () => {
     const postMarker = stopWith(settled, surviving);
     await assert.rejects(
       postMarker.stop(),
-      /did not become an available shell/,
+      /(did not become an available shell|deadline exhausted)/,
     );
 
     // An unrelated prompt child, even one running the same executable under a
@@ -5515,7 +5573,7 @@ test("managed rollback does not interrupt an already-restored shell", async () =
       else
         await assert.rejects(
           rollback,
-          /did not settle back to its original shell/,
+          /(did not settle back to its original shell|deadline exhausted)/,
         );
       assert.equal(
         calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),

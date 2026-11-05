@@ -501,6 +501,17 @@ test("parent delegates two same-definition children with exact ownership", async
           removeAgentBootstrap(mailbox);
         }
       }
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "send-keys" &&
+        args[3] === "ctrl+c"
+      ) {
+        const state = [...lifecycle.live.values()].find(
+          ({ paneId }) => paneId === args[2],
+        );
+        if (state) lifecycle.live.delete(state.agentLabel);
+      }
       const result = lifecycle.exec(command, args);
       if (starting) {
         assert.equal(
@@ -2330,6 +2341,17 @@ test("nested delegation rejects parent evidence changes during child startup", a
           text: "Replacement project",
         });
       }
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "send-keys" &&
+        args[3] === "ctrl+c"
+      ) {
+        const state = [...lifecycle.live.values()].find(
+          ({ paneId }) => paneId === args[2],
+        );
+        if (state) lifecycle.live.delete(state.agentLabel);
+      }
       const result = lifecycle.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         const mailbox = agentMailboxPath(
@@ -2495,7 +2517,117 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
   }
 });
 
-test("zero-child lead close is blocked by the parent delegation lock", async () => {
+test("managed Agent close quiesces and closes the target subtree child-first", async () => {
+  setLeadEnvironment();
+  setAgentEnvironment("close-subtree-parent", ["subtree-child"]);
+  const parent = managedState("close-subtree-parent");
+  const child = {
+    ...managedState(
+      "close-subtree-child",
+      undefined,
+      recoveryIdentity("close-subtree-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: "/tmp/close-subtree-child.jsonl",
+  };
+  const grandchild = {
+    ...managedState(
+      "close-subtree-grandchild",
+      undefined,
+      recoveryIdentity("close-subtree-grandchild"),
+    ),
+    ownerSessionId: child.piSessionId,
+    piSessionId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    piSessionFile: "/tmp/close-subtree-grandchild.jsonl",
+  };
+  const states = [parent, child, grandchild];
+  const files = [
+    [
+      "subtree-parent.md",
+      '---\nname: subtree-parent\nagents: ["subtree-child"]\n---\nparent\n',
+    ],
+    [
+      "subtree-child.md",
+      '---\nname: subtree-child\nagents: ["subtree-grandchild"]\n---\nchild\n',
+    ],
+    [
+      "subtree-grandchild.md",
+      "---\nname: subtree-grandchild\n---\ngrandchild\n",
+    ],
+  ];
+  for (const state of states) {
+    const mailbox = agentMailboxPath(WORKSPACE, state.agentLabel);
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
+  }
+  for (const [name, content] of files)
+    realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
+  const lifecycle = delegatedLifecycleExecutor(parent, [child, grandchild]);
+  process.env.PI_HERDSMAN_AGENT_DEFINITION = "subtree-parent";
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "subtree-parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "close-subtree-parent",
+      },
+    },
+  ]);
+  let releaseChildLock: (() => void) | undefined = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, child.piSessionId),
+    { name: "test delegation lifecycle" },
+  );
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const closing = registeredAgentTool(pi, "close").execute(
+      "close-subtree-child",
+      { agent: child.agentLabel },
+      undefined,
+      undefined,
+      context,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const competingDelegation = await registeredAgentTool(
+      pi,
+      "delegate",
+    ).execute(
+      "during-close",
+      { definition: "subtree-child", task: "must not start during close" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      competingDelegation.details.error.category,
+      "agent_busy",
+      JSON.stringify(competingDelegation.details),
+    );
+    releaseChildLock();
+    releaseChildLock = undefined;
+    const closed = await closing;
+    assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+    assert.deepEqual(lifecycle.closeOrder, [
+      grandchild.agentLabel,
+      child.agentLabel,
+    ]);
+    assert.ok(readAgentState(agentMailboxPath(WORKSPACE, parent.agentLabel)));
+  } finally {
+    releaseChildLock?.();
+    for (const handler of pi.events.get("session_shutdown") ?? []) handler();
+    for (const state of states)
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    for (const [name] of files)
+      realFs.rmSync(join(PI_AGENTS_DIR, name), { force: true });
+  }
+});
+
+test("zero-child close waits for the parent delegation lock", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -2518,27 +2650,23 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
   );
 
   try {
-    const closed = await registeredAgentTool(pi, "close").execute(
+    const closing = registeredAgentTool(pi, "close").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
     );
-    assert.equal(
-      closed.details.error.category,
-      "agent_busy",
-      JSON.stringify(closed.details),
-    );
-    assert.match(closed.details.error.message, /Delegation lifecycle/);
-    assert.match(
-      closed.details.error.nextAction,
-      /current delegation lifecycle/,
-    );
-    assert.deepEqual(lifecycle.closeOrder, []);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(lifecycle.closeOrder.length, 0);
+    releaseLock();
+    releaseLock = undefined;
+    const closed = await closing;
+    assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+    assert.deepEqual(lifecycle.closeOrder, [parent.agentLabel]);
     assert.equal(
       pi.calls.some((args) => isPaneClose(args)),
-      false,
+      true,
     );
     assert.equal(
       pi.entries.some(
@@ -2546,9 +2674,7 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
       ),
       false,
     );
-    assert.ok(readAgentState(mailbox));
-    releaseLock();
-    releaseLock = undefined;
+    assert.equal(readAgentState(mailbox), undefined);
     const listed = await registeredAgentTool(pi, "list").execute(
       "list-after-busy-close",
       {},
@@ -8267,8 +8393,20 @@ test("managed Lead cancellation during final authority wait publishes and accept
     false,
     () => accepted++,
   );
+  let rollbackStopped = false;
   const pi = fakePi({
     exec: async (command: string, args: string[]) => {
+      if (
+        rollbackStopped &&
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "list"
+      )
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+          stderr: "",
+          code: 0,
+        };
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
           stdout: JSON.stringify({
@@ -8353,6 +8491,7 @@ test("managed Lead cancellation during final authority wait publishes and accept
       false,
       "final publication must not bypass the held global authority lock",
     );
+    rollbackStopped = true;
     abort.abort();
     const settled = await Promise.race([
       pending.then(
@@ -14568,7 +14707,43 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
     true,
   );
   realFs.rmSync(startup.mailbox, { recursive: true, force: true });
-  const pi = fakePi({ exec: startup.exec });
+  let started = false;
+  let stopped = false;
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        started = true;
+      return result;
+    },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries);
   await pi.events.get("session_start")![0](undefined, context);
@@ -14929,10 +15104,40 @@ test("managed startup reports the validated child initialization stage", async (
   setLeadEnvironment();
   const label = "failed-child-stage";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  let started = false;
+  let stopped = false;
   const pi = fakePi({
     exec: async (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       const result = await startup.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        started = true;
         const outcome = readAgentStartupOutcome(startup.mailbox);
         assert.ok(outcome);
         writeAgentStartupOutcome(startup.mailbox, {
@@ -14980,9 +15185,40 @@ async function exerciseStartupLock(t: TestContext, failObservation = false) {
   const abort = new AbortController();
   let releaseChildLock: (() => void) | undefined;
   let agentGetCount = 0;
+  let started = false;
+  let stopped = false;
   const pi = fakePi({
     exec: async (command, args, options) => {
+      if (command === "herdr" && isPreservePaneStop(args)) stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: "startup-pane",
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 999 : 123,
+                foreground_processes:
+                  started && !stopped
+                    ? [
+                        { pid: 123, argv0: "/bin/zsh" },
+                        { pid: 999, argv0: "/usr/local/bin/pi" },
+                      ]
+                    : [{ pid: 123, argv0: "/bin/zsh" }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        started = true;
       if (
         command === "herdr" &&
         args[0] === "agent" &&
