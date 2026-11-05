@@ -3373,7 +3373,9 @@ function expandedResultLines(
         ? "work assigned"
         : action === "resume"
           ? details.already_running === true
-            ? "work already running"
+            ? details.message_queued === true
+              ? "work already running · instruction queued"
+              : "work already running"
             : "work resumed"
           : undefined
       : undefined;
@@ -3783,7 +3785,8 @@ export function renderCoordinationResult(
   if (
     !expanded &&
     tool === "staff" &&
-    ["delegate", "resume", "stop"].includes(action)
+    ["delegate", "resume", "stop"].includes(action) &&
+    (action !== "resume" || details.ok === true)
   ) {
     const branch = value(details.branch) || value(args.branch) || "project";
     const outcome =
@@ -3791,7 +3794,9 @@ export function renderCoordinationResult(
         ? `work assigned · ${branch}`
         : action === "resume"
           ? details.already_running === true
-            ? `work already running · ${branch}`
+            ? details.message_queued === true
+              ? `work already running · instruction queued · ${branch}`
+              : `work already running · ${branch}`
             : `work resumed · ${branch}`
           : `Lead stopped · ${branch} preserved`;
     return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);

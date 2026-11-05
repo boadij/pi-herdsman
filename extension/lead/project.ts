@@ -3178,7 +3178,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         content: [
           {
             type: "text" as const,
-            text: `Work on ${branch} is already running in Lead ${id}.`,
+            text: `Work on ${branch} is already running in Lead ${id}. The resume instruction was queued for delivery; no relaunch occurred. Do not resend the same instruction with message_staff. Queueing does not confirm delivery.`,
           },
         ],
         details: {

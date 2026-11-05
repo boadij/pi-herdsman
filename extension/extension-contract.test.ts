@@ -2270,7 +2270,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
     [
       tool,
-      "Send nonterminal coordination or review feedback to an exact direct report; active work is steered cooperatively.",
+      "For an active assigned Lead, use its assignment branch, even when its current execution is idle or done; active work is steered cooperatively.",
     ],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
