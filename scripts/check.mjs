@@ -115,24 +115,30 @@ $rows = [System.Collections.Generic.List[object]]::new()
 $truncated = $false
 $repoRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
 function Resolve-TestFile($command) {
+  if ($null -eq $command) { return @{ file = $null; category = 'command-line-unavailable' } }
   $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $testArguments = 0
+  $unresolved = $false
   foreach ($match in [regex]::Matches($command, '(?:^|\\s)(?:"([^"\\r\\n]+)"|([^\\s"]+))(?=\\s|$)')) {
     $argument = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
     if ($argument -notmatch '\\.test\\.(?:[cm]?[jt]s)$') { continue }
+    $testArguments++
     try {
       $candidate = if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $repoRoot $argument }
       $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
-      if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+      if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { $unresolved = $true; continue }
       $name = $resolved.Substring($repoRoot.Length).Replace('\', '/')
       if ($name -match '^(?!\\.\\.?/)[a-z0-9_./-]+\\.test\\.(?:[cm]?[jt]s)$' -and -not (Get-Item -LiteralPath $resolved).PSIsContainer) {
         [void]$files.Add($name)
       }
     } catch {
-      # Unresolvable command-line arguments are not test-file evidence.
+      $unresolved = $true
     }
   }
-  if ($files.Count -eq 1) { return @($files)[0] }
-  return $null
+  if ($files.Count -eq 1 -and -not $unresolved) { return @{ file = @($files)[0]; category = $null } }
+  if ($files.Count -gt 1) { return @{ file = $null; category = 'ambiguous-test-path' } }
+  if ($testArguments -gt 0) { return @{ file = $null; category = 'unresolved-or-outside-repo-test-path' } }
+  return @{ file = $null; category = 'unrecognized-arguments' }
 }
 while ($queue.Count -gt 0) {
   $parent = $queue.Dequeue()
@@ -143,8 +149,8 @@ while ($queue.Count -gt 0) {
     [void]$seen.Add([int]$process.ProcessId)
     $queue.Enqueue($process)
     $node = ($parent.ProcessId -eq $runnerPid -and $process.Name -ieq 'node.exe')
-    $file = if ($node -and $null -ne $process.CommandLine) { Resolve-TestFile ([string]$process.CommandLine) } else { $null }
-    $rows.Add([pscustomobject]@{ node = $node; file = $file })
+    $attribution = if ($node) { Resolve-TestFile $process.CommandLine } else { @{ file = $null; category = $null } }
+    $rows.Add([pscustomobject]@{ node = $node; file = $attribution.file; category = $attribution.category })
   }
 }
 
@@ -165,19 +171,37 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
       const lines = ["check: Windows timeout snapshot"];
       let unattributedNodeWorkers = 0;
       let otherDescendants = 0;
+      const categories = new Set([
+        "command-line-unavailable",
+        "unrecognized-arguments",
+        "unresolved-or-outside-repo-test-path",
+        "ambiguous-test-path",
+      ]);
+      const categoryCounts = new Map();
       for (const row of snapshot.rows) {
         if (
           typeof row.node !== "boolean" ||
-          (row.file !== null && typeof row.file !== "string")
+          (row.file !== null && typeof row.file !== "string") ||
+          (row.category !== null && !categories.has(row.category))
         )
           throw new Error();
         const file =
           row.node && row.file ? windowsTestFile(row.file) : undefined;
         if (file) lines.push(`check: candidate test worker file=${file}`);
-        else if (row.node) unattributedNodeWorkers++;
-        else otherDescendants++;
+        else if (row.node) {
+          unattributedNodeWorkers++;
+          if (row.category)
+            categoryCounts.set(
+              row.category,
+              (categoryCounts.get(row.category) ?? 0) + 1,
+            );
+        } else otherDescendants++;
       }
       lines.push(`check: unattributed node workers=${unattributedNodeWorkers}`);
+      for (const category of [...categories].sort())
+        lines.push(
+          `check: unattributed workers ${category}=${categoryCounts.get(category) ?? 0}`,
+        );
       lines.push(`check: other descendants=${otherDescendants}`);
       lines.push(`check: snapshot truncated=${snapshot.truncated}`);
       return lines.join("\n");

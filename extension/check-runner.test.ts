@@ -131,7 +131,13 @@ test("Windows snapshot attribution uses the repository root outside the checkout
         callback(
           null,
           JSON.stringify({
-            rows: [{ node: true, file: "extension/check-runner.test.ts" }],
+            rows: [
+              {
+                node: true,
+                file: "extension/check-runner.test.ts",
+                category: null,
+              },
+            ],
             truncated: false,
           }),
         );
@@ -149,8 +155,89 @@ test("Windows snapshot attribution uses the repository root outside the checkout
   );
   assert.equal(
     workerDiagnostic,
-    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
+    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: unattributed workers unresolved-or-outside-repo-test-path=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
   );
+});
+
+test("Windows worker snapshot reports only allowlisted unattributed categories", async () => {
+  const cases = [
+    ["command-line-unavailable", "command-line-unavailable"],
+    ["unrecognized-arguments", "unrecognized-arguments"],
+    [
+      "unresolved-or-outside-repo-test-path",
+      "unresolved-or-outside-repo-test-path",
+    ],
+    ["ambiguous-test-path", "ambiguous-test-path"],
+  ] as const;
+  for (const [category, expected] of cases) {
+    const { promise } = snapshotWindowsTestWorkers(
+      1,
+      new AbortController().signal,
+      (_command, _args, _options, callback) => {
+        const child = new EventEmitter() as ChildProcess;
+        Object.assign(child, { pid: 1 });
+        queueMicrotask(() => {
+          callback(
+            null,
+            JSON.stringify({
+              rows: [{ node: true, file: null, category }],
+              truncated: false,
+            }),
+          );
+          child.emit("close", 0, null);
+        });
+        return child;
+      },
+    );
+    const diagnostic = await promise;
+    assert.match(diagnostic, new RegExp(`unattributed workers ${expected}=1`));
+    assert.doesNotMatch(diagnostic, /private|[A-Za-z]:\\|node\.exe/i);
+  }
+});
+
+test("Windows worker snapshot rejects unknown categories without echoing raw fields", async () => {
+  const injectedCommand = "node.exe --private-secret=do-not-print";
+  const injectedPath = "C:\\private\\machine\\secret.test.ts";
+  const { promise } = snapshotWindowsTestWorkers(
+    1,
+    new AbortController().signal,
+    (_command, _args, _options, callback) => {
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, { pid: 1 });
+      queueMicrotask(() => {
+        callback(
+          null,
+          JSON.stringify({
+            rows: [
+              {
+                node: true,
+                file: null,
+                category: "unrecognized-private-category",
+                commandLine: injectedCommand,
+                args: [injectedCommand],
+                path: injectedPath,
+              },
+            ],
+            truncated: false,
+          }),
+        );
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+  );
+
+  const diagnostic = await promise;
+  assert.equal(
+    diagnostic,
+    "check: Windows timeout snapshot unavailable (invalid snapshot)",
+  );
+  for (const injectedValue of [
+    "unrecognized-private-category",
+    injectedCommand,
+    injectedPath,
+  ])
+    assert.equal(diagnostic.includes(injectedValue), false);
 });
 
 test(
