@@ -1261,6 +1261,8 @@ test("resume preserves queued manager message when controlled recovery fails", a
     assignment as any,
   );
   const events: any[] = [];
+  const topologyCalls: string[][] = [];
+  const unrelatedRepo = join(tmpdir(), `unrelated-${randomUUID()}`);
   let launches = 0;
   let alreadyRunning = false;
   const ctx = fakeContext() as any;
@@ -1302,9 +1304,16 @@ test("resume preserves queued manager message when controlled recovery fails", a
       worktrees: [],
     }),
     runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list")
+      if (args[0] === "worktree" && args[1] === "list") {
+        topologyCalls.push(args);
         return {
-          source: { repo_key: repoKey, source_checkout_path: repoKey },
+          source: {
+            repo_key:
+              args[2] === "--cwd" && args[3] === repoKey
+                ? repoKey
+                : unrelatedRepo,
+            source_checkout_path: repoKey,
+          },
           worktrees: [
             {
               path: checkout,
@@ -1314,6 +1323,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
             },
           ],
         };
+      }
       if (args[0] === "workspace" && args[1] === "get")
         return { workspace: { workspace_id: WORKSPACE } };
       if (args[0] === "worktree" && args[1] === "open")
@@ -1386,6 +1396,12 @@ test("resume preserves queued manager message when controlled recovery fails", a
   assert.deepEqual(
     events.map((event) => event.kind),
     ["manager_message"],
+  );
+  assert.ok(topologyCalls.length >= 2);
+  assert.ok(
+    topologyCalls.every(
+      (args) => args.length === 4 && args[2] === "--cwd" && args[3] === repoKey,
+    ),
   );
 });
 
