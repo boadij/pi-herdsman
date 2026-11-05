@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { execFile, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CHECK_TIMEOUT_MS,
   runTestRunner,
@@ -155,7 +155,7 @@ test("Windows snapshot attribution uses the repository root outside the checkout
   );
   assert.equal(
     workerDiagnostic,
-    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: unattributed workers unresolved-or-outside-repo-test-path=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
+    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers file-uri-argument=0\ncheck: unattributed workers in-repo-path-validation-failure=0\ncheck: unattributed workers resolve-path-failure=0\ncheck: unattributed workers resolved-outside-repo=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
   );
 });
 
@@ -163,10 +163,10 @@ test("Windows worker snapshot reports only allowlisted unattributed categories",
   const cases = [
     ["command-line-unavailable", "command-line-unavailable"],
     ["unrecognized-arguments", "unrecognized-arguments"],
-    [
-      "unresolved-or-outside-repo-test-path",
-      "unresolved-or-outside-repo-test-path",
-    ],
+    ["file-uri-argument", "file-uri-argument"],
+    ["resolve-path-failure", "resolve-path-failure"],
+    ["resolved-outside-repo", "resolved-outside-repo"],
+    ["in-repo-path-validation-failure", "in-repo-path-validation-failure"],
     ["ambiguous-test-path", "ambiguous-test-path"],
   ] as const;
   for (const [category, expected] of cases) {
@@ -194,6 +194,114 @@ test("Windows worker snapshot reports only allowlisted unattributed categories",
     assert.doesNotMatch(diagnostic, /private|[A-Za-z]:\\|node\.exe/i);
   }
 });
+
+test(
+  "Windows PowerShell classifier distinguishes sanitized worker path reasons",
+  { skip: process.platform !== "win32", timeout: 20_000 },
+  async (t) => {
+    const repositoryRoot = process.cwd();
+    const repositoryFixtureDir = await mkdtemp(
+      join(repositoryRoot, ".check-worker-reasons-"),
+    );
+    const outsideFixtureDir = await mkdtemp(
+      join(tmpdir(), "check-worker-reasons-"),
+    );
+    const invalidName = join(repositoryFixtureDir, "not allowed.test.ts");
+    const outsideFile = join(outsideFixtureDir, "outside.test.ts");
+    await writeFile(invalidName, "");
+    await writeFile(outsideFile, "");
+    t.after(async () => {
+      await Promise.all([
+        rm(repositoryFixtureDir, { recursive: true, force: true }),
+        rm(outsideFixtureDir, { recursive: true, force: true }),
+      ]);
+    });
+
+    const missingFile = join(repositoryFixtureDir, "missing.test.ts");
+    const cases = [
+      ["file-uri-argument", pathToFileURL(invalidName).href],
+      ["resolve-path-failure", missingFile],
+      ["resolved-outside-repo", outsideFile],
+      ["in-repo-path-validation-failure", invalidName],
+    ] as const;
+    const workers: Array<{
+      child: ChildProcess;
+      pid?: number;
+      closed: Promise<void>;
+    }> = [];
+    try {
+      for (const [, argument] of cases) {
+        const child = spawn(
+          process.execPath,
+          ["-e", "setInterval(() => {}, 1000)", "--", argument],
+          { stdio: "ignore", windowsHide: true },
+        );
+        const worker = {
+          child,
+          closed: new Promise<void>((resolvePromise) =>
+            child.once("close", () => resolvePromise()),
+          ),
+        };
+        workers.push(worker);
+        const pid = await new Promise<number>((resolvePromise, reject) => {
+          child.once("error", reject);
+          child.once("spawn", () => {
+            if (child.pid === undefined)
+              reject(new Error("worker PID unavailable"));
+            else resolvePromise(child.pid);
+          });
+        });
+        worker.pid = pid;
+      }
+
+      const { promise } = snapshotWindowsTestWorkers(
+        process.pid,
+        new AbortController().signal,
+      );
+      const diagnostic = await promise;
+      for (const [category] of cases)
+        assert.match(
+          diagnostic,
+          new RegExp(`unattributed workers ${category}=1`),
+        );
+      assert.doesNotMatch(diagnostic, /[A-Za-z]:\\|file:\/\/|node\.exe/i);
+    } finally {
+      let cleanupVerified = true;
+      for (const { child, pid, closed } of workers) {
+        if (pid === undefined) continue;
+        try {
+          if (child.exitCode === null && child.signalCode === null)
+            child.kill();
+          await new Promise<void>((resolvePromise, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("worker cleanup exceeded its bound")),
+              5_000,
+            );
+            closed.then(() => {
+              clearTimeout(timer);
+              resolvePromise();
+            });
+          });
+          let running = true;
+          try {
+            process.kill(pid, 0);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ESRCH")
+              running = false;
+          }
+          if (running) cleanupVerified = false;
+        } catch {
+          cleanupVerified = false;
+        }
+      }
+      assert.equal(
+        cleanupVerified,
+        true,
+        "test-owned workers exited after cleanup",
+      );
+    }
+  },
+);
 
 test("Windows worker snapshot rejects unknown categories without echoing raw fields", async () => {
   const injectedCommand = "node.exe --private-secret=do-not-print";

@@ -118,26 +118,30 @@ function Resolve-TestFile($command) {
   if ($null -eq $command) { return @{ file = $null; category = 'command-line-unavailable' } }
   $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   $testArguments = 0
-  $unresolved = $false
+  $failureCategory = $null
   foreach ($match in [regex]::Matches($command, '(?:^|\\s)(?:"([^"\\r\\n]+)"|([^\\s"]+))(?=\\s|$)')) {
     $argument = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    if ($argument -match '^file:.*\\.test\\.(?:[cm]?[jt]s)$') { $testArguments++; if ($null -eq $failureCategory) { $failureCategory = 'file-uri-argument' }; continue }
     if ($argument -notmatch '\\.test\\.(?:[cm]?[jt]s)$') { continue }
     $testArguments++
     try {
       $candidate = if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $repoRoot $argument }
       $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
-      if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { $unresolved = $true; continue }
+      if (-not $resolved.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { if ($null -eq $failureCategory) { $failureCategory = 'resolved-outside-repo' }; continue }
       $name = $resolved.Substring($repoRoot.Length).Replace('\', '/')
       if ($name -match '^(?!\\.\\.?/)[a-z0-9_./-]+\\.test\\.(?:[cm]?[jt]s)$' -and -not (Get-Item -LiteralPath $resolved).PSIsContainer) {
         [void]$files.Add($name)
-      }
+      } elseif ($null -eq $failureCategory) { $failureCategory = 'in-repo-path-validation-failure' }
     } catch {
-      $unresolved = $true
+      if ($null -eq $failureCategory) { $failureCategory = 'resolve-path-failure' }
     }
   }
-  if ($files.Count -eq 1 -and -not $unresolved) { return @{ file = @($files)[0]; category = $null } }
+  if ($files.Count -eq 1 -and $null -eq $failureCategory) { return @{ file = @($files)[0]; category = $null } }
   if ($files.Count -gt 1) { return @{ file = $null; category = 'ambiguous-test-path' } }
-  if ($testArguments -gt 0) { return @{ file = $null; category = 'unresolved-or-outside-repo-test-path' } }
+  if ($testArguments -gt 0) {
+    if ($null -ne $failureCategory) { return @{ file = $null; category = $failureCategory } }
+    return @{ file = $null; category = 'in-repo-path-validation-failure' }
+  }
   return @{ file = $null; category = 'unrecognized-arguments' }
 }
 while ($queue.Count -gt 0) {
@@ -174,7 +178,10 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
       const categories = new Set([
         "command-line-unavailable",
         "unrecognized-arguments",
-        "unresolved-or-outside-repo-test-path",
+        "file-uri-argument",
+        "resolve-path-failure",
+        "resolved-outside-repo",
+        "in-repo-path-validation-failure",
         "ambiguous-test-path",
       ]);
       const categoryCounts = new Map();
