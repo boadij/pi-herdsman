@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { execFile, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CHECK_TIMEOUT_MS,
   runTestRunner,
+  snapshotWindowsTestWorkers,
   windowsTestFile,
 } from "../scripts/check.mjs";
 
@@ -29,6 +33,55 @@ test("Windows worker attribution accepts only existing repository test paths", (
   assert.equal(windowsTestFile(`node.exe --file="${file}"`), undefined);
 });
 
+test("Windows snapshot attribution uses the repository root outside the checkout", async (t) => {
+  const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const originalCwd = process.cwd();
+  const outsideDirectory = await mkdtemp(join(tmpdir(), "check-snapshot-cwd-"));
+  t.after(async () => {
+    process.chdir(originalCwd);
+    await rm(outsideDirectory, { recursive: true, force: true });
+  });
+
+  let snapshotCwdIsRepositoryRoot = false;
+  process.chdir(outsideDirectory);
+  const { promise } = snapshotWindowsTestWorkers(
+    1,
+    new AbortController().signal,
+    (
+      _command: string,
+      _args: string[],
+      options: { cwd?: string },
+      callback: (error: null, stdout: string) => void,
+    ) => {
+      snapshotCwdIsRepositoryRoot = options.cwd === repositoryRoot;
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, { pid: 1 });
+      queueMicrotask(() => {
+        callback(
+          null,
+          JSON.stringify({
+            rows: [{ node: true, file: "extension/check-runner.test.ts" }],
+            truncated: false,
+          }),
+        );
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+  );
+  const workerDiagnostic = await promise;
+
+  assert.equal(
+    snapshotCwdIsRepositoryRoot,
+    true,
+    "snapshot runs with the configured repository root as its cwd",
+  );
+  assert.equal(
+    workerDiagnostic,
+    "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
+  );
+});
+
 test(
   "native attribution fixture",
   { skip: !process.env.CHECK_WORKER_FIXTURE },
@@ -37,7 +90,7 @@ test(
       process.env.CHECK_WORKER_FIXTURE!,
       JSON.stringify({ parent: process.ppid, child: process.pid }),
     );
-    await new Promise(() => setInterval(() => {}, 1_000));
+    setInterval(() => {}, 1_000);
   },
 );
 
@@ -140,7 +193,7 @@ test(
 );
 
 test(
-  "Windows timeout stops waiting for a snapshot when the runner exits",
+  "runner exit wins the snapshot race and capture is awaited after abort",
   { timeout: 15_000 },
   async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "check-snapshot-"));
@@ -148,6 +201,7 @@ test(
     t.after(() => rm(directory, { recursive: true, force: true }));
     const startedAt = Date.now();
     let aborted = false;
+    let snapshotSettled = false;
     const result = await runTestRunner(
       [
         "-e",
@@ -162,6 +216,7 @@ test(
             "abort",
             () => {
               aborted = true;
+              snapshotSettled = true;
               resolve("aborted");
             },
             { once: true },
@@ -183,27 +238,255 @@ test(
       "check: Windows timeout snapshot unavailable (runner exited)",
     );
     assert.equal(aborted, true);
+    assert.equal(snapshotSettled, true);
     assert.ok(Date.now() - startedAt < 10_000);
   },
 );
 
 test(
-  "cleanup starts before a slow snapshot completes",
-  { timeout: 15_000 },
+  "successful worker snapshot is retained before timeout cleanup",
+  { timeout: 10_000 },
   async () => {
     let snapshotStarted = false;
-    let aborted = false;
+    let snapshotSignal: AbortSignal | undefined;
     const result = await runTestRunner(
       ["-e", "setInterval(() => {}, 1000)"],
       Date.now() + 250,
       "hanging fixture",
-      (_pid: number, signal: AbortSignal) => {
+      async (pid: number, signal: AbortSignal) => {
         snapshotStarted = true;
+        snapshotSignal = signal;
+        assert.doesNotThrow(() => process.kill(pid, 0));
+        return "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts";
+      },
+    );
+    assert.equal(snapshotStarted, true);
+    assert.equal(snapshotSignal?.aborted, true);
+    assert.equal(result.kind, "suite-timeout");
+    assert.equal(
+      result.workerDiagnostic,
+      "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts",
+    );
+    assert.doesNotMatch(
+      result.workerDiagnostic,
+      /(?:^|\s)(?:pid|parent)=|[A-Za-z]:\\|node\.exe/i,
+    );
+    assert.throws(
+      () => process.kill(result.pid, 0),
+      (error: any) => error?.code === "ESRCH",
+    );
+  },
+);
+
+test(
+  "Windows snapshot timeout cancels and closes its real execFile child",
+  { timeout: 15_000 },
+  async (t) => {
+    let capturePid: number | undefined;
+    let captureKill: (() => boolean) | undefined;
+    let captureAborted = false;
+    let captureClosed = false;
+    let runnerAliveWhenCaptureClosed = false;
+    let closeCaptureResolve: (() => void) | undefined;
+    const closeCapture = new Promise<void>((resolve) => {
+      closeCaptureResolve = resolve;
+    });
+    t.after(async () => {
+      if (capturePid && !captureClosed) {
+        captureKill?.();
+        let timeoutId: NodeJS.Timeout;
+        try {
+          await Promise.race([
+            closeCapture,
+            new Promise(
+              (_, reject) =>
+                (timeoutId = setTimeout(
+                  () => reject(new Error("capture child did not close")),
+                  3_000,
+                )),
+            ),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      }
+      if (capturePid)
+        assert.throws(
+          () => process.kill(capturePid!, 0),
+          (error: any) => error?.code === "ESRCH",
+        );
+    });
+    const result = await runTestRunner(
+      ["-e", "setInterval(() => {}, 1000)"],
+      Date.now() + 250,
+      "hanging fixture",
+      (runnerPid: number, signal: AbortSignal) =>
+        snapshotWindowsTestWorkers(
+          runnerPid,
+          signal,
+          (_file, _args, options, callback) => {
+            options.signal?.addEventListener(
+              "abort",
+              () => {
+                captureAborted = true;
+              },
+              { once: true },
+            );
+            const child = execFile(
+              process.execPath,
+              ["-e", "setInterval(() => {}, 1000)"],
+              options,
+              callback,
+            );
+            capturePid = child.pid;
+            captureKill = child.kill.bind(child);
+            child.once("close", () => {
+              captureClosed = true;
+              closeCaptureResolve?.();
+              try {
+                process.kill(runnerPid, 0);
+                runnerAliveWhenCaptureClosed = true;
+              } catch {
+                // Snapshot child closure must precede suite-runner cleanup.
+              }
+            });
+            return child;
+          },
+        ),
+    );
+    assert.equal(
+      result.workerDiagnostic,
+      "check: Windows timeout snapshot unavailable (capture deadline)",
+    );
+    assert.equal(captureAborted, true);
+    assert.equal(captureClosed, true);
+    assert.equal(runnerAliveWhenCaptureClosed, true);
+    assert.ok(capturePid);
+  },
+);
+
+test(
+  "Windows snapshot escalates after an error without close and reports unconfirmed stop",
+  { timeout: 20_000 },
+  async (t) => {
+    let capturePid: number | undefined;
+    let captureChild: ReturnType<typeof execFile> | undefined;
+    let forceKill: (() => boolean) | undefined;
+    let escalationAttempted = false;
+    let captureClosedResolve: (() => void) | undefined;
+    const captureClosed = new Promise<void>((resolve) => {
+      captureClosedResolve = resolve;
+    });
+    const closeCapture = async () => {
+      if (capturePid && !captureChild?.killed) forceKill?.();
+      if (capturePid) {
+        let timeoutId: NodeJS.Timeout;
+        try {
+          await Promise.race([
+            captureClosed,
+            new Promise(
+              (_, reject) =>
+                (timeoutId = setTimeout(
+                  () => reject(new Error("capture child did not close")),
+                  3_000,
+                )),
+            ),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      }
+      if (capturePid)
+        assert.throws(
+          () => process.kill(capturePid!, 0),
+          (error: any) => error?.code === "ESRCH",
+        );
+    };
+    t.after(closeCapture);
+
+    const result = await runTestRunner(
+      ["-e", "setInterval(() => {}, 1000)"],
+      Date.now() + 250,
+      "hanging fixture",
+      (runnerPid: number, signal: AbortSignal) =>
+        snapshotWindowsTestWorkers(
+          runnerPid,
+          signal,
+          (_file, _args, options, callback) => {
+            const child = execFile(
+              process.execPath,
+              ["-e", "setInterval(() => {}, 1000)"],
+              options,
+              callback,
+            );
+            captureChild = child;
+            capturePid = child.pid;
+            forceKill = child.kill.bind(child);
+            child.kill = () => false;
+            child.once("close", () => captureClosedResolve?.());
+            options.signal?.addEventListener(
+              "abort",
+              () => child.emit("error", new Error("simulated kill failure")),
+              { once: true },
+            );
+            return child;
+          },
+          async (pid) => {
+            assert.equal(pid, capturePid);
+            escalationAttempted = true;
+          },
+        ),
+    );
+
+    assert.equal(escalationAttempted, true);
+    assert.equal(result.kind, "suite-timeout-cleanup-failed");
+    assert.equal(result.captureStopUnconfirmed, true);
+    assert.equal(
+      result.workerDiagnostic,
+      "check: Windows timeout snapshot unavailable (capture stop unconfirmed)",
+    );
+    assert.match(
+      result.diagnostic,
+      /suite cleanup proceeded without confirmed capture closure/,
+    );
+    assert.ok(capturePid);
+    assert.doesNotThrow(() => process.kill(capturePid, 0));
+  },
+);
+
+test(
+  "timeout waits a bounded interval for the snapshot before cleanup",
+  { timeout: 15_000 },
+  async () => {
+    let snapshotStarted = false;
+    let runnerAliveAtSnapshot = false;
+    let runnerAliveAtSnapshotAbort = false;
+    let aborted = false;
+    let snapshotSettled = false;
+    const result = await runTestRunner(
+      ["-e", "setInterval(() => {}, 1000)"],
+      Date.now() + 250,
+      "hanging fixture",
+      (pid: number, signal: AbortSignal) => {
+        snapshotStarted = true;
+        try {
+          process.kill(pid, 0);
+          runnerAliveAtSnapshot = true;
+        } catch {
+          // The snapshot must be attempted while the test runner is available.
+        }
         return new Promise<string>((resolve) => {
           signal.addEventListener(
             "abort",
             () => {
               aborted = true;
+              snapshotSettled = true;
+              try {
+                process.kill(pid, 0);
+                runnerAliveAtSnapshotAbort = true;
+              } catch {
+                // Cleanup must not start until the bounded snapshot attempt ends.
+              }
               resolve("aborted");
             },
             { once: true },
@@ -212,8 +495,15 @@ test(
       },
     );
     assert.equal(snapshotStarted, true);
+    assert.equal(runnerAliveAtSnapshot, true);
+    assert.equal(runnerAliveAtSnapshotAbort, true);
     assert.equal(aborted, true);
+    assert.equal(snapshotSettled, true);
     assert.equal(result.kind, "suite-timeout");
+    assert.equal(
+      result.workerDiagnostic,
+      "check: Windows timeout snapshot unavailable (capture deadline)",
+    );
     assert.throws(
       () => process.kill(result.pid, 0),
       (error: any) => error?.code === "ESRCH",
@@ -293,6 +583,7 @@ test(
     delete process.env.NODE_TEST_CONTEXT;
     let run;
     try {
+      // Its expected forced stop must not look like an incomplete outer test run.
       run = runTestRunner(
         [
           "--test",
@@ -301,6 +592,8 @@ test(
         ],
         deadline,
         "native worker fixture",
+        undefined,
+        "ignore",
       );
     } finally {
       if (previousFixture === undefined)
@@ -322,7 +615,7 @@ test(
         if (line.startsWith("check: candidate test worker "))
           assert.equal(
             line,
-            `check: candidate test worker pid=${pids.child} file=extension/check-runner.test.ts`,
+            "check: candidate test worker file=extension/check-runner.test.ts",
           );
       }
     } else {
