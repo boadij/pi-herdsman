@@ -147,14 +147,16 @@ import {
   type AgentDefinition,
 } from "./agent-definitions.ts";
 
+const delegationLockPath = (workspaceId: string, sessionId: string) =>
+  join(
+    herdsmanTempRoot(),
+    "locks",
+    `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
+  );
+
 export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
   try {
-    const path = join(
-      herdsmanTempRoot(),
-      "locks",
-      `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
-    );
-    return claimProcessLock(path, {
+    return claimProcessLock(delegationLockPath(workspaceId, sessionId), {
       name: "delegation lifecycle",
       occupiedMessage: "Delegation lifecycle is already in progress",
     });
@@ -166,6 +168,37 @@ export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
           "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
       });
     throw error;
+  }
+};
+
+const waitForDelegationLock = async (
+  workspaceId: string,
+  sessionId: string,
+  deadline: number,
+  signal?: AbortSignal,
+): Promise<() => void> => {
+  while (true) {
+    signal?.throwIfAborted();
+    try {
+      return claimProcessLock(delegationLockPath(workspaceId, sessionId), {
+        name: "delegation lifecycle",
+        occupiedMessage: "Delegation lifecycle is already in progress",
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ProcessLockOccupiedError) ||
+        Date.now() >= deadline
+      ) {
+        if (error instanceof ProcessLockOccupiedError)
+          fail("agent_busy", error.message, "lifecycle", {
+            details: { workspaceId, parentSessionId: sessionId },
+            nextAction:
+              "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
+          });
+        throw error;
+      }
+      await delay(Math.min(50, deadline - Date.now()), undefined, { signal });
+    }
   }
 };
 
@@ -880,6 +913,7 @@ export const AGENT_HANDOFF_GUIDANCE =
   "When delegating a bounded task, prefer continue_agent if a known exact historical " +
   "managed-Agent Pi session carries substantial context relevant to that task " +
   "and remains eligible; otherwise use delegate_agent to start fresh from a definition. " +
+  "When a result ref is shown, prefer it to the exact session UUID or path. " +
   "Retired sessions cannot be continued while context retirement is enabled. " +
   "If further work is needed, delegate a fresh Agent with the prior handoff " +
   "and relevant files. Each live Agent generation exists for one " +
@@ -2276,6 +2310,133 @@ export function ownedAssignmentChildren(
   return [...children.values()];
 }
 
+function resolveDirectResultSessionPath(
+  ctx: ExtensionContext,
+  ref: string,
+): string {
+  const semantic = parseSemanticResultRef(ref);
+  if (!semantic)
+    fail(
+      "invalid_request",
+      `Invalid result ref: ${ref}. Copy the exact result ref shown by the agent completion.`,
+      "continue",
+    );
+  const ownerId = ctx.sessionManager.getSessionId();
+  const entries = ctx.sessionManager.getBranch();
+  const mappings = canonicalRefsForSemanticResult(entries, ref, "continue");
+  if (mappings.size > 1)
+    fail(
+      "target_ambiguous",
+      `Result ref ${ref} has conflicting bindings`,
+      "continue",
+    );
+
+  const matching = entries.flatMap((entry, index) => {
+    const details = agentResultDetails(entry);
+    if (
+      details?.agentLabel !== semantic.agent ||
+      details.resultIndex !== semantic.index ||
+      details.ownerSessionId !== ownerId
+    )
+      return [];
+    if (
+      details.status !== "completed" ||
+      !validId(details.requestId as string) ||
+      !validId(details.runId as string) ||
+      !validId(details.piSessionId as string) ||
+      typeof details.piSessionFile !== "string" ||
+      typeof details.agentDefinition !== "string" ||
+      !details.agentDefinition.trim() ||
+      typeof details.agentLabel !== "string" ||
+      details.resultRef !== resultRef(details.requestId as string)
+    )
+      fail(
+        "invalid_request",
+        `Result ref ${ref} has incomplete provenance`,
+        "continue",
+      );
+    let path: string;
+    try {
+      path = canonicalSessionPath(details.piSessionFile);
+    } catch {
+      fail(
+        "invalid_request",
+        `Result ref ${ref} has an invalid session path`,
+        "continue",
+      );
+    }
+    if (mappings.size === 1 && !mappings.has(details.resultRef))
+      fail(
+        "target_ambiguous",
+        `Result ref ${ref} has conflicting bindings`,
+        "continue",
+      );
+    return [{ details, path, index }];
+  });
+  if (!matching.length)
+    fail(
+      "target_not_found",
+      `No directly owned completed result matches ${ref}`,
+      "continue",
+    );
+
+  const selected = matching[0]!;
+  if (
+    matching.some(
+      ({ details, path }) =>
+        path !== selected.path ||
+        !sameTerminalProvenance(details, selected.details) ||
+        details.resultIndex !== selected.details.resultIndex ||
+        details.resultRef !== selected.details.resultRef,
+    )
+  )
+    fail(
+      "target_ambiguous",
+      `Result ref ${ref} has conflicting completion records`,
+      "continue",
+    );
+
+  const child: OwnedAssignmentSession = {
+    id: selected.details.piSessionId as string,
+    path: selected.path,
+    label: semantic.agent,
+    definition: selected.details.agentDefinition as string,
+  };
+  const accepted = acceptedAssignmentReceipts(entries, ownerId, child);
+  if (
+    accepted.some(
+      (receipt) =>
+        receipt.index > selected.index &&
+        receipt.requestId !== selected.details.requestId,
+    ) ||
+    entries.some((entry, index) => {
+      if (index <= selected.index) return false;
+      const details = agentResultDetails(entry);
+      if (
+        details?.ownerSessionId !== ownerId ||
+        details.piSessionId !== child.id ||
+        details.requestId === selected.details.requestId ||
+        (details.status !== "completed" && details.status !== "failed")
+      )
+        return false;
+      try {
+        return (
+          canonicalSessionPath(details.piSessionFile as string) === child.path
+        );
+      } catch {
+        return false;
+      }
+    })
+  )
+    fail(
+      "invalid_request",
+      `Result ref ${ref} is stale; use the latest eligible session selector`,
+      "continue",
+    );
+
+  return selected.path;
+}
+
 export function openOwnedAssignmentSession(
   child: OwnedAssignmentSession,
 ): SessionManager | undefined {
@@ -2309,7 +2470,9 @@ export function resolveAssignmentSession(
     readOnlyEvidence?: boolean;
   } = {},
 ): ResolvedAssignmentSession {
-  const value = raw.trim();
+  let value = raw.trim();
+  if (value.startsWith("result:"))
+    value = resolveDirectResultSessionPath(ctx, value);
   if (!value)
     fail(
       "invalid_request",
@@ -3988,6 +4151,54 @@ export function createAgentController(
       undefined,
       allowTranscriptDefinitionFallback,
     );
+  const withQuiescedTree = async <T>(
+    context: ExtensionContext,
+    ownerSessionId: string,
+    workspaceId: string,
+    operation: (heldLocks: ReadonlySet<string>) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const deadline = Date.now() + 30_000;
+    const releases: Array<() => void> = [];
+    const held = new Set<string>();
+    const freeze = async (sessionId: string): Promise<void> => {
+      const key = `${workspaceId}\0${sessionId}`;
+      if (held.has(key)) throw new Error("Managed Agent ancestry is ambiguous");
+      releases.push(
+        await waitForDelegationLock(workspaceId, sessionId, deadline, signal),
+      );
+      held.add(key);
+      const snapshot = await snapshots(context, signal, true);
+      if (snapshot.stateIssues.length)
+        throw new Error("Owned Agent mailbox state is unresolved");
+      assertUniqueDurableIdentities(
+        snapshot.mailboxes.map(({ state }) => state),
+      );
+      const children = snapshot.agents
+        .filter(
+          ({ state }) =>
+            state.workspaceId === workspaceId &&
+            state.ownerSessionId === sessionId,
+        )
+        .map(({ state }) => state);
+      for (const child of children) {
+        managedAgentCascadePlanFromSnapshot(snapshot, child, sameIdentity);
+        await freeze(child.piSessionId);
+        const fresh = await snapshots(context, signal, true);
+        const matches = fresh.agents.filter(({ state }) =>
+          sameIdentity(state, child),
+        );
+        if (matches.length !== 1)
+          throw new Error("Managed Agent identity changed during shutdown");
+      }
+    };
+    try {
+      await freeze(ownerSessionId);
+      return await operation(held);
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  };
   const snapshot = (
     context: ExtensionContext,
     signal?: AbortSignal,
@@ -5194,9 +5405,14 @@ export function createAgentController(
       onCleanupFailure: (label, message) => warnings.set(label, message),
     };
     try {
-      if (scope?.kind === "root")
-        await closeCascade(context, state, signal, undefined, report);
-      else await closeSnapshot(context, candidate, signal, report);
+      await withQuiescedTree(
+        context,
+        state.piSessionId,
+        state.workspaceId,
+        async (heldLocks) =>
+          closeCascade(context, state, signal, undefined, report, heldLocks),
+        signal,
+      );
     } catch (error) {
       const failure = normalizeCloseFailure(error, {
         label: agentLabel,
@@ -5617,11 +5833,12 @@ export function createAgentController(
     signal?: AbortSignal,
     deliveredRootResultId?: string,
     report?: StopReport,
+    heldLocks?: ReadonlySet<string>,
   ): Promise<void> => {
-    const release = claimDelegationLock(
-      expected.workspaceId,
-      expected.piSessionId,
-    );
+    const lockKey = `${expected.workspaceId}\0${expected.piSessionId}`;
+    const release = heldLocks?.has(lockKey)
+      ? undefined
+      : claimDelegationLock(expected.workspaceId, expected.piSessionId);
     const parentMailbox = agentMailboxPath(
       expected.workspaceId,
       expected.agentLabel,
@@ -5719,7 +5936,7 @@ export function createAgentController(
       );
     } finally {
       parentRelease?.();
-      release();
+      release?.();
     }
   };
 
@@ -5728,6 +5945,7 @@ export function createAgentController(
     owner: string,
     workspaceId: string,
     signal?: AbortSignal,
+    heldLocks?: ReadonlySet<string>,
   ): Promise<StopOwnedAgentsResult> => {
     const snapshot = await snapshots(context, signal, true);
     if (snapshot.stateIssues.length)
@@ -5818,16 +6036,25 @@ export function createAgentController(
             "close",
             { ids: { label: current.agentLabel, paneId: current.paneId } },
           );
-        await closeCascade(context, current, signal, undefined, {
-          onClosed: (outcome) => {
-            if (!closed.some(({ state }) => sameIdentity(state, outcome.state)))
-              closed.push(outcome);
+        await closeCascade(
+          context,
+          current,
+          signal,
+          undefined,
+          {
+            onClosed: (outcome) => {
+              if (
+                !closed.some(({ state }) => sameIdentity(state, outcome.state))
+              )
+                closed.push(outcome);
+            },
+            onCleanupFailure: (label, message) => {
+              cleanupFailureReported = true;
+              recordFailure(label, message);
+            },
           },
-          onCleanupFailure: (label, message) => {
-            cleanupFailureReported = true;
-            recordFailure(label, message);
-          },
-        });
+          heldLocks,
+        );
       } catch (error) {
         const failure = normalizeCloseFailure(error, {
           label: target.state.agentLabel,
@@ -6662,11 +6889,35 @@ export function createAgentController(
               ? "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent."
               : undefined;
         const status = resultStatus(runtime, result.requestId, entries);
+        let usableSemanticResult: { ref: string } | undefined;
+        if (
+          result.status === "completed" &&
+          sessionRetired === false &&
+          semanticResult &&
+          validId(runtime.piSessionId) &&
+          typeof runtime.piSessionFile === "string"
+        ) {
+          const parsed = parseSemanticResultRef(semanticResult.ref);
+          try {
+            if (
+              parsed?.agent === result.agentLabel &&
+              parsed.index > 0 &&
+              canonicalSessionPath(runtime.piSessionFile).length > 0
+            )
+              usableSemanticResult = semanticResult;
+          } catch {
+            // Keep the exact-session fallback when persisted provenance is unusable.
+          }
+        }
+        const exactSelector =
+          sessionRetired === false && validId(runtime.piSessionId)
+            ? runtime.piSessionId
+            : undefined;
         const header = [
           "Agent result",
           `agent=${result.agentLabel}`,
           `definition=${runtime.agentDefinition}`,
-          ...(sessionRetired === false
+          ...(exactSelector && !usableSemanticResult
             ? [`session=${runtime.piSessionId ?? "?"}`]
             : []),
           `status=${result.status}`,
@@ -6674,6 +6925,15 @@ export function createAgentController(
         const content = [
           header,
           ...(semanticResult ? [`Result ref: ${semanticResult.ref}`] : []),
+          ...(usableSemanticResult
+            ? [
+                `To continue this session, use continue_agent with session="${usableSemanticResult.ref}".`,
+              ]
+            : exactSelector
+              ? [
+                  `To continue this session, use continue_agent with session="${exactSelector}".`,
+                ]
+              : []),
           ...(forwardedResultBindings.length
             ? [
                 `Forwardable result evidence: ${forwardedResultBindings
@@ -8750,7 +9010,7 @@ export function createAgentController(
       {
         session: Type.String({
           description:
-            "Exact saved managed-Agent Pi session path or full UUID.",
+            "Semantic result ref (result:<agent>#<index>), exact saved managed-Agent Pi session path, or full UUID.",
           minLength: 1,
         }),
         task: Type.String({
@@ -8963,7 +9223,7 @@ export function createAgentController(
       name: "continue_agent",
       label: "continue agent",
       description:
-        "Start one bounded assignment from an eligible exact historical managed-Agent Pi session. Retired sessions cannot be continued while context retirement is enabled.",
+        "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -10070,6 +10330,7 @@ export function createAgentController(
     closeSnapshot,
     closeCascade,
     stopOwnedAgentsForSession,
+    withQuiescedTree,
     workspaceId: options.workspaceId,
     recoverRuntimes,
     resolveRuntime,

@@ -282,9 +282,11 @@ jobs:
           - phase: Manager
             smoke_phase: ""
             diagnostics: "0"
+            summary: "1"
           - phase: Ordinary Lead
             smoke_phase: delivery
             diagnostics: "1"
+            summary: "0"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -303,6 +305,7 @@ jobs:
         env:
           PEER_SMOKE_PHASE: ${{ matrix.smoke_phase }}
           PEER_SMOKE_DIAGNOSTICS: ${{ matrix.diagnostics }}
+          PEER_SMOKE_SUMMARY: ${{ matrix.summary }}
         run: node scripts/peer-federation-smoke.mjs
 
   ci:

@@ -1627,7 +1627,14 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.match(
     delivered,
     new RegExp(
-      `^Agent result · agent=${label} · definition=agent · session=${identity.piSessionId} · status=completed`,
+      `^Agent result · agent=${label} · definition=agent · status=completed`,
+    ),
+  );
+  assert.doesNotMatch(delivered.split("\n\n")[0], /\bsession=/);
+  assert.match(
+    delivered,
+    new RegExp(
+      `To continue this session, use continue_agent with session="result:${label}#2"\\.`,
     ),
   );
   assert.deepEqual(
@@ -3340,7 +3347,8 @@ test("result delivery reports retirement-policy uncertainty without losing resul
         : { error: { code: "execution_error", message: "child failed" } }),
       completedAt: Date.now(),
     });
-    if (hasSessionFile)
+    if (hasSessionFile) {
+      realFs.writeFileSync(identity.piSessionFile!, "{}", "utf8");
       nativeSessions.set(identity.piSessionFile!, {
         id: identity.piSessionId,
         path: identity.piSessionFile!,
@@ -3366,6 +3374,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
             : []),
         ],
       });
+    }
     const lifecycle = cascadeExecutor([child]);
     const entries: unknown[] = [];
     let delivered: any;
@@ -3392,6 +3401,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       pi.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(mailbox);
       nativeSessions.delete(identity.piSessionFile!);
+      realFs.rmSync(identity.piSessionFile!, { force: true });
     }
   };
 
@@ -3407,6 +3417,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
         retired.content.indexOf("completed child work"),
     );
     assert.equal(retired.details.sessionRetired, true);
+    assert.doesNotMatch(retired.content, /To continue this session/);
     assert.equal(
       retired.details.piSessionId,
       recoveryIdentity("retired-delivery-agent").piSessionId,
@@ -3427,6 +3438,18 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       /delegate_agent with this result and relevant files/,
     );
     assert.doesNotMatch(failedRetired.content, /completed child work/);
+    assert.doesNotMatch(failedRetired.content, /To continue this session/);
+
+    const failed = await deliver(
+      "failed-delivery-agent",
+      false,
+      false,
+      "/tmp",
+      true,
+      "failed",
+    );
+    assert.match(failed.content, /status=failed/);
+    assert.doesNotMatch(failed.content, /session="result:/);
 
     const uncertain = await deliver(
       "uncertain-delivery-agent",
@@ -3436,6 +3459,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     );
     assert.match(uncertain.content, /Continuation policy unverified/);
     assert.doesNotMatch(uncertain.content.split("\n\n")[0], /\bsession=/);
+    assert.doesNotMatch(uncertain.content, /To continue this session/);
     assert.equal(uncertain.details.sessionRetired, null);
 
     const disabled = await deliver("disabled-delivery-agent", true, false);
@@ -3444,7 +3468,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       /retirement policy could not be verified/,
     );
     assert.equal(disabled.details.sessionRetired, false);
-    assert.match(disabled.content.split("\n\n")[0], /\bsession=/);
+    assert.match(disabled.content, /To continue this session/);
 
     const ordinary = await deliver("ordinary-delivery-agent", false, true);
     assert.doesNotMatch(
@@ -3452,7 +3476,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
       /Session retired after context pressure/,
     );
     assert.equal(ordinary.details.sessionRetired, false);
-    assert.match(ordinary.content.split("\n\n")[0], /\bsession=/);
+    assert.match(ordinary.content, /To continue this session/);
 
     const missingFile = await deliver(
       "missing-session-file-agent",
@@ -3463,6 +3487,7 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     );
     assert.match(missingFile.content, /Continuation policy unverified/);
     assert.doesNotMatch(missingFile.content.split("\n\n")[0], /\bsession=/);
+    assert.doesNotMatch(missingFile.content, /To continue this session/);
     assert.equal(missingFile.details.sessionRetired, null);
   } finally {
     updateConfig("contextRetirement", undefined);
@@ -6491,7 +6516,7 @@ test("cascade revalidates a live descendant mailbox before closing it", async ()
       fakeContext(),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
-    assert.equal(snapshotCalls, 2);
+    assert.equal(snapshotCalls, 5);
     assert.deepEqual(lifecycle.closeOrder, []);
     assert.deepEqual(readAgentState(parentMailbox), parent);
     assert.deepEqual(readAgentState(childMailbox), changedChild);
