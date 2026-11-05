@@ -16220,13 +16220,16 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   sampleRefresh = true;
   await runtime.refresh(ctx);
   await cancelledDiffStarted;
-  contextAbort.abort();
-  assert.equal(
-    samplerSignal?.aborted,
-    true,
-    "context abort must cancel the active sampler signal",
-  );
-  resolveCancelledDiff();
+  try {
+    contextAbort.abort();
+    assert.equal(
+      samplerSignal?.aborted,
+      true,
+      "context abort must cancel the active sampler signal",
+    );
+  } finally {
+    resolveCancelledDiff();
+  }
   await new Promise<void>((resolve) => setImmediate(resolve));
   assignedRow = widget
     .render(120)
