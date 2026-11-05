@@ -86,7 +86,7 @@ jobs:
         continue-on-error: true
         env:
           HERDSMAN_STARTUP_DIAGNOSTICS: "1"
-        run: npm test -- --test-reporter=tap extension/controller-startup-diagnostics.test.ts
+        run: node --experimental-test-module-mocks --import=./scripts/test-env.mjs --test --test-timeout=120000 --test-reporter=tap extension/controller-startup-diagnostics.test.ts
       - run: npm run check
       - name: Require isolated Windows diagnostics success
         if: always() && matrix.os == 'windows-latest'
