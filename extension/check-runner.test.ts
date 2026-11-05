@@ -24,8 +24,13 @@ function runPowerShell(script: string): Promise<string> {
       ["-NoProfile", "-NonInteractive", "-Command", script],
       { windowsHide: true, timeout: 5_000, maxBuffer: 8 * 1024 },
       (error, stdout) => {
-        if (error) reject(new Error("bounded PowerShell fixture failed"));
-        else resolvePromise(stdout.trim());
+        if (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ETIMEDOUT") reject(new Error("PowerShell timed out"));
+          else if (code === "ENOENT")
+            reject(new Error("PowerShell executable unavailable"));
+          else reject(new Error("PowerShell execution failed"));
+        } else resolvePromise(stdout.trim());
       },
     );
   });

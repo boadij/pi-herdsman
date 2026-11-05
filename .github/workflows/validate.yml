@@ -80,6 +80,9 @@ jobs:
           node-version: ${{ needs.scope.outputs.node_version }}
           package-manager-cache: false
       - run: npm ci
+      - name: Isolated Windows check-runner tests (temporary)
+        if: matrix.os == 'windows-latest'
+        run: npm test -- --test-name-pattern="^(Windows PowerShell classifier distinguishes sanitized worker path reasons|Windows targeted CIM query identifies and cleans its exact test child)$" extension/check-runner.test.ts
       - name: Isolated Windows startup diagnostics (temporary)
         id: isolated-startup-diagnostics
         if: matrix.os == 'windows-latest'
