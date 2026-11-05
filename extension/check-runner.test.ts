@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CHECK_TIMEOUT_MS,
+  WORKER_SNAPSHOT_AT_MS,
   runTestRunner,
   snapshotWindowsTestWorkers,
   windowsTestFileClassifierScript,
@@ -64,6 +65,10 @@ test("check suite deadline allows extra time on Windows", () => {
     CHECK_TIMEOUT_MS,
     process.platform === "win32" ? 360_000 : 240_000,
   );
+});
+
+test("worker snapshot is scheduled 25 seconds before the suite deadline", () => {
+  assert.equal(WORKER_SNAPSHOT_AT_MS, CHECK_TIMEOUT_MS - 25_000);
 });
 
 test("proactive worker snapshot is scheduled and emitted when it completes", async () => {
@@ -275,6 +280,7 @@ test(
       const script = `
 $ErrorActionPreference = 'Stop'
 $repoRoot = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${root}'))
+$repoRoot += [IO.Path]::DirectorySeparatorChar
 $inputs = ConvertFrom-Json ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${payload}')))
 function Resolve-Path {
   [CmdletBinding()]
