@@ -9271,6 +9271,157 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   realFs.rmSync(session.path, { force: true });
 });
 
+test("assignment session resolution accepts only directly owned branch result refs", async (t) => {
+  const id = "018f2f2e-7b13-7abc-8def-0123456789ab";
+  const path = join(homedir(), `semantic-resume-${randomUUID()}.jsonl`);
+  const requestId = randomUUID();
+  const runId = randomUUID();
+  const result = {
+    type: "custom_message",
+    customType: "pi-herdsman-agent-result",
+    content: "",
+    display: true,
+    details: {
+      requestId,
+      runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: "workspace",
+      agentLabel: "review-fix",
+      paneId: "pane",
+      piSessionId: id,
+      piSessionFile: path,
+      agentDefinition: "reviewer",
+      status: "completed",
+      resultIndex: 1,
+      resultRef: resultRef(requestId),
+    },
+  };
+  const accepted = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "delegate_agent",
+      details: {
+        ok: true,
+        owner_session_id: LEAD_SESSION_ID,
+        session_id: id,
+        session_path: path,
+        agent: "review-fix",
+        definition: "reviewer",
+        request_id: requestId,
+      },
+    },
+  };
+  nativeSessions.clear();
+  nativeSessions.set(id, {
+    id,
+    path,
+    cwd: homedir(),
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: id, definition: "reviewer", label: "review-fix" },
+      },
+    ],
+  });
+  realFs.writeFileSync(path, "{}", "utf8");
+  t.after(() => {
+    nativeSessions.delete(id);
+    realFs.rmSync(path, { force: true });
+  });
+  const context = fakeContext([accepted, result]) as any;
+  context.cwd = homedir();
+  const semantic = await resolveAssignmentSession(
+    context,
+    "result:review-fix#1",
+  );
+  assert.deepEqual(semantic, await resolveAssignmentSession(context, path));
+  assert.deepEqual(semantic, await resolveAssignmentSession(context, id));
+  assert.throws(
+    () =>
+      resolveAssignmentSession(
+        fakeContext([], []) as any,
+        "result:review-fix#1",
+      ),
+    /No directly owned completed result/,
+  );
+  assert.throws(
+    () =>
+      resolveAssignmentSession(
+        fakeContext([
+          {
+            ...result,
+            details: { ...result.details, ownerSessionId: randomUUID() },
+          },
+        ]) as any,
+        "result:review-fix#1",
+      ),
+    /No directly owned completed result/,
+  );
+  assert.throws(
+    () => resolveAssignmentSession(context, "result:review-fix#0"),
+    /Invalid result ref/,
+  );
+
+  const imported = {
+    type: "custom",
+    customType: "pi-herdsman-result-ref",
+    data: {
+      ref: "result:review-fix#1",
+      canonicalRef: resultRef(requestId),
+      requesterSessionId: LEAD_SESSION_ID,
+    },
+  };
+  const forwardedOnly = fakeContext([imported]) as any;
+  assert.throws(
+    () => resolveAssignmentSession(forwardedOnly, "result:review-fix#1"),
+    /No directly owned completed result/,
+  );
+  assert.throws(
+    () =>
+      resolveAssignmentSession(
+        fakeContext([
+          accepted,
+          result,
+          {
+            ...imported,
+            data: { ...imported.data, canonicalRef: resultRef(randomUUID()) },
+          },
+        ]) as any,
+        "result:review-fix#1",
+      ),
+    /conflicting bindings/,
+  );
+  assert.throws(
+    () =>
+      resolveAssignmentSession(
+        fakeContext([
+          accepted,
+          result,
+          {
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolName: "continue_agent",
+              details: {
+                ok: true,
+                owner_session_id: LEAD_SESSION_ID,
+                session_id: id,
+                session_path: path,
+                agent: "review-fix",
+                definition: "reviewer",
+                request_id: randomUUID(),
+              },
+            },
+          },
+        ]) as any,
+        "result:review-fix#1",
+      ),
+    /is stale/,
+  );
+});
+
 test("owned continuation requires a matching persisted child edge", () => {
   const id = randomUUID();
   const path = join(testTmpRoot, `owned-validation-${id}.jsonl`);
@@ -11658,6 +11809,21 @@ test("registered agent validates duplicate agents and selectors before lifecycle
     context,
   );
   assert.equal(substitutedResume.details.error.category, "invalid_request");
+  const invalidSemanticResume = await continueTool.execute(
+    "id",
+    { session: "result:reviewer#1", task: "continue" },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(
+    invalidSemanticResume.details.error.category,
+    "target_not_found",
+  );
+  assert.equal(
+    duplicate.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+  );
   duplicate.events.get("session_shutdown")?.[0]();
 });
 

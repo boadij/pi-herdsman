@@ -299,7 +299,12 @@ physical cleanup alone; unknown or partial ancestry remains ineligible.
 
 ## Historical session failure
 
-`continue_agent` requires an exact session path or full UUID.
+For a completed result delivered directly to this controller on its current Pi
+branch, `continue_agent` also accepts its semantic reference
+(`result:<agent>#<index>`). Otherwise, use the exact saved session path or full
+UUID; these exact selectors remain available for recovery and recursively owned
+descendants. A semantic reference selects the producing session's current saved
+history, not an earlier checkpoint.
 
 The saved session header must contain a non-empty working directory. Session
 continuation uses that saved cwd and does not accept a caller-supplied `cwd`.
