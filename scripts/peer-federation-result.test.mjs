@@ -20,6 +20,7 @@ import {
   currentSendDiscoveryMatched,
   isLiveCorrespondenceRecipient,
   matchedUnboundTargetRejection,
+  managedLeadRejectionSummary,
   matchedDelegateResult,
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
@@ -498,27 +499,77 @@ test("unbound target rejection requires exact nested call and correlated error r
     matchedUnboundTargetRejection([call, result], "lead:0123456789").text,
     "Unknown coordinator target; rediscover it",
   );
+  assert.deepEqual(
+    managedLeadRejectionSummary([call, result], "lead:0123456789"),
+    {
+      exactTargetCalls: 1,
+      matchingToolResults: 1,
+      outcome: "expected_rejection",
+    },
+  );
+  assert.deepEqual(managedLeadRejectionSummary([call], "lead:0123456789"), {
+    exactTargetCalls: 1,
+    matchingToolResults: 0,
+    outcome: "missing_result",
+  });
+  assert.deepEqual(
+    managedLeadRejectionSummary(
+      [call, { ...result, message: { ...result.message, isError: false } }],
+      "lead:0123456789",
+    ),
+    {
+      exactTargetCalls: 1,
+      matchingToolResults: 1,
+      outcome: "non_error_result",
+    },
+  );
+  assert.deepEqual(
+    managedLeadRejectionSummary([call, result], "lead:9876543210"),
+    { exactTargetCalls: 0, matchingToolResults: 0, outcome: "missing_call" },
+  );
   assert.throws(() =>
     matchedUnboundTargetRejection([call, result], "lead:9876543210"),
   );
   assert.throws(() => matchedUnboundTargetRejection([call], "lead:0123456789"));
+  const unexpectedText =
+    "unexpected secret-session /private/path target=lead:0123456789 tool-args=private";
+  const unexpectedResult = {
+    ...result,
+    message: {
+      ...result.message,
+      content: [{ type: "text", text: unexpectedText }],
+    },
+  };
+  let error;
   assert.throws(
     () =>
       matchedUnboundTargetRejection(
-        [
-          call,
-          {
-            ...result,
-            message: {
-              ...result.message,
-              content: [{ type: "text", text: "unrelated failure" }],
-            },
-          },
-        ],
+        [call, unexpectedResult],
         "lead:0123456789",
       ),
-    /expected rejection/u,
+    (caught) => {
+      error = caught;
+      return true;
+    },
   );
+  assert.match(
+    error.message,
+    /outcome=wrong_rejection; exactTargetCalls=1; matchingToolResults=1/u,
+  );
+  assert.doesNotMatch(
+    error.message,
+    /unexpected secret-session|private|lead:/u,
+  );
+  const summary = managedLeadRejectionSummary(
+    [call, unexpectedResult],
+    "lead:0123456789",
+  );
+  assert.deepEqual(summary, {
+    exactTargetCalls: 1,
+    matchingToolResults: 1,
+    outcome: "wrong_rejection",
+  });
+  assert.doesNotMatch(JSON.stringify(summary), /unexpected|private|lead:/u);
 });
 
 test("delegate_work error text is surfaced before JSON parsing", () => {

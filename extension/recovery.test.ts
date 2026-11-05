@@ -6491,7 +6491,7 @@ test("cascade revalidates a live descendant mailbox before closing it", async ()
       fakeContext(),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
-    assert.equal(snapshotCalls, 2);
+    assert.equal(snapshotCalls, 5);
     assert.deepEqual(lifecycle.closeOrder, []);
     assert.deepEqual(readAgentState(parentMailbox), parent);
     assert.deepEqual(readAgentState(childMailbox), changedChild);

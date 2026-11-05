@@ -176,7 +176,7 @@ export class HerdrStartFailure extends Error {
   }
 }
 
-const SETTLE_TIMEOUT = 2_000;
+const SETTLE_TIMEOUT = 30_000;
 const START_DIAGNOSTIC_TIMEOUT = 2_000;
 const FRESH_PANE_BUSY_RETRY_TIMEOUT = 2_000;
 const HERDR_START_TIMEOUT_MIN = 3_001;
@@ -2204,6 +2204,15 @@ function normalizePaneProcess(
   return Object.freeze(normalized);
 }
 
+function settlementRemaining(
+  deadline: number,
+  operation: "close" | "rollback",
+): number {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) error(operation, "Process settlement deadline exhausted");
+  return remaining;
+}
+
 async function waitForShellMarker(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -2214,10 +2223,7 @@ async function waitForShellMarker(
 ): Promise<void> {
   const timeout = (): number => {
     if (operation === "start") return startupCallTimeout(deadline);
-    const remaining = deadline - Date.now();
-    if (remaining <= 0)
-      error(operation, `pane ${paneId} shell readiness deadline exhausted`);
-    return remaining;
+    return settlementRemaining(deadline, operation);
   };
   const marker = `__PI_HERDSMAN_READY_${randomUUID()}__`;
   await runHerdr(pi, ctx, ["pane", "run", paneId, `echo ${marker}`], {
@@ -2260,9 +2266,7 @@ async function proveShellReady(
   const timeout =
     operation === "start"
       ? startupCallTimeout(deadline)
-      : deadline - Date.now();
-  if (timeout <= 0)
-    error(operation, `pane ${paneId} shell readiness deadline exhausted`);
+      : settlementRemaining(deadline, operation);
   const result = await runHerdr(
     pi,
     ctx,
@@ -2294,7 +2298,10 @@ async function settlePreservedPane(
   const deadline = Date.now() + SETTLE_TIMEOUT;
   let safeObservation = false;
   while (Date.now() < deadline) {
-    const listed = await runHerdr(pi, ctx, ["agent", "list"], { signal });
+    const listed = await runHerdr(pi, ctx, ["agent", "list"], {
+      signal,
+      timeout: settlementRemaining(deadline, operation),
+    });
     if (!Array.isArray(listed?.agents))
       error(operation, "agent list ownership proof is unavailable");
     const agents = listed.agents;
@@ -2307,7 +2314,10 @@ async function settlePreservedPane(
       safeObservation = false;
     } else {
       const pane = (
-        await runHerdr(pi, ctx, ["pane", "get", expected.paneId], { signal })
+        await runHerdr(pi, ctx, ["pane", "get", expected.paneId], {
+          signal,
+          timeout: settlementRemaining(deadline, operation),
+        })
       ).pane;
       if (
         !pane ||
@@ -2317,7 +2327,15 @@ async function settlePreservedPane(
         !sameCwd(pane.cwd, expected.cwd)
       )
         error(operation, `pane ${expected.paneId} ownership changed`);
-      const observed = await paneProcess(pi, ctx, expected.paneId, signal);
+      const observed = await paneProcess(
+        pi,
+        ctx,
+        expected.paneId,
+        signal,
+        undefined,
+        false,
+        settlementRemaining(deadline, operation),
+      );
       if (
         observed &&
         settledShell(processIdentity, observed, terminalOccupier)
@@ -2341,7 +2359,11 @@ async function settlePreservedPane(
         safeObservation = false;
       }
     }
-    await sleep(POLL_INTERVAL, undefined, { signal });
+    await sleep(
+      Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)),
+      undefined,
+      { signal },
+    );
   }
   error(
     operation,
@@ -2689,9 +2711,13 @@ async function verifyHerdrPaneClosed(
   const deadline = Date.now() + SETTLE_TIMEOUT;
   while (Date.now() < deadline) {
     const [agents, panes] = await Promise.all([
-      runHerdr(pi, ctx, ["agent", "list"], { signal }),
+      runHerdr(pi, ctx, ["agent", "list"], {
+        signal,
+        timeout: settlementRemaining(deadline, operation),
+      }),
       runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
         signal,
+        timeout: settlementRemaining(deadline, operation),
       }),
     ]);
     if (!Array.isArray(agents?.agents))
@@ -2703,7 +2729,11 @@ async function verifyHerdrPaneClosed(
     );
     const paneGone = !panes.panes.some((item: any) => item.pane_id === paneId);
     if (agentGone && paneGone) return;
-    await sleep(POLL_INTERVAL, undefined, { signal });
+    await sleep(
+      Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)),
+      undefined,
+      { signal },
+    );
   }
   error(
     operation,

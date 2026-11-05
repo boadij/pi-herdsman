@@ -6022,19 +6022,22 @@ async function runManagerStartupScenario(
             delegationLockPathForTest(childWorkspace, staleId),
             { name: "test delegation lifecycle" },
           );
-          await assert.rejects(
-            control("stop_lead", { branch: "smoke/recover" }),
+          const pendingStop = control("stop_lead", {
+            branch: "smoke/recover",
+          });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          assert.equal(
+            started,
+            true,
+            "stop must wait without stopping the Lead",
           );
-          assert.equal(started, true, "busy lifecycle must preserve the Lead");
           assert.ok(
             readAgentState(agentMailboxPath(childWorkspace, "researcher")),
           );
           releaseDelegation();
 
           if (mode === "close-tree-failure") {
-            await assert.rejects(
-              control("stop_lead", { branch: "smoke/recover" }),
-            );
+            await assert.rejects(pendingStop);
             assert.equal(started, true);
             assert.equal(leadStopAttempts, 0);
             assert.equal(
@@ -6058,9 +6061,7 @@ async function runManagerStartupScenario(
             return;
           }
 
-          const closed = await control("stop_lead", {
-            branch: "smoke/recover",
-          });
+          const closed = await pendingStop;
           assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
           assert.equal(closed.details.branch, "smoke/recover");
           assert.equal(started, false, "Lead must stop after Agent cleanup");
@@ -7656,6 +7657,69 @@ test("empty stop inventory reports a valid Agent discovered in final verificatio
   } finally {
     resetAgentMailbox(mailbox);
   }
+});
+
+test("quiesced Agent tree waits for the root delegation lock and retains it in callback", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  setLeadEnvironment();
+  const owner = "quiesced-tree-owner";
+  const pi = fakePi({ exec: cascadeExecutor([]).exec });
+  const context = fakeContext() as any;
+  const controller = createAgentController(pi.pi as never, {
+    scope: { kind: "root" },
+    build: HERDSMAN_BUILD,
+    extensionPath: "test",
+    isContextRetired: () => false,
+    snapshotDependencies: {
+      runtimeForLabel: () => undefined,
+      readRootOwners: () => [],
+      staleAfterMs: 60_000,
+    },
+    persistedTranscriptReady: () => true,
+    agentDefinitions: async () => [],
+    readTranscript: () => ({ transcript: "", truncated: false }),
+    workspaceId: () => WORKSPACE,
+    sendResultMessage: () => undefined,
+    sendAskMessage: () => undefined,
+    sessionRetired: () => false,
+    appendError: () => undefined,
+    onChanged: () => undefined,
+    onWorkChanged: () => undefined,
+    reportWatcherError: () => undefined,
+  });
+  const release = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, owner),
+    { name: "test delegation lifecycle" },
+  );
+  let entered = false;
+  try {
+    const pending = controller.withQuiescedTree(
+      context,
+      owner,
+      WORKSPACE,
+      async (held) => {
+        entered = true;
+        assert.equal(held.has(`${WORKSPACE}\0${owner}`), true);
+        assert.throws(() =>
+          claimProcessLock(delegationLockPathForTest(WORKSPACE, owner), {
+            name: "test delegation lifecycle",
+          }),
+        );
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(entered, false);
+    release();
+    await pending;
+    assert.equal(entered, true);
+  } finally {
+    release();
+  }
+  const reacquired = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, owner),
+    { name: "test delegation lifecycle" },
+  );
+  reacquired();
 });
 
 test("new delegation may start from a remaining Git branch", () =>
@@ -9839,7 +9903,47 @@ test("continuation revalidates saved Agent identity before admitting a request",
           changed === "definition" ? "child" : `${label}-changed`;
       },
     );
-    const pi = fakePi({ exec: startup.exec });
+    let started = false;
+    let stopped = false;
+    const pi = fakePi({
+      exec: (command, args, options) => {
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+          started = true;
+        if (
+          command === "herdr" &&
+          args[0] === "agent" &&
+          args[1] === "send-keys" &&
+          args[3] === "ctrl+c"
+        )
+          stopped = true;
+        if (
+          command === "herdr" &&
+          args[0] === "pane" &&
+          args[1] === "process-info"
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                process_info: {
+                  pane_id: args.at(-1),
+                  shell_pid: 123,
+                  foreground_process_group_id: started && !stopped ? 456 : 123,
+                  foreground_processes: [
+                    {
+                      pid: started && !stopped ? 456 : 123,
+                      argv0: started && !stopped ? "/usr/bin/pi" : "/bin/zsh",
+                    },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        return startup.exec(command, args, options);
+      },
+    });
     registerExtension!(pi.pi as never);
     const context = fakeContext([
       ownershipResult(id, LEAD_SESSION_ID, { path, label }),
@@ -11843,11 +11947,50 @@ test("assignment retains its request when acknowledgement never arrives", async 
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   startup.stopMailboxConsumer();
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 10).unref();
+  let started = false;
+  let stopped = false;
   const pi = fakePi({
-    exec: startup.exec,
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        started = true;
+      if (
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "send-keys" &&
+        args[3] === "ctrl+c"
+      )
+        stopped = true;
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: args.at(-1),
+                shell_pid: 123,
+                foreground_process_group_id: started && !stopped ? 456 : 123,
+                foreground_processes: [
+                  {
+                    pid: started && !stopped ? 456 : 123,
+                    argv0: started && !stopped ? "/usr/bin/pi" : "/bin/zsh",
+                  },
+                ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args, options);
+    },
   });
-  registerExtension!(pi.pi as never);
+  registerExtensionForTest!(pi.pi as never, {
+    afterRequestPublished: () => controller.abort(),
+  });
   await pi.events.get("session_start")![0](undefined, fakeContext());
   const result = await agentTool(pi, "delegate").execute(
     "id",

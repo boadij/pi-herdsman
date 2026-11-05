@@ -6455,6 +6455,8 @@ async function managerRemovalFixture(
   t: TestContext,
   options: {
     runningLead?: boolean;
+    replaceLeadAfterQuiescence?: boolean;
+    leadAppearsAfterPreflight?: boolean;
     closedWorkspace?: boolean;
     reopenedWorkspaceId?: string | null;
     reconcileError?: boolean;
@@ -6551,6 +6553,9 @@ async function managerRemovalFixture(
   let integratedHeadReads = 0;
   let targetBranchReads = 0;
   let leadRunning = options.runningLead ?? false;
+  let leadPaneId = "child-pane";
+  let treeQuiesced = false;
+  let stoppedWithHeldLocks = false;
   let stoppedLeadCount = 0;
   let workspaceId = options.closedWorkspace ? undefined : "child-workspace";
   let topologyWorkspaceId = options.primaryWorkspaceInitially
@@ -6760,7 +6765,7 @@ async function managerRemovalFixture(
         ? [
             {
               workspace_id: "child-workspace",
-              pane_id: "child-pane",
+              pane_id: leadPaneId,
               tab_id: "child-tab",
               cwd: checkoutPath,
             },
@@ -6770,6 +6775,7 @@ async function managerRemovalFixture(
     readLeadCoordinationState: () => ({
       role: "lead",
       piSessionId: assignment?.id,
+      instanceId: "lead-instance",
     }),
     requireCompatibleBuild: () => {},
     runHerdr: async (_pi: any, _ctx: any, args: string[], runOptions: any) => {
@@ -6891,7 +6897,33 @@ async function managerRemovalFixture(
         ? [{ path: "unavailable", diagnostic: "test" }]
         : [],
     }),
-    stopOwnedAgentsForSession: async () => ({ complete: true, summary: "" }),
+    stopOwnedAgentsForSession: async (
+      _ctx: unknown,
+      _session: string,
+      _workspace: string,
+      _signal: AbortSignal | undefined,
+      heldLocks?: ReadonlySet<string>,
+    ) => {
+      stoppedWithHeldLocks = !!heldLocks?.has(
+        `child-workspace\0${assignment.id}`,
+      );
+      return { complete: true, summary: "" };
+    },
+    withQuiescedTree: async (
+      _ctx: unknown,
+      _session: string,
+      _workspace: string,
+      operation: (held: ReadonlySet<string>) => Promise<unknown>,
+    ) => {
+      assert.equal(assignmentLockHeld, false);
+      treeQuiesced = true;
+      if (options.replaceLeadAfterQuiescence) leadPaneId = "replacement-pane";
+      try {
+        return await operation(new Set([`child-workspace\0${assignment.id}`]));
+      } finally {
+        treeQuiesced = false;
+      }
+    },
     stopProjectLeadPane: async () => {
       stoppedLeadCount++;
       leadRunning = false;
@@ -6909,6 +6941,8 @@ async function managerRemovalFixture(
       _branch: string,
       operation: () => unknown,
     ) => {
+      if (options.leadAppearsAfterPreflight) leadRunning = true;
+      if (options.runningLead) assert.equal(treeQuiesced, true);
       assignmentLockHeld = true;
       try {
         return await operation();
@@ -6981,6 +7015,7 @@ async function managerRemovalFixture(
     removalOptions,
     confirmationCount: () => confirmationCount,
     stoppedLeadCount: () => stoppedLeadCount,
+    stoppedWithHeldLocks: () => stoppedWithHeldLocks,
     lockCount: () => lockCount,
     reconciliationAssignmentId: () => reconciliationAssignmentId,
     reconciliationProjectWorkLocked: () => reconciliationProjectWorkLocked,
@@ -7491,7 +7526,10 @@ test("ordinary preapproved removal aborts if repository approval is revoked befo
 });
 
 test("Manager merge runtime keeps integrated cleanup failure pending", async (t) => {
-  const fixture = await managerRemovalFixture(t, { removeError: true });
+  const fixture = await managerRemovalFixture(t, {
+    removeError: true,
+    runningLead: true,
+  });
   const result = await fixture.runtime.executeStaff(
     "merge",
     {
@@ -7507,6 +7545,32 @@ test("Manager merge runtime keeps integrated cleanup failure pending", async (t)
   assert.equal(result.details.integrated, true);
   assert.equal(result.details.checkout_removed, false);
   assert.equal(result.details.assignment_retired, false);
+  assert.equal(fixture.stoppedLeadCount(), 1);
+  assert.equal(fixture.stoppedWithHeldLocks(), true);
+});
+
+test("Manager merge rejects a replacement Lead after quiescing the preflight Lead", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    replaceLeadAfterQuiescence: true,
+  });
+  await assert.rejects(
+    fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: "2".repeat(40),
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    ),
+    /Assigned Lead changed; select the removal target again/,
+  );
+  assert.equal(fixture.stoppedLeadCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
 });
 
 test("Manager merge preserves the source if the primary branch changes after integration", async (t) => {
@@ -8090,8 +8154,10 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
       assert.equal(result.details.assignment_retired, true);
       assert.equal(result.details.forced, false);
       assert.equal(fixture.assignment(), undefined);
-      if (scenario.runningLead) assert.equal(result.details.lead_stopped, true);
-      else assert.equal(result.details.lead_stopped, false);
+      if (scenario.runningLead) {
+        assert.equal(result.details.lead_stopped, true);
+        assert.equal(fixture.stoppedWithHeldLocks(), true);
+      } else assert.equal(result.details.lead_stopped, false);
       if (scenario.name === "closed after branch switch") {
         const reopen = fixture.calls.find((args) => args[1] === "open");
         assert.ok(reopen);
@@ -8107,6 +8173,33 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
       }
     });
   }
+});
+
+test("Manager removal rejects a replacement Lead after quiescing the preflight Lead", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    replaceLeadAfterQuiescence: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Assigned Lead changed; select the removal target again/,
+  );
+  assert.equal(fixture.stoppedLeadCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+});
+
+test("Manager removal rejects a Lead that appears after inactive preflight", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    leadAppearsAfterPreflight: true,
+  });
+  await assert.rejects(
+    fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+    /Assigned Lead changed; select the removal target again/,
+  );
+  assert.equal(fixture.stoppedLeadCount(), 0);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
 });
 
 test("Manager removal rejects unverified checkout and repository identity", async (t) => {
