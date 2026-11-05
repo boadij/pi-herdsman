@@ -83,21 +83,7 @@ jobs:
       - name: Isolated Windows check-runner tests (temporary)
         if: matrix.os == 'windows-latest'
         run: npm test -- --test-name-pattern="^(Windows PowerShell classifier distinguishes sanitized worker path reasons|Windows targeted CIM query identifies and cleans its exact test child)$" extension/check-runner.test.ts
-      - name: Isolated Windows startup diagnostics (temporary)
-        id: isolated-startup-diagnostics
-        if: matrix.os == 'windows-latest'
-        continue-on-error: true
-        env:
-          HERDSMAN_STARTUP_DIAGNOSTICS: "1"
-        run: node --experimental-test-module-mocks --import=./scripts/test-env.mjs --test --test-timeout=120000 --test-reporter=tap extension/controller-startup-diagnostics.test.ts
       - run: npm run check
-      - name: Require isolated Windows diagnostics success
-        if: always() && matrix.os == 'windows-latest'
-        shell: pwsh
-        env:
-          DIAGNOSTICS_OUTCOME: ${{ steps.isolated-startup-diagnostics.outcome }}
-        run: |
-          if ($env:DIAGNOSTICS_OUTCOME -ne 'success') { exit 1 }
 
   windows-bootstrap:
     name: Windows bootstrap acceptance
