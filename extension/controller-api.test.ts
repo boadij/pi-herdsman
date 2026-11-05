@@ -9338,6 +9338,12 @@ test("assignment session resolution accepts only directly owned branch result re
   );
   assert.deepEqual(semantic, await resolveAssignmentSession(context, path));
   assert.deepEqual(semantic, await resolveAssignmentSession(context, id));
+  const terminalOnlyContext = fakeContext([result]) as any;
+  terminalOnlyContext.cwd = homedir();
+  assert.deepEqual(
+    await resolveAssignmentSession(terminalOnlyContext, "result:review-fix#1"),
+    await resolveAssignmentSession(terminalOnlyContext, path),
+  );
   assert.throws(
     () =>
       resolveAssignmentSession(

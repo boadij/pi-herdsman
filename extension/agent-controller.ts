@@ -2371,18 +2371,6 @@ function resolveDirectResultSessionPath(
   };
   const accepted = acceptedAssignmentReceipts(entries, ownerId, child);
   if (
-    !accepted.some(
-      (receipt) =>
-        receipt.requestId === selected.details.requestId &&
-        receipt.index < selected.index,
-    )
-  )
-    fail(
-      "invalid_request",
-      `Cannot verify the accepted assignment for result ref ${ref}`,
-      "continue",
-    );
-  if (
     accepted.some(
       (receipt) =>
         receipt.index > selected.index &&
