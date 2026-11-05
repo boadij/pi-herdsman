@@ -97,6 +97,7 @@ import {
   managerAssignmentDiagnostics,
   managerHandoffSupervisorToolAvailability,
   supervisorMessageDiagnostics,
+  supervisorAgentCompletionMatches,
   supervisorMessageCallStatus,
   managerAssignmentIdentity,
   managerAssignmentBranchMismatch,
@@ -4664,6 +4665,63 @@ test("supervisor-agent accepts only its current-format completed result", () => 
   assert.match(
     unrelated.content[0].text,
     /Waiting for the completed Agent result/,
+  );
+});
+
+test("supervisor completion harness accepts semantic and exact-session headers only with matching details", () => {
+  const requestId = "supervisor-request";
+  const childSessionId = "supervisor-session";
+  const details = {
+    requestId,
+    piSessionId: childSessionId,
+    agentLabel: "smoke-supervisor-agent",
+    agentDefinition: "smoke-agent",
+    status: "completed",
+  };
+  const semantic = {
+    customType: "pi-herdsman-agent-result",
+    details,
+    content:
+      "Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · status=completed\n\nResult ref: result:smoke-supervisor-agent#1\n\nSMOKE_SUPERVISOR_AGENT_COMPLETED",
+  };
+  const fallback = {
+    ...semantic,
+    content: `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed\n\nSMOKE_SUPERVISOR_AGENT_COMPLETED`,
+  };
+  assert.equal(
+    supervisorAgentCompletionMatches(semantic, requestId, childSessionId),
+    true,
+  );
+  assert.equal(
+    supervisorAgentCompletionMatches(fallback, requestId, childSessionId),
+    true,
+  );
+  for (const [field, value] of Object.entries({
+    requestId: "other-request",
+    piSessionId: "other-session",
+    agentLabel: "other-agent",
+    agentDefinition: "other-definition",
+    status: "failed",
+  }))
+    assert.equal(
+      supervisorAgentCompletionMatches(
+        { ...semantic, details: { ...details, [field]: value } },
+        requestId,
+        childSessionId,
+      ),
+      false,
+      `reject mismatched ${field}`,
+    );
+  assert.equal(
+    supervisorAgentCompletionMatches(
+      {
+        ...semantic,
+        content: semantic.content.replace("status=completed", "status=running"),
+      },
+      requestId,
+      childSessionId,
+    ),
+    false,
   );
 });
 

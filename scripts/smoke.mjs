@@ -931,6 +931,28 @@ const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
   "internal_failure",
 ]);
 
+export function supervisorAgentCompletionMatches(
+  message,
+  requestId,
+  childSessionId,
+) {
+  const details = message?.details;
+  const text = messageText(message?.content);
+  const semanticHeader =
+    "Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · status=completed";
+  const exactHeader = `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed`;
+  return (
+    message?.customType === "pi-herdsman-agent-result" &&
+    details?.requestId === requestId &&
+    details?.piSessionId === childSessionId &&
+    details?.agentLabel === "smoke-supervisor-agent" &&
+    details?.agentDefinition === "smoke-agent" &&
+    details?.status === "completed" &&
+    (text.startsWith(semanticHeader) || text.startsWith(exactHeader)) &&
+    text.includes("SMOKE_SUPERVISOR_AGENT_COMPLETED")
+  );
+}
+
 export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
   let session;
   try {
@@ -10813,20 +10835,10 @@ async function runSupervisorAgentSmoke(ctx) {
     }
     const delivered = entries.find((entry) => {
       const message = entry.type === "custom_message" ? entry : entry.message;
-      const details = message?.details;
-      return (
-        message?.customType === "pi-herdsman-agent-result" &&
-        details?.requestId === requestId &&
-        details?.piSessionId === childSessionId &&
-        details?.agentLabel === "smoke-supervisor-agent" &&
-        details?.agentDefinition === "smoke-agent" &&
-        details?.status === "completed" &&
-        messageText(message.content).startsWith(
-          `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed`,
-        ) &&
-        messageText(message.content).includes(
-          "SMOKE_SUPERVISOR_AGENT_COMPLETED",
-        )
+      return supervisorAgentCompletionMatches(
+        message,
+        requestId,
+        childSessionId,
       );
     });
     timeline.requestId = requestId;
@@ -10922,13 +10934,7 @@ async function runSupervisorAgentSmoke(ctx) {
         const handoffIndex = entries.findIndex(
           (entry, i) =>
             i > resultIndex &&
-            entry.type === "custom_message" &&
-            entry.customType === "pi-herdsman-agent-result" &&
-            entry.details?.requestId === requestId &&
-            entry.details?.piSessionId === childSessionId &&
-            entry.details?.agentLabel === "smoke-supervisor-agent" &&
-            entry.details?.agentDefinition === "smoke-agent" &&
-            entry.details?.status === "completed",
+            supervisorAgentCompletionMatches(entry, requestId, childSessionId),
         );
         await sampleHandoffTimeline(
           session,
@@ -10936,7 +10942,6 @@ async function runSupervisorAgentSmoke(ctx) {
           childSessionId,
           listed.value,
         );
-        const expectedHeader = `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed`;
         const handoff = handoffIndex >= 0 ? entries[handoffIndex] : null;
         const completion =
           handoffIndex >= 0 &&
@@ -10952,9 +10957,10 @@ async function runSupervisorAgentSmoke(ctx) {
             );
         if (
           handoff &&
-          messageText(handoff.content).startsWith(expectedHeader) &&
-          messageText(handoff.content).includes(
-            "SMOKE_SUPERVISOR_AGENT_COMPLETED",
+          supervisorAgentCompletionMatches(
+            handoff,
+            requestId,
+            childSessionId,
           ) &&
           completion
         ) {
