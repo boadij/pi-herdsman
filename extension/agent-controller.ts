@@ -913,6 +913,7 @@ export const AGENT_HANDOFF_GUIDANCE =
   "When delegating a bounded task, prefer continue_agent if a known exact historical " +
   "managed-Agent Pi session carries substantial context relevant to that task " +
   "and remains eligible; otherwise use delegate_agent to start fresh from a definition. " +
+  "When a result ref is shown, prefer it to the exact session UUID or path. " +
   "Retired sessions cannot be continued while context retirement is enabled. " +
   "If further work is needed, delegate a fresh Agent with the prior handoff " +
   "and relevant files. Each live Agent generation exists for one " +
@@ -2309,6 +2310,133 @@ export function ownedAssignmentChildren(
   return [...children.values()];
 }
 
+function resolveDirectResultSessionPath(
+  ctx: ExtensionContext,
+  ref: string,
+): string {
+  const semantic = parseSemanticResultRef(ref);
+  if (!semantic)
+    fail(
+      "invalid_request",
+      `Invalid result ref: ${ref}. Copy the exact result ref shown by the agent completion.`,
+      "continue",
+    );
+  const ownerId = ctx.sessionManager.getSessionId();
+  const entries = ctx.sessionManager.getBranch();
+  const mappings = canonicalRefsForSemanticResult(entries, ref, "continue");
+  if (mappings.size > 1)
+    fail(
+      "target_ambiguous",
+      `Result ref ${ref} has conflicting bindings`,
+      "continue",
+    );
+
+  const matching = entries.flatMap((entry, index) => {
+    const details = agentResultDetails(entry);
+    if (
+      details?.agentLabel !== semantic.agent ||
+      details.resultIndex !== semantic.index ||
+      details.ownerSessionId !== ownerId
+    )
+      return [];
+    if (
+      details.status !== "completed" ||
+      !validId(details.requestId as string) ||
+      !validId(details.runId as string) ||
+      !validId(details.piSessionId as string) ||
+      typeof details.piSessionFile !== "string" ||
+      typeof details.agentDefinition !== "string" ||
+      !details.agentDefinition.trim() ||
+      typeof details.agentLabel !== "string" ||
+      details.resultRef !== resultRef(details.requestId as string)
+    )
+      fail(
+        "invalid_request",
+        `Result ref ${ref} has incomplete provenance`,
+        "continue",
+      );
+    let path: string;
+    try {
+      path = canonicalSessionPath(details.piSessionFile);
+    } catch {
+      fail(
+        "invalid_request",
+        `Result ref ${ref} has an invalid session path`,
+        "continue",
+      );
+    }
+    if (mappings.size === 1 && !mappings.has(details.resultRef))
+      fail(
+        "target_ambiguous",
+        `Result ref ${ref} has conflicting bindings`,
+        "continue",
+      );
+    return [{ details, path, index }];
+  });
+  if (!matching.length)
+    fail(
+      "target_not_found",
+      `No directly owned completed result matches ${ref}`,
+      "continue",
+    );
+
+  const selected = matching[0]!;
+  if (
+    matching.some(
+      ({ details, path }) =>
+        path !== selected.path ||
+        !sameTerminalProvenance(details, selected.details) ||
+        details.resultIndex !== selected.details.resultIndex ||
+        details.resultRef !== selected.details.resultRef,
+    )
+  )
+    fail(
+      "target_ambiguous",
+      `Result ref ${ref} has conflicting completion records`,
+      "continue",
+    );
+
+  const child: OwnedAssignmentSession = {
+    id: selected.details.piSessionId as string,
+    path: selected.path,
+    label: semantic.agent,
+    definition: selected.details.agentDefinition as string,
+  };
+  const accepted = acceptedAssignmentReceipts(entries, ownerId, child);
+  if (
+    accepted.some(
+      (receipt) =>
+        receipt.index > selected.index &&
+        receipt.requestId !== selected.details.requestId,
+    ) ||
+    entries.some((entry, index) => {
+      if (index <= selected.index) return false;
+      const details = agentResultDetails(entry);
+      if (
+        details?.ownerSessionId !== ownerId ||
+        details.piSessionId !== child.id ||
+        details.requestId === selected.details.requestId ||
+        (details.status !== "completed" && details.status !== "failed")
+      )
+        return false;
+      try {
+        return (
+          canonicalSessionPath(details.piSessionFile as string) === child.path
+        );
+      } catch {
+        return false;
+      }
+    })
+  )
+    fail(
+      "invalid_request",
+      `Result ref ${ref} is stale; use the latest eligible session selector`,
+      "continue",
+    );
+
+  return selected.path;
+}
+
 export function openOwnedAssignmentSession(
   child: OwnedAssignmentSession,
 ): SessionManager | undefined {
@@ -2342,7 +2470,9 @@ export function resolveAssignmentSession(
     readOnlyEvidence?: boolean;
   } = {},
 ): ResolvedAssignmentSession {
-  const value = raw.trim();
+  let value = raw.trim();
+  if (value.startsWith("result:"))
+    value = resolveDirectResultSessionPath(ctx, value);
   if (!value)
     fail(
       "invalid_request",
@@ -6759,11 +6889,35 @@ export function createAgentController(
               ? "Continuation policy unverified. Continue only from the original trusted project context, or delegate a fresh Agent."
               : undefined;
         const status = resultStatus(runtime, result.requestId, entries);
+        let usableSemanticResult: { ref: string } | undefined;
+        if (
+          result.status === "completed" &&
+          sessionRetired === false &&
+          semanticResult &&
+          validId(runtime.piSessionId) &&
+          typeof runtime.piSessionFile === "string"
+        ) {
+          const parsed = parseSemanticResultRef(semanticResult.ref);
+          try {
+            if (
+              parsed?.agent === result.agentLabel &&
+              parsed.index > 0 &&
+              canonicalSessionPath(runtime.piSessionFile).length > 0
+            )
+              usableSemanticResult = semanticResult;
+          } catch {
+            // Keep the exact-session fallback when persisted provenance is unusable.
+          }
+        }
+        const exactSelector =
+          sessionRetired === false && validId(runtime.piSessionId)
+            ? runtime.piSessionId
+            : undefined;
         const header = [
           "Agent result",
           `agent=${result.agentLabel}`,
           `definition=${runtime.agentDefinition}`,
-          ...(sessionRetired === false
+          ...(exactSelector && !usableSemanticResult
             ? [`session=${runtime.piSessionId ?? "?"}`]
             : []),
           `status=${result.status}`,
@@ -6771,6 +6925,15 @@ export function createAgentController(
         const content = [
           header,
           ...(semanticResult ? [`Result ref: ${semanticResult.ref}`] : []),
+          ...(usableSemanticResult
+            ? [
+                `To continue this session, use continue_agent with session="${usableSemanticResult.ref}".`,
+              ]
+            : exactSelector
+              ? [
+                  `To continue this session, use continue_agent with session="${exactSelector}".`,
+                ]
+              : []),
           ...(forwardedResultBindings.length
             ? [
                 `Forwardable result evidence: ${forwardedResultBindings
@@ -8847,7 +9010,7 @@ export function createAgentController(
       {
         session: Type.String({
           description:
-            "Exact saved managed-Agent Pi session path or full UUID.",
+            "Semantic result ref (result:<agent>#<index>), exact saved managed-Agent Pi session path, or full UUID.",
           minLength: 1,
         }),
         task: Type.String({
@@ -9060,7 +9223,7 @@ export function createAgentController(
       name: "continue_agent",
       label: "continue agent",
       description:
-        "Start one bounded assignment from an eligible exact historical managed-Agent Pi session. Retired sessions cannot be continued while context retirement is enabled.",
+        "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

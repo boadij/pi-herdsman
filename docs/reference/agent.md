@@ -138,14 +138,20 @@ own acknowledgement. Startup outcomes do not establish continuing liveness.
 
 ```json
 {
-  "session": "<exact .jsonl path or full UUID>",
+  "session": "<result:<agent>#<index>, exact .jsonl path, or full UUID>",
   "task": "Continue the investigation"
 }
 ```
 
-Call `continue_agent` with `session`, `task`, and optional `files`. The exact
-saved session path or full UUID supplies its cwd, definition identity, and
-historical Pi context. Continuation always creates a new agent generation for
+Call `continue_agent` with `session`, `task`, and optional `files`. The session
+selector accepts a semantic result reference, exact saved session path, or full
+UUID. A semantic reference resolves only a completed result directly owned by
+the caller on its active Pi branch; readable or forwarded result evidence does
+not grant continuation authority. It selects the saved session that produced
+that result, not an earlier checkpoint. Exact paths and UUIDs remain available
+for recovery, including clean stops without a completed result. The resolved
+saved session supplies its cwd, definition identity, and historical Pi context.
+Continuation always creates a new agent generation for
 one assignment with a live label; it never assigns work to an existing agent.
 The cwd comes from the saved session. The saved definition is resolved again
 from current configuration and must currently be enabled and authorized; its
@@ -178,8 +184,10 @@ handoff/result and relevant files instead. Retired results explicitly instruct
 the controller to delegate a fresh agent when follow-up work remains, before
 the result text. The model-facing result omits the historical session selector
 when retirement is confirmed or cannot be verified. When retirement is
-verified as disabled or the session is not retired, the ordinary selector is
-preserved. Structured result details continue to retain session provenance.
+verified as disabled or the session is not retired, a suitable semantic result
+reference is the preferred selector; otherwise the exact session UUID remains
+available. Structured result details continue to retain full session
+provenance.
 
 Fresh delegate assignments receive an automatically chosen logical label when
 no label is supplied. The saved session's logical label is inherited exactly
@@ -570,21 +578,26 @@ session and occurs exactly once. A persisted reusable completion's
 model-visible wording is:
 
 ```text
-Agent result · agent=<agent> · definition=<definition> · session=<id> · status=completed
+Agent result · agent=<agent> · definition=<definition> · status=completed
 
 Result ref: result:<agent>#<index>
+
+To continue this session, use continue_agent with session="result:<agent>#<index>".
 ```
 
 Reusable result artifacts persist the source agent label, definition, assignment
 cwd, and producing Pi session ID (when available) with the agent-authored result
 so later `files` handoffs retain their provenance.
 
-The `session=<id>` selector is included only when retirement is verified as
-disabled or the session is not retired. If retirement is confirmed or cannot
-be verified, the header omits it and any continuation guidance precedes the
-completion text. Details retain durable session provenance for diagnosis and
-authorized inspection; the selector is not authorization, and continuation
-remains subject to runtime identity, ownership, and policy checks.
+The semantic continuation selector is shown only when the result is completed,
+persisted session provenance and its semantic binding are valid, and retirement
+is verified as disabled or the session is not retired. Otherwise the exact
+session selector is used only when it is eligible to be shown. If retirement is
+confirmed or cannot be verified, the header omits continuation selectors and
+any retirement guidance precedes the completion text. Details retain durable
+session provenance for diagnosis and authorized inspection; a selector is not
+authorization, and continuation remains subject to runtime identity,
+ownership, freshness, and policy checks.
 
 Details retain durable `agentLabel`, `resultIndex` when present,
 `agentDefinition`, `piSessionId`, `piSessionFile`, canonical result references,

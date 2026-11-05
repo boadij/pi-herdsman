@@ -219,7 +219,8 @@ function supervisorAgentResult(messages) {
     throw new Error(
       "Supervisor Agent assignment result omitted session/request identity",
     );
-  const expectedHeader = `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${sessionId} · status=completed`;
+  const expectedHeader =
+    "Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · status=completed";
   const handoff = messages.find((message, index) => {
     if (index <= matched.resultIndex || message.role !== "user") return false;
     const metadata = message.details;
@@ -240,7 +241,7 @@ function supervisorAgentResult(messages) {
 
 function completedResultBody(message) {
   const match = text(message).match(
-    /status=completed\n\n(?:Result ref: [^\n]+\n\n)?([\s\S]+?)\n\nDelegation status:/,
+    /status=completed\n\n(?:Result ref: [^\n]+\n\n)?(?:To continue this session, use continue_agent with session="[^"]+"\.\n\n)?([\s\S]+?)\n\nDelegation status:/,
   );
   if (!match)
     throw new Error("Completed Agent result omitted its response body");
@@ -479,13 +480,12 @@ function continuationDecision(messages) {
       throw new Error(
         "continue_agent did not target the exact saved session path",
       );
-    const sessionId = textFromSessionId(continued.result);
     const result = deliveredResult(
       messages,
       "continue_agent",
       (content) =>
         content.startsWith("Agent result · agent=") &&
-        content.includes(`session=${sessionId} · status=completed`),
+        content.includes("status=completed"),
     );
     if (result) {
       const body = completedResultBody(result);
@@ -567,13 +567,6 @@ function continuationDecision(messages) {
   throw new Error("Unexpected continuation transcript");
 }
 
-function textFromSessionId(result) {
-  const id = result.details?.session_id;
-  if (typeof id !== "string" || !id)
-    throw new Error("continue_agent result omitted its exact session identity");
-  return id;
-}
-
 function agentCrashRecoveryDecision(model, context) {
   const messages = context.messages;
   const prompt = text(lastUser(messages));
@@ -631,13 +624,15 @@ function agentCrashRecoveryDecision(model, context) {
           session,
           task: "SMOKE_CRASH_CONTINUE: return exactly PI_HERDSMAN_CRASH_RECOVERY_CONTINUED without replaying prior work.",
         });
-      const sessionId = textFromSessionId(continued.result);
       const handoff = deliveredResult(
         messages,
         "continue_agent",
         (content) =>
-          content.startsWith("Agent result · agent=") &&
-          content.includes(`session=${sessionId} · status=completed`),
+          content.startsWith(
+            "Agent result · agent=smoke-crash-target · definition=",
+          ) &&
+          content.includes("status=completed") &&
+          content.includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUED"),
       );
       return handoff
         ? fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CONTINUED")

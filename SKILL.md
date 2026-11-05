@@ -78,7 +78,8 @@ configuration changes. Do not use `list_agents` merely to check progress.
 
 For a new bounded delegated task, prefer `continue_agent` when a known,
 eligible historical managed-Agent Pi session contains substantial context
-relevant to that task. Otherwise use `delegate_agent` for a fresh assignment.
+relevant to that task. Use its result ref when shown, otherwise its exact session
+ID or path. Otherwise use `delegate_agent` for a fresh assignment.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
