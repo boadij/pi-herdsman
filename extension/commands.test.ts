@@ -15423,6 +15423,16 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     (resolve) => (markCancelledDiffStarted = resolve),
   );
   let samplerSignal: AbortSignal | undefined;
+  const samplerPhases: string[] = [];
+  let samplerPhaseTraceActive = false;
+  let samplerPhaseTraceComplete = false;
+  const markSamplerPhase = (phase: string) => {
+    if (!samplerPhases.includes(phase)) samplerPhases.push(phase);
+  };
+  t.after(() => {
+    if (!samplerPhaseTraceComplete)
+      t.diagnostic(`sampler phases: ${samplerPhases.join(" -> ") || "none"}`);
+  });
   const originalDateNow = Date.now;
   let testNow = originalDateNow();
   Date.now = () => testNow;
@@ -15434,6 +15444,22 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     state: currentState,
     pi: {
       exec: async (_command: string, args: string[], options: any) => {
+        if (samplerPhaseTraceActive) {
+          markSamplerPhase("sampler-started");
+          if (
+            args.includes("--show-toplevel") ||
+            args.includes("--git-common-dir")
+          )
+            markSamplerPhase("identity");
+          else if (args.includes("status")) markSamplerPhase("status");
+          else if (args[0] === "rev-parse" && args.includes("--verify"))
+            markSamplerPhase("generation");
+          else if (args.includes("merge-base")) markSamplerPhase("merge-base");
+          else if (args.includes("diff")) {
+            markSamplerPhase("diff-entry");
+            samplerPhaseTraceActive = false;
+          }
+        }
         gitCalls.push({ cwd: options.cwd, args });
         if (
           args[0] === "rev-parse" &&
@@ -16217,6 +16243,8 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   diffMode = "cancelDeferred";
   assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
   testNow += 30_001;
+  markSamplerPhase("sampler-eligible");
+  samplerPhaseTraceActive = true;
   sampleRefresh = true;
   await runtime.refresh(ctx);
   await cancelledDiffStarted;
@@ -16337,6 +16365,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   );
   assert.equal(currentRole, "chief", "nested navigation remains observational");
   runtime.stopPeriodic();
+  samplerPhaseTraceComplete = true;
 });
 
 test("Lead resume repairs stale staff from its durable displaced loadout", async () => {
