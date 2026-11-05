@@ -2690,6 +2690,55 @@ test("zero-child close waits for the parent delegation lock", async () => {
   }
 });
 
+test("close maps an expired delegation-lock wait to actionable agent_busy", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "expired-lock-parent",
+      undefined,
+      recoveryIdentity("expired-lock-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+    piSessionFile: "/tmp/expired-lock-parent.jsonl",
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, parent);
+  const pi = fakePi({ exec: cascadeExecutor([parent]).exec });
+  registerExtension!(pi.pi as never);
+  const releaseLock = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, parent.piSessionId),
+    { name: "test delegation lifecycle" },
+  );
+  let now = 0;
+  const clock = mock.method(Date, "now", () => now);
+  try {
+    const closing = registeredAgentTool(pi, "close").execute(
+      "id",
+      { agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    now = 30_000;
+    const result = await closing;
+    assert.equal(result.details.error.category, "agent_busy");
+    assert.equal(result.details.error.operation, "close");
+    assert.deepEqual(result.details.error.details, {
+      workspaceId: WORKSPACE,
+      parentSessionId: parent.piSessionId,
+    });
+    assert.match(result.details.error.nextAction, /retry/i);
+    assert.equal(readAgentState(mailbox)?.piSessionId, parent.piSessionId);
+  } finally {
+    clock.mock.restore();
+    releaseLock();
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("lead close maps assignment-lock contention to agent_busy", async () => {
   setLeadEnvironment();
   const parent = {

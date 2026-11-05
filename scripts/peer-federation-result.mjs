@@ -276,9 +276,55 @@ export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
   if (
     message.isError !== true ||
     !/Unknown coordinator target; rediscover it/u.test(text)
-  )
-    throw new Error(`Unbound target did not match expected rejection: ${text}`);
+  ) {
+    const summary = managedLeadRejectionSummary(entries, assignedLeadTarget);
+    throw new Error(
+      `Unbound target did not match expected rejection (outcome=${summary.outcome}; exactTargetCalls=${summary.exactTargetCalls}; matchingToolResults=${summary.matchingToolResults})`,
+    );
+  }
   return { toolCallId: call.id, message, text };
+}
+
+export function managedLeadRejectionSummary(entries, assignedLeadTarget) {
+  const calls = entries
+    .filter(
+      (entry) =>
+        entry.type === "message" && entry.message?.role === "assistant",
+    )
+    .flatMap((entry) => entry.message.content ?? [])
+    .filter(
+      (part) =>
+        part.type === "toolCall" &&
+        part.name === "message_peer" &&
+        part.arguments?.target === assignedLeadTarget &&
+        typeof part.id === "string",
+    );
+  const results = entries.filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "message_peer" &&
+      calls.some((call) => entry.message.toolCallId === call.id),
+  );
+  let outcome = "wrong_rejection";
+  if (calls.length === 0) outcome = "missing_call";
+  else if (calls.length > 1) outcome = "duplicate_call";
+  else if (results.length === 0) outcome = "missing_result";
+  else if (results.length > 1) outcome = "duplicate_result";
+  else if (results[0].message.isError !== true) outcome = "non_error_result";
+  else {
+    const text = (results[0].message.content ?? [])
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (/Unknown coordinator target; rediscover it/u.test(text))
+      outcome = "expected_rejection";
+  }
+  return {
+    exactTargetCalls: calls.length,
+    matchingToolResults: results.length,
+    outcome,
+  };
 }
 
 export function assertPeerInListPeersResult(entries, peerTarget) {

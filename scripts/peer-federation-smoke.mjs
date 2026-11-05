@@ -26,6 +26,7 @@ import {
   delegateResultEvidence,
   isLiveCorrespondenceRecipient,
   matchedUnboundTargetRejection,
+  managedLeadRejectionSummary,
   matchedDelegateResult,
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
@@ -1369,15 +1370,16 @@ try {
     .split("\n")
     .filter(Boolean)
     .map(JSON.parse);
+  const rejectionTarget = coordinatorTarget("lead", assignedLeadSessionId);
+  if (process.env.PEER_SMOKE_SUMMARY === "1")
+    console.log(
+      `[peer-smoke-summary] ${JSON.stringify(managedLeadRejectionSummary(managedAttempt, rejectionTarget))}`,
+    );
   const rejectionResult = matchedUnboundTargetRejection(
     managedAttempt,
-    coordinatorTarget("lead", assignedLeadSessionId),
+    rejectionTarget,
   );
-  stage("managed-lead-discovery-excluded-and-unbound-target-rejected", {
-    sessionId: assignedLeadSessionId,
-    assignmentId: projectAssignment.id,
-    unboundTargetRejection: rejectionResult.text,
-  });
+  stage("managed-lead-discovery-excluded-and-unbound-target-rejected");
   const ordinaryLeadSession = resources.a.ordinaryLead.sessionPath;
   const discoveryStartLine = Number(
     exec("a", ["wc", "-l", ordinaryLeadSession]).trim().split(/\s/u)[0],

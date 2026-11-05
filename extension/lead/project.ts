@@ -546,9 +546,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         assignment.repoKey !== expected.repoKey)
     )
       throw new Error("Project assignment changed before stop");
-    const preflight = await host.liveLead(ctx, session);
-    if (preflight.length !== 1)
-      throw new Error("Exact live Lead was not found or is ambiguous");
     const close = async (heldLocks: ReadonlySet<string>) => {
       if (
         host.readProjectAssignment(
@@ -617,8 +614,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     return host.withProjectWorkLock(
       `${manager.repoKey}\0${assignment.branch}`,
-      () =>
-        host.withQuiescedTree(
+      async () => {
+        const preflight = (await host.liveLead(ctx, session)).filter(
+          (agent: any) => scope.workspaceIds.includes(agent.workspace_id),
+        );
+        if (preflight.length !== 1)
+          throw new Error("Exact live Lead was not found or is ambiguous");
+        return host.withQuiescedTree(
           ctx,
           session,
           preflight[0].workspace_id,
@@ -630,7 +632,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               signal,
             ),
           signal,
-        ),
+        );
+      },
     );
   };
   const inspectRemovalTarget = async (

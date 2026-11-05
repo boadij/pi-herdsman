@@ -188,8 +188,15 @@ const waitForDelegationLock = async (
       if (
         !(error instanceof ProcessLockOccupiedError) ||
         Date.now() >= deadline
-      )
+      ) {
+        if (error instanceof ProcessLockOccupiedError)
+          fail("agent_busy", error.message, "lifecycle", {
+            details: { workspaceId, parentSessionId: sessionId },
+            nextAction:
+              "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
+          });
         throw error;
+      }
       await delay(Math.min(50, deadline - Date.now()), undefined, { signal });
     }
   }
