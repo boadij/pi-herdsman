@@ -4,7 +4,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
-import { claimDelegationLock } from "../agent-controller.ts";
 import {
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   effectiveMergePolicy,
@@ -820,28 +819,28 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         host.controller.sessionSignal(),
       );
       if (!snapshot.agents.length) {
-        const release = claimDelegationLock(
-          host.controller.workspaceId(),
+        await host.controller.withQuiescedTree(
+          ctx,
           ctx.sessionManager.getSessionId(),
-        );
-        try {
-          const fresh = await host.controller.agentSnapshotView(
-            ctx,
-            { kind: "lead" },
-            host.controller.sessionSignal(),
-          );
-          if (fresh.stateIssues.length)
-            throw new Error(
-              "Owned Agent mailbox state is unresolved; stop not verified",
+          host.controller.workspaceId(),
+          async () => {
+            const fresh = await host.controller.agentSnapshotView(
+              ctx,
+              { kind: "lead" },
+              host.controller.sessionSignal(),
             );
-          if (fresh.visible.length) {
-            ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
-            return;
-          }
-          host.presentStopSummary("No owned agents running.");
-        } finally {
-          release();
-        }
+            if (fresh.stateIssues.length)
+              throw new Error(
+                "Owned Agent mailbox state is unresolved; stop not verified",
+              );
+            if (fresh.visible.length) {
+              ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
+              return;
+            }
+            host.presentStopSummary("No owned agents running.");
+          },
+          host.controller.sessionSignal(),
+        );
         return;
       }
       const confirmed = await ctx.ui.confirm(
@@ -852,32 +851,36 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       ctx.abort();
       const sessionId = ctx.sessionManager.getSessionId();
       const workspaceId = host.controller.workspaceId();
-      const release = claimDelegationLock(workspaceId, sessionId);
-      try {
-        const result = await host.controller.stopOwnedAgentsForSession(
-          ctx,
-          sessionId,
-          workspaceId,
-          host.controller.sessionSignal(),
-        );
-        let persisted = 0;
-        try {
-          persisted = await host.persistStopClosures(
+      await host.controller.withQuiescedTree(
+        ctx,
+        sessionId,
+        workspaceId,
+        async (heldLocks) => {
+          const result = await host.controller.stopOwnedAgentsForSession(
             ctx,
-            result.closures ?? [],
+            sessionId,
+            workspaceId,
+            host.controller.sessionSignal(),
+            heldLocks,
           );
-        } catch {
-          // A verified stop does not imply that continuation proof was persisted.
-        }
-        const unavailable = (result.closures?.length ?? 0) - persisted;
-        host.presentStopSummary(
-          (result.closures?.length ?? 0) > 0
-            ? `${result.summary}\nContinuity proof saved for ${persisted} stopped Agent${persisted === 1 ? "" : "s"}; unavailable for ${unavailable}. Agents without saved proof may not be continuable.`
-            : result.summary,
-        );
-      } finally {
-        release();
-      }
+          let persisted = 0;
+          try {
+            persisted = await host.persistStopClosures(
+              ctx,
+              result.closures ?? [],
+            );
+          } catch {
+            // A verified stop does not imply that continuation proof was persisted.
+          }
+          const unavailable = (result.closures?.length ?? 0) - persisted;
+          host.presentStopSummary(
+            (result.closures?.length ?? 0) > 0
+              ? `${result.summary}\nContinuity proof saved for ${persisted} stopped Agent${persisted === 1 ? "" : "s"}; unavailable for ${unavailable}. Agents without saved proof may not be continuable.`
+              : result.summary,
+          );
+        },
+        host.controller.sessionSignal(),
+      );
       if (host.isLead()) host.maybeFinishHerdRun(ctx);
     },
     async openExecutionMenu(ctx: ExtensionCommandContext): Promise<void> {

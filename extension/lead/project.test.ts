@@ -26,6 +26,135 @@ const { claimManagerLease } = await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
+test("stop Lead observes liveness after waiting for project-work serialization", async () => {
+  const ctx = fakeContext() as any;
+  const manager = {
+    repoKey: "/verified-repo",
+    workspaceId: "manager-workspace",
+    piSessionId: "manager-session",
+    leaseId: "lease",
+  };
+  const assignment = {
+    version: 2 as const,
+    id: "lead-session",
+    repoKey: manager.repoKey,
+    branch: "feature/stop",
+    text: "work",
+  };
+  const lead = {
+    workspace_id: "lead-workspace",
+    pane_id: "lead-pane",
+    tab_id: "lead-tab",
+    agent_session: { value: assignment.id },
+  } as any;
+  let queued!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => (queued = resolve));
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let waitingForProjectWork = false;
+  let liveCalls = 0;
+  let quiescedWorkspace: string | undefined;
+  let runtime: ReturnType<typeof createLeadProjectRuntime>;
+  runtime = createLeadProjectRuntime({
+    activeRole: () => "manager",
+    leadRuntime: { roleSuspended: false },
+    currentManager: async () => manager,
+    managerLease: () => ({ descriptor: manager }),
+    sameManagerDescriptor: () => true,
+    supervisionRuntime: () => ({}),
+    findProjectAssignmentBySession: () => [assignment],
+    readProjectAssignment: () => assignment,
+    loadSupervisionSnapshot: async () => ({
+      work: [
+        {
+          branch: assignment.branch,
+          session: assignment.id,
+          status: "active",
+        },
+      ],
+      incompatible: [],
+      leads: [
+        {
+          session: assignment.id,
+          paneId: lead.pane_id,
+          workspaceId: lead.workspace_id,
+          tabId: lead.tab_id,
+          instanceId: "lead-instance",
+          relationship: "assigned",
+          branch: assignment.branch,
+        },
+      ],
+    }),
+    directReports: async () => [
+      {
+        lead: assignment.id,
+        paneId: lead.pane_id,
+        workspaceId: lead.workspace_id,
+        tabId: lead.tab_id,
+        instanceId: "lead-instance",
+        relationship: "assigned",
+        branch: assignment.branch,
+        availableActions: ["stop"],
+      },
+    ],
+    worktreeGroupScope: async () => ({
+      repoKey: manager.repoKey,
+      workspaceIds: [lead.workspace_id],
+    }),
+    liveLead: async () => {
+      liveCalls++;
+      return waitingForProjectWork ? [] : liveCalls <= 2 ? [lead] : [];
+    },
+    readLeadCoordinationState: () => ({
+      instanceId: "lead-instance",
+      build: HERDSMAN_BUILD,
+    }),
+    requireCompatibleBuild: () => {},
+    withProjectWorkLock: async (
+      _key: string,
+      operation: () => Promise<any>,
+    ) => {
+      waitingForProjectWork = true;
+      queued();
+      await gate;
+      waitingForProjectWork = false;
+      return operation();
+    },
+    withQuiescedTree: async (
+      _ctx: unknown,
+      _session: string,
+      workspaceId: string,
+      operation: (held: ReadonlySet<string>) => Promise<unknown>,
+    ) => {
+      quiescedWorkspace = workspaceId;
+      return operation(new Set());
+    },
+    withProjectAssignmentLock: async (
+      _repo: string,
+      _branch: string,
+      operation: () => Promise<unknown>,
+    ) => operation(),
+    stopOwnedAgentsForSession: async () => ({ complete: true, closures: [] }),
+    stopProjectLeadPane: async () => {},
+    stopProjectLead: (...args: any[]) => runtime.stop(...args),
+  } as any);
+
+  const stopping = runtime.executeStaff(
+    "stop",
+    { action: "stop", branch: assignment.branch },
+    undefined,
+    undefined,
+    ctx,
+  );
+  await waiting;
+  assert.equal(liveCalls, 0, "liveness preflight must wait in the work queue");
+  release();
+  const result = await stopping;
+  assert.equal(result.details.ok, true);
+  assert.equal(quiescedWorkspace, lead.workspace_id);
+  assert.equal(liveCalls, 3);
+});
+
 test("staff message rejects an identity change during attachment preparation", async () => {
   const entries: unknown[] = [];
   const ctx = fakeContext(entries) as any;

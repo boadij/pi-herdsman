@@ -395,6 +395,7 @@ type LeadRuntimeOptions = {
     | "pi"
     | "SessionManager"
     | "stopOwnedAgentsForSession"
+    | "withQuiescedTree"
     | "withProjectWorkLock"
     | "supervisedSessionFile"
     | "sameObservedSessionPath"
@@ -3017,6 +3018,9 @@ export function registerLeadRuntime(
     stopOwnedAgentsForSession: (
       ...args: Parameters<typeof controller.stopOwnedAgentsForSession>
     ) => controller.stopOwnedAgentsForSession(...args),
+    withQuiescedTree: (
+      ...args: Parameters<typeof controller.withQuiescedTree>
+    ) => controller.withQuiescedTree(...args),
     pi,
     leadRuntime,
     HERDSMAN_BUILD: options.build,
