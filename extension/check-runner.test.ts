@@ -287,7 +287,7 @@ ${windowsTestFileClassifierScript}
 $results = foreach ($inputCommand in $inputs) {
   (Resolve-TestFile ([pscustomobject]@{ CommandLine = $inputCommand }) $repoRoot).category
 }
-$success = Resolve-TestFile ([pscustomobject]@{ CommandLine = ('node.exe "' + (Join-Path $repoRoot 'extension\check-runner.test.ts') + '"') }) $repoRoot
+$success = Resolve-TestFile ([pscustomobject]@{ CommandLine = ('node.exe "' + (Join-Path $repoRoot 'extension/check-runner.test.ts') + '"') }) $repoRoot
 ConvertTo-Json -InputObject @{ categories = @($results); file = $success.file; category = $success.category } -Compress
 `;
       const result = await runPowerShell(script);
