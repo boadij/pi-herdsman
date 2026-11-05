@@ -80,7 +80,21 @@ jobs:
           node-version: ${{ needs.scope.outputs.node_version }}
           package-manager-cache: false
       - run: npm ci
+      - name: Isolated Windows startup diagnostics (temporary)
+        id: isolated-startup-diagnostics
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        env:
+          HERDSMAN_STARTUP_DIAGNOSTICS: "1"
+        run: npm test -- --test-reporter=tap extension/controller-startup-diagnostics.test.ts
       - run: npm run check
+      - name: Require isolated Windows diagnostics success
+        if: always() && matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          DIAGNOSTICS_OUTCOME: ${{ steps.isolated-startup-diagnostics.outcome }}
+        run: |
+          if ($env:DIAGNOSTICS_OUTCOME -ne 'success') { exit 1 }
 
   windows-bootstrap:
     name: Windows bootstrap acceptance
