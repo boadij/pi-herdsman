@@ -71,7 +71,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --project tsconfig.json",
     "package:audit": "node scripts/package-audit.mjs",
-    "validate": "npm run format:check && npm run check && npm run build && npm run package:audit",
+    "validate": "npm run format:check && npm run typecheck && npm run lint -- --deny-warnings && npm run check && npm run build && npm run package:audit",
     "release:check": "npm run validate && npm publish --dry-run --ignore-scripts",
     "prepack": "npm run build"
   },

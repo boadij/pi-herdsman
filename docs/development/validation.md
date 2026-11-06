@@ -17,6 +17,8 @@ npm run format
 
 # Read-only verification before staging or committing.
 npm run format:check
+npm run typecheck
+npm run lint -- --deny-warnings
 npm run check
 git diff --check
 ```
@@ -24,11 +26,13 @@ git diff --check
 Do not run formatting again between these verification commands and staging or
 committing.
 
-`npm run format` applies formatting; `npm run format:check` verifies it without
-changing files. Both use the locally installed Prettier version pinned by the
-lockfile. `npm run check` runs the bounded behavioral test suite,
-`npm run validate` composes formatting verification, tests, build, and package
-audit, and `git diff --check` checks Git whitespace.
+TypeScript typechecking (`npm run typecheck`) and warning-free Oxlint
+(`npm run lint -- --deny-warnings`) are mandatory local and CI checks.
+`npm run validate` runs formatting verification, typechecking, warning-free
+linting, tests, build, and package audit. `npm run format` applies formatting;
+`npm run format:check` verifies it without changing files. Both use the locally
+installed Prettier version pinned by the lockfile. `npm run check` runs the
+bounded behavioral test suite, and `git diff --check` checks Git whitespace.
 
 When reviewing staged work, also run as appropriate:
 

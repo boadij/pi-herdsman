@@ -297,6 +297,19 @@ jobs:
           PEER_SMOKE_SUMMARY: ${{ matrix.summary }}
         run: node scripts/peer-federation-smoke.mjs
 
+  quality:
+    name: Static quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint -- --deny-warnings
+
   ci:
     name: CI
     if: ${{ always() }}
@@ -310,6 +323,7 @@ jobs:
         smoke,
         windows-bootstrap,
         peer-federation,
+        quality,
       ]
     runs-on: ubuntu-latest
     env:
@@ -328,6 +342,7 @@ jobs:
       WINDOWS_BOOTSTRAP_RESULT: ${{ needs.windows-bootstrap.result }}
       PEER_REQUIRED: ${{ needs.scope.outputs.peer }}
       PEER_RESULT: ${{ needs.peer-federation.result }}
+      QUALITY_RESULT: ${{ needs.quality.result }}
     steps:
       - run: |
           set -euo pipefail
@@ -351,3 +366,4 @@ jobs:
           required_result "$SMOKE_REQUIRED" "$SMOKE_RESULT" "Simulated smoke"
           required_result "$BOOTSTRAP_REQUIRED" "$WINDOWS_BOOTSTRAP_RESULT" "Windows bootstrap"
           required_result "$PEER_REQUIRED" "$PEER_RESULT" "Peer federation"
+          required_result "true" "$QUALITY_RESULT" "Static quality"
