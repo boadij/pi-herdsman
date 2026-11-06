@@ -124,21 +124,15 @@ overlay. A trusted project may therefore configure the Lead that works on its
 branch. A Lead that is already live is not hot-reconfigured; changed launch
 policy takes effect on its next start.
 
-Trust is determined for the target worktree, not inherited from the Manager
-session. Existing Pi trust decisions for that worktree are honored. If the
-saved decision approves it, the Lead may use its project and trusted
-private-repository definition layers; a saved denial starts it restricted. If
-the worktree has protected project configuration but no saved decision,
-Manager asks whether to trust it for this session, trust and remember it, or
-start the Lead restricted. Restricted mode excludes those layers; it is a
-configuration-trust choice, not an operating-system sandbox. With no protected
-configuration, Pi-compatible implicit trust applies.
-
-If approval is unavailable or the prompt is cancelled, Herdsman does not start
-a partially configured Lead. The assignment and checkout are preserved. After
-setting the target worktree's decision in Pi (for a persistent choice, use Pi's
-`/trust`), run `resume_work` with the original assignment branch and a fresh
-instruction to retry the launch.
+Herdsman-managed Leads inherit the Manager's effective Pi project-trust
+decision when launched into a verified linked worktree. A trusted Manager
+authorizes project and private-repository definitions in that worktree, even
+if a separate saved decision for the worktree differs. An untrusted Manager
+launches the Lead restricted. The decision applies to the managed process and
+does not modify Pi's persistent trust store. Same-worktree delegated Agents
+inherit their parent's effective trust. Already-running Leads are not
+reconfigured. Trust controls configuration access; it is not an
+operating-system sandbox.
 
 See [`delegate_work`](../reference/staff.md#delegate_work) and
 [`resume_work`](../reference/staff.md#resume_work).

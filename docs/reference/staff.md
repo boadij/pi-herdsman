@@ -194,15 +194,15 @@ binary, or oversized files fail instead of becoming required evidence. A
 supported snapshot that does not fit inline is delivered by reference to the
 preserved snapshot.
 
-Managed Lead trust is resolved for the target worktree, independently of the
-Manager session's trust. A saved Pi approval permits the project and trusted
-private-repository definition layers; a saved denial starts the Lead
-restricted. When protected project configuration is present and no saved
-decision applies, the Manager must obtain an explicit choice before starting
-the Lead. Restricted Leads do not load project or private-repository
-definitions. If approval is unavailable or cancelled, the assignment and
-checkout remain available, but no Lead is launched; after resolving trust, use
-`resume_work` to start that assignment.
+Herdsman-managed Leads inherit the Manager's effective Pi project-trust
+decision when launched into a verified linked worktree. A trusted Manager
+authorizes project and private-repository definitions in that worktree, even
+if a separate saved decision for the worktree differs. An untrusted Manager
+launches the Lead restricted. The decision applies to the managed process and
+does not modify Pi's persistent trust store. Same-worktree delegated Agents
+inherit their parent's effective trust. Already-running Leads are not
+reconfigured. Trust controls configuration access; it is not an
+operating-system sandbox.
 
 ## `resume_work`
 

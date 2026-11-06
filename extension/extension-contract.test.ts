@@ -5783,11 +5783,23 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.match(prompt, /Custom Manager strategy/);
     assert.match(
       prompt,
-      /overlapping assignments or unanswered coordination messages do not themselves block project work/,
+      /Independent assignments remain independent by default/,
     );
     assert.match(
       prompt,
-      /keep unaffected assignments progressing independently/,
+      /Potential overlap,[\s\S]*do not justify initiating or\s+directing cross-assignment coordination/,
+    );
+    assert.match(
+      prompt,
+      /report the evidence and affected work to the user for direction/,
+    );
+    assert.match(
+      prompt,
+      /overlapping assignments\s+or unanswered coordination messages do not themselves block project work/,
+    );
+    assert.match(
+      prompt,
+      /Keep unaffected assignments progressing independently/,
     );
     assert.match(
       pi.tools.find((tool) => tool.name === "message_supervisor")

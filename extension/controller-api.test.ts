@@ -4430,9 +4430,9 @@ async function runManagerStartupScenario(
       assert.deepEqual(
         args.slice(
           args.indexOf("--session-id"),
-          args.indexOf("--session-id") + 3,
+          args.indexOf("--session-id") + 2,
         ),
-        ["--session-id", starting.id, approvalFlag],
+        ["--session-id", starting.id],
       );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
