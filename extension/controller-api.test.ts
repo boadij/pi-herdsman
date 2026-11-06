@@ -10261,7 +10261,13 @@ test("scoped historical continuation rejects residual mailbox after state remova
     );
     assert.throws(
       () => resolveAssignmentSession(fakeContext([terminal]) as any, id),
-      /historical mailbox still exists/,
+      /Historical mailbox contains unresolved entries/,
+    );
+    realFs.rmSync(join(mailbox, `request-${requestId}.json`));
+    realFs.writeFileSync(join(mailbox, ".starting"), "", "utf8");
+    assert.throws(
+      () => resolveAssignmentSession(fakeContext([terminal]) as any, id),
+      /Historical mailbox contains unresolved entries/,
     );
   } finally {
     nativeSessions.clear();
@@ -10395,6 +10401,13 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     WORKSPACE,
     `malformed-${id.slice(0, 8)}`,
   );
+  const appearedPath = join(
+    agentMailboxPath(WORKSPACE, label),
+    "result-orphan.json",
+  );
+  const appearedBytes = '{"orphaned":true}\n';
+  let injectAppearedRecord = false;
+  let startCalls = 0;
   process.env.HERDR_SOCKET_PATH = socketPath;
   realFs.mkdirSync(checkoutPath, { recursive: true });
   const projectRuntime = supervisionRuntime(socketPath);
@@ -10451,7 +10464,7 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     undefined,
     undefined,
     false,
-    undefined,
+    () => startCalls++,
     "/tmp",
     AGENT_ID,
     false,
@@ -10463,7 +10476,11 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
   );
   const pi = fakePi({
     exec: async (command: string, args: string[]) => {
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+        if (injectAppearedRecord) {
+          injectAppearedRecord = false;
+          realFs.writeFileSync(appearedPath, appearedBytes, "utf8");
+        }
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -10486,6 +10503,7 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
           stderr: "",
           code: 0,
         };
+      }
       return startup.exec(command, args);
     },
   });
@@ -10513,8 +10531,27 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
       false,
       "the exact historical Agent mailbox must be absent after cleanup",
     );
+    realFs.mkdirSync(startup.mailbox, { recursive: true });
+    assert.deepEqual(realFs.readdirSync(startup.mailbox), []);
     realFs.mkdirSync(unrelatedMailbox, { recursive: true });
     realFs.writeFileSync(join(unrelatedMailbox, "state.json"), "{", "utf8");
+
+    injectAppearedRecord = true;
+    const rejected = await agentTool(pi, "continue").execute(
+      "id",
+      { session: id, task: "continue despite unrelated corrupt mailbox" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(rejected.details.ok, false, JSON.stringify(rejected.details));
+    assert.equal(
+      realFs.readFileSync(appearedPath, "utf8"),
+      appearedBytes,
+      "pre-reset verification must preserve a newly appeared mailbox record",
+    );
+    assert.equal(startCalls, 0, "preflight failure must not start an Agent");
+    realFs.rmSync(appearedPath);
 
     const result = await agentTool(pi, "continue").execute(
       "id",
@@ -10528,12 +10565,19 @@ test("valid scoped historical continuation ignores an unrelated corrupt mailbox"
     const state = readAgentState(startup.mailbox);
     assert.ok(state?.activeRequestId);
     assert.notEqual(state.activeRequestId, requestId);
+    assert.equal(state.piSessionId, id);
+    assert.deepEqual(realFs.readdirSync(unrelatedMailbox), ["state.json"]);
+    assert.equal(
+      realFs.readFileSync(join(unrelatedMailbox, "state.json"), "utf8"),
+      "{",
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(projectRuntime, repoKey, "continuation-isolation");
     realFs.rmSync(unrelatedMailbox, { recursive: true, force: true });
+    realFs.rmSync(appearedPath, { force: true });
     nativeSessions.delete(id);
     realFs.rmSync(path, { force: true });
     realFs.rmSync(checkoutPath, { recursive: true, force: true });
