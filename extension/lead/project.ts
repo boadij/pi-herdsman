@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   getAgentDir,
+  hasTrustRequiringProjectResources,
   ProjectTrustStore,
 } from "@earendil-works/pi-coding-agent";
 import type {
@@ -78,15 +79,10 @@ async function resolveManagedLeadTrust(
   const saved = store.get(cwd);
   if (saved !== null) return { kind: "launch", trusted: saved };
   if (
-    ![
-      "settings.json",
-      "extensions",
-      "prompts",
-      "skills",
-      "themes",
-      "agents",
-      "coordinators",
-    ].some((resource) => existsSync(join(cwd, ".pi", resource)))
+    !hasTrustRequiringProjectResources(cwd) &&
+    !["agents", "coordinators"].some((resource) =>
+      existsSync(join(cwd, ".pi", resource)),
+    )
   )
     return { kind: "launch", trusted: true };
   if (!ctx.hasUI) return { kind: "approval_required" };
@@ -3951,6 +3947,37 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             4096,
           ),
         );
+      }
+      if (operation.action === "resume" && !resumeMessageQueued) {
+        const fresh = await currentManager(ctx);
+        const stillAssigned = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error("Manager changed before resume handoff");
+        if (!stillAssigned || stillAssigned.id !== assignment.id)
+          throw new Error("Project assignment changed before resume handoff");
+        const partial = await prepareResumeHandoff();
+        if (partial) return partial;
+        const postPrepareManager = await currentManager(ctx);
+        const postPrepareAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (
+          !postPrepareManager ||
+          !sameManagerDescriptor(postPrepareManager, manager) ||
+          !postPrepareAssignment ||
+          postPrepareAssignment.id !== assignment.id
+        )
+          throw new Error(
+            "Manager or project assignment changed during resume handoff preparation",
+          );
+        await assertResumePlacement();
+        await queueResumeHandoff(false);
       }
       const assertManagerCurrent = async () => {
         const fresh = await currentManager(ctx);

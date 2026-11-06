@@ -8405,6 +8405,7 @@ async function managerDelegateAssignmentTest(
   extendedPaths = false,
   expectApprovalRequired = false,
   approvalChoice?: string,
+  protectedResource?: "mcp",
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -8463,12 +8464,17 @@ async function managerDelegateAssignmentTest(
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   const targetTrusted = (targetDecision ?? ancestorDecision) === true;
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  const managedLeadDir = join(childCwd, ".pi", "coordinators");
-  realFs.mkdirSync(managedLeadDir, { recursive: true });
-  realFs.writeFileSync(
-    join(managedLeadDir, "managed-lead.md"),
-    "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
-  );
+  if (protectedResource === "mcp") {
+    realFs.mkdirSync(join(childCwd, ".pi"), { recursive: true });
+    realFs.writeFileSync(join(childCwd, ".pi", "mcp.json"), "{}");
+  } else {
+    const managedLeadDir = join(childCwd, ".pi", "coordinators");
+    realFs.mkdirSync(managedLeadDir, { recursive: true });
+    realFs.writeFileSync(
+      join(managedLeadDir, "managed-lead.md"),
+      "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
+    );
+  }
   let childSession = `lead-${randomUUID()}`;
   let lead: any;
   let leadCtx: any;
@@ -10030,6 +10036,19 @@ test("Manager target approval cancellation preserves recoverable work", (t) =>
     false,
     true,
     "Cancel",
+  ));
+
+test("Pi MCP config requires an explicit managed Lead trust decision", (t) =>
+  managerDelegateAssignmentTest(
+    t,
+    true,
+    undefined,
+    null,
+    null,
+    false,
+    true,
+    undefined,
+    "mcp",
   ));
 
 test("Manager trust cannot authorize a denied target decision", (t) =>
