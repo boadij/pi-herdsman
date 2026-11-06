@@ -18,6 +18,45 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.40.0](https://github.com/boadij/pi-herdsman/compare/v0.39.0...v0.40.0) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** standardize coordinator profile directories ([#821](https://github.com/boadij/pi-herdsman/issues/821))
+
+### Features
+
+* **agents:** bundle validator and enable PowerShell for executors ([#817](https://github.com/boadij/pi-herdsman/issues/817)) ([a04e7a4](https://github.com/boadij/pi-herdsman/commit/a04e7a496906371616910d9a83950a813292bd63))
+* **agent:** support semantic result continuation ([#824](https://github.com/boadij/pi-herdsman/issues/824)) ([eaa13e7](https://github.com/boadij/pi-herdsman/commit/eaa13e7864074fbb4ce4116578f87b4bc9731319))
+* **config:** edit settings in their owning definition scope ([#820](https://github.com/boadij/pi-herdsman/issues/820)) ([32da2ed](https://github.com/boadij/pi-herdsman/commit/32da2ed8c4b66c0b7c433a9192155d18871a7d71))
+* **config:** support private repository definitions across worktrees ([#815](https://github.com/boadij/pi-herdsman/issues/815)) ([9b3fe4e](https://github.com/boadij/pi-herdsman/commit/9b3fe4e799ed8a8e59e7098d95a09198c1618d8d))
+
+
+### Fixes
+
+* **ci:** temporarily extend Windows suite deadline ([#827](https://github.com/boadij/pi-herdsman/issues/827)) ([499cda1](https://github.com/boadij/pi-herdsman/commit/499cda13ec82a4aff3927e13eb1e37cb1bdf2044))
+* **lifecycle:** make hierarchical shutdown reliable ([#823](https://github.com/boadij/pi-herdsman/issues/823)) ([3892336](https://github.com/boadij/pi-herdsman/commit/38923363359fe109cf0803d6b852a100484ea097))
+* **manager:** prevent redundant resume instructions ([#828](https://github.com/boadij/pi-herdsman/issues/828)) ([4a82f12](https://github.com/boadij/pi-herdsman/commit/4a82f122c606c86ebd16a2e0219b4bc18330ad90))
+* **manager:** scope resume topology revalidation to verified checkout ([#831](https://github.com/boadij/pi-herdsman/issues/831)) ([03f3c53](https://github.com/boadij/pi-herdsman/commit/03f3c5367c85dc02a579d172eb840a33d6dbdc55)), closes [#830](https://github.com/boadij/pi-herdsman/issues/830)
+
+
+### Refactoring
+
+* **config:** standardize coordinator profile directories ([#821](https://github.com/boadij/pi-herdsman/issues/821)) ([08a140c](https://github.com/boadij/pi-herdsman/commit/08a140c1789a075a2bbf8a5a5f90a3423115014d)), closes [#734](https://github.com/boadij/pi-herdsman/issues/734)
+
+
+### Tests
+
+* **ci:** add Windows startup timing diagnostics ([#825](https://github.com/boadij/pi-herdsman/issues/825)) ([53c8af4](https://github.com/boadij/pi-herdsman/commit/53c8af415f6ddfd5e1b9548f2061d5f235fc26b0))
+* **supervision:** release deferred Git sample on abort ([#829](https://github.com/boadij/pi-herdsman/issues/829)) ([bcab33e](https://github.com/boadij/pi-herdsman/commit/bcab33e02a9035453287ffbaae2d39f977060062))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.1 ([#818](https://github.com/boadij/pi-herdsman/issues/818)) ([8ad2a66](https://github.com/boadij/pi-herdsman/commit/8ad2a662e36e9fad7e69c61768a6933f7a352177))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.2 ([#826](https://github.com/boadij/pi-herdsman/issues/826)) ([cb0057b](https://github.com/boadij/pi-herdsman/commit/cb0057b9ffe624bab918f680a6ce699d3fa49be6))
+
 ## [0.39.0](https://github.com/boadij/pi-herdsman/compare/v0.38.1...v0.39.0) (2026-11-04)
 
 
