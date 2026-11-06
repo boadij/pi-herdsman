@@ -1974,7 +1974,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     prepareMessageInput,
     resolveMessageFiles,
     projectAssignmentBytes,
-    writeProjectAssignment,
     delay,
     startHerdrAgentInPane,
     sessionIdentity,
@@ -2007,7 +2006,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     host.withProjectAssignmentLock(
       assignment.repoKey,
       assignment.branch,
-      () => {
+      async () => {
         const current = host.readProjectAssignment(
           host.supervisionRuntime(),
           assignment.repoKey,
@@ -2023,7 +2022,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           return current;
         }
         const bound = { ...current, piSessionFile };
-        host.writeProjectAssignment(host.supervisionRuntime(), bound);
+        await writeProjectAssignmentAfter(
+          host.supervisionRuntime(),
+          current,
+          bound,
+          signal,
+          undefined,
+          host.onProjectAssignmentAuthorityWaitOccupied,
+        );
         return bound;
       },
       signal,
@@ -3569,47 +3575,65 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         await withProjectAssignmentLock(
           manager.repoKey,
           assignment.branch,
-          () => {
-            if (
-              readProjectAssignment(runtime, manager.repoKey, assignment.branch)
-            )
-              throw new Error(
-                `Work already exists on ${assignment.branch}; resume it with resume_work.`,
-              );
-            const competingClaim = host
-              .listProjectAssignments(runtime, manager.repoKey)
-              .find((existing) => {
-                if (existing.id === assignment.id) return false;
-                let claimedPath = existing.checkoutPath;
-                if (!claimedPath && existing.piSessionFile) {
-                  try {
-                    const saved = host.SessionManager.open(
-                      existing.piSessionFile,
-                    );
-                    if (saved.getSessionId() === existing.id)
-                      claimedPath = saved.getCwd();
-                  } catch {
-                    // Unverifiable legacy records do not establish a checkout claim.
-                  }
-                }
-                return (
-                  !!claimedPath &&
-                  sameDirectory(claimedPath, assignment.checkoutPath!)
-                );
-              });
-            if (competingClaim)
-              throw new Error(
-                `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
-              );
-            if (evidenceScope)
-              return evidenceScope.revalidate(() =>
-                writeProjectAssignment(
+          async () => {
+            if (evidenceScope) await evidenceScope.revalidate(() => {});
+            await writeProjectAssignmentAfter(
+              runtime,
+              undefined,
+              assignment,
+              signal,
+              () => {
+                const currentLease = host.managerLease();
+                const liveManager = readManagerDescriptor(
                   runtime,
-                  assignment,
-                  evidenceScope.verify,
-                ),
-              );
-            writeProjectAssignment(runtime, assignment);
+                  manager.workspaceId,
+                );
+                if (
+                  host.activeRole() !== "manager" ||
+                  host.leadRuntime.roleSuspended ||
+                  ctx.sessionManager.getSessionId() !== manager.piSessionId ||
+                  !currentLease ||
+                  !host.sameManagerDescriptor(
+                    currentLease.descriptor,
+                    manager,
+                  ) ||
+                  currentLease.descriptor.leaseId !== manager.leaseId ||
+                  !liveManager ||
+                  !host.sameManagerDescriptor(liveManager, manager)
+                )
+                  throw new Error(
+                    "Manager authority changed before project assignment was published",
+                  );
+                evidenceScope?.verify();
+                evidenceScope?.verifyProvenance();
+                const competingClaim = host
+                  .listProjectAssignments(runtime, manager.repoKey)
+                  .find((existing) => {
+                    if (existing.id === assignment.id) return false;
+                    let claimedPath = existing.checkoutPath;
+                    if (!claimedPath && existing.piSessionFile) {
+                      try {
+                        const saved = host.SessionManager.open(
+                          existing.piSessionFile,
+                        );
+                        if (saved.getSessionId() === existing.id)
+                          claimedPath = saved.getCwd();
+                      } catch {
+                        // Unverifiable legacy records do not establish a checkout claim.
+                      }
+                    }
+                    return (
+                      !!claimedPath &&
+                      sameDirectory(claimedPath, assignment.checkoutPath!)
+                    );
+                  });
+                if (competingClaim)
+                  throw new Error(
+                    `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
+                  );
+              },
+              host.onProjectAssignmentAuthorityWaitOccupied,
+            );
           },
           signal,
         );
