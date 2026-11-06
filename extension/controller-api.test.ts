@@ -3924,6 +3924,19 @@ async function runManagerStartupScenario(
         options?.cwd === childPath
       )
         return { stdout: `${childPath}\n`, stderr: "", code: 0 };
+      if (
+        args[0] === "rev-parse" &&
+        args.includes("--path-format=absolute") &&
+        args.includes("--git-path") &&
+        args.at(-1) === "modules"
+      )
+        return {
+          stdout: `${join(childPath, ".git", "modules")}\n`,
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "submodule" && args[1] === "status")
+        return { stdout: "", stderr: "", code: 0 };
       if (args[0] === "rev-parse")
         return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
       if (args[0] === "symbolic-ref")
