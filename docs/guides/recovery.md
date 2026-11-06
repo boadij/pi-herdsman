@@ -29,7 +29,7 @@ For stale attention, use this decision sequence:
 6. Keep waiting only while existing evidence still justifies the operation;
    otherwise use `interrupt_agent` to abandon it and continue the same assignment.
    Interrupt supersedes earlier undelivered steering.
-7. Use `close_agent` only when abandoning the assignment is intended.
+7. Use `stop_agent` only when abandoning the assignment is intended.
 
 Other persistent actionable conditions may repeat approximately `5m → 2m30s →
 1m15s → 1m`; stale episodes repeat approximately every five minutes after the
@@ -174,12 +174,13 @@ unknown Agent automatically.
 `lost` means the expected physical execution is proven gone before a durable
 terminal result resolved the assignment. The durable mailbox remains owned and
 the assignment remains unresolved; loss is not completion or task failure.
-Only the direct owner may use `close_agent` to abandon the lost generation. When
-`close_agent` is listed, use it before replacing it or continuing its saved session.
-If `close_agent` is absent, resolve the condition blocking its close preflight first.
+Only the direct owner may use `stop_agent` to abandon the lost generation. When
+`stop_agent` is listed, use it before replacing it or continuing its saved
+session.
+If `stop_agent` is absent, resolve the condition blocking its stop preflight first.
 Herdsman never redelegates or continues it automatically. Moved or conflicting
 evidence is `unknown`, not `lost`, and remains fail-closed.
-After a verified clean close, the direct owner may explicitly continue the exact
+After a verified clean Agent stop, the direct owner may explicitly continue the exact
 saved session. A verified `/agents stop` can also preserve a versioned receipt
 in the owner's history for that explicit continuation. Stop never auto-restarts
 work. Continuation starts a new generation and does not replay the abandoned
@@ -270,14 +271,14 @@ before retrying.
 A later attempt should not reuse a label or resource whose ownership is still
 uncertain.
 
-## Close failure
+## Agent stop failure
 
-Normal `close_agent` targets one exact directly owned live agent or a directly
+`stop_agent` targets one exact directly owned live agent or a directly
 owned generation proven `lost` by fresh absence evidence. Unknown presence
 fails closed.
 
-Closing a delegating agent cascades through its owned agents first. If a
-agent cannot be proved or closed safely, the delegating agent remains rather
+Stopping a delegating agent cascades through its owned agents first. If an
+agent cannot be proved or stopped safely, the delegating agent remains rather
 than being destructively guessed away.
 
 For lead-only human emergency cleanup, `/agents stop` operates on the proven
@@ -321,8 +322,8 @@ override or regenerate its saved label.
 An exact session that is already represented by active or unresolved managed
 work cannot be activated concurrently. The session-start exclusion applies to
 the canonical session path, so an exact UUID and its exact path identify the
-same target. Wait for the existing assignment to finish and clean up, or close
-its exact live agent when abandoning it, then retry. Do not delegate another
+same target. Wait for the existing assignment to finish and clean up, or use
+`stop_agent` to abandon its exact live Agent, then retry. Do not delegate another
 task through an agent label.
 
 ## Native Pi restoration of a managed Agent

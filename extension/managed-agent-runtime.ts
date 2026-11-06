@@ -2506,7 +2506,7 @@ export function registerManagedAgentSettlementHandlers(
             retrySafe: false,
             cleanupSafe: true,
             nextAction:
-              "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
+              "Resolve the mailbox persistence failure described by result_error, then use stop_agent before starting another assignment.",
           };
           try {
             const currentAssignment = execution.assignment;

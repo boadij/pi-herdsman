@@ -725,7 +725,7 @@ test("parent delegates two same-definition children with exact ownership", async
     for (const label of labels) {
       const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
-        .find((tool) => tool.name === "close_agent")!
+        .find((tool) => tool.name === "stop_agent")!
         .execute("close", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
       assert.deepEqual(closed.details.closed_assignment, {
@@ -842,7 +842,7 @@ const registeredAgentTool = (
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
-          close: "close_agent",
+          stop: "stop_agent",
           inspect: "inspect_agent",
           transcript: "read_agent_transcript",
         } as Record<string, string>
@@ -2461,7 +2461,7 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
       JSON.stringify(parentPi.entries),
     );
 
-    const closePromise = registeredAgentTool(leadPi, "close").execute(
+    const closePromise = registeredAgentTool(leadPi, "stop").execute(
       "close",
       { agent: parent.agentLabel },
       undefined,
@@ -2579,7 +2579,7 @@ test("managed Agent close quiesces and closes the target subtree child-first", a
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const closing = registeredAgentTool(pi, "close").execute(
+    const closing = registeredAgentTool(pi, "stop").execute(
       "close-subtree-child",
       { agent: child.agentLabel },
       undefined,
@@ -2644,7 +2644,7 @@ test("zero-child close waits for the parent delegation lock", async () => {
   );
 
   try {
-    const closing = registeredAgentTool(pi, "close").execute(
+    const closing = registeredAgentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -2707,7 +2707,7 @@ test("close maps an expired delegation-lock wait to actionable agent_busy", asyn
   let now = 0;
   const clock = mock.method(Date, "now", () => now);
   try {
-    const closing = registeredAgentTool(pi, "close").execute(
+    const closing = registeredAgentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -2753,7 +2753,7 @@ test("lead close maps assignment-lock contention to agent_busy", async () => {
     name: "test assignment transition",
   });
   try {
-    const result = await registeredAgentTool(pi, "close").execute(
+    const result = await registeredAgentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -2807,7 +2807,7 @@ test("cascade close revalidates the parent generation under its assignment lock"
         writeAgentState(parentMailbox, replacement);
       }
     };
-    const closed = await registeredAgentTool(pi, "close").execute(
+    const closed = await registeredAgentTool(pi, "stop").execute(
       "close-generation-race",
       { agent: parent.agentLabel },
       undefined,
@@ -2880,7 +2880,7 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
   registerExtension!(pi.pi as never);
   try {
     support.failNextRequestRemoval = true;
-    const first = await registeredAgentTool(pi, "close").execute(
+    const first = await registeredAgentTool(pi, "stop").execute(
       "close-parent-with-child-cleanup-failure",
       { agent: parent.agentLabel },
       undefined,
@@ -2908,7 +2908,7 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
     assert.ok(readAgentState(parentMailbox));
     assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
 
-    const retried = await registeredAgentTool(pi, "close").execute(
+    const retried = await registeredAgentTool(pi, "stop").execute(
       "retry-parent-close-after-child-cleanup",
       { agent: parent.agentLabel },
       undefined,
@@ -3193,7 +3193,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     );
     assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
 
-    const closed = await registeredAgentTool(pi, "close").execute(
+    const closed = await registeredAgentTool(pi, "stop").execute(
       "close",
       { agent: label },
       undefined,
@@ -13615,7 +13615,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       "utf8",
     );
     const closed = await parentPi.tools
-      .find((tool) => tool.name === "close_agent")!
+      .find((tool) => tool.name === "stop_agent")!
       .execute(
         "close-after-result-error",
         { agent: childLabel },
@@ -13628,7 +13628,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       closed.details.closed_assignment.request_id,
       resultError.requestId,
     );
-    persistToolResult("close_agent", closed);
+    persistToolResult("stop_agent", closed);
     const continuedAfterClose = await continuation.execute(
       "continue-after-result-error-close",
       {
@@ -13873,131 +13873,211 @@ test("continuation after a later unscoped assignment does not revive prior requi
 
 test("verified stop proof continues the exact accepted saved session", async () => {
   setLeadEnvironment();
-  const name = `stop-proof-${randomUUID().slice(0, 8)}`;
-  const sessionId = DEFAULT_PI_SESSION_ID;
-  const path = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
-  const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
-  const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
-  const requestId = randomUUID();
-  const state = managedState(name);
-  const session = {
-    id: sessionId,
-    path,
-    cwd: "/tmp",
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-definition",
-        data: { sessionId, definition: name, label: name },
-      },
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-required-evidence",
-        data: {
-          version: 1,
-          sessionId,
-          requestId,
-          runId: state.runId,
-          ownerSessionId: state.ownerSessionId,
-          workspaceId: state.workspaceId,
-          agentLabel: name,
-          paneId: state.paneId,
-          inheritedEvidence: [],
-          localEvidence: [],
-        },
-      },
-    ],
-  };
-  writeValidPiSessionFile(session);
-  realFs.writeFileSync(promptPath, "saved prompt", "utf8");
-  writePromptDefinition(definitionPath, name, promptPath);
-  nativeSessions.set(sessionId, session);
-  const savedMailbox = agentMailboxPath(WORKSPACE, name);
-  resetAgentMailbox(savedMailbox);
-  let continued: RequestRecord | undefined;
-  const startup = startupExecutor(
-    name,
-    () => sessionId,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    "/tmp",
-    AGENT_ID,
-    false,
-    false,
-    false,
-    (request) => {
-      continued = request;
+  const cases = [
+    {
+      name: "legacy pair",
+      tool: "close_agent",
+      action: "close",
+      expected: true,
     },
-  );
-  const proof = {
-    owner_session_id: state.ownerSessionId,
-    session_id: sessionId,
-    session_path: path,
-    run_id: state.runId,
-    request_id: requestId,
-    agent: name,
-    definition: name,
-    pane_id: state.paneId,
-    workspace_id: state.workspaceId,
-  };
-  const pi = fakePi({
-    exec: startup.exec,
-    entries: [
-      {
-        type: "message",
-        message: {
-          role: "toolResult",
-          toolName: "delegate_agent",
-          isError: false,
-          details: {
-            ok: true,
-            owner_session_id: state.ownerSessionId,
-            session_id: sessionId,
-            session_path: path,
-            request_id: requestId,
-            agent: name,
-            definition: name,
+    { name: "new pair", tool: "stop_agent", action: "stop", expected: true },
+    {
+      name: "legacy name/new action",
+      tool: "close_agent",
+      action: "stop",
+      expected: false,
+    },
+    {
+      name: "new name/legacy action",
+      tool: "stop_agent",
+      action: "close",
+      expected: false,
+    },
+    {
+      name: "missing accepted request",
+      tool: "stop_agent",
+      action: "stop",
+      expected: false,
+      missingRequest: true,
+    },
+    {
+      name: "partial cleanup",
+      tool: "stop_agent",
+      action: "stop",
+      expected: false,
+      partial: true,
+    },
+    {
+      name: "conflicting request proof",
+      tool: "stop_agent",
+      action: "stop",
+      expected: false,
+      conflictRequest: true,
+    },
+    {
+      name: "conflicting session proof",
+      tool: "stop_agent",
+      action: "stop",
+      expected: false,
+      conflictSession: true,
+    },
+  ];
+  for (const testCase of cases) {
+    const name = `stop-proof-${randomUUID().slice(0, 8)}`;
+    const sessionId = DEFAULT_PI_SESSION_ID;
+    const path = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
+    const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
+    const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
+    const requestId = randomUUID();
+    const state = managedState(name);
+    const session = {
+      id: sessionId,
+      path,
+      cwd: "/tmp",
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { sessionId, definition: name, label: name },
+        },
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-required-evidence",
+          data: {
+            version: 1,
+            sessionId,
+            requestId,
+            runId: state.runId,
+            ownerSessionId: state.ownerSessionId,
+            workspaceId: state.workspaceId,
+            agentLabel: name,
+            paneId: state.paneId,
+            inheritedEvidence: [],
+            localEvidence: [],
           },
         },
-      },
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-closed-assignment",
-        data: { version: 1, proof },
-      },
-    ],
-  });
-  registerExtension!(pi.pi as never);
-  seedLeadRole(fakeContext(pi.entries));
-  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
-  try {
-    const result = await registeredAgentTool(pi, "continue").execute(
-      "continue-after-verified-stop",
-      { session: path, task: "continue the accepted assignment" },
-      undefined,
-      undefined,
-      ownedSessionContext(sessionId, name),
-    );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(result.details.session_id, sessionId);
-    assert.notEqual(result.details.run_id, state.runId);
-    assert.notEqual(result.details.request_id, requestId);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(continued);
-    assert.equal(continued!.ownerSessionId, state.ownerSessionId);
-    assert.equal(continued!.agentLabel, name);
-    assert.notEqual(continued!.runId, state.runId);
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    nativeSessions.delete(sessionId);
-    resetAgentMailbox(startup.mailbox);
+      ],
+    };
+    writeValidPiSessionFile(session);
+    realFs.writeFileSync(promptPath, "saved prompt", "utf8");
+    writePromptDefinition(definitionPath, name, promptPath);
+    nativeSessions.set(sessionId, session);
+    const savedMailbox = agentMailboxPath(WORKSPACE, name);
     resetAgentMailbox(savedMailbox);
-    realFs.rmSync(path, { force: true });
-    realFs.rmSync(definitionPath, { force: true });
-    realFs.rmSync(promptPath, { force: true });
+    let continued: RequestRecord | undefined;
+    const startup = startupExecutor(
+      name,
+      () => sessionId,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      "/tmp",
+      AGENT_ID,
+      false,
+      false,
+      false,
+      (request) => {
+        continued = request;
+      },
+    );
+    const proof = {
+      owner_session_id: state.ownerSessionId,
+      session_id: sessionId,
+      session_path: path,
+      run_id: state.runId,
+      request_id: requestId,
+      agent: name,
+      definition: name,
+      pane_id: state.paneId,
+      workspace_id: state.workspaceId,
+    };
+    const pi = fakePi({
+      exec: startup.exec,
+      entries: [
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolName: "delegate_agent",
+            isError: false,
+            details: {
+              ok: true,
+              owner_session_id: state.ownerSessionId,
+              session_id: sessionId,
+              session_path: path,
+              ...(testCase.missingRequest ? {} : { request_id: requestId }),
+              agent: name,
+              definition: name,
+            },
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolName: testCase.tool,
+            details: {
+              ok: true,
+              action: testCase.action,
+              ...(testCase.partial
+                ? { cleanup_error: "cleanup incomplete" }
+                : {}),
+              closed_assignment: {
+                ...proof,
+                ...(testCase.conflictRequest
+                  ? { request_id: randomUUID() }
+                  : {}),
+                ...(testCase.conflictSession
+                  ? { session_id: randomUUID() }
+                  : {}),
+              },
+            },
+          },
+        },
+      ],
+    });
+    registerExtension!(pi.pi as never);
+    seedLeadRole(fakeContext(pi.entries));
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
+    try {
+      const result = await registeredAgentTool(pi, "continue").execute(
+        "continue-after-verified-stop",
+        { session: path, task: "continue the accepted assignment" },
+        undefined,
+        undefined,
+        fakeContext(pi.entries),
+      );
+      assert.equal(
+        result.details.ok,
+        testCase.expected,
+        `${testCase.name}: ${JSON.stringify(result.details)}`,
+      );
+      if (testCase.expected) {
+        assert.equal(result.details.session_id, sessionId);
+        assert.notEqual(result.details.run_id, state.runId);
+        assert.notEqual(result.details.request_id, requestId);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        assert.ok(continued, testCase.name);
+        assert.equal(continued!.ownerSessionId, state.ownerSessionId);
+        assert.equal(continued!.agentLabel, name);
+        assert.notEqual(continued!.runId, state.runId);
+      } else {
+        assert.equal(continued, undefined, testCase.name);
+      }
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      startup.stopMailboxConsumer();
+      nativeSessions.delete(sessionId);
+      resetAgentMailbox(startup.mailbox);
+      resetAgentMailbox(savedMailbox);
+      realFs.rmSync(path, { force: true });
+      realFs.rmSync(definitionPath, { force: true });
+      realFs.rmSync(promptPath, { force: true });
+    }
   }
 });
 

@@ -3449,8 +3449,8 @@ function expandedResultLines(
                       ? "interrupt accepted"
                       : tool === "agent" && action === "reply"
                         ? `reply sent to ${display}`
-                        : action === "close"
-                          ? `${display} closed`
+                        : tool === "agent" && action === "stop"
+                          ? `${display} stopped`
                           : `${action} ${display}`);
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
@@ -3525,7 +3525,11 @@ function expandedResultLines(
           ]
         : []),
     );
-  if (action === "close" && value(details.descendant_continuation_warning))
+  if (
+    tool === "agent" &&
+    action === "stop" &&
+    value(details.descendant_continuation_warning)
+  )
     lines.push(
       `descendant continuation warning: ${value(details.descendant_continuation_warning)}`,
     );
@@ -3915,8 +3919,8 @@ export function renderCoordinationResult(
           ? "steering queued"
           : action === "reply"
             ? "reply sent"
-            : action === "close"
-              ? `${label} closed`
+            : tool === "agent" && action === "stop"
+              ? `${label} stopped`
               : `${action} ${label}`;
     return new WidthSafeText(
       statusLine(theme, "success", "✓", message) +
@@ -3924,7 +3928,9 @@ export function renderCoordinationResult(
         (details.cleanup_errors && typeof details.cleanup_errors === "object")
           ? `\n${humanText(theme, "warning", `  ! cleanup warning · Ctrl+O`)}`
           : "") +
-        (action === "close" && value(details.descendant_continuation_warning)
+        (tool === "agent" &&
+        action === "stop" &&
+        value(details.descendant_continuation_warning)
           ? `\n${humanText(theme, "warning", `  ! descendant continuation warning · Ctrl+O`)}`
           : ""),
       0,
@@ -4684,7 +4690,7 @@ export function renderAgentLostMessage(
           typeof action === "string" && action.length > 0,
       )
     : [];
-  const closeAvailable = availableActions.includes("close");
+  const stopAvailable = availableActions.includes("stop");
   const nextReminder =
     typeof details.nextReminderMs === "number" &&
     Number.isFinite(details.nextReminderMs) &&
@@ -4709,17 +4715,17 @@ export function renderAgentLostMessage(
           : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         "",
-        ...(closeAvailable
-          ? ["Close this lost generation before replacing or continuing it."]
+        ...(stopAvailable
+          ? ["Stop this lost generation before replacing or continuing it."]
           : [
-              "Close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+              "Stop is not currently available; resolve the condition blocking its stop preflight before replacing or continuing it.",
             ]),
       ]
     : [
         statusLine(theme, "error", "×", `${label} lost`),
-        closeAvailable
-          ? "  assignment remains unresolved · close before replacing or continuing"
-          : "  assignment remains unresolved · close unavailable; resolve the blocking close-preflight condition first",
+        stopAvailable
+          ? "  assignment remains unresolved · stop before replacing or continuing"
+          : "  assignment remains unresolved · stop unavailable; resolve the blocking stop-preflight condition first",
       ];
   return renderMessageBox(
     new WidthSafeText(lines.join("\n"), 0, 0),

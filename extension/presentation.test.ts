@@ -2378,7 +2378,7 @@ test("compact coordination calls show available agent definitions", () => {
     ["interrupt", "interrupt agent  release-review · researcher"],
     ["reply", "reply agent  release-review · researcher"],
     ["inspect", "inspect agent  release-review · researcher"],
-    ["close", "close agent  release-review · researcher"],
+    ["stop", "stop agent  release-review · researcher"],
   ] as const) {
     assert.equal(
       renderedText(
@@ -2572,19 +2572,19 @@ test("coordination headers use semantic typography without ANSI-specific asserti
   const rendered = renderedText(
     renderCoordinationCall(
       "agent",
-      "close",
-      { action: "close", agent: "release-review" },
+      "stop",
+      { action: "stop", agent: "release-review" },
       styleProbeTheme,
       { agentDefinition: "researcher" },
     ),
   );
-  assert.match(rendered, /<toolTitle><bold>close agent<\/bold><\/toolTitle>/);
+  assert.match(rendered, /<toolTitle><bold>stop agent<\/bold><\/toolTitle>/);
   assert.match(
     rendered,
     /<accent>release-review<\/accent><muted> · researcher<\/muted>/,
   );
-  assert.ok(tokens.includes("bold:close agent"));
-  assert.ok(tokens.includes("toolTitle:<bold>close agent</bold>"));
+  assert.ok(tokens.includes("bold:stop agent"));
+  assert.ok(tokens.includes("toolTitle:<bold>stop agent</bold>"));
   assert.ok(tokens.includes("accent:release-review"));
   assert.ok(tokens.includes("muted: · researcher"));
 });
@@ -2690,7 +2690,7 @@ test("coordination call titles use action-first natural targets", () => {
     ["agent", "steer", "steer agent"],
     ["agent", "interrupt", "interrupt agent"],
     ["agent", "reply", "reply agent"],
-    ["agent", "close", "close agent"],
+    ["agent", "stop", "stop agent"],
     ["agent", "inspect", "inspect agent"],
     ["agent", "transcript", "read agent transcript"],
     ["staff", "list", "list staff"],
@@ -2892,19 +2892,19 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
             {
               agent: "root",
               state: "working",
-              available_tools: ["inspect_agent", "steer_agent", "close_agent"],
+              available_tools: ["inspect_agent", "steer_agent", "stop_agent"],
             },
             {
               agent: "child",
               parent_label: "root",
               state: "blocked",
-              available_tools: ["inspect_agent", "reply_agent", "close_agent"],
+              available_tools: ["inspect_agent", "reply_agent", "stop_agent"],
             },
             {
               agent: "grandchild",
               parent_label: "child",
               state: "working",
-              available_tools: ["inspect_agent", "close_agent"],
+              available_tools: ["inspect_agent", "stop_agent"],
             },
             {
               agent: "recovery",
@@ -3860,7 +3860,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "ask_owner",
@@ -3903,7 +3903,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     });
     assert.equal(
       widget.render(160)[0],
-      "● lead → implementer:one  [read, bash, list_agents, delegate_agent, continue_agent, steer_agent, interrupt_agent, reply_agent, close_agent, inspect_agent, …]",
+      "● lead → implementer:one  [read, bash, list_agents, delegate_agent, continue_agent, steer_agent, interrupt_agent, reply_agent, stop_agent, inspect_agent, …]",
     );
     assert.doesNotMatch(
       widget.render(160)[0]!,
@@ -4693,7 +4693,7 @@ test("tool and completion renderers retain structured action details", (_t) => {
       /✓ researcher started\n  ! cleanup warning · Ctrl\+O/,
     );
     assert.match(
-      formatToolModelResult("close", {
+      formatToolModelResult("stop", {
         ok: true,
         agent: "researcher",
         cleanup_error: "mailbox cleanup failed",
@@ -4712,30 +4712,30 @@ test("tool and completion renderers retain structured action details", (_t) => {
       renderedText(
         renderCoordinationResult(
           "agent",
-          "close",
+          "stop",
           closeWarnings,
           {},
           presentationTheme,
-          { args: { action: "close" } },
+          { args: { action: "stop" } },
         ),
       ),
-      /researcher closed\n  ! cleanup warning · Ctrl\+O\n  ! descendant continuation warning · Ctrl\+O/,
+      /researcher stopped\n  ! cleanup warning · Ctrl\+O\n  ! descendant continuation warning · Ctrl\+O/,
     );
     assert.match(
       renderedText(
         renderCoordinationResult(
           "agent",
-          "close",
+          "stop",
           closeWarnings,
           { expanded: true },
           presentationTheme,
-          { args: { action: "close" } },
+          { args: { action: "stop" } },
         ),
       ),
       /descendant continuation warning: child proof could not be saved/,
     );
     assert.match(
-      formatToolModelResult("close", {
+      formatToolModelResult("stop", {
         ok: true,
         label: "exact",
         pane_id: "p",
@@ -5280,7 +5280,7 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   assert.match(collapsedLost, /× researcher lost/);
   assert.match(
     collapsedLost,
-    /assignment remains unresolved · close unavailable; resolve the blocking close-preflight condition first/,
+    /assignment remains unresolved · stop unavailable; resolve the blocking stop-preflight condition first/,
   );
   assert.doesNotMatch(collapsedLost, /actions:|next reminder:/);
   const expandedLost = renderedText(
@@ -5289,7 +5289,7 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   assert.match(expandedLost, /actions: transcript/);
   assert.match(
     expandedLost,
-    /Close is not currently available; resolve the condition blocking its close preflight/,
+    /Stop is not currently available; resolve the condition blocking its stop preflight/,
   );
   assert.doesNotMatch(expandedLost, /Close this lost generation/);
   assert.match(expandedLost, /next reminder: ~2m 30s/);
@@ -5910,13 +5910,13 @@ test("List output preserves definitions and agent action state", (_t) => {
         {
           agent: "parent",
           state: "settling",
-          available_tools: ["inspect_agent", "reply_agent", "close_agent"],
+          available_tools: ["inspect_agent", "reply_agent", "stop_agent"],
         },
       ],
     });
     assert.match(
       rendered,
-      /parent · settling · available_tools: inspect_agent, reply_agent, close_agent/,
+      /parent · settling · available_tools: inspect_agent, reply_agent, stop_agent/,
     );
     assert.doesNotMatch(rendered, /\b(?:inspect|reply|close)\b/);
   }

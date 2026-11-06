@@ -229,7 +229,7 @@ It reports discarded active work or durable pending results when present.
 Cleanup uses existing exact ownership proofs and proceeds conservatively across
 independent failures.
 
-Use ordinary `close_agent` for normal targeted model-driven control.
+Use ordinary `stop_agent` for normal targeted model-driven control.
 
 `Project manager` offers `Start Manager mode` when inactive, or `Overview`,
 `Refresh profile`, and `Leave Manager mode` while active. `Advanced…` opens

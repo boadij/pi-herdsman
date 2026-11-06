@@ -604,10 +604,10 @@ function agentCrashRecoveryDecision(model, context) {
       if (!list) return call("list_agents", {});
       const closed = correlatedCall(
         messages,
-        "close_agent",
+        "stop_agent",
         "smoke-crash-target",
       );
-      if (!closed) return call("close_agent", { agent: "smoke-crash-target" });
+      if (!closed) return call("stop_agent", { agent: "smoke-crash-target" });
       const continuePrompt = messages.find(
         (message) =>
           message.role === "user" &&

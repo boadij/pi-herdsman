@@ -21,7 +21,7 @@ from `state` alone. `steer_agent` means active work accepts cooperative steering
 `interrupt_agent` means a currently working Pi operation may be preempted,
 superseding earlier undelivered steering with replacement direction,
 `reply_agent` means a correlated pending `ask_owner` is valid, and
-`close_agent` means exact direct ownership and the current applicable close
+`stop_agent` means exact direct ownership and the current applicable stop
 preflight permit teardown. For a
 Lead-owned parent, that preflight includes its owned descendant cascade.
 `available_tools` never includes `delegate_agent`; an agent generation handles one assignment only. Every operation
@@ -36,7 +36,7 @@ currently working Pi operation. Stale or inactive fields are advisory and do
 not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
 Directly owned live records may expose the applicable live controls; directly
-owned live or proven `lost` records may expose `close_agent` when the applicable close
+owned live or proven `lost` records may expose `stop_agent` when the applicable stop
 preflight currently succeeds. They may also expose the read-only `read_agent_transcript`
 action when a materialized persisted Pi session file exists. Unknown records and
 non-direct descendants remain fail-closed with no actions.
@@ -90,8 +90,8 @@ When exact physical evidence changes, re-evaluate the record from fresh state.
 
 `lost` is different: a coherent Herdr inventory proves the expected pane,
 session, and run-scoped alias are absent. It is not completion or task failure;
-use direct-owner `close_agent` to abandon the unresolved generation when the
-applicable close preflight succeeds. Lost attention may repeat for the direct
+use direct-owner `stop_agent` to abandon the unresolved generation when the
+applicable stop preflight succeeds. Lost attention may repeat for the direct
 owner while the assignment remains unresolved.
 
 ## Result precedence and actions
@@ -101,11 +101,11 @@ absence and projects as `settling` while delivery or recovery converges. A
 failed inventory never proves `lost`; relocated or conflicting evidence is
 `unknown`.
 
-| Record    | Direct-owner actions                                                                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live`    | `inspect_agent`, eligible `read_agent_transcript`, `steer_agent`, `interrupt_agent`, `reply_agent`, and `close_agent` when the applicable close preflight succeeds. |
-| `lost`    | eligible `read_agent_transcript` and `close_agent` when the applicable close preflight succeeds.                                                                    |
-| `unknown` | None.                                                                                                                                                               |
+| Record    | Direct-owner actions                                                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live`    | `inspect_agent`, eligible `read_agent_transcript`, `steer_agent`, `interrupt_agent`, `reply_agent`, and `stop_agent` when the applicable stop preflight succeeds. |
+| `lost`    | eligible `read_agent_transcript` and `stop_agent` when the applicable stop preflight succeeds.                                                                    |
+| `unknown` | None.                                                                                                                                                             |
 
 Owned descendants remain visible through proven durable ancestry but do not gain
 direct control from that visibility.
@@ -120,7 +120,7 @@ do not advance `last_activity_at`. This advisory does not change the state or
 prove a hang. The first stale attention is eligible after ten minutes without
 qualifying progress; if the same condition persists, reminders may repeat at
 approximately `5m → 2m30s → 1m15s → 1m`, subject to the 30-second health scan.
-Leave healthy or legitimately long-running work alone. Use `read_agent_transcript` for persisted evidence and `inspect_agent` for live evidence; stale alone does not justify `interrupt_agent` or `close_agent`.
+Leave healthy or legitimately long-running work alone. Use `read_agent_transcript` for persisted evidence and `inspect_agent` for live evidence; stale alone does not justify `interrupt_agent` or `stop_agent`.
 The stale episode is defined by its active request and last qualifying activity;
 first-attention diagnosis is bounded, and repeated reminders do not automatically
 repeat the live capture.

@@ -281,7 +281,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
           interrupt: "interrupt_agent",
           attach: "attach_handoff",
           reply: "reply_agent",
-          close: "close_agent",
+          stop: "stop_agent",
           inspect: "inspect_agent",
           transcript: "read_agent_transcript",
         } as Record<string, string>
@@ -1635,7 +1635,7 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
     recovered.resultError?.nextAction ?? "",
     /mailbox persistence failure described by result_error/,
   );
-  assert.match(recovered.resultError?.nextAction ?? "", /close_agent/);
+  assert.match(recovered.resultError?.nextAction ?? "", /stop_agent/);
 
   agent.events.get("session_shutdown")?.[0]();
   const root = fakePi({
@@ -1706,7 +1706,7 @@ test("agent rejects task replay while result persistence recovery is present", (
     retrySafe: false,
     cleanupSafe: true,
     nextAction:
-      "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
+      "Resolve the mailbox persistence failure described by result_error, then use stop_agent before starting another assignment.",
   };
   writeAgentState(mailbox, { ...managedState(label), resultError: recovery });
 
@@ -4084,7 +4084,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",

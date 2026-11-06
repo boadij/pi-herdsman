@@ -164,7 +164,7 @@ turn. For stale attention:
    Do not repeat reads solely because of a reminder.
 6. Otherwise use `interrupt_agent` to abandon the current operation and continue
    the same assignment; it supersedes earlier undelivered steering.
-7. Use `close_agent` only when abandoning the assignment is intended.
+7. Use `stop_agent` only when abandoning the assignment is intended.
 
 For other attention, use `read_agent_transcript` for persisted Pi conversation and tool
 history and `inspect_agent` for live terminal/process state as needed. Use `reply_agent` only
@@ -216,7 +216,7 @@ After normal mailbox cleanup, scoped continuation is allowed only when the
 saved assignment evidence matches its terminal result, or verified closure
 evidence matches the accepted request, exact session, and exact owner on the
 active Pi branch, and the project remains currently authorized. A clean
-`close_agent` or stop may preserve a versioned owner-history receipt for
+`stop_agent` or `/agents stop` may preserve a versioned owner-history receipt for
 explicit exact-session continuation. Stop never automatically restarts an
 Agent. Closing or stopping abandons unfinished work; continuation starts a new
 generation from the saved conversation and does not replay that work.
@@ -251,8 +251,10 @@ has not yet delivered, and supplies the replacement instruction that continues
 the same assignment. The generation, active task
 request, ownership, Pi session, and final-result obligation remain unchanged.
 
-Neither action creates another assignment. `close_agent` is the operation that
-abandons the managed generation.
+Neither action creates another assignment. `stop_agent` abandons the Agent's
+unfinished assignment and managed generation. By contrast, `stop_lead` stops a
+Manager-assigned Lead while preserving the project assignment, Pi session,
+branch, and worktree.
 
 Steering is at-least-once at the agent boundary: an agent can apply a steer
 before its acknowledgement write is recorded. If that acknowledgement write

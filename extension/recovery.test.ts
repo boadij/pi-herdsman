@@ -74,7 +74,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
-          close: "close_agent",
+          stop: "stop_agent",
           inspect: "inspect_agent",
           transcript: "read_agent_transcript",
         } as Record<string, string>
@@ -983,7 +983,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
-  assert.deepEqual(listed.details.agents[0].available_tools, ["close_agent"]);
+  assert.deepEqual(listed.details.agents[0].available_tools, ["stop_agent"]);
   assert.equal(listed.details.cleanup_errors, undefined);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
@@ -2430,7 +2430,7 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.deepEqual(waitingList.details.agents[0].available_tools, [
     "inspect_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
   ]);
   const result = await agentTool(pi, "reply").execute(
     "reply",
@@ -2492,7 +2492,7 @@ test("controller reply submits the normal request and preserves the assignment",
     "inspect_agent",
     "steer_agent",
     "interrupt_agent",
-    "close_agent",
+    "stop_agent",
   ]);
   const missingAsk = await agentTool(pi, "reply").execute(
     "reply-without-ask",
@@ -2753,7 +2753,7 @@ test("parent close cascades child-first and reports a structured child failure",
     });
     registerExtension!(pi.pi as never);
     try {
-      const result = await agentTool(pi, "close").execute(
+      const result = await agentTool(pi, "stop").execute(
         "id",
         { agent: parent.agentLabel },
         undefined,
@@ -2762,21 +2762,21 @@ test("parent close cascades child-first and reports a structured child failure",
       );
       if (!failed) {
         assert.equal(result.details.ok, true);
-        assert.equal(result.details.action, "close");
+        assert.equal(result.details.action, "stop");
         assert.equal(result.details.agent, parent.agentLabel);
         assert.equal(result.details.truncated, false);
         assert.ok(
           (result.content[0] as { text: string }).text.includes(
-            `Close agent ${parent.agentLabel}.`,
+            `Stop agent ${parent.agentLabel}.`,
           ),
         );
-        const rendered = agentTool(pi, "close").renderResult(
+        const rendered = agentTool(pi, "stop").renderResult(
           { content: result.content, details: result.details },
           { expanded: true, isPartial: false },
           { fg: (_color: string, text: string) => text },
           { args: { agent: parent.agentLabel } },
         );
-        assert.match(rendered.text, new RegExp(`${parent.agentLabel} closed`));
+        assert.match(rendered.text, new RegExp(`${parent.agentLabel} stopped`));
         assert.deepEqual(lifecycle.closeOrder, [
           child.agentLabel,
           parent.agentLabel,
@@ -2817,7 +2817,7 @@ test("close returns a structured nonfatal mailbox cleanup warning", async () => 
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -2891,7 +2891,7 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
       );
       assert.equal(listedChild?.parent_label, parent.agentLabel);
       assert.deepEqual(listedChild?.available_tools, []);
-      const result = await agentTool(pi, "close").execute(
+      const result = await agentTool(pi, "stop").execute(
         "id",
         { agent: child.agentLabel },
         undefined,
@@ -3118,7 +3118,7 @@ test("lead cannot mutate a child owned by a live parent", async () => {
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: child.agentLabel },
       undefined,
@@ -3158,7 +3158,7 @@ test("manual close omits malformed and absent agents", async () => {
   writeAgentState(mailbox, managedState(label, undefined, identity));
   await pi.events.get("session_start")![0](undefined, fakeContext());
   writeFileSync(join(mailbox, "state.json"), "{malformed", "utf8");
-  const tool = pi.tools.find((candidate) => candidate.name === "close_agent");
+  const tool = pi.tools.find((candidate) => candidate.name === "stop_agent");
   assert.ok(tool);
   const malformed = await tool.execute(
     "id",
@@ -4368,7 +4368,7 @@ test("manual close retains ownership when live session identity is missing or wr
       ),
     });
     registerExtension!(pi.pi as never);
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: label },
       undefined,
@@ -4773,7 +4773,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   );
   assert.match(
     advisory.content,
-    /Available tools: inspect_agent, steer_agent, interrupt_agent, close_agent/,
+    /Available tools: inspect_agent, steer_agent, interrupt_agent, stop_agent/,
   );
   assert.match(advisory.content, /steer_agent queues a cooperative correction/);
   assert.match(
@@ -5192,7 +5192,7 @@ test("result errors wake the direct owner with durable recovery evidence", async
       retrySafe: false,
       cleanupSafe: true,
       nextAction:
-        "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
+        "Resolve the mailbox persistence failure described by result_error, then use stop_agent before starting another assignment.",
     },
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -5217,7 +5217,7 @@ test("result errors wake the direct owner with durable recovery evidence", async
   assert.equal(attention?.details.requestId, REQUEST_ID);
   assert.equal(attention?.details.nextReminderMs, 5 * 60_000);
   assert.doesNotMatch(attention.details.nextAction, /\binspect_agent\b/);
-  assert.match(attention.details.nextAction, /\bclose_agent\b/);
+  assert.match(attention.details.nextAction, /\bstop_agent\b/);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -5442,7 +5442,7 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         retrySafe: false,
         cleanupSafe: true,
         nextAction:
-          "Use inspect_agent to inspect the stored result error, then use close_agent to close this agent.",
+          "Use inspect_agent to inspect the stored result error, then use stop_agent to close this agent.",
       },
     };
   });
@@ -5567,7 +5567,7 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     assert.equal(agent.state, "lost");
     assert.deepEqual(agent.available_tools, [
       "read_agent_transcript",
-      "close_agent",
+      "stop_agent",
     ]);
     assert.equal(
       pi.sent.filter(
@@ -5611,7 +5611,7 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     );
     assert.ok(readAgentState(mailbox));
 
-    const closed = await agentTool(pi, "close").execute(
+    const closed = await agentTool(pi, "stop").execute(
       "id",
       { agent: label },
       undefined,
@@ -5686,10 +5686,10 @@ test("lost parent health attention omits close when a descendant has an unread d
       (message: any) => message.customType === "pi-herdsman-agent-lost",
     ) as any;
     assert.equal(attention?.details.agentLabel, parent.agentLabel);
-    assert.equal(attention?.details.availableActions.includes("close"), false);
+    assert.equal(attention?.details.availableActions.includes("stop"), false);
     assert.match(
       String(attention?.content),
-      /close_agent is not currently available/,
+      /stop_agent is not currently available/,
     );
     assert.doesNotMatch(
       String(attention?.content),
@@ -5738,7 +5738,7 @@ test("live agents with an unread durable result do not advertise close", async (
       (candidate: any) => candidate.agent === label,
     );
     assert.equal(agent.state, "settling");
-    assert.equal(agent.available_tools.includes("close_agent"), false);
+    assert.equal(agent.available_tools.includes("stop_agent"), false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
@@ -5798,7 +5798,7 @@ test("lead list hides close when a descendant has an unread durable result", asy
     const listedParent = result.details.agents.find(
       (agent: any) => agent.agent === parent.agentLabel,
     );
-    assert.equal(listedParent.available_tools.includes("close_agent"), false);
+    assert.equal(listedParent.available_tools.includes("stop_agent"), false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(parentMailbox);
@@ -5844,7 +5844,7 @@ test("lost agents with an unread durable result cannot be closed", async () => {
     assert.equal(agent.state, "settling");
     assert.deepEqual(agent.available_tools, []);
 
-    const closed = await agentTool(pi, "close").execute(
+    const closed = await agentTool(pi, "stop").execute(
       "id",
       { agent: label },
       undefined,
@@ -5904,7 +5904,7 @@ test("cascade preflight keeps descendants when a lost parent has a pending resul
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const closed = await agentTool(pi, "close").execute(
+    const closed = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -5970,8 +5970,8 @@ test("lost close fails closed when a result appears during its final proof", asy
       undefined,
       fakeContext(),
     );
-    assert.deepEqual(listed.details.agents[0].available_tools, ["close_agent"]);
-    const closed = await agentTool(pi, "close").execute(
+    assert.deepEqual(listed.details.agents[0].available_tools, ["stop_agent"]);
+    const closed = await agentTool(pi, "stop").execute(
       "id",
       { agent: state.agentLabel },
       undefined,
@@ -6026,10 +6026,10 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
       (agent: any) => agent.agent === child.agentLabel,
     );
     assert.equal(parentRow?.state, "lost");
-    assert.equal(parentRow?.available_tools.includes("close_agent"), true);
+    assert.equal(parentRow?.available_tools.includes("stop_agent"), true);
     assert.equal(childRow?.parent_label, parent.agentLabel);
 
-    const closed = await agentTool(pi, "close").execute(
+    const closed = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6078,7 +6078,7 @@ test("unknown descendants refuse a lost-parent cascade", async () => {
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6141,7 +6141,7 @@ test("mixed live and unknown descendants preflight before closing", async () => 
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6205,7 +6205,7 @@ test("mixed lost and unknown descendants preflight before removing mailboxes", a
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6269,7 +6269,7 @@ test("nested cascades resolve every descendant deepest-first", async () => {
     const pi = fakePi({ exec: lifecycle.exec });
     registerExtension!(pi.pi as never);
     try {
-      const result = await agentTool(pi, "close").execute(
+      const result = await agentTool(pi, "stop").execute(
         "id",
         { agent: parent.agentLabel },
         undefined,
@@ -6335,7 +6335,7 @@ test("nested unknown descendants refuse the cascade before any mutation", async 
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6392,7 +6392,7 @@ test("duplicate durable parent identities refuse cascade before mutation", async
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6439,7 +6439,7 @@ test("cascade preflights the parent before closing descendants", async () => {
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
@@ -6500,7 +6500,7 @@ test("cascade revalidates a live descendant mailbox before closing it", async ()
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "id",
       { agent: parent.agentLabel },
       undefined,
