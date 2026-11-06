@@ -646,6 +646,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     branch: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    checkSubmoduleRemovalEligibility = false,
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
@@ -817,6 +818,65 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Checkout is dirty or could not be verified; worktree preserved",
       );
+    if (checkSubmoduleRemovalEligibility) {
+      const gitOptions = { cwd: checkoutPath, signal, timeout: 10_000 };
+      const metadata = await host.pi.exec(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-path", "modules"],
+        gitOptions,
+      );
+      const metadataOutput = String(metadata.stdout ?? "");
+      const modulesPath = metadataOutput.endsWith("\r\n")
+        ? metadataOutput.slice(0, -2)
+        : metadataOutput.endsWith("\n")
+          ? metadataOutput.slice(0, -1)
+          : metadataOutput;
+      if (
+        metadata.code !== 0 ||
+        metadata.killed ||
+        metadata.stderr?.trim() ||
+        !modulesPath ||
+        /[\r\n]/u.test(modulesPath) ||
+        !isAbsolute(modulesPath)
+      )
+        throw new Error(
+          "Git submodule metadata could not be verified; worktree preserved",
+        );
+      let hasModulesDirectory = false;
+      try {
+        hasModulesDirectory = statSync(modulesPath).isDirectory();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          throw new Error(
+            "Git submodule metadata could not be inspected; worktree preserved",
+          );
+      }
+      if (hasModulesDirectory)
+        throw new Error(
+          "Worktree retains Git submodule metadata; assigned Lead was not stopped",
+        );
+      const submodules = await host.pi.exec(
+        "git",
+        ["submodule", "status"],
+        gitOptions,
+      );
+      if (
+        submodules.code !== 0 ||
+        submodules.killed ||
+        submodules.stderr?.trim()
+      )
+        throw new Error(
+          "Git submodule state could not be verified; worktree preserved",
+        );
+      if (
+        String(submodules.stdout ?? "")
+          .split(/\r?\n/u)
+          .some((line) => line.length > 0 && line[0] !== "-")
+      )
+        throw new Error(
+          "Worktree contains initialized submodules; assigned Lead was not stopped",
+        );
+    }
     const leads = await host.liveLead(ctx, assignment.id);
     if (leads.length > 1)
       throw new Error(
@@ -1065,7 +1125,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Only Managers can remove project worktrees");
     const operationSignal = signal ?? ctx.signal;
     operationSignal?.throwIfAborted();
-    const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
+    const candidate = await inspectRemovalTarget(
+      branch,
+      ctx,
+      operationSignal,
+      true,
+    );
     if (
       options.expected &&
       (options.expected.repoKey !== candidate.manager.repoKey ||
@@ -1198,6 +1263,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     branch,
                     ctx,
                     operationSignal,
+                    true,
                   );
                   if (
                     current.assignment.id !== candidate.assignment.id ||
@@ -1306,6 +1372,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       branch,
                       ctx,
                       operationSignal,
+                      true,
                     );
                   } catch (error) {
                     if (!leadStopped) throw error;
@@ -4070,6 +4137,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         params.branch,
         ctx,
         operationSignal,
+        true,
       );
       await assertNoUnrelatedPiExecution(target, ctx, operationSignal);
       if (isWorktreeRemovalPreapproved(target.manager.repoKey))
@@ -4091,6 +4159,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         params.branch,
         ctx,
         operationSignal,
+        true,
       );
       if (
         host.activeRole() !== "manager" ||

@@ -6489,10 +6489,17 @@ async function managerRemovalFixture(
     primaryCheckoutAsWorktree?: boolean;
     wrongGitRepository?: boolean;
     missingGitRepository?: boolean;
+    submoduleStatusSequence?: string[];
+    submoduleStatusError?: boolean;
+    submoduleMetadataError?: boolean;
+    submoduleMetadataOutput?: string;
+    retainedSubmoduleMetadata?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
   const checkoutPath = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-child-"));
+  const modulesPath = join(checkoutPath, "git-modules");
+  if (options.retainedSubmoduleMetadata) mkdirSync(modulesPath);
   const unrelatedPath = realFs.mkdtempSync(
     join(PI_AGENT_ROOT, "remove-unrelated-"),
   );
@@ -6563,6 +6570,7 @@ async function managerRemovalFixture(
   let reconciliationAssignmentId: string | undefined;
   let reconciliationProjectWorkLocked: boolean | undefined;
   let liveLeadChecks = 0;
+  let submoduleStatusReads = 0;
   const inventoryOutput = () => {
     const worktrees = [
       `worktree ${repoKey}`,
@@ -6631,6 +6639,14 @@ async function managerRemovalFixture(
             stderr: "",
           };
         if (args[0] === "rev-parse" && args[1] === "--path-format=absolute") {
+          if (args[2] === "--git-path" && args[3] === "modules")
+            return options.submoduleMetadataError
+              ? { code: 1, stdout: "", stderr: "metadata unavailable" }
+              : {
+                  code: 0,
+                  stdout: options.submoduleMetadataOutput ?? `${modulesPath}\n`,
+                  stderr: "",
+                };
           const common =
             args.includes("--git-common-dir") && runOptions.cwd !== repoKey;
           const path =
@@ -6693,6 +6709,14 @@ async function managerRemovalFixture(
             stdout: `${join(repoKey, args[2]!)}\n`,
             stderr: "",
           };
+        if (args[0] === "submodule" && args[1] === "status") {
+          if (options.submoduleStatusError)
+            return { code: 1, stdout: "", stderr: "submodule unavailable" };
+          const sequence = options.submoduleStatusSequence ?? [""];
+          const output =
+            sequence[Math.min(submoduleStatusReads++, sequence.length - 1)];
+          return { code: 0, stdout: output, stderr: "" };
+        }
         if (args[0] === "ls-files" && args[1] === "--unmerged")
           return { code: 0, stdout: "", stderr: "" };
         if (args[0] === "merge-base" && args[1] === "--is-ancestor")
@@ -8163,6 +8187,90 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
   }
 });
 
+test("Manager removal preflights submodule eligibility before stopping the Lead", async (t) => {
+  for (const scenario of [
+    { name: "no submodules", options: {}, succeeds: true },
+    {
+      name: "uninitialized submodule",
+      options: { submoduleStatusSequence: ["-111 submodule (heads/main)\n"] },
+      succeeds: true,
+    },
+    {
+      name: "initialized submodule",
+      options: { submoduleStatusSequence: [" 111 submodule (heads/main)\n"] },
+      error: /contains initialized submodules/,
+    },
+    {
+      name: "mismatched submodule",
+      options: { submoduleStatusSequence: ["+111 submodule (heads/main)\n"] },
+      error: /contains initialized submodules/,
+    },
+    {
+      name: "conflicting submodule",
+      options: { submoduleStatusSequence: ["U111 submodule (heads/main)\n"] },
+      error: /contains initialized submodules/,
+    },
+    {
+      name: "retained submodule metadata",
+      options: { retainedSubmoduleMetadata: true },
+      error: /retains Git submodule metadata/,
+    },
+    {
+      name: "submodule initialized before locked inspection",
+      options: {
+        submoduleStatusSequence: ["", " 111 submodule (heads/main)\n"],
+      },
+      error: /contains initialized submodules/,
+    },
+    {
+      name: "metadata verification failure",
+      options: { submoduleMetadataError: true },
+      error: /metadata could not be verified/,
+    },
+    {
+      name: "malformed metadata path output",
+      options: {
+        submoduleMetadataOutput: `${join(PI_AGENT_ROOT, "missing-modules")}\nextra diagnostic\n`,
+      },
+      error: /metadata could not be verified/,
+    },
+    {
+      name: "submodule verification failure",
+      options: { submoduleStatusError: true },
+      error: /state could not be verified/,
+    },
+  ] as const) {
+    await t.test(scenario.name, async (subtest) => {
+      const fixture = await managerRemovalFixture(subtest, {
+        runningLead: true,
+        ...scenario.options,
+      });
+      if (scenario.succeeds) {
+        const result = await fixture.runtime.removeWorktree(
+          "feat/remove-test",
+          fixture.ctx,
+        );
+        assert.equal(result.details.checkout_removed, true);
+        assert.equal(result.details.assignment_retired, true);
+        assert.equal(result.details.forced, false);
+        assert.equal(result.details.lead_stopped, true);
+        assert.equal(fixture.stoppedLeadCount(), 1);
+        assert.deepEqual(fixture.removals, ["child-workspace"]);
+        assert.equal(fixture.assignment(), undefined);
+      } else {
+        await assert.rejects(
+          fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
+          scenario.error,
+        );
+        assert.equal(fixture.stoppedLeadCount(), 0);
+        assert.deepEqual(fixture.removals, []);
+        assert.ok(fixture.assignment());
+        assert.ok(existsSync(fixture.checkoutPath));
+      }
+    });
+  }
+});
+
 test("Manager removal rejects a replacement Lead after quiescing the preflight Lead", async (t) => {
   const fixture = await managerRemovalFixture(t, {
     runningLead: true,
@@ -8584,6 +8692,19 @@ async function managerDelegateAssignmentTest(
         return { stdout: gitStatusOutput, stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
         return { stdout: `${childCwd}\n`, stderr: "", code: 0 };
+      if (
+        args[0] === "rev-parse" &&
+        args[1] === "--path-format=absolute" &&
+        args[2] === "--git-path" &&
+        args[3] === "modules"
+      )
+        return {
+          stdout: `${join(childCwd, ".herdsman-test-no-modules")}\n`,
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "submodule" && args[1] === "status")
+        return { stdout: "", stderr: "", code: 0 };
       if (args[0] === "rev-parse" && args[1] === "--path-format=absolute")
         return {
           stdout: `${(options?.cwd === childCwd || options?.cwd === toNamespacedPath(childCwd)) && (args.includes("--show-toplevel") || args.includes("--git-dir")) ? childCwd : extendedPaths && args.includes("--show-toplevel") ? repoPath : gitRepoPath}\n`,
