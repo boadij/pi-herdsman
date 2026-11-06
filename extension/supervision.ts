@@ -2518,7 +2518,7 @@ export function writeProjectAssignment(
 
 export function writeProjectAssignmentAfter(
   runtime: SupervisionRuntime,
-  expected: ProjectAssignment,
+  expected: ProjectAssignment | undefined,
   assignment: ProjectAssignment,
   signal?: AbortSignal,
   verifyAuthority?: () => void,
@@ -2529,12 +2529,16 @@ export function writeProjectAssignmentAfter(
       verifyAuthority?.();
       const current = readProjectAssignment(
         runtime,
-        expected.repoKey,
-        expected.branch,
+        assignment.repoKey,
+        assignment.branch,
       );
-      if (!current || !isDeepStrictEqual(current, expected))
+      if (
+        expected ? !current || !isDeepStrictEqual(current, expected) : !!current
+      )
         throw new Error(
-          "Project assignment changed before required evidence was updated",
+          expected
+            ? "Project assignment changed before required evidence was updated"
+            : `Work already exists on ${assignment.branch}; resume it with resume_work.`,
         );
       writeProjectAssignmentUnlocked(runtime, assignment);
     },

@@ -8511,6 +8511,7 @@ async function managerDelegateAssignmentTest(
   targetDecision: boolean | null = projectTrusted,
   ancestorDecision: boolean | null = null,
   extendedPaths = false,
+  authorityContention?: "publication" | "binding" | "conflict" | "cancel",
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -8584,6 +8585,13 @@ async function managerDelegateAssignmentTest(
   let leadToolError: unknown;
   let leadToolResult: unknown;
   let leadPublication: Promise<void> | undefined;
+  let authorityHolder: ReturnType<typeof acquireProcessLock> | undefined;
+  let signalAuthorityWait!: () => void;
+  const authorityWait = new Promise<void>((resolve) => {
+    signalAuthorityWait = resolve;
+  });
+  let authorityWaitSeen = false;
+  let authorityWaitController: AbortController | undefined;
   let managerLockClaim: ReturnType<typeof readLiveProcessLock> | undefined;
   let leadLockClaim: ReturnType<typeof readLiveProcessLock> | undefined;
   let lockedAssignmentSnapshot: unknown;
@@ -9036,6 +9044,19 @@ async function managerDelegateAssignmentTest(
       });
     const result = await exec(command, args, options);
     if (
+      authorityContention === "binding" &&
+      command === "herdr" &&
+      args[0] === "agent" &&
+      args[1] === "start"
+    ) {
+      const { projectAssignmentAuthorityLockPath } =
+        await import("./supervision.ts");
+      authorityHolder = acquireProcessLock(
+        projectAssignmentAuthorityLockPath(),
+        { name: "test session-binding contention" },
+      );
+    }
+    if (
       lockOrder === "lead-first" &&
       command === "herdr" &&
       args[0] === "agent" &&
@@ -9081,6 +9102,25 @@ async function managerDelegateAssignmentTest(
     persistMessages: true,
   });
   const managerLockHooks = {
+    onAuthorityWaitOccupied: () => {
+      authorityWaitSeen = true;
+      signalAuthorityWait();
+      if (authorityContention === "conflict" && authorityHolder) {
+        authorityHolder.release();
+        authorityHolder = undefined;
+        writeProjectAssignment(supervisionRuntime(), {
+          version: 2,
+          id: randomUUID(),
+          repoKey,
+          branch: createdBranch,
+          text: "competing assignment",
+        });
+      } else if (authorityContention === "cancel") {
+        authorityWaitController?.abort(
+          new Error("cancel during authority wait"),
+        );
+      }
+    },
     afterOccupied: async (lockedRepo: string) => {
       if (lockedRepo === repoKey && lockOrder === "lead-first")
         signalManagerWait();
@@ -9133,7 +9173,8 @@ async function managerDelegateAssignmentTest(
       }
     },
   };
-  if (lockOrder) registerExtensionForTest(pi.pi as never, managerLockHooks);
+  if (lockOrder || authorityContention)
+    registerExtensionForTest(pi.pi as never, managerLockHooks);
   else registerExtension!(pi.pi as never);
   initializeLeadRuntime = async () => {
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
@@ -9225,14 +9266,86 @@ async function managerDelegateAssignmentTest(
     );
     let outcome: any;
     let delegationError: unknown;
+    if (
+      authorityContention === "publication" ||
+      authorityContention === "conflict" ||
+      authorityContention === "cancel"
+    ) {
+      const { projectAssignmentAuthorityLockPath } =
+        await import("./supervision.ts");
+      authorityHolder = acquireProcessLock(
+        projectAssignmentAuthorityLockPath(),
+        {
+          name: "test assignment-publication contention",
+        },
+      );
+    }
+    if (authorityContention === "cancel") {
+      authorityWaitController = new AbortController();
+      ctx.signal = authorityWaitController.signal;
+    }
     const delegate = staff.execute(
       "delegate",
       { task: "Implement focused change" },
-      undefined,
+      authorityWaitController?.signal,
       undefined,
       ctx,
     );
-    if (lockOrder === "lead-first") {
+    if (authorityContention) {
+      const settled = delegate.then(
+        (value: unknown) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          delegationError = error;
+        },
+      );
+      await authorityWait;
+      assert.equal(authorityWaitSeen, true);
+      const pendingAssignments = listProjectAssignments(
+        supervisionRuntime(),
+        repoKey,
+      );
+      if (authorityContention === "publication") {
+        assert.equal(pendingAssignments.length, 0);
+        assert.equal(leadStarted, false);
+      } else if (authorityContention === "conflict") {
+        assert.equal(pendingAssignments.length, 1);
+        assert.equal(pendingAssignments[0]!.text, "competing assignment");
+        assert.equal(leadStarted, false);
+      } else if (authorityContention === "cancel") {
+        assert.equal(pendingAssignments.length, 0);
+        assert.equal(leadStarted, false);
+      } else {
+        assert.equal(pendingAssignments.length, 1);
+        assert.equal(pendingAssignments[0]!.piSessionFile, undefined);
+        assert.equal(
+          pi.calls.filter((args) => args[0] === "agent" && args[1] === "start")
+            .length,
+          1,
+        );
+      }
+      authorityHolder?.release();
+      authorityHolder = undefined;
+      await settled;
+      if (authorityContention === "conflict") {
+        assert.match(String(delegationError), /resume it with resume_work/);
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), repoKey)[0]!.text,
+          "competing assignment",
+        );
+        removeProjectAssignment(supervisionRuntime(), repoKey, createdBranch);
+        return;
+      }
+      if (authorityContention === "cancel") {
+        assert.ok(delegationError);
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), repoKey).length,
+          0,
+        );
+        return;
+      }
+    } else if (lockOrder === "lead-first") {
       const settled = delegate.then(
         (value: unknown) => {
           outcome = value;
@@ -10068,6 +10181,7 @@ async function managerDelegateAssignmentTest(
       await lead.events.get("session_shutdown")?.[0]();
     }
   } finally {
+    authorityHolder?.release();
     releaseLeadLock();
     if (leadPublication) await leadPublication;
     if (lockOrder) await lead?.events.get("session_shutdown")?.[0]();
@@ -10111,6 +10225,50 @@ test("saved target ancestor trust authorizes the target independently of Manager
 
 test("Manager session binding holds the assignment lock before Lead publication", (t) =>
   managerDelegateAssignmentTest(t, false, "manager-first"));
+
+test("registered delegate_work waits for authority before initial assignment publication", (t) =>
+  managerDelegateAssignmentTest(
+    t,
+    true,
+    undefined,
+    true,
+    null,
+    false,
+    "publication",
+  ));
+
+test("registered delegate_work waits for authority while binding the started Lead session", (t) =>
+  managerDelegateAssignmentTest(
+    t,
+    true,
+    undefined,
+    true,
+    null,
+    false,
+    "binding",
+  ));
+
+test("registered delegate_work preserves a conflicting assignment created during authority wait", (t) =>
+  managerDelegateAssignmentTest(
+    t,
+    true,
+    undefined,
+    true,
+    null,
+    false,
+    "conflict",
+  ));
+
+test("registered delegate_work cancellation during authority wait publishes nothing", (t) =>
+  managerDelegateAssignmentTest(
+    t,
+    true,
+    undefined,
+    true,
+    null,
+    false,
+    "cancel",
+  ));
 
 test("Lead publication holds the assignment lock before Manager session binding", (t) =>
   managerDelegateAssignmentTest(t, false, "lead-first"));
