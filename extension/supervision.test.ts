@@ -36,6 +36,7 @@ const {
   sameChiefDescriptor,
   sameManagerDescriptor,
   writeProjectAssignment,
+  writeProjectAssignmentAfter,
   readProjectAssignment,
   listProjectAssignments,
   removeProjectAssignment,
@@ -4903,6 +4904,33 @@ test("global authority wait handles release, cancellation, and timeout without r
   } finally {
     holder.release();
   }
+});
+
+test("assignment compare-and-write creates only when the target is absent", async () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 2 as const,
+    id: id(),
+    repoKey: "create-only",
+    branch: "feature",
+    text: "task",
+  };
+  await writeProjectAssignmentAfter(runtime, undefined, assignment);
+  assert.deepEqual(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+    assignment,
+  );
+  await assert.rejects(
+    writeProjectAssignmentAfter(runtime, undefined, {
+      ...assignment,
+      id: id(),
+    }),
+    /resume it with resume_work/,
+  );
+  assert.deepEqual(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+    assignment,
+  );
 });
 
 test("pending retirements preserve exact generations and reject conflicting storage", () => {

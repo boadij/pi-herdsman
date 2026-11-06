@@ -364,15 +364,23 @@ function projectLifecycle(options: {
   const assignmentRoot = join(assignments, "root");
   mkdirSync(assignmentRoot, { recursive: true });
   const branch = "feature/baseline";
-  const manager = {
-    repoKey,
-    workspaceId: WORKSPACE,
-    socket: "/test-socket",
-    group: null,
-    leaseId: randomUUID(),
-    piSessionId: randomUUID(),
+  const supervision = {
+    root: assignmentRoot,
+    assignments,
+    managers: join(assignments, "managers"),
   };
-  let published: any;
+  const managerLease = claimManagerLease(
+    {
+      build: HERDSMAN_BUILD,
+      repoKey,
+      workspaceId: WORKSPACE,
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      piSessionId: randomUUID(),
+    },
+    supervision as any,
+  );
+  const manager = managerLease.descriptor;
   const topology = {
     source: {
       repo_key: repoKey,
@@ -383,6 +391,7 @@ function projectLifecycle(options: {
     worktrees: [],
   };
   const runtime = createLeadProjectRuntime({
+    activeRole: () => "manager",
     pi: {
       exec: async (command: string, args: string[]) => {
         if (command === "herdr") {
@@ -419,7 +428,7 @@ function projectLifecycle(options: {
       primaryWorkspaceId: WORKSPACE,
       worktrees: topology.worktrees,
     }),
-    supervisionRuntime: () => ({ root: assignmentRoot, assignments }),
+    supervisionRuntime: () => supervision as any,
     readProjectAssignment: () => undefined,
     listProjectAssignments: () => [],
     reconcileProjectAssignments: async () => {},
@@ -501,12 +510,12 @@ function projectLifecycle(options: {
       verify?: () => void,
     ) => {
       verify?.();
-      published = assignment;
     },
     appendDurableError: () => {},
   } as any);
   const ctx = fakeContext() as any;
   ctx.cwd = managerCheckout;
+  ctx.sessionManager.getSessionId = () => manager.piSessionId;
   return {
     branch,
     manager,
@@ -514,21 +523,26 @@ function projectLifecycle(options: {
     worktreePath,
     workspaceId,
     get published() {
-      return published;
+      return readProjectAssignment(supervision as any, repoKey, branch);
     },
     runtime,
     ctx,
-    activate: (signal = new AbortController().signal) =>
-      runtime.activateProjectLead(
-        {
-          action: "delegate",
-          task: "work",
-          branch,
-          ...(options.retained ? { files: [options.retained.ref!] } : {}),
-        },
-        ctx,
-        signal,
-      ),
+    activate: async (signal = new AbortController().signal) => {
+      try {
+        return await runtime.activateProjectLead(
+          {
+            action: "delegate",
+            task: "work",
+            branch,
+            ...(options.retained ? { files: [options.retained.ref!] } : {}),
+          },
+          ctx,
+          signal,
+        );
+      } finally {
+        managerLease.release();
+      }
+    },
   };
 }
 

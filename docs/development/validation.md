@@ -58,7 +58,8 @@ The test runner uses:
 
 On POSIX systems the test runner runs in a detached process group. On Windows
 it runs as a normal child process and uses the native `taskkill.exe /PID <pid>
-/T /F` process-tree operation for timeout cleanup.
+/T /F` process-tree operation for timeout cleanup. The suite deadline is
+360 seconds on all three platforms.
 
 On POSIX suite deadline, the runner attempts:
 
@@ -72,8 +73,7 @@ snapshot. The runner invokes `taskkill.exe /PID <pid> /T /F` and waits for the
 runner process to disappear. Filename attribution is best-effort and may be
 unavailable when cleanup wins the race; raw command lines and environment
 details are not logged. Snapshot failure does not replace the original
-suite-timeout failure. The 240-second suite deadline remains unchanged. Runner
-disappearance does not verify descendant
+suite-timeout failure. Runner disappearance does not verify descendant
 cleanup, which is explicitly reported as unverified.
 
 A test runner that leaks descendants after normal exit is reported as a failure

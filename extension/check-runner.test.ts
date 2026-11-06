@@ -60,11 +60,8 @@ function childIsRunning(pid: number): boolean {
   }
 }
 
-test("check suite deadline allows extra time on Windows", () => {
-  assert.equal(
-    CHECK_TIMEOUT_MS,
-    process.platform === "win32" ? 360_000 : 240_000,
-  );
+test("check suite deadline is six minutes on every platform", () => {
+  assert.equal(CHECK_TIMEOUT_MS, 360_000);
 });
 
 test("worker snapshot is scheduled 25 seconds before the suite deadline", () => {

@@ -696,6 +696,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     branch: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    checkSubmoduleRemovalEligibility = false,
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
@@ -867,6 +868,65 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Checkout is dirty or could not be verified; worktree preserved",
       );
+    if (checkSubmoduleRemovalEligibility) {
+      const gitOptions = { cwd: checkoutPath, signal, timeout: 10_000 };
+      const metadata = await host.pi.exec(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-path", "modules"],
+        gitOptions,
+      );
+      const metadataOutput = String(metadata.stdout ?? "");
+      const modulesPath = metadataOutput.endsWith("\r\n")
+        ? metadataOutput.slice(0, -2)
+        : metadataOutput.endsWith("\n")
+          ? metadataOutput.slice(0, -1)
+          : metadataOutput;
+      if (
+        metadata.code !== 0 ||
+        metadata.killed ||
+        metadata.stderr?.trim() ||
+        !modulesPath ||
+        /[\r\n]/u.test(modulesPath) ||
+        !isAbsolute(modulesPath)
+      )
+        throw new Error(
+          "Git submodule metadata could not be verified; worktree preserved",
+        );
+      let hasModulesDirectory = false;
+      try {
+        hasModulesDirectory = statSync(modulesPath).isDirectory();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          throw new Error(
+            "Git submodule metadata could not be inspected; worktree preserved",
+          );
+      }
+      if (hasModulesDirectory)
+        throw new Error(
+          "Worktree retains Git submodule metadata; assigned Lead was not stopped",
+        );
+      const submodules = await host.pi.exec(
+        "git",
+        ["submodule", "status"],
+        gitOptions,
+      );
+      if (
+        submodules.code !== 0 ||
+        submodules.killed ||
+        submodules.stderr?.trim()
+      )
+        throw new Error(
+          "Git submodule state could not be verified; worktree preserved",
+        );
+      if (
+        String(submodules.stdout ?? "")
+          .split(/\r?\n/u)
+          .some((line) => line.length > 0 && line[0] !== "-")
+      )
+        throw new Error(
+          "Worktree contains initialized submodules; assigned Lead was not stopped",
+        );
+    }
     const leads = await host.liveLead(ctx, assignment.id);
     if (leads.length > 1)
       throw new Error(
@@ -1115,7 +1175,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Only Managers can remove project worktrees");
     const operationSignal = signal ?? ctx.signal;
     operationSignal?.throwIfAborted();
-    const candidate = await inspectRemovalTarget(branch, ctx, operationSignal);
+    const candidate = await inspectRemovalTarget(
+      branch,
+      ctx,
+      operationSignal,
+      true,
+    );
     if (
       options.expected &&
       (options.expected.repoKey !== candidate.manager.repoKey ||
@@ -1248,6 +1313,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     branch,
                     ctx,
                     operationSignal,
+                    true,
                   );
                   if (
                     current.assignment.id !== candidate.assignment.id ||
@@ -1356,6 +1422,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       branch,
                       ctx,
                       operationSignal,
+                      true,
                     );
                   } catch (error) {
                     if (!leadStopped) throw error;
@@ -1957,7 +2024,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     prepareMessageInput,
     resolveMessageFiles,
     projectAssignmentBytes,
-    writeProjectAssignment,
     delay,
     startHerdrAgentInPane,
     sessionIdentity,
@@ -1990,7 +2056,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     host.withProjectAssignmentLock(
       assignment.repoKey,
       assignment.branch,
-      () => {
+      async () => {
         const current = host.readProjectAssignment(
           host.supervisionRuntime(),
           assignment.repoKey,
@@ -2006,7 +2072,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           return current;
         }
         const bound = { ...current, piSessionFile };
-        host.writeProjectAssignment(host.supervisionRuntime(), bound);
+        await writeProjectAssignmentAfter(
+          host.supervisionRuntime(),
+          current,
+          bound,
+          signal,
+          undefined,
+          host.onProjectAssignmentAuthorityWaitOccupied,
+        );
         return bound;
       },
       signal,
@@ -3604,47 +3677,65 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         await withProjectAssignmentLock(
           manager.repoKey,
           assignment.branch,
-          () => {
-            if (
-              readProjectAssignment(runtime, manager.repoKey, assignment.branch)
-            )
-              throw new Error(
-                `Work already exists on ${assignment.branch}; resume it with resume_work.`,
-              );
-            const competingClaim = host
-              .listProjectAssignments(runtime, manager.repoKey)
-              .find((existing) => {
-                if (existing.id === assignment.id) return false;
-                let claimedPath = existing.checkoutPath;
-                if (!claimedPath && existing.piSessionFile) {
-                  try {
-                    const saved = host.SessionManager.open(
-                      existing.piSessionFile,
-                    );
-                    if (saved.getSessionId() === existing.id)
-                      claimedPath = saved.getCwd();
-                  } catch {
-                    // Unverifiable legacy records do not establish a checkout claim.
-                  }
-                }
-                return (
-                  !!claimedPath &&
-                  sameDirectory(claimedPath, assignment.checkoutPath!)
-                );
-              });
-            if (competingClaim)
-              throw new Error(
-                `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
-              );
-            if (evidenceScope)
-              return evidenceScope.revalidate(() =>
-                writeProjectAssignment(
+          async () => {
+            if (evidenceScope) await evidenceScope.revalidate(() => {});
+            await writeProjectAssignmentAfter(
+              runtime,
+              undefined,
+              assignment,
+              signal,
+              () => {
+                const currentLease = host.managerLease();
+                const liveManager = readManagerDescriptor(
                   runtime,
-                  assignment,
-                  evidenceScope.verify,
-                ),
-              );
-            writeProjectAssignment(runtime, assignment);
+                  manager.workspaceId,
+                );
+                if (
+                  host.activeRole() !== "manager" ||
+                  host.leadRuntime.roleSuspended ||
+                  ctx.sessionManager.getSessionId() !== manager.piSessionId ||
+                  !currentLease ||
+                  !host.sameManagerDescriptor(
+                    currentLease.descriptor,
+                    manager,
+                  ) ||
+                  currentLease.descriptor.leaseId !== manager.leaseId ||
+                  !liveManager ||
+                  !host.sameManagerDescriptor(liveManager, manager)
+                )
+                  throw new Error(
+                    "Manager authority changed before project assignment was published",
+                  );
+                evidenceScope?.verify();
+                evidenceScope?.verifyProvenance();
+                const competingClaim = host
+                  .listProjectAssignments(runtime, manager.repoKey)
+                  .find((existing) => {
+                    if (existing.id === assignment.id) return false;
+                    let claimedPath = existing.checkoutPath;
+                    if (!claimedPath && existing.piSessionFile) {
+                      try {
+                        const saved = host.SessionManager.open(
+                          existing.piSessionFile,
+                        );
+                        if (saved.getSessionId() === existing.id)
+                          claimedPath = saved.getCwd();
+                      } catch {
+                        // Unverifiable legacy records do not establish a checkout claim.
+                      }
+                    }
+                    return (
+                      !!claimedPath &&
+                      sameDirectory(claimedPath, assignment.checkoutPath!)
+                    );
+                  });
+                if (competingClaim)
+                  throw new Error(
+                    `Checkout is already claimed by managed assignment ${competingClaim.branch}; resume that work instead.`,
+                  );
+              },
+              host.onProjectAssignmentAuthorityWaitOccupied,
+            );
           },
           signal,
         );
@@ -4269,6 +4360,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         params.branch,
         ctx,
         operationSignal,
+        true,
       );
       await assertNoUnrelatedPiExecution(target, ctx, operationSignal);
       if (isWorktreeRemovalPreapproved(target.manager.repoKey))
@@ -4290,6 +4382,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         params.branch,
         ctx,
         operationSignal,
+        true,
       );
       if (
         host.activeRole() !== "manager" ||
