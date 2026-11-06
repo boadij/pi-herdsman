@@ -166,7 +166,7 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
     names(delegating),
     [
       "ask_owner",
-      "close_agent",
+      "stop_agent",
       "continue_agent",
       "delegate_agent",
       "inspect_agent",
@@ -316,7 +316,7 @@ test("each Agent operation has its own schema without projection", () => {
       ["agent", "message"],
     ],
     [
-      "close_agent",
+      "stop_agent",
       { agent: "worker" },
       { agent: "worker", message: "x" },
       ["agent"],

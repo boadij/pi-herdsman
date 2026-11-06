@@ -929,8 +929,8 @@ function agentToolName(action: string): string {
       return "interrupt_agent";
     case "reply":
       return "reply_agent";
-    case "close":
-      return "close_agent";
+    case "stop":
+      return "stop_agent";
     case "inspect":
       return "inspect_agent";
     case "transcript":
@@ -946,7 +946,7 @@ export const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
 export const AGENT_UNRESOLVED_GUIDANCE =
   "Use list_agents when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
   "Follow current available_tools and revalidation: steer_agent queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. interrupt_agent cancels the current operation and replaces its direction. " +
-  "Use reply_agent only to answer that Agent's exact pending ask_owner question. close_agent destructively closes an eligible Agent generation. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
+  "Use reply_agent only to answer that Agent's exact pending ask_owner question. stop_agent abandons an eligible Agent generation and its unfinished assignment. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
   "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
   "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment. " +
   "A proven lost Agent remains unresolved; physical disappearance is not completion. A physically unknown Agent remains fail-closed: do not control, close, replace, or infer completion of that generation. Unknown Agent identity does not by itself prove a currently active competing writer. For a concrete recovery decision, use available current evidence and at most one bounded diagnostic read when necessary; distinguish historical Agent identity from current execution and delegated scope. Continue necessary independent work that remains authorized and has no unresolved execution conflict. Do not take over the Agent's unresolved assignment. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. If evidence is insufficient to exclude competing execution, preserve the affected scope and identify the specific missing evidence or external action. Do not repeat the same identity investigation without new evidence.";
@@ -1306,10 +1306,12 @@ function closedAssignmentReceipt(
     const proof = details?.closed_assignment;
     if (
       message?.role !== "toolResult" ||
-      message.toolName !== "close_agent" ||
+      !(
+        (message.toolName === "close_agent" && details?.action === "close") ||
+        (message.toolName === "stop_agent" && details?.action === "stop")
+      ) ||
       message.isError === true ||
       details?.ok !== true ||
-      details.action !== "close" ||
       details.cleanup_error !== undefined ||
       details.cleanup_errors !== undefined ||
       !validClosedProof(proof, ownerSessionId, child)
@@ -3211,7 +3213,7 @@ export type Params =
   | { action: "steer"; agent: string; message: string; files?: string[] }
   | { action: "interrupt"; agent: string; message: string; files?: string[] }
   | { action: "reply"; agent: string; message: string; files?: string[] }
-  | { action: "close"; agent: string }
+  | { action: "stop"; agent: string }
   | { action: "inspect"; agent: string }
   | { action: "transcript"; agent: string };
 
@@ -3919,7 +3921,7 @@ export function listedAgentRecord(
   const actions: string[] = [];
   if (direct && presence.kind === "lost") {
     if (transcriptAvailable) actions.push("transcript");
-    if (closeAvailable) actions.push("close");
+    if (closeAvailable) actions.push("stop");
   } else if (presence.kind === "live" && direct && !listed.recovery_only) {
     actions.push("inspect");
     if (transcriptAvailable) actions.push("transcript");
@@ -3942,7 +3944,7 @@ export function listedAgentRecord(
           actions.push("reply");
       } catch {}
     }
-    if (closeAvailable) actions.push("close");
+    if (closeAvailable) actions.push("stop");
   }
   const {
     label: _label,
@@ -5499,7 +5501,7 @@ export function createAgentController(
       : undefined;
     return {
       ok: true,
-      action: "close",
+      action: "stop",
       agent: agentLabel,
       ...(closedAssignment ? { closed_assignment: closedAssignment } : {}),
       presentation_agent_definition: candidate.agentDefinition,
@@ -9429,10 +9431,10 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "close_agent",
-      label: "close agent",
+      name: "stop_agent",
+      label: "stop agent",
       description:
-        "Destructively close the verified eligible directly owned Agent generation and cascade through its owned descendants, child-first.",
+        "Stop an eligible directly owned Agent and its owned descendants, abandoning unfinished assignments. Saved Pi history may remain eligible for explicit continuation. Does not complete or automatically restart the work.",
       parameters: agentTargetParameters,
       promptSnippet: undefined,
       promptGuidelines: undefined,
@@ -9442,12 +9444,11 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(id, { action: "close", ...p }, signal, update, ctx),
+      ) => agentTool.execute(id, { action: "stop", ...p }, signal, update, ctx),
       renderCall: (a: unknown, t: any, c: any) =>
-        renderCoordinationCall("agent", "close", a, t, c),
+        renderCoordinationCall("agent", "stop", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
-        renderCoordinationResult("agent", "close", r, o, t, c),
+        renderCoordinationResult("agent", "stop", r, o, t, c),
     });
     pi.registerTool({
       ...agentTool,
@@ -9538,7 +9539,7 @@ export function createAgentController(
       );
     if (scope.kind === "root") {
       if (params.action === "list") return listAction(ctx, signal);
-      if (params.action === "close")
+      if (params.action === "stop")
         return closeAction(ctx, params.agent, signal);
       if (params.action === "transcript")
         return transcriptAction(ctx, params.agent, signal);
@@ -9583,7 +9584,7 @@ export function createAgentController(
       ctx.sessionManager.getSessionId(),
     );
     try {
-      if (params.action === "close")
+      if (params.action === "stop")
         return await closeAction(ctx, params.agent, signal);
       if (
         params.action === "steer" ||
@@ -9660,8 +9661,8 @@ export function createAgentController(
           return ["interrupt"];
         case "reply_agent":
           return ["reply"];
-        case "close_agent":
-          return ["close"];
+        case "stop_agent":
+          return ["stop"];
         case "inspect_agent":
           return ["inspect"];
         case "read_agent_transcript":
@@ -9719,7 +9720,7 @@ export function createAgentController(
     if (signal.aborted || !ctx.isIdle()) return false;
     try {
       if (signal.aborted || !ctx.isIdle()) return false;
-      const closeAvailable = availableActions.includes("close");
+      const stopAvailable = availableActions.includes("stop");
       pi.sendMessage(
         {
           customType: "pi-herdsman-agent-lost",
@@ -9730,12 +9731,12 @@ export function createAgentController(
             `Next reminder if unresolved: ~${formatHealthAttentionDuration(nextReminderMs)}`,
             "",
             "Use read_agent_transcript only when persisted work materially affects the recovery decision.",
-            ...(closeAvailable
+            ...(stopAvailable
               ? [
-                  "Use close_agent to close this lost generation before replacing it or continuing its saved session.",
+                  "Use stop_agent to stop this lost generation before replacing it or continuing its saved session.",
                 ]
               : [
-                  "close_agent is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+                  "stop_agent is not currently available; resolve the condition blocking its stop preflight before replacing or continuing it.",
                 ]),
             "Physical disappearance is not task completion.",
           ].join("\n"),
@@ -10008,7 +10009,7 @@ export function createAgentController(
                 "Use read_agent_transcript for persisted conversation/tool evidence.",
                 "Use inspect_agent only when the live blocking state matters.",
                 "Do not invent an owner reply or send guessed terminal input.",
-                "Use close_agent only when abandoning the assignment is the intended recovery.",
+                "Use stop_agent only when abandoning the assignment is the intended recovery.",
               ].join("\n"),
               display: true,
               details: {
@@ -10247,7 +10248,7 @@ export function createAgentController(
               "Streaming tool output does not count as qualifying progress.",
               "steer_agent queues a cooperative correction; it does not preempt the current operation.",
               "Use interrupt_agent only when the current operation itself must be abandoned; interrupt_agent cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
-              "Use close_agent only to abandon the assignment or as destructive fallback.",
+              "Use stop_agent only to abandon the assignment or as destructive fallback.",
             ].join("\n"),
             display: true,
             details: {

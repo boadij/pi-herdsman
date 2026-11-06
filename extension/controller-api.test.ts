@@ -176,7 +176,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
-          close: "close_agent",
+          stop: "stop_agent",
           inspect: "inspect_agent",
           transcript: "read_agent_transcript",
         } as Record<string, string>
@@ -8634,7 +8634,7 @@ test("parent list hides disabled allowed definitions", async () => {
         "inspect_agent",
         "steer_agent",
         "interrupt_agent",
-        "close_agent",
+        "stop_agent",
       ],
     });
 
@@ -12426,7 +12426,7 @@ test("registered lead exposes only explicit live controls", async () => {
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -12438,7 +12438,7 @@ test("registered lead exposes only explicit live controls", async () => {
     "inspect_agent",
     "steer_agent",
     "interrupt_agent",
-    "close_agent",
+    "stop_agent",
   ]);
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
@@ -12457,7 +12457,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(rejectedSteer.details.error.category, "incompatible_build");
   assert.equal(steerSubmitted, undefined);
   assert.ok(
-    accepting.tools.some((candidate) => candidate.name === "close_agent"),
+    accepting.tools.some((candidate) => candidate.name === "stop_agent"),
   );
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
@@ -13522,7 +13522,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(settledList.details.agents[0].state, "settling");
       assert.deepEqual(settledList.details.agents[0].available_tools, [
         "inspect_agent",
-        "close_agent",
+        "stop_agent",
       ]);
     } finally {
       pi.events.get("session_shutdown")?.[0]();

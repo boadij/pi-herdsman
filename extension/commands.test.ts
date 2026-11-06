@@ -660,7 +660,7 @@ const leadTools = [
   "steer_agent",
   "interrupt_agent",
   "reply_agent",
-  "close_agent",
+  "stop_agent",
   "inspect_agent",
   "read_agent_transcript",
   "message_supervisor",
@@ -877,7 +877,7 @@ test("managed identity survives tree and assignment loss while native new-sessio
   ])
     assert.equal(pi.pi.getActiveTools().includes(tool), false, tool);
   assert.equal(pi.pi.getActiveTools().includes("inspect_agent"), false);
-  assert.equal(pi.pi.getActiveTools().includes("close_agent"), false);
+  assert.equal(pi.pi.getActiveTools().includes("stop_agent"), false);
   const result = await pi.tools
     .find((tool) => tool.name === "delegate_agent")!
     .execute(
@@ -946,6 +946,10 @@ test("managed identity survives tree and assignment loss while native new-sessio
 
 test("unverifiable exact assignment initialization never persists ordinary identity", async (t) => {
   setLeadEnvironment();
+  realFs.writeFileSync(
+    join(PI_AGENTS_DIR, "mcp-runner.md"),
+    "---\nname: mcp-runner\n---\nfixture MCP runner\n",
+  );
   const repoKey = spawnSync(
     "git",
     ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -2635,7 +2639,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
-          close: "close_agent",
+          stop: "stop_agent",
           inspect: "inspect_agent",
           transcript: "read_agent_transcript",
         } as Record<string, string>
@@ -3374,7 +3378,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
-          "close_agent",
+          "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
           "message_supervisor",
@@ -4463,7 +4467,7 @@ test("Manager leave suspends authority when lease release fails", async () => {
         ),
       ),
     );
-    for (const name of ["list_agents", "reply_agent", "close_agent"])
+    for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
     assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
@@ -4484,7 +4488,7 @@ test("Manager leave suspends authority when lease release fails", async () => {
       undefined,
     );
     await pi.commandOptions.get("manager").handler("", ctx);
-    for (const name of ["list_agents", "reply_agent", "close_agent"])
+    for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -14188,7 +14192,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -14269,7 +14273,7 @@ test("lead session-start continues when chief lease release fails", async () => 
         "steer_agent",
         "interrupt_agent",
         "reply_agent",
-        "close_agent",
+        "stop_agent",
         "inspect_agent",
         "read_agent_transcript",
         "message_supervisor",
@@ -14294,7 +14298,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -14502,7 +14506,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
     assert.match(prompt?.systemPrompt ?? "", /Configured chief body/);
     assert.ok(pi.pi.getActiveTools().includes("read"));
     assert.ok(pi.pi.getActiveTools().includes("list_staff"));
-    for (const name of ["list_agents", "reply_agent", "close_agent"])
+    for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     for (const name of ["message_supervisor", "list_peers", "message_peer"])
       assert.ok(!pi.pi.getActiveTools().includes(name), name);
@@ -14997,7 +15001,7 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
       "inspect_agent",
       "steer_agent",
       "interrupt_agent",
-      "close_agent",
+      "stop_agent",
     ])
       assert.ok(active.includes(name), name);
     assert.equal(
@@ -16660,7 +16664,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -16742,7 +16746,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
-          "close_agent",
+          "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
           "message_supervisor",
@@ -16761,7 +16765,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -17171,7 +17175,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
-          "close_agent",
+          "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
           "message_supervisor",
@@ -17219,7 +17223,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
     "message_supervisor",
@@ -17268,7 +17272,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
-          "close_agent",
+          "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
           "message_supervisor",
@@ -17297,7 +17301,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
         "steer_agent",
         "interrupt_agent",
         "reply_agent",
-        "close_agent",
+        "stop_agent",
         "inspect_agent",
         "read_agent_transcript",
         "message_supervisor",
@@ -17311,7 +17315,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     });
     context.ui.notify = () => undefined;
     await pi.events.get("session_start")![0](undefined, context);
-    for (const name of ["list_agents", "reply_agent", "close_agent"])
+    for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
     assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
@@ -17346,7 +17350,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     for (const name of chiefTools)
       assert.ok(pi.pi.getActiveTools().includes(name));
     assert.ok(pi.pi.getActiveTools().includes("read"));
-    for (const name of ["list_agents", "reply_agent", "close_agent"])
+    for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     for (const name of ["message_supervisor", "list_peers", "message_peer"])
       assert.ok(!pi.pi.getActiveTools().includes(name), name);
@@ -20655,7 +20659,7 @@ for (const acceptedChild of [true, false]) {
       rmSync(sessionRoot, { recursive: true, force: true });
     });
 
-    const result = await agentTool(pi, "close").execute(
+    const result = await agentTool(pi, "stop").execute(
       "close-cascade-parent",
       { agent: parent.agentLabel },
       undefined,
@@ -20663,7 +20667,7 @@ for (const acceptedChild of [true, false]) {
       context,
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(result.details.action, "close");
+    assert.equal(result.details.action, "stop");
     assert.equal(result.details.agent, parent.agentLabel);
     assert.equal(result.details.cleanup_error, undefined);
     assert.equal(result.details.cleanup_errors, undefined);
@@ -20684,12 +20688,12 @@ for (const acceptedChild of [true, false]) {
       parent.agentLabel,
     ]);
     // Pi persists native tool results as message entries. Preserve the actual
-    // close result here so continuation is authorized by the recorded call.
+    // stop result here so continuation is authorized by the recorded call.
     pi.entries.push({
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "close_agent",
+        toolName: "stop_agent",
         isError: false,
         content: result.content,
         details: result.details,

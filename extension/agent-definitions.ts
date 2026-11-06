@@ -154,7 +154,7 @@ export const AGENT_COORDINATION_TOOLS = [
   "steer_agent",
   "interrupt_agent",
   "reply_agent",
-  "close_agent",
+  "stop_agent",
   "inspect_agent",
   "read_agent_transcript",
 ] as const;

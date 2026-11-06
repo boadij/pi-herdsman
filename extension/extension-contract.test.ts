@@ -175,7 +175,7 @@ const REGISTERED_ROLE_TOOLS = [
   "steer_agent",
   "interrupt_agent",
   "reply_agent",
-  "close_agent",
+  "stop_agent",
   "inspect_agent",
   "read_agent_transcript",
   "read_evidence",
@@ -226,7 +226,7 @@ const SEMANTIC_TOOL_CASES = [
     ["agent", "message"],
   ],
   [
-    "close_agent",
+    "stop_agent",
     { agent: "worker" },
     { agent: "worker", message: "x" },
     ["agent"],
@@ -437,7 +437,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     steer_agent: "steer agent",
     interrupt_agent: "interrupt agent",
     reply_agent: "reply agent",
-    close_agent: "close agent",
+    stop_agent: "stop agent",
     inspect_agent: "inspect agent",
     read_agent_transcript: "read agent transcript",
     message_supervisor: "message supervisor",
@@ -841,7 +841,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
     [
-      "close_agent",
+      "stop_agent",
       "continue_agent",
       "delegate_agent",
       "inspect_agent",
@@ -5589,7 +5589,7 @@ test("delegating agents receive only their allowed definition roster", async () 
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
-    "close_agent",
+    "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
   ])
@@ -5868,9 +5868,10 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
         assert.ok(description?.includes(term), `${name}: ${term}`);
     }
     const closeDescription = pi.tools.find(
-      (tool) => tool.name === "close_agent",
+      (tool) => tool.name === "stop_agent",
     )?.description;
-    assert.match(closeDescription ?? "", /owned descendants, child-first/);
+    assert.match(closeDescription ?? "", /abandoning unfinished assignments/);
+    assert.ok(!pi.tools.some((tool) => tool.name === "close_agent"));
     await pi.commandOptions.get("manager").handler("leave", context);
     const restoredEvent = promptEvent();
     await pi.events.get("before_agent_start")![0](restoredEvent, context);

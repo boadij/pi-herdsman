@@ -6660,7 +6660,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   ctx.crashRecovery.reopenedOwnerTabId = created.tab?.tab_id;
   ctx.rootPaneId = ownerPane.pane_id;
-  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents, cleanly close only smoke-crash-target if close_agent is available, then continue that exact saved session.`;
+  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents, stop only smoke-crash-target with stop_agent if available, then continue that exact saved session.`;
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
     herdrStateExtension: ctx.herdrStateExtension,
@@ -6759,13 +6759,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "target generation missing from reopened owner view",
   );
   assert.ok(
-    reopenedTarget.available_tools?.includes("close_agent"),
-    `target close is not permitted after restart; state=${reopenedTarget.state}, tools=${JSON.stringify(reopenedTarget.available_tools)}`,
+    reopenedTarget.available_tools?.includes("stop_agent"),
+    `target stop is not permitted after restart; state=${reopenedTarget.state}, tools=${JSON.stringify(reopenedTarget.available_tools)}`,
   );
 
-  const closeResult = await waitForEvidence(
+  const stopResult = await waitForEvidence(
     ctx,
-    "crash-recovery-close-receipt-persisted",
+    "crash-recovery-stop-receipt-persisted",
     async () => {
       const owner = await rootSessionSnapshot(ctx);
       const entries = owner ? sessionEntries(owner.contents) : [];
@@ -6773,7 +6773,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
         (entry) =>
           entry.type === "message" &&
           entry.message?.role === "toolResult" &&
-          entry.message.toolName === "close_agent" &&
+          entry.message.toolName === "stop_agent" &&
           !entry.message.isError,
       );
       const completed = owner?.contents.includes(
@@ -6783,19 +6783,19 @@ async function runAgentCrashRecoverySmoke(ctx) {
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
   );
-  const closeDetails = closeResult.message.details;
+  const stopDetails = stopResult.message.details;
   assert.equal(
-    closeDetails?.ok,
+    stopDetails?.ok,
     true,
-    `persisted close result was not successful: ${JSON.stringify(closeDetails)}`,
+    `persisted stop result was not successful: ${JSON.stringify(stopDetails)}`,
   );
-  assert.equal(closeDetails?.action, "close");
+  assert.equal(stopDetails?.action, "stop");
   assert.equal(
-    closeDetails?.closed_assignment?.session_path,
+    stopDetails?.closed_assignment?.session_path,
     ctx.crashRecovery.target.sessionPath,
-    "close receipt did not identify the exact accepted target session",
+    "stop receipt did not identify the exact accepted target session",
   );
-  ctx.crashRecovery.closeReceipt = closeDetails.closed_assignment;
+  ctx.crashRecovery.closeReceipt = stopDetails.closed_assignment;
   const afterCloseSnapshot = await nestedCommand(ctx, ["api", "snapshot"]);
   const staleTarget = (afterCloseSnapshot.snapshot?.agents ?? []).find(
     (agent) =>

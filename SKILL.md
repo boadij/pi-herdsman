@@ -96,7 +96,7 @@ eligibility. Every operation revalidates exact state and identity before
 mutation.
 
 The live-agent control tools are `steer_agent`, `interrupt_agent`,
-`reply_agent`, and `close_agent`;
+`reply_agent`, and `stop_agent`;
 these mutate
 live agent execution and are available only when listed. Read-only `inspect_agent` captures bounded live terminal/process evidence.
 `read_agent_transcript` captures bounded persisted Pi conversation and tool evidence
@@ -115,15 +115,17 @@ merely because an agent is slow or marked stale; inactivity is advisory and
 does not prove a hang.
 
 Use `reply_agent` only to answer a valid outstanding `ask_owner` question. Use
-`close_agent` only for intentional teardown or abandonment.
+`stop_agent` only when abandoning the Agent's unfinished assignment is
+intended. Unlike `stop_lead`, which preserves a Manager's project assignment,
+`stop_agent` does not complete or automatically restart the work.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
 task failure. Treat the assignment as unresolved. When `read_agent_transcript` is listed,
 use it only when the last persisted work materially affects recovery. When
-`close_agent` is listed, use it to abandon the lost generation before replacing it or
-continuing its saved session. If `close_agent` is absent, resolve the condition
-blocking its close preflight first. Unknown evidence remains fail-closed and is
+`stop_agent` is listed, use it to abandon the lost generation before replacing it or
+continuing its saved session. If `stop_agent` is absent, resolve the condition
+blocking its stop preflight first. Unknown evidence remains fail-closed and is
 not proof of loss.
 
 Never guess identities, paths, sessions, or control state. Treat unknown or
@@ -553,7 +555,7 @@ managed session remains an Agent at every depth.
 Every managed agent receives `ask_owner`. A non-empty effective `agents` list
 is necessary but not sufficient to enable the nine Agent ownership tools:
 `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `close_agent`, `inspect_agent`, and
+`interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
 `read_agent_transcript`. Delegation is disabled when `excludeTools` contains
 `agent`, when `noTools: true` unless explicit `tools` contains `agent`,
 or when `tools` is explicitly empty. Otherwise, omitted `tools` permits

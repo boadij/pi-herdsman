@@ -334,7 +334,7 @@ is disabled when `excludeTools` contains `agent`, when `noTools: true` unless
 the explicit `tools` list contains `agent`, or when `tools` is explicitly
 empty. Otherwise, a non-empty `agents` list enables all nine coordination
 tools: `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `close_agent`, `inspect_agent`, and
+`interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
 `read_agent_transcript`. Thus omitted `tools` permits delegation, and explicit
 ordinary tools permit it unless one of those opt-outs applies. An omitted or
 empty `agents` list always makes the agent a leaf. Every managed agent receives

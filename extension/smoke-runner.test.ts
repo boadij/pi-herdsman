@@ -4749,14 +4749,14 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
         {
           type: "toolCall",
           id: "close",
-          name: "close_agent",
+          name: "stop_agent",
           arguments: { agent: "smoke-crash-target" },
         },
       ],
     },
     {
       role: "toolResult",
-      toolName: "close_agent",
+      toolName: "stop_agent",
       toolCallId: "close",
       isError: false,
       details: { closed_assignment: { session_path: "/saved/target.jsonl" } },

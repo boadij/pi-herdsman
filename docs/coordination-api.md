@@ -18,7 +18,7 @@ continue_agent
 steer_agent
 interrupt_agent
 reply_agent
-close_agent
+stop_agent
 inspect_agent
 read_agent_transcript
 ```
@@ -35,7 +35,8 @@ Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
 Manager additionally uses branch-based project operations to start and resume
-project work, can stop a Lead without retiring its assignment, and can request
+project work, can use `stop_lead` to stop a Lead while preserving its project
+assignment, and can request
 independent human confirmation to remove an assigned project's worktree.
 `resume_work` requires a fresh instruction for the existing assignment; it
 queues that instruction separately without replacing the saved task. Already
