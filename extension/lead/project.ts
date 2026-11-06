@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   getAgentDir,
+  hasTrustRequiringProjectResources,
   ProjectTrustStore,
 } from "@earendil-works/pi-coding-agent";
 import type {
@@ -62,8 +63,57 @@ import {
 import type { MessageFileInput } from "../core.ts";
 import type { ManagedAgentState } from "../mailbox.ts";
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+
+type ManagedLeadTrust =
+  { kind: "launch"; trusted: boolean } | { kind: "approval_required" };
+
+async function resolveManagedLeadTrust(
+  cwd: string,
+  ctx: ExtensionContext,
+  signal: AbortSignal | undefined,
+  revalidate: () => Promise<void>,
+): Promise<ManagedLeadTrust> {
+  const store = new ProjectTrustStore(getAgentDir());
+  const saved = store.get(cwd);
+  if (saved !== null) return { kind: "launch", trusted: saved };
+  if (
+    !hasTrustRequiringProjectResources(cwd) &&
+    !["agents", "coordinators"].some((resource) =>
+      existsSync(join(cwd, ".pi", resource)),
+    )
+  )
+    return { kind: "launch", trusted: true };
+  if (!ctx.hasUI) return { kind: "approval_required" };
+  let choice: string | undefined;
+  try {
+    choice = await ctx.ui.select(
+      `Trust managed Lead worktree?\n${cwd}\nTrusting may load project settings, extensions, and worktree-specific definitions; restricted mode excludes project and private definitions. This is not an operating-system sandbox.`,
+      [
+        "Trust this session only",
+        "Trust this worktree and remember",
+        "Start restricted",
+        "Cancel",
+      ],
+      { signal, timeout: 30_000 },
+    );
+  } catch {
+    return { kind: "approval_required" };
+  }
+  if (!choice || choice === "Cancel") return { kind: "approval_required" };
+  await revalidate();
+  const current = store.get(cwd);
+  if (current !== null) return { kind: "launch", trusted: current };
+  if (choice === "Trust this worktree and remember") {
+    store.set(cwd, true);
+    return { kind: "launch", trusted: true };
+  }
+  return {
+    kind: "launch",
+    trusted: choice === "Trust this session only",
+  };
+}
 
 export type ManagerEvidence = (
   ctx: ExtensionContext,
@@ -3181,6 +3231,58 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "Assigned checkout placement changed during resume handoff",
         );
     };
+    const assertDelegatePlacement = async (cwd: string) => {
+      if (operation.action !== "delegate") return;
+      const currentTopology = await runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--cwd", localScope.checkoutPath],
+        { signal },
+      );
+      const matches = currentTopology?.worktrees?.filter(
+        (worktree: any) => worktree?.branch === assignment.branch,
+      );
+      if (
+        currentTopology?.source?.repo_key !== manager.repoKey ||
+        !Array.isArray(matches) ||
+        matches.length !== 1 ||
+        matches[0]?.is_linked_worktree !== true ||
+        !assignment.checkoutPath ||
+        !sameDirectory(matches[0]?.path, cwd) ||
+        !sameDirectory(
+          realpathSync.native(matches[0].path),
+          assignment.checkoutPath,
+        )
+      )
+        throw new Error(
+          "Assigned checkout identity changed during trust approval",
+        );
+      const [common, branchResult] = await Promise.all([
+        pi.exec(
+          "git",
+          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+          { cwd, signal, timeout: 10_000 },
+        ),
+        pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+          cwd,
+          signal,
+          timeout: 10_000,
+        }),
+      ]);
+      if (
+        common.code !== 0 ||
+        common.killed ||
+        common.stderr?.trim() ||
+        branchResult.code !== 0 ||
+        branchResult.killed ||
+        branchResult.stderr?.trim() ||
+        !sameDirectory(String(common.stdout ?? "").trim(), manager.repoKey) ||
+        String(branchResult.stdout ?? "").trim() !== assignment.branch
+      )
+        throw new Error(
+          "Assigned checkout branch or repository changed during trust approval",
+        );
+    };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
     const live =
@@ -3639,39 +3741,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       await assertUnoccupied(workspaceId!);
-      if (operation.action === "resume") {
-        const fresh = await currentManager(ctx);
-        const stillAssigned = readProjectAssignment(
-          runtime,
-          manager.repoKey,
-          branch,
-        );
-        if (!fresh || !sameManagerDescriptor(fresh, manager))
-          throw new Error("Manager changed before resume handoff");
-        if (!stillAssigned || stillAssigned.id !== assignment.id)
-          throw new Error("Project assignment changed before resume handoff");
-        const partial = await prepareResumeHandoff();
-        if (partial) return partial;
-        const postPrepareManager = await currentManager(ctx);
-        const postPrepareAssignment = readProjectAssignment(
-          runtime,
-          manager.repoKey,
-          branch,
-        );
-        if (
-          !postPrepareManager ||
-          !sameManagerDescriptor(postPrepareManager, manager) ||
-          !postPrepareAssignment ||
-          postPrepareAssignment.id !== assignment.id
-        )
-          throw new Error(
-            "Manager or project assignment changed during resume handoff preparation",
-          );
-        await assertResumePlacement();
-        if (branchWorktrees[0]?.open_workspace_id)
-          await assertUnoccupied(branchWorktrees[0].open_workspace_id);
-        await queueResumeHandoff(true);
-      }
       let lead: any;
       let startedLead = false;
       const verifyLeadCandidate = (candidate: any): boolean => {
@@ -3721,6 +3790,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (verifyLeadCandidate(currentCandidates[0]))
           lead = currentCandidates[0];
       }
+      let effectiveProjectTrusted: boolean | undefined;
       if (!lead) {
         const processInfo = await runHerdr(
           pi,
@@ -3739,8 +3809,84 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!piAlreadyRunning) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
-          const projectTrusted =
-            new ProjectTrustStore(getAgentDir()).get(cwd!) === true;
+          const trust = await resolveManagedLeadTrust(
+            cwd!,
+            ctx,
+            signal,
+            async () => {
+              const fresh = await currentManager(ctx);
+              const stillAssigned = readProjectAssignment(
+                runtime,
+                manager.repoKey,
+                branch,
+              );
+              if (!fresh || !sameManagerDescriptor(fresh, manager))
+                throw new Error("Manager changed during trust approval");
+              if (!stillAssigned || stillAssigned.id !== assignment.id)
+                throw new Error(
+                  "Project assignment changed during trust approval",
+                );
+              await assertResumePlacement();
+              await assertDelegatePlacement(cwd!);
+              await assertUnoccupied(workspaceId!);
+            },
+          );
+          if (trust.kind === "approval_required")
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Approval is required before starting a Lead for ${branch}. No Lead was launched; the assignment and worktree are preserved. Approve the target worktree, then resume it with resume_work.`,
+                },
+              ],
+              details: {
+                ok: false,
+                action: operation.action === "resume" ? "resume" : "delegate",
+                branch,
+                session: assignment.id,
+                status: "approval_required",
+                ...(operation.action === "resume"
+                  ? { message_queued: false }
+                  : {}),
+              },
+            };
+          const projectTrusted = trust.trusted;
+          effectiveProjectTrusted = projectTrusted;
+          if (operation.action === "resume") {
+            const fresh = await currentManager(ctx);
+            const stillAssigned = readProjectAssignment(
+              runtime,
+              manager.repoKey,
+              branch,
+            );
+            if (!fresh || !sameManagerDescriptor(fresh, manager))
+              throw new Error("Manager changed before resume handoff");
+            if (!stillAssigned || stillAssigned.id !== assignment.id)
+              throw new Error(
+                "Project assignment changed before resume handoff",
+              );
+            const partial = await prepareResumeHandoff();
+            if (partial) return partial;
+            const postPrepareManager = await currentManager(ctx);
+            const postPrepareAssignment = readProjectAssignment(
+              runtime,
+              manager.repoKey,
+              branch,
+            );
+            if (
+              !postPrepareManager ||
+              !sameManagerDescriptor(postPrepareManager, manager) ||
+              !postPrepareAssignment ||
+              postPrepareAssignment.id !== assignment.id
+            )
+              throw new Error(
+                "Manager or project assignment changed during resume handoff preparation",
+              );
+            await assertResumePlacement();
+            if (branchWorktrees[0]?.open_workspace_id)
+              await assertUnoccupied(branchWorktrees[0].open_workspace_id);
+            await queueResumeHandoff(true);
+          }
           const definition = discoverRoleDefinition(
             MANAGED_LEAD_DEFINITION_NAME,
             projectTrusted ? { projectRoot: cwd! } : {},
@@ -3893,6 +4039,37 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ),
         );
       }
+      if (operation.action === "resume" && !resumeMessageQueued) {
+        const fresh = await currentManager(ctx);
+        const stillAssigned = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error("Manager changed before resume handoff");
+        if (!stillAssigned || stillAssigned.id !== assignment.id)
+          throw new Error("Project assignment changed before resume handoff");
+        const partial = await prepareResumeHandoff();
+        if (partial) return partial;
+        const postPrepareManager = await currentManager(ctx);
+        const postPrepareAssignment = readProjectAssignment(
+          runtime,
+          manager.repoKey,
+          branch,
+        );
+        if (
+          !postPrepareManager ||
+          !sameManagerDescriptor(postPrepareManager, manager) ||
+          !postPrepareAssignment ||
+          postPrepareAssignment.id !== assignment.id
+        )
+          throw new Error(
+            "Manager or project assignment changed during resume handoff preparation",
+          );
+        await assertResumePlacement();
+        await queueResumeHandoff(false);
+      }
       const assertManagerCurrent = async () => {
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
@@ -3985,6 +4162,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               session: leadSessionId,
               workspace_id: workspaceId,
               branch: assignment.branch,
+              ...(effectiveProjectTrusted === undefined
+                ? {}
+                : {
+                    trust: effectiveProjectTrusted ? "trusted" : "restricted",
+                    ...(!effectiveProjectTrusted
+                      ? {
+                          project_definitions: "unavailable",
+                          private_definitions: "unavailable",
+                        }
+                      : {}),
+                  }),
               ...(operation.action === "resume" ? { recovered: true } : {}),
               ...(operation.action === "resume"
                 ? { message_queued: true, message_id: resumeMessageId }
@@ -3998,6 +4186,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: leadSessionId,
           workspace_id: workspaceId,
           branch: assignment.branch,
+          ...(effectiveProjectTrusted === undefined
+            ? {}
+            : {
+                trust: effectiveProjectTrusted ? "trusted" : "restricted",
+                ...(!effectiveProjectTrusted
+                  ? {
+                      project_definitions: "unavailable",
+                      private_definitions: "unavailable",
+                    }
+                  : {}),
+              }),
           ...(operation.action === "resume" ? { recovered: true } : {}),
           ...(operation.action === "resume"
             ? { message_queued: true, message_id: resumeMessageId }

@@ -194,8 +194,15 @@ binary, or oversized files fail instead of becoming required evidence. A
 supported snapshot that does not fit inline is delivered by reference to the
 preserved snapshot.
 
-Manager-created Leads inherit the Manager session's effective project-trust
-decision for that run; this does not modify Pi's persistent trust store.
+Managed Lead trust is resolved for the target worktree, independently of the
+Manager session's trust. A saved Pi approval permits the project and trusted
+private-repository definition layers; a saved denial starts the Lead
+restricted. When protected project configuration is present and no saved
+decision applies, the Manager must obtain an explicit choice before starting
+the Lead. Restricted Leads do not load project or private-repository
+definitions. If approval is unavailable or cancelled, the assignment and
+checkout remain available, but no Lead is launched; after resolving trust, use
+`resume_work` to start that assignment.
 
 ## `resume_work`
 

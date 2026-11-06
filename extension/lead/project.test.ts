@@ -1278,6 +1278,8 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const unrelatedRepo = join(tmpdir(), `unrelated-${randomUUID()}`);
   let launches = 0;
   let alreadyRunning = false;
+  let startingUnverifiedPi = false;
+  let snapshotCalls = 0;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -1347,7 +1349,11 @@ test("resume preserves queued manager message when controlled recovery fails", a
           worktree: { path: checkout, branch: assignment.branch },
         };
       if (args[0] === "pane" && args[1] === "process-info")
-        return { process_info: { foreground_processes: [] } };
+        return {
+          process_info: {
+            foreground_processes: startingUnverifiedPi ? [{ argv0: "pi" }] : [],
+          },
+        };
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
     readProjectAssignment: () => assignment,
@@ -1359,9 +1365,38 @@ test("resume preserves queued manager message when controlled recovery fails", a
       _branch: string,
       op: () => unknown,
     ) => op(),
-    herdrSessionSnapshot: async () => ({ agents: [] }),
+    herdrSessionSnapshot: async () => {
+      snapshotCalls++;
+      return {
+        agents:
+          startingUnverifiedPi && snapshotCalls > 2
+            ? [
+                {
+                  workspace_id: "resume-workspace",
+                  pane_id: "pane",
+                  tab_id: "tab",
+                  agent_session: { value: id },
+                },
+              ]
+            : [],
+      };
+    },
+    isPiAgent: () => true,
+    sessionIdentity: (session: any) => session?.value,
+    herdrSessionId: (candidate: any) => candidate?.agent_session?.value,
     liveAgent: async () =>
       alreadyRunning ? [{ workspace_id: "resume-workspace" }] : [],
+    liveLead: async () =>
+      startingUnverifiedPi
+        ? [
+            {
+              workspace_id: "resume-workspace",
+              pane_id: "pane",
+              tab_id: "tab",
+              agent_session: { value: id },
+            },
+          ]
+        : [],
     readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => undefined,
@@ -1416,6 +1451,29 @@ test("resume preserves queued manager message when controlled recovery fails", a
       (args) => args.length === 4 && args[2] === "--cwd" && args[3] === repoKey,
     ),
   );
+
+  alreadyRunning = false;
+  startingUnverifiedPi = true;
+  snapshotCalls = 0;
+  events.length = 0;
+  const recovered = (await runtime.activateProjectLead(
+    {
+      action: "resume",
+      branch: assignment.branch,
+      message: "continue startup",
+    },
+    ctx,
+    new AbortController().signal,
+  )) as any;
+  assert.equal(launches, 1, "an existing Pi process is not relaunched");
+  assert.equal(recovered.details.ok, true, JSON.stringify(recovered));
+  assert.equal(recovered.details.message_queued, true);
+  assert.ok(recovered.details.message_id);
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ["manager_message"],
+  );
+  assert.equal(events[0].id, recovered.details.message_id);
 });
 
 test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {

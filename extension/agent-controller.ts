@@ -8303,8 +8303,9 @@ export function createAgentController(
             sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
             cwd: agentCwd,
             managedAgent: true,
-            approveProject:
-              agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
+            approveProject: sameCwd(agentCwd, ctx.cwd)
+              ? agentContext.projectTrusted
+              : undefined,
             ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
             modelDecision: childModel,
           });

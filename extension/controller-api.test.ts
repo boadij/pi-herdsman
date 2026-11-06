@@ -8309,18 +8309,26 @@ test("project-only Definitions edits update the project source", async () => {
 });
 
 test("same-cwd managed parents resolve project children", async () => {
-  setAgentEnvironment("project-parent", ["project-child"]);
+  setAgentEnvironment("project-parent", ["project-child", "restricted-child"]);
   const project = realFs.mkdtempSync(
     join(tmpdir(), "pi-herdsman-parent-project-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-parent.md"),
-    '---\nname: project-parent\nagents: ["project-child"]\n---\nparent',
+    '---\nname: project-parent\nagents: ["project-child", "restricted-child"]\n---\nparent',
   );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-child.md"),
     "---\nname: project-child\n---\nchild",
+  );
+  realFs.writeFileSync(
+    join(project, ".pi", "agents", "restricted-child.md"),
+    "---\nname: restricted-child\n---\nchild",
+  );
+  realFs.writeFileSync(
+    join(PI_AGENTS_DIR, "restricted-child.md"),
+    "---\nname: restricted-child\n---\nchild",
   );
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "project-parent";
   const parent = { ...managedState("project-parent"), cwd: project };
@@ -8356,6 +8364,12 @@ test("same-cwd managed parents resolve project children", async () => {
       context,
     );
     assert.equal(started.details.ok, true, JSON.stringify(started.details));
+    const launch = pi.calls.find(
+      (args) => args[0] === "agent" && args[1] === "start",
+    );
+    assert.ok(launch, "delegation should launch the child through Herdr");
+    assert.ok(launch.includes("--approve"));
+    assert.equal(launch.includes("--no-approve"), false);
     const childState = readAgentState(
       agentMailboxPath(WORKSPACE, "project-child"),
     );
@@ -8366,11 +8380,39 @@ test("same-cwd managed parents resolve project children", async () => {
       child.projectSource,
       join(project, ".pi", "agents", "project-child.md"),
     );
+
+    context.isProjectTrusted = () => false;
+    const restricted = await agentTool(pi, "delegate").execute(
+      "start-restricted",
+      {
+        definition: "restricted-child",
+        task: "delegate restricted child work",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      restricted.details.ok,
+      true,
+      JSON.stringify(restricted.details),
+    );
+    const launches = pi.calls.filter(
+      (args) => args[0] === "agent" && args[1] === "start",
+    );
+    const restrictedLaunch = launches[1];
+    assert.ok(restrictedLaunch, "restricted child should launch through Herdr");
+    assert.ok(restrictedLaunch.includes("--no-approve"));
+    assert.equal(restrictedLaunch.includes("--approve"), false);
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);
     resetAgentMailbox(agentMailboxPath(WORKSPACE, "project-child"));
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, "restricted-child"));
     realFs.rmSync(project, { recursive: true, force: true });
+    realFs.rmSync(join(PI_AGENTS_DIR, "restricted-child.md"), {
+      force: true,
+    });
     setLeadEnvironment();
   }
 });
@@ -10981,7 +11023,7 @@ test("production continuation policy uses the saved project's trusted override",
   }
 });
 
-test("session continuation inherits the saved label without an override", async () => {
+test("cross-directory continuation does not inherit parent project trust", async () => {
   const label = "resume-stable";
   const run = async () => {
     setLeadEnvironment();
@@ -11007,6 +11049,9 @@ test("session continuation inherits the saved label without an override", async 
       ownershipResult(source.id, LEAD_SESSION_ID, { path: source.path, label }),
     ]) as any;
     context.model = { provider: "continue-provider", id: "continue-model" };
+    context.cwd = process.cwd();
+    context.isProjectTrusted = () => true;
+    assert.notEqual(source.cwd, context.cwd);
     context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
     await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -11031,6 +11076,8 @@ test("session continuation inherits the saved label without an override", async 
         (args) => args[0] === "agent" && args[1] === "start",
       )!;
       assert.ok(start);
+      assert.equal(start.includes("--approve"), false);
+      assert.equal(start.includes("--no-approve"), false);
       assert.equal(start.includes("--model"), false);
       assert.equal(start.includes("--thinking"), false);
       assert.equal(
