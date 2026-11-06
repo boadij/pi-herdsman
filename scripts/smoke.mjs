@@ -7379,6 +7379,7 @@ async function runCoreSmoke(ctx) {
 }
 
 async function runContinuationSmoke(ctx) {
+  const deadline = Date.now() + 6 * 60_000;
   const firstPrompt = ctx.initialPrompt;
   const firstMarker = "PI_HERDSMAN_CONTINUATION_FIRST";
   const secondMarker = "PI_HERDSMAN_CONTINUATION_SECOND";
