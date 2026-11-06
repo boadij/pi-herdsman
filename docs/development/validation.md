@@ -72,7 +72,7 @@ snapshot. The runner invokes `taskkill.exe /PID <pid> /T /F` and waits for the
 runner process to disappear. Filename attribution is best-effort and may be
 unavailable when cleanup wins the race; raw command lines and environment
 details are not logged. Snapshot failure does not replace the original
-suite-timeout failure. The 240-second suite deadline remains unchanged. Runner
+suite-timeout failure. The 360-second suite deadline applies to all platforms. Runner
 disappearance does not verify descendant
 cleanup, which is explicitly reported as unverified.
 
