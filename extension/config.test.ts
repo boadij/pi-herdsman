@@ -219,6 +219,22 @@ test("Manager merge policy strictly validates booleans and repository keys", () 
   );
 });
 
+test("Manager merge repository keys reject remaining control characters", () => {
+  realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
+  for (const code of [0x00, 0x1f, 0x7f]) {
+    const repoKey = `repo${String.fromCharCode(code)}key`;
+    assert.throws(
+      () => setManagerMergeOverride(repoKey, true),
+      /verified repository identity/,
+    );
+    realFs.writeFileSync(
+      configPath!,
+      JSON.stringify({ managerMergeOverrides: { [repoKey]: true } }),
+    );
+    assert.throws(() => readConfig(), /managerMerge/);
+  }
+});
+
 test("partial and complete valid configs overlay defaults", () => {
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
   realFs.writeFileSync(

@@ -9,7 +9,6 @@ import {
   closeSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
   statSync,
@@ -720,7 +719,7 @@ export function worktreeGroupScopeFromTopology(
   };
 }
 
-function workspace(ctx: ExtensionContext): string {
+function workspace(_ctx: ExtensionContext): string {
   const value = process.env.HERDR_WORKSPACE_ID;
   if (!value) error("herdr context", "HERDR_WORKSPACE_ID is not set");
   return value;
@@ -949,8 +948,10 @@ export function sameRunningProcessOwner(
   const expectedForeground = expected.foreground_processes?.[0]?.pid;
   const observedForeground = observed.foreground_processes?.[0]?.pid;
   return (
+    typeof expectedForeground === "number" &&
     Number.isInteger(expectedForeground) &&
     expectedForeground > 0 &&
+    typeof observedForeground === "number" &&
     Number.isInteger(observedForeground) &&
     observedForeground > 0 &&
     expectedForeground === observedForeground
@@ -1550,7 +1551,7 @@ export async function startHerdrAgent(
             )
           ).tabs ?? []);
     if (placement.kind === "split") {
-      panes =
+      const listedPanes =
         (
           await runHerdr(
             pi,
@@ -1562,7 +1563,8 @@ export async function startHerdrAgent(
             },
           )
         ).panes ?? [];
-      const callerPane = panes.find(
+      panes = listedPanes;
+      const callerPane = listedPanes.find(
         (pane: any) =>
           pane.pane_id === placement.paneId &&
           pane.workspace_id === workspaceId,
@@ -2522,10 +2524,11 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
+  const expectedPath = expected.path;
   const hasExpectedPath =
-    typeof expected.path === "string" && expected.path.length > 0;
+    typeof expectedPath === "string" && expectedPath.length > 0;
   if (hasExpectedPath) {
-    if (!sameObservedSessionPath(session.value, expected.path)) return false;
+    if (!sameObservedSessionPath(session.value, expectedPath)) return false;
     if (typeof expected.id !== "string" || expected.id.length === 0)
       return true;
   }
@@ -2919,7 +2922,7 @@ export async function rollbackHerdrStart(
       error("rollback", `pane ${started.paneId} has a replacement agent`);
     if (!started.launchMayHaveStarted && managed)
       error("rollback", `pane ${started.paneId} agent ownership changed`);
-    if (started.launchMayHaveStarted && managed) {
+    if (started.launchMayHaveStarted && managed && expectedShell) {
       const observedSession = sessionIdentity(managed.agent_session);
       const sessionReference =
         started.sessionReference ??

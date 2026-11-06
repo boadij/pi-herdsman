@@ -3514,6 +3514,49 @@ test("lead metadata omits coordination state and follows session names", async (
   delete process.env.HERDR_PANE_ID;
 });
 
+test("lead metadata waits for a session name before reporting", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.getContextUsage = () => ({ percent: 61 });
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() =>
+      assert.ok(
+        pi.calls.some(
+          (args) =>
+            args[0] === "pane" &&
+            args[1] === "report-metadata" &&
+            args.includes("pi_herdsman_context_percent=61"),
+        ),
+      ),
+    );
+    assert.equal(
+      pi.calls.some((args) => args.includes("pi_herdsman_name=")),
+      false,
+      "unnamed session must not serialize name metadata",
+    );
+
+    await pi.events.get("session_info_changed")![0]({ name: "named" }, context);
+    await t.waitFor(() =>
+      assert.ok(
+        pi.calls.some(
+          (args) =>
+            args[0] === "pane" &&
+            args[1] === "report-metadata" &&
+            args.includes("pi_herdsman_name=named"),
+        ),
+      ),
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Lead tab naming verifies the pane's current tab and automatic position", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";

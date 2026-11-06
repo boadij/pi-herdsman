@@ -5655,6 +5655,67 @@ test("maybeFinish replays historical successful handoff with kindless ProjectMes
   );
 });
 
+test("restored report with an unsupported kind remains pending and is diagnosed", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  const pending = {
+    type: "custom",
+    customType: "pi-herdsman-herd-run",
+    data: {
+      phase: "report_pending",
+      sessionId: LEAD_SESSION_ID,
+      startedAt: Date.now(),
+      reportId: randomUUID(),
+      message: "Persisted report must not be discarded",
+      target: "project",
+      kind: "invalid_report_kind",
+    },
+  } as any;
+  pi.entries.push(pending);
+  const originalPendingEntry = structuredClone(pending);
+  const stateErrors: Error[] = [];
+  let publications = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    isVerifiedActiveLead: () => true,
+    isManagedLead: () => true,
+    entryName: "pi-herdsman-herd-run",
+    canFinalizeOwnedHerd: () => true,
+    currentProjectAssignment: async () => ({ project: "assigned" }) as any,
+    publishProjectMessage: async () => {
+      publications++;
+      return true;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: (_pi, _ctx, category, error) => {
+      assert.equal(category, "pi_herdsman_state_error");
+      stateErrors.push(error as Error);
+    },
+  });
+
+  herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+  herd.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(stateErrors.length, 1);
+  assert.match(
+    stateErrors[0].message,
+    /Unsupported persisted Lead report kind: invalid_report_kind/,
+  );
+  assert.equal(publications, 0);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "report_sent"),
+    false,
+  );
+  assert.deepEqual(pending, originalPendingEntry);
+});
+
 test("restored verified Lead settlement waits for children and hands off once", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();

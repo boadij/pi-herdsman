@@ -34,7 +34,7 @@ export const VALID_THINKING_LEVELS = [
   "xhigh",
   "max",
 ] as const;
-const THINKING_LEVELS = new Set(VALID_THINKING_LEVELS);
+const THINKING_LEVELS = new Set<string>(VALID_THINKING_LEVELS);
 const SYSTEM_PROMPT_MODES = new Set(["append", "replace"]);
 type BodyMode = "replace" | "append";
 const BODY_MODES = new Set<BodyMode>(["append", "replace"]);
@@ -1231,7 +1231,7 @@ export function agentLaunchArgs(
   }
 
   const mode = frontmatter.systemPromptMode ?? "append";
-  if (!SYSTEM_PROMPT_MODES.has(mode))
+  if (typeof mode !== "string" || !SYSTEM_PROMPT_MODES.has(mode))
     throw new Error(
       `agent ${agent.name} has invalid systemPromptMode: ${JSON.stringify(mode)}`,
     );

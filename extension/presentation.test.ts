@@ -4966,6 +4966,27 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
   }
 });
 
+test("partial failed completion details remain failures", () => {
+  const theme = {
+    fg: (_name: string, text: string) => text,
+    bg: (_name: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  for (const details of [
+    { status: "failed" },
+    { status: "failed", truncated: "invalid" },
+  ]) {
+    const rendered = renderCompletionMessage(
+      { content: "failure reason", details },
+      { expanded: false },
+      theme,
+    );
+    const text = rendered.render(120).join("\n");
+    assert.match(text, /✗ agent failed/);
+    assert.match(text, /failure reason/);
+  }
+});
+
 test("completion result prose renders Markdown while metadata stays structural", () => {
   const message = {
     content: "Found **one blocker** in `controller.ts`.",

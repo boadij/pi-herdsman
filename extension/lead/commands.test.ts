@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { claimDelegationLock } from "../agent-controller.ts";
+import {
+  claimDelegationLock,
+  visibleAgentSnapshots,
+} from "../agent-controller.ts";
 import { readConfig, validStatusWidgetMaxRows } from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
@@ -555,6 +558,88 @@ test("lead stop-all rejects an empty inventory with unresolved mailbox state", a
   );
   assert.deepEqual(summaries, []);
   assert.equal(cleanupStarted, false);
+});
+
+test("lead stop-all empty recheck sees only the Lead-owned root tree", async () => {
+  const ownerSessionId = fakeContext().sessionManager.getSessionId();
+  const makeAgent = (
+    agentLabel: string,
+    workspaceId: string,
+    owner: string,
+    piSessionId: string,
+  ) =>
+    ({
+      state: { agentLabel, workspaceId, ownerSessionId: owner, piSessionId },
+    }) as any;
+  const ownedRoot = makeAgent("owned-root", WORKSPACE, ownerSessionId, "owned");
+  const ownedChild = makeAgent("owned-child", WORKSPACE, "owned", "child");
+  const unrelatedRoot = makeAgent(
+    "unrelated-root",
+    "other-workspace",
+    "other",
+    "other",
+  );
+  const unrelatedChild = makeAgent(
+    "unrelated-child",
+    "other-workspace",
+    "other",
+    "other-child",
+  );
+
+  for (const scenario of [
+    {
+      agents: [ownedRoot, ownedChild, unrelatedRoot, unrelatedChild],
+      visible: ["owned-root", "owned-child"],
+      summary: "Agent state changed; reopen Stop all.",
+    },
+    {
+      agents: [unrelatedRoot, unrelatedChild],
+      visible: [],
+      summary: "No owned agents running.",
+    },
+  ]) {
+    const context = fakeContext() as any;
+    context.hasUI = true;
+    const notices: string[] = [];
+    const summaries: string[] = [];
+    const runtime = createLeadCommandRuntime({
+      loadStatusSnapshot: async () => ({ agents: [] }),
+      controller: {
+        workspaceId: () => WORKSPACE,
+        sessionSignal: () => new AbortController().signal,
+        withQuiescedTree: async (
+          _ctx: unknown,
+          _owner: string,
+          _workspace: string,
+          operation: (held: ReadonlySet<string>) => Promise<unknown>,
+        ) => operation(new Set()),
+        agentSnapshotView: async (_ctx: unknown, scope: { kind: "root" }) => {
+          const visible = visibleAgentSnapshots(
+            { agents: scenario.agents },
+            scope,
+            ownerSessionId,
+          );
+          assert.deepEqual(
+            visible.map(({ state }) => state.agentLabel),
+            scenario.visible,
+          );
+          return { stateIssues: [], visible };
+        },
+      },
+      presentStopSummary: (summary: string) => summaries.push(summary),
+    } as any);
+    context.ui.notify = (message: string) => notices.push(message);
+
+    await runtime.confirmAndStopAll(context);
+    assert.deepEqual(
+      notices,
+      scenario.visible.length ? [scenario.summary] : [],
+    );
+    assert.deepEqual(
+      summaries,
+      scenario.visible.length ? [] : [scenario.summary],
+    );
+  }
 });
 
 test("Stop all finishes only the Lead herd run", async () => {

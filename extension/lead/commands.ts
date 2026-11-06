@@ -2,7 +2,11 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  type Api,
+  type Model,
+} from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
@@ -21,7 +25,7 @@ import {
   type DefinitionEditScope,
   type RoleDefinitionName,
 } from "../agent-definitions.ts";
-import type { LeadExecutionMode } from "../core.ts";
+import { isLeadExecutionMode, type LeadExecutionMode } from "../core.ts";
 import {
   compactModelToken,
   managedExecutionLabel,
@@ -32,6 +36,7 @@ import {
 } from "../presentation.ts";
 
 type LeadCommandHost = {
+  pi: import("@earendil-works/pi-coding-agent").ExtensionAPI;
   persistStopClosures(
     ctx: ExtensionContext,
     closures: NonNullable<
@@ -43,11 +48,7 @@ type LeadCommandHost = {
     managedLeads?: readonly { id: string; piSessionFile?: string }[],
   ): ReturnType<typeof import("../agent-controller.ts").collectSessionUsage>;
   formatSessionUsage: typeof import("../presentation.ts").formatSessionUsage;
-  runHerdr(
-    ctx: ExtensionContext,
-    args: string[],
-    options: Parameters<typeof import("../herdr.ts").runHerdr>[3],
-  ): ReturnType<typeof import("../herdr.ts").runHerdr>;
+  runHerdr: typeof import("../herdr.ts").runHerdr;
   presentStopSummary(summary: string): void;
   version: string;
   selectMenu(
@@ -138,7 +139,7 @@ type LeadCommandHost = {
     role: "manager" | "chief",
     leave: boolean,
     ctx: ExtensionCommandContext,
-  ): Promise<unknown>;
+  ): Promise<string>;
   maybeFinishHerdRun(ctx: ExtensionContext): Promise<void>;
   getThinkingLevel(): string;
 };
@@ -287,14 +288,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     resolveConfiguredModel(
       ctx: ExtensionContext,
       configured: string,
-    ): Model | undefined {
+    ): Model<Api> | undefined {
       const models = ctx.modelRegistry.getAll();
       const canonical = models.find(
-        (candidate: Model) => modelToken(candidate) === configured,
+        (candidate: Model<Api>) => modelToken(candidate) === configured,
       );
       if (canonical) return canonical;
       const compactMatches = models.filter(
-        (candidate: Model) =>
+        (candidate: Model<Api>) =>
           compactModelToken(modelToken(candidate)) === configured,
       );
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
@@ -408,13 +409,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             const target = targets.find(
               (candidate) => candidate.scope === selectedScope,
             )!;
-            let snapshot;
-            let snapshotError: unknown;
-            try {
-              snapshot = readDefinitionEditSnapshot(definition, target);
-            } catch (error) {
-              snapshotError = error;
-            }
+            const snapshotResult = (() => {
+              try {
+                return {
+                  snapshot: readDefinitionEditSnapshot(definition, target),
+                };
+              } catch (error) {
+                return { error };
+              }
+            })();
+            const snapshot =
+              "snapshot" in snapshotResult
+                ? snapshotResult.snapshot
+                : undefined;
+            const snapshotError =
+              "error" in snapshotResult ? snapshotResult.error : undefined;
             const globalDefinition = isReservedRoleDefinition(definition.name)
               ? (await loadDefinitions("roles", false)).find(
                   (candidate) => candidate.name === definition.name,
@@ -576,8 +585,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               }
               continue;
             }
-            if (snapshotError) {
-              ctx.ui.notify(String(snapshotError), "warning");
+            if ("error" in snapshotResult) {
+              ctx.ui.notify(String(snapshotResult.error), "warning");
               continue;
             }
             let field: "model" | "thinking" | "enabled";
@@ -587,7 +596,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               await ctx.modelRegistry.refresh();
               const models = ctx.modelRegistry.getAvailable();
               const tokens = [
-                ...new Set(models.map((item: Model) => modelToken(item))),
+                ...new Set(models.map((item: Model<Api>) => modelToken(item))),
               ].sort();
               const configured =
                 typeof localValue("model") === "string"
@@ -609,7 +618,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? this.resolveConfiguredModel(ctx, configured)
                 : undefined;
               const modelsByToken = new Map(
-                models.map((item: Model) => [modelToken(item), item]),
+                models.map((item: Model<Api>) => [modelToken(item), item]),
               );
               if (resolvedConfigured)
                 modelsByToken.set(
@@ -704,7 +713,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             }
             const result = host.updateAgentOverride(latest, field, value, {
               scope: selectedScope,
-              expectedContent: snapshot.content,
+              expectedContent: snapshotResult.snapshot.content,
             });
             const verified = await resolveDefinition(definition.name);
             if (!verified)
@@ -790,7 +799,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify("Agent changed; reopen Running.", "warning");
         return;
       }
-      await host.runHerdr(ctx, ["agent", "focus", target.paneId], {
+      await host.runHerdr(host.pi, ctx, ["agent", "focus", target.paneId], {
         signal: host.controller.sessionSignal(),
       });
     },
@@ -826,7 +835,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           async () => {
             const fresh = await host.controller.agentSnapshotView(
               ctx,
-              { kind: "lead" },
+              { kind: "root" },
               host.controller.sessionSignal(),
             );
             if (fresh.stateIssues.length)
@@ -1527,17 +1536,18 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       ctx: ExtensionCommandContext,
     ): Promise<void> {
       const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
+      const mode = args[0];
       if (
         args.length > 1 ||
-        (args[0] && args[0] !== "flexible" && args[0] !== "orchestrate")
+        (mode !== undefined && !isLeadExecutionMode(mode))
       ) {
         ctx.ui.notify("Usage: /lead [flexible|orchestrate]", "error");
         return;
       }
-      if (!args.length) return void (await this.openExecutionMenu(ctx));
+      if (mode === undefined) return void (await this.openExecutionMenu(ctx));
       try {
-        await host.setLeadExecutionMode(ctx, args[0]);
-        ctx.ui.notify(`Lead execution: ${args[0]}`);
+        await host.setLeadExecutionMode(ctx, mode);
+        ctx.ui.notify(`Lead execution: ${mode}`);
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }

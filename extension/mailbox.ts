@@ -1238,7 +1238,8 @@ function waitForMailbox<T>(
       clearInterval(interval);
       if (abortListener && options.signal)
         options.signal.removeEventListener("abort", abortListener);
-      error ? reject(error) : resolve(state!);
+      if (error) reject(error);
+      else resolve(state!);
     };
     const check = () => {
       try {

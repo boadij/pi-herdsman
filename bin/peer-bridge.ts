@@ -558,6 +558,9 @@ if (action === "probe") {
     }
     if (!acceptedRace) afterDurablePeerAcceptanceStep("pending-marker-durable");
   }
+  if (!Array.isArray(envelope.attachments) || envelope.attachments.length > 32)
+    throw new Error("invalid peer transfer evidence");
+  const attachments = envelope.attachments;
   acceptTransfer: {
     if (acceptedRace) {
       console.log(JSON.stringify({ accepted: true, id: record.id }));
@@ -574,7 +577,7 @@ if (action === "probe") {
       throw new Error("peer correspondence does not match message route");
     const receivedRefs: string[] = [];
     let receivedText = record.text as string;
-    for (const attachment of envelope.attachments) {
+    for (const attachment of attachments) {
       if (
         typeof attachment.name !== "string" ||
         typeof attachment.marker !== "string" ||
@@ -675,7 +678,7 @@ if (action === "probe") {
         }
         syncDirectory(markerDir);
       }
-      for (const attachment of envelope.attachments) {
+      for (const attachment of attachments) {
         const binding = record.resultBindings?.find(
           (item: { ref?: unknown }) => item.ref === attachment.ref,
         );
@@ -691,7 +694,7 @@ if (action === "probe") {
           );
       }
     } else {
-      for (const attachment of envelope.attachments) {
+      for (const attachment of attachments) {
         const binding = record.resultBindings?.find(
           (item: { ref?: unknown }) => item.ref === attachment.ref,
         );

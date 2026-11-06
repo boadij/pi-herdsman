@@ -1,21 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { mock, test } from "node:test";
+import { tmpdir } from "node:os";
+import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
-import { Value } from "typebox/value";
 import type {
-  AskRecord,
   RequestRecord,
   ResultRecord,
   ManagedAgentState,
 } from "./mailbox.ts";
-import { assignmentLockPath, claimProcessLock } from "./lock.ts";
-import { OperationError } from "./errors.ts";
+import { assignmentLockPath } from "./lock.ts";
 import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 

@@ -94,7 +94,6 @@ import {
 import {
   importResultBindings,
   resolveMessageFiles,
-  canonicalRefsForSemanticResult,
   verifiedBranchResultMappings,
 } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
@@ -480,6 +479,7 @@ export function managedAgentRequiredEvidence(ctx: ExtensionContext):
   return latest?.evidenceAssignmentId
     ? {
         ...latest,
+        evidenceAssignmentId: latest.evidenceAssignmentId,
         inheritedEvidence: [...latest.inheritedEvidence],
         localEvidence: [...latest.localEvidence],
         effectiveEvidence: [
@@ -614,20 +614,38 @@ export function managedAgentEnvironmentIdentity(
 ): ManagedAgentState | undefined {
   const e = process.env;
   if (managedAgentEnvironmentError()) return undefined;
+  const runId = e.PI_HERDSMAN_RUN_ID;
+  const ownerSessionId = e.PI_HERDSMAN_OWNER_SESSION_ID;
+  const workspaceId = e.PI_HERDSMAN_WORKSPACE_ID;
+  const agentLabel = e.PI_HERDSMAN_LABEL;
+  const paneId = e.HERDR_PANE_ID;
+  const agentDefinition = e.PI_HERDSMAN_AGENT_DEFINITION;
+  if (
+    typeof runId !== "string" ||
+    !validId(runId) ||
+    typeof ownerSessionId !== "string" ||
+    !validId(ownerSessionId) ||
+    !workspaceId?.trim() ||
+    !agentLabel ||
+    !AGENT_LABEL_PATTERN.test(agentLabel) ||
+    !paneId?.trim() ||
+    !agentDefinition?.trim()
+  )
+    return undefined;
   return {
     version: 5,
     build,
-    runId: e.PI_HERDSMAN_RUN_ID,
-    ownerSessionId: e.PI_HERDSMAN_OWNER_SESSION_ID,
-    workspaceId: e.PI_HERDSMAN_WORKSPACE_ID,
-    agentLabel: e.PI_HERDSMAN_LABEL,
+    runId,
+    ownerSessionId,
+    workspaceId,
+    agentLabel,
     ...(e.PI_HERDSMAN_ROOT_SESSION_ID?.trim()
       ? { rootSessionId: e.PI_HERDSMAN_ROOT_SESSION_ID.trim() }
       : {}),
-    paneId: e.HERDR_PANE_ID,
+    paneId,
     piSessionId: ctx.sessionManager.getSessionId(),
     piSessionFile: ctx.sessionManager.getSessionFile(),
-    agentDefinition: e.PI_HERDSMAN_AGENT_DEFINITION,
+    agentDefinition,
     cwd: ctx.cwd,
     updatedAt: Date.now(),
   };
@@ -1331,7 +1349,7 @@ export function createManagedAgentAskOwnerHandler(options: {
     askId: string,
     createdAt: number,
     limits: { inline: { bytes: number }; mailbox: { bytes: number } },
-  ): Promise<{ text: string; resultBindings: unknown[] }>;
+  ): Promise<{ text: string; resultBindings: ResultBinding[] }>;
   checkMailboxSize(bytes: number, limit: number): void;
   claimLock(mailbox: string, state: ManagedAgentState): () => void;
   readState(mailbox: string): ManagedAgentState | undefined;
@@ -1674,13 +1692,11 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
           "required_evidence",
         ) as ResultBinding[])
       : [];
-    const additions: RequiredEvidence[] = [
-      ...bindings.map((result) => ({
-        id: randomUUID(),
-        name: result.ref,
-        result,
-      })),
-    ];
+    const additions: RequiredEvidence[] = bindings.map((result) => ({
+      id: randomUUID(),
+      name: result.ref,
+      result,
+    }));
     if (files.length)
       additions.push(
         ...persistRequiredTextFiles(
@@ -1713,6 +1729,8 @@ export function createManagedAgentEvidenceUpdater(pi: ExtensionAPI) {
         throw new Error(
           "Managed-agent assignment changed during evidence update",
         );
+      if (!state.activeRequestId)
+        throw new Error("Managed-agent assignment has no active request");
       pi.appendEntry(AGENT_REQUIRED_EVIDENCE_ENTRY, {
         version: 1,
         sessionId: ctx.sessionManager.getSessionId(),
@@ -2204,6 +2222,8 @@ export function registerManagedAgentActivityHandlers(
         ).trim();
       }
     }
+    const assignment = execution.assignment;
+    if (!assignment?.activeRequestId) return;
     const usage = ctx.getContextUsage();
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
@@ -2211,7 +2231,7 @@ export function registerManagedAgentActivityHandlers(
       ? `${ctx.model.provider}/${ctx.model.id}`
       : undefined;
     const thinking = ctx.thinkingLevel;
-    options.reportMetadata(execution.assignment, ctx, {
+    options.reportMetadata(assignment, ctx, {
       context: percent ?? null,
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
@@ -2221,12 +2241,9 @@ export function registerManagedAgentActivityHandlers(
     options.resetAssignmentGuidance();
     options.touchActivity();
   });
-  for (const event of [
-    "message_update",
-    "tool_execution_start",
-    "tool_execution_end",
-  ])
-    pi.on(event, () => options.touchActivity());
+  pi.on("message_update", () => options.touchActivity());
+  pi.on("tool_execution_start", () => options.touchActivity());
+  pi.on("tool_execution_end", () => options.touchActivity());
   pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
     if (!execution.assignment) return;
     const model = `${event.model.provider}/${event.model.id}`;
@@ -2639,8 +2656,15 @@ export function registerManagedAgentRuntime(
   const controller = delegationEnabled
     ? createAgentController(pi, {
         ...options.controllerOptions,
-        managedAgentRootSessionId: (ctx) =>
-          managedAgentControllerIdentity(ctx).rootSessionId,
+        managedAgentRootSessionId: (ctx) => {
+          const rootSessionId =
+            managedAgentControllerIdentity(ctx).rootSessionId;
+          if (!rootSessionId?.trim())
+            throw new Error(
+              "Managed-agent state has no verified ownership scope",
+            );
+          return rootSessionId;
+        },
         scope: {
           kind: "managed-agent",
           allowedAgentDefinitions: new Set(allowedAgentDefinitions),
@@ -2779,7 +2803,7 @@ export function registerManagedAgentRuntime(
       },
     });
   }
-  controller?.registerTools(new Map());
+  controller?.registerTools();
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
     const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
     const label = process.env.PI_HERDSMAN_LABEL!;
@@ -3040,7 +3064,7 @@ export function registerManagedAgentRuntime(
       rejectionReason: requestState.askRejectionReason,
       isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
       messageLimits: options.messageLimits,
-      prepare: (ctx, question, files, state, askId, createdAt, limits) =>
+      prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
         prepareMessageInput(
           question,
           options.resolveMessageFiles(ctx, files, "ask_owner"),
@@ -3052,13 +3076,7 @@ export function registerManagedAgentRuntime(
             mailboxLimitBytes: limits.mailbox.bytes,
             requireInline: true,
             serializedBytes: (text, bindings) =>
-              askRecordBytes(
-                state,
-                askId,
-                text,
-                createdAt,
-                bindings as ResultBinding[],
-              ),
+              askRecordBytes(state, askId, text, createdAt, bindings),
           },
         ),
       checkMailboxSize: (bytes, limit) => {
