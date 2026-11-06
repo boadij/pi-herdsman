@@ -417,6 +417,8 @@ function privateRepositoryRoot(projectRoot: string): string | undefined {
       ],
       {
         cwd: projectRoot,
+        // The catch below matches Git's English diagnostic.
+        env: { ...process.env, LC_ALL: "C" },
         encoding: "utf8",
         timeout: 2_000,
         maxBuffer: 8_192,
