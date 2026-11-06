@@ -5,7 +5,6 @@ import {
   formatSize,
   getMarkdownTheme,
   truncateHead,
-  truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
@@ -49,6 +48,10 @@ import type {
 } from "./supervision.ts";
 import { formatRuntimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
+
+type CustomMessageInput = Parameters<
+  Parameters<ExtensionAPI["registerMessageRenderer"]>[1]
+>[0];
 
 export function populateMenuFrame(
   container: Container,
@@ -293,7 +296,10 @@ export function collapseDisplayText(
 ): string | undefined {
   if (value === undefined) return undefined;
   const normalized = value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[\s\S]/gu, (character) => {
+      const code = character.codePointAt(0)!;
+      return code <= 0x1f || code === 0x7f ? " " : character;
+    })
     .replace(/\s+/gu, " ")
     .trim();
   if (!normalized) return undefined;
@@ -528,7 +534,10 @@ export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
   );
 }
 
-export type StatusDisplayRow = Omit<StatusRow, "tree" | "indicator"> & {
+export type StatusDisplayRow = Pick<
+  StatusRow,
+  "label" | "paneId" | "sessionId"
+> & {
   text: string;
 };
 
@@ -796,7 +805,9 @@ function managerPresentationSnapshot(
       ...("paneId" in lead ? { paneId: lead.paneId } : {}),
       ...("tabId" in lead ? { tabId: lead.tabId } : {}),
       ...("workspaceId" in lead ? { workspaceId: lead.workspaceId } : {}),
-      branch: "branch" in lead ? lead.branch : undefined,
+      ...("branch" in lead && typeof lead.branch === "string"
+        ? { branch: lead.branch }
+        : {}),
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
       ...(lead.agentCounts ? { agent_counts: lead.agentCounts } : {}),
@@ -812,7 +823,7 @@ export function supervisionPresentationReports(
 ): SupervisedLeadSnapshot[] {
   if (!snapshot) return [];
   if ("managers" in snapshot) {
-    const directLeads = "leads" in snapshot ? snapshot.leads : [];
+    const directLeads = snapshot.leads ?? [];
     return [
       ...snapshot.managers.map(managerPresentationSnapshot),
       ...directLeads.map((lead) => ({ ...lead, role: "lead" as const })),
@@ -1626,11 +1637,12 @@ export const SUPERVISION_CONTEXT_MAX_BYTES = 16 * 1024;
 
 function supervisionValue(value: unknown): string {
   return String(value)
-    .replace(
-      /[\u0000-\u001f\u007f\u2028\u2029]/gu,
-      (character) =>
-        `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`,
-    )
+    .replace(/[\s\S]/gu, (character) => {
+      const code = character.codePointAt(0)!;
+      return code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029
+        ? `\\u${code.toString(16).padStart(4, "0")}`
+        : character;
+    })
     .replaceAll("<", "\\u003c")
     .replaceAll(">", "\\u003e");
 }
@@ -1708,7 +1720,7 @@ export function formatSupervisionContext(
       ? [
           `managers: ${reports.filter((report) => report.role === "manager" && report.compatibility !== "incompatible").length}`,
           `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,
-          `incompatible_staff_observations: ${reports.filter((report) => report.compatibility === "incompatible").length + (snapshot?.managers?.reduce((total, manager) => total + (manager.incompatibleLeadCount ?? 0), 0) ?? 0)}`,
+          `incompatible_staff_observations: ${reports.filter((report) => report.compatibility === "incompatible").length + (snapshot && "managers" in snapshot ? snapshot.managers.reduce((total, manager) => total + (manager.incompatibleLeadCount ?? 0), 0) : 0)}`,
         ]
       : [
           `direct_leads: ${reports.filter((report) => report.role === "lead" && report.compatibility !== "incompatible").length}`,
@@ -1791,13 +1803,14 @@ export function formatSupervisionContext(
     lines.push(`  workspace_id: ${supervisionValue(lead.workspaceId)}`);
     lines.push(`  runtime: ${supervisionValue(lead.runtimeState)}`);
     lines.push(
-      `  available_tools: ${lead.availableActions
+      `  available_tools: ${(lead.availableActions ?? [])
         .map((action) => supervisionValue(staffToolName(action)))
         .join(", ")}`,
     );
-    lines.push(
-      `  agent_counts: active=${supervisionValue(lead.agentCounts.active)} blocked=${supervisionValue(lead.agentCounts.blocked)} total=${supervisionValue(lead.agentCounts.total)}`,
-    );
+    if (lead.agentCounts)
+      lines.push(
+        `  agent_counts: active=${supervisionValue(lead.agentCounts.active)} blocked=${supervisionValue(lead.agentCounts.blocked)} total=${supervisionValue(lead.agentCounts.total)}`,
+      );
     if (lead.leadCounts)
       lines.push(
         `  lead_counts (compatible reports): active=${lead.leadCounts.active} blocked=${lead.leadCounts.blocked} total=${lead.leadCounts.total}`,
@@ -2102,6 +2115,10 @@ function value(v: unknown): string {
   return typeof v === "string" && v.trim() ? v : "";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function peerMessageStatus(details: Record<string, unknown>): string {
   return details.accepted === true
     ? "accepted remotely"
@@ -2198,10 +2215,41 @@ function tailTruncate(value: string, width: number): string {
 }
 
 function safeDisplaySegment(value: string): string {
-  return value
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, "")
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+  let clean = "";
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) === 0x1b && value[index + 1] === "[") {
+      let cursor = index + 2;
+      while (cursor < value.length && /[0-?]/u.test(value[cursor]!)) cursor++;
+      while (cursor < value.length && /[ -/]/u.test(value[cursor]!)) cursor++;
+      if (cursor < value.length && /[@-~]/u.test(value[cursor]!)) {
+        index = cursor;
+        continue;
+      }
+    } else if (value.charCodeAt(index) === 0x1b && value[index + 1] === "]") {
+      let cursor = index + 2;
+      while (cursor < value.length) {
+        if (value.charCodeAt(cursor) === 0x07) break;
+        if (
+          value.charCodeAt(cursor) === 0x1b &&
+          value.charCodeAt(cursor + 1) === 0x5c
+        ) {
+          cursor++;
+          break;
+        }
+        cursor++;
+      }
+      if (cursor < value.length) {
+        index = cursor;
+        continue;
+      }
+    }
+    clean += value[index];
+  }
+  return clean
+    .replace(/[\s\S]/gu, (character) => {
+      const code = character.codePointAt(0)!;
+      return code <= 0x1f || code === 0x7f ? " " : character;
+    })
     .replace(/\s+/gu, " ")
     .trim();
 }
@@ -2330,11 +2378,8 @@ export function formatAgentDefinitions(
   });
 }
 
-export type ThemeLike = {
-  fg: (color: string, text: string) => string;
-  bg: (color: string, text: string) => string;
-  bold: (text: string) => string;
-};
+export type ThemeLike = Pick<Theme, "fg" | "bg" | "bold">;
+type ThemeColor = Parameters<Theme["fg"]>[0];
 
 export function displayHomePath(path: string): string {
   const home = homedir();
@@ -2411,7 +2456,7 @@ function humanRow(
   theme: ThemeLike,
   label: string,
   content: string,
-  contentColor = "customMessageText",
+  contentColor: ThemeColor = "customMessageText",
 ): string {
   return `${theme.fg("muted", `${label.padEnd(9)}  `)}${theme.fg(contentColor, content)}`;
 }
@@ -2561,13 +2606,12 @@ export function renderAgentDefinitionsOverview(
 }
 
 export function renderStopSummary(
-  message: { content?: string; details?: unknown },
+  message: { details?: unknown },
   theme: any,
 ): TuiBox {
-  const summary =
-    message.details && typeof message.details === "object"
-      ? (message.details as { summary?: unknown }).summary
-      : undefined;
+  const summary = isRecord(message.details)
+    ? message.details.summary
+    : undefined;
   return renderMessageBox(
     new WidthSafeText(
       [
@@ -3660,7 +3704,7 @@ export function renderCoordinationResult(
   options: any,
   theme: any,
   context: any = {},
-): WidthSafeText {
+): Component {
   const details = resultDetails(result);
   const args = (context?.args ?? {}) as Record<string, unknown>;
   hydrateCoordinationAgent(details, context);
@@ -3818,7 +3862,7 @@ export function renderCoordinationResult(
     const label =
       value(details.agent) ||
       value(details.display_name) ||
-      (tool === "staff" || tool === "peer"
+      (tool === "staff"
         ? value(details.target)
         : shortIdentity(details.session)) ||
       "target";
@@ -4144,25 +4188,45 @@ function renderMessageBox(
 export function renderCoordinationMessage(
   kind: CoordinationMessageKind | "project_message",
   message: {
-    content?: string;
-    details?: {
-      fromSessionId?: string;
-      senderTarget?: string;
-      toSessionId?: string;
-      leadSessionId?: string;
-      branch?: string;
-      toRole?: "chief" | "manager" | "lead";
-      fromDisplayName?: string;
-      toDisplayName?: string;
-      kind?: import("./supervision.ts").ProjectMessageKind;
-    };
+    content?: CustomMessageInput["content"];
+    details?: unknown;
   },
   options: { expanded?: boolean; outputPad?: number },
   theme: any,
 ): TuiBox {
-  const d = message.details;
+  const rawDetails = isRecord(message.details) ? message.details : {};
+  const optionalString = (key: string) =>
+    typeof rawDetails[key] === "string" ? rawDetails[key] : undefined;
+  const projectKinds: readonly import("./supervision.ts").ProjectMessageKind[] =
+    [
+      "supervisor_message",
+      "direct_response",
+      "herd_settlement",
+      "execution_failure",
+      "execution_cancelled",
+    ];
+  const projectKind = projectKinds.find(
+    (candidate) => candidate === rawDetails.kind,
+  );
+  const rawRole = rawDetails.toRole;
+  const toRole: "chief" | "manager" | "lead" | undefined =
+    rawRole === "chief" || rawRole === "manager" || rawRole === "lead"
+      ? rawRole
+      : undefined;
+  const d = {
+    fromSessionId: optionalString("fromSessionId"),
+    senderTarget: optionalString("senderTarget"),
+    toSessionId: optionalString("toSessionId"),
+    leadSessionId: optionalString("leadSessionId"),
+    branch: optionalString("branch"),
+    toRole,
+    fromDisplayName: optionalString("fromDisplayName"),
+    toDisplayName: optionalString("toDisplayName"),
+    kind: projectKind,
+  };
   const branch = d?.branch ?? "project work";
-  let heading: string;
+  const messageContent = contentText(message.content ?? "");
+  let heading = "";
   let prefix: string | undefined;
   type CoordinationRole = "chief" | "manager" | "lead";
   const senderRole: CoordinationRole | undefined =
@@ -4187,7 +4251,7 @@ export function renderCoordinationMessage(
       senderRole === "chief"
         ? "From your Chief: "
         : `From ${senderRole === "manager" ? "Manager" : "Lead"}${d?.senderTarget ? ` ${d.senderTarget}` : ""}: `;
-    prefix = message.content?.startsWith(currentPrefix)
+    prefix = messageContent.startsWith(currentPrefix)
       ? currentPrefix
       : d?.fromSessionId
         ? `From ${senderRole} ${d.fromSessionId}: `
@@ -4200,7 +4264,7 @@ export function renderCoordinationMessage(
           : undefined;
         heading = sender ? `Peer message · ${sender}` : "Peer message";
         const currentPrefix = `Peer message${d?.senderTarget ? ` from ${d.senderTarget}` : ""}: `;
-        prefix = message.content?.startsWith(currentPrefix)
+        prefix = messageContent.startsWith(currentPrefix)
           ? currentPrefix
           : d?.fromSessionId
             ? `Peer message from ${d.fromSessionId}: `
@@ -4220,7 +4284,7 @@ export function renderCoordinationMessage(
         break;
     }
   }
-  let body = message.content ?? "";
+  let body = messageContent;
   if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
   const content = new Container();
   content.addChild(new WidthSafeText(heading, 0, 0));
@@ -4258,22 +4322,37 @@ export function renderCoordinationMessage(
 }
 
 export function renderCompletionMessage(
-  message: { content?: string; details?: CompletionMessageDetails },
+  message: {
+    content?: CustomMessageInput["content"];
+    details?: unknown;
+  },
   options: { expanded?: boolean; outputPad?: number },
   theme: any,
 ): TuiBox {
-  const d = message.details;
-  const failed = d?.status === "failed";
+  const d = isCompletionMessageDetails(message.details)
+    ? message.details
+    : undefined;
+  const status: CompletionMessageDetails["status"] | undefined =
+    isRecord(message.details) &&
+    (message.details.status === "completed" ||
+      message.details.status === "failed")
+      ? message.details.status
+      : undefined;
+  const failed = status === "failed";
   const elapsed =
     Number.isFinite(d?.elapsedMs) &&
     d?.elapsedMs !== undefined &&
     d.elapsedMs >= 0
       ? formatElapsed(0, d.elapsedMs)
       : undefined;
-  const label = d?.agentLabel ?? "agent";
+  const label =
+    d?.agentLabel ??
+    (isRecord(message.details) && typeof message.details.agentLabel === "string"
+      ? message.details.agentLabel
+      : "agent");
   const definition = agentDefinitionSuffix(label, d?.agentDefinition);
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
-  const humanContent = (message.content ?? "")
+  const humanContent = contentText(message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
     .replace(/^Result ref: result:[^\n]+\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
@@ -4347,6 +4426,67 @@ export function renderCompletionMessage(
       );
   }
   return renderMessageBox(content, theme, options.outputPad ?? 0);
+}
+
+function isCompletionMessageDetails(
+  value: unknown,
+): value is CompletionMessageDetails {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.requestId !== "string" ||
+    typeof value.agentLabel !== "string" ||
+    (value.status !== "completed" && value.status !== "failed") ||
+    typeof value.truncated !== "boolean"
+  )
+    return false;
+  const optionalStrings = [
+    "agentDefinition",
+    "piSessionId",
+    "piSessionFile",
+    "resultRef",
+    "fullOutputPath",
+    "resultPersistenceError",
+  ] as const;
+  if (
+    optionalStrings.some(
+      (key) => value[key] !== undefined && typeof value[key] !== "string",
+    )
+  )
+    return false;
+  if (
+    value.sessionRetired !== undefined &&
+    value.sessionRetired !== null &&
+    typeof value.sessionRetired !== "boolean"
+  )
+    return false;
+  if (
+    value.elapsedMs !== undefined &&
+    (typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs))
+  )
+    return false;
+  if (
+    value.resultIndex !== undefined &&
+    (typeof value.resultIndex !== "number" ||
+      !Number.isInteger(value.resultIndex))
+  )
+    return false;
+  if (value.contextUsage !== undefined) {
+    if (
+      !isRecord(value.contextUsage) ||
+      (value.contextUsage.tokens !== null &&
+        typeof value.contextUsage.tokens !== "number") ||
+      typeof value.contextUsage.contextWindow !== "number" ||
+      (value.contextUsage.percent !== null &&
+        typeof value.contextUsage.percent !== "number")
+    )
+      return false;
+  }
+  return (
+    value.error === undefined ||
+    (isRecord(value.error) &&
+      typeof value.error.code === "string" &&
+      typeof value.error.message === "string")
+  );
 }
 
 export function renderAgentAskMessage(

@@ -3,6 +3,8 @@ import type {
   ExtensionContext,
   ProjectedSessionEntry,
   SessionEntry,
+  ToolExecutionMode,
+  ToolExposure,
 } from "@earendil-works/pi-coding-agent";
 import {
   buildSessionProjection,
@@ -12,12 +14,12 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
-import { basename, join, resolve, isAbsolute } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -60,6 +62,7 @@ import {
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
+  type StatusAgent,
   type StatusSnapshot,
   type BreadcrumbSegment,
   type FocusIntent,
@@ -91,9 +94,9 @@ import {
   tryClaimAssignmentLock,
 } from "./lock.ts";
 import type {
+  ManagedAgentControlState,
   SpawnPlacement,
   MessageFileInput,
-  PreparedMessageInput,
 } from "./core.ts";
 import {
   agentControlState,
@@ -130,7 +133,6 @@ import {
   type StartedHerdrAgent,
   type RemovedHerdrWorktree,
 } from "./herdr.ts";
-import { fileURLToPath } from "node:url";
 import { readEffectiveConfig } from "./config.ts";
 import {
   contextAgentDefinitions,
@@ -248,29 +250,40 @@ export function buildAgentStatusSnapshot(
   );
   const agents = listed.map((agent) => {
     const runtime = host.runtimeForLabel(agent.agent as string);
-    const tokens = agent.tokens ?? {};
+    const tokens =
+      agent.tokens && typeof agent.tokens === "object" ? agent.tokens : {};
+    const role = Reflect.get(tokens, "role");
+    const task = Reflect.get(tokens, "task");
     const presentation = parsePresentationTokens(tokens);
+    const state: StatusAgent["state"] =
+      agent.state === "working" ||
+      agent.state === "blocked" ||
+      agent.state === "settling" ||
+      agent.state === "starting" ||
+      agent.state === "unknown" ||
+      agent.state === "lost"
+        ? agent.state
+        : "unknown";
     return {
       label: agent.agent as string,
-      state: agent.state,
-      definition: collapseDisplayText(
-        typeof agent.agent_definition === "string" &&
-          agent.agent_definition.trim()
-          ? agent.agent_definition
-          : typeof tokens.role === "string"
-            ? tokens.role
-            : undefined,
-      ),
-      paneId: agent.pane_id,
-      sessionId: agent.pi_session_id,
-      task: typeof tokens.task === "string" ? tokens.task : runtime?.task,
+      state,
+      definition:
+        collapseDisplayText(
+          typeof agent.agent_definition === "string" &&
+            agent.agent_definition.trim()
+            ? agent.agent_definition
+            : typeof role === "string"
+              ? role
+              : undefined,
+        ) ?? "unknown",
+      ...(typeof agent.pane_id === "string" ? { paneId: agent.pane_id } : {}),
+      ...(typeof agent.pi_session_id === "string"
+        ? { sessionId: agent.pi_session_id }
+        : {}),
+      task: typeof task === "string" ? task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model:
-        presentation.model !== undefined ? presentation.model : runtime?.model,
-      thinking:
-        presentation.thinking !== undefined
-          ? presentation.thinking
-          : runtime?.thinking,
+      model: presentation.model ?? runtime?.model ?? undefined,
+      thinking: presentation.thinking ?? runtime?.thinking ?? undefined,
       contextPercent: presentation.contextPercent,
       ...(agent.stale
         ? {
@@ -281,11 +294,13 @@ export function buildAgentStatusSnapshot(
                 : undefined,
           }
         : {}),
-      ...(agent.parent_label ? { parentLabel: agent.parent_label } : {}),
+      ...(typeof agent.parent_label === "string"
+        ? { parentLabel: agent.parent_label }
+        : {}),
     };
   });
   const herdStartedAt =
-    host.scope.kind === "root" ? host.herdStartedAt() : undefined;
+    host.scope.kind === "root" ? host.herdStartedAt?.() : undefined;
   return {
     agents,
     stale: false,
@@ -720,7 +735,10 @@ export function resolveMessageFiles(
   return files.map((file) => {
     if (file.startsWith("evidence:")) {
       const matches = acceptedEvidence.filter(
-        (entry) => !("result" in entry) && entry.ref === file,
+        (
+          entry,
+        ): entry is Exclude<RequiredEvidence, { result: ResultBinding }> =>
+          !("result" in entry) && entry.ref === file,
       );
       if (matches.length !== 1)
         fail(
@@ -1501,9 +1519,7 @@ export function managedAgentPresence(
     const aliases = [agent?.name].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
     );
-    return (
-      aliases.length === 0 || aliases.every((alias) => alias === expectedAlias)
-    );
+    return aliases.every((alias) => alias === expectedAlias);
   };
   const safeMatches = (value: unknown): boolean => {
     try {
@@ -2066,7 +2082,14 @@ function readPersistedSessionEntries(
     throw new Error(
       "Persisted Pi session is missing a matching current session header",
     );
-  return entries;
+  const sessionEntries = entries.slice(1);
+  if (sessionEntries.some((entry) => entry.type === "session"))
+    throw new Error(
+      "Persisted Pi session contains an unexpected session header",
+    );
+  return sessionEntries.filter(
+    (entry): entry is SessionEntry => entry.type !== "session",
+  );
 }
 
 function truncateTranscriptToolResult(text: string): {
@@ -2148,7 +2171,7 @@ export function readPersistedTranscript(
 ): { transcript: string; truncated: boolean } {
   const entries = readPersistedSessionEntries(target, readFile, isFile);
   const formatted = formatPersistedTranscript(
-    buildSessionProjection(entries.slice(1) as SessionEntry[]).entries,
+    buildSessionProjection(entries).entries,
   );
   const bounded = truncateTail(formatted.text, {
     maxBytes: TRANSCRIPT_MAX_BYTES,
@@ -2676,7 +2699,7 @@ export function resolveAssignmentSession(
             .some(
               (proof) =>
                 proof?.requestId === historicalClose.request_id &&
-                proof.piSessionId === child.id,
+                proof?.piSessionId === child.id,
             )
         )
           fail(
@@ -3184,14 +3207,12 @@ export type Params =
       retentionPersisted?: boolean;
     }
   | { action: "continue"; session: string; task: string; files?: string[] }
-  | {
-      action: "steer" | "interrupt";
-      agent: string;
-      message: string;
-      files?: string[];
-    }
+  | { action: "steer"; agent: string; message: string; files?: string[] }
+  | { action: "interrupt"; agent: string; message: string; files?: string[] }
   | { action: "reply"; agent: string; message: string; files?: string[] }
-  | { action: "close" | "inspect" | "transcript"; agent: string };
+  | { action: "close"; agent: string }
+  | { action: "inspect"; agent: string }
+  | { action: "transcript"; agent: string };
 
 export function validateAssignmentRequest(params: Params): void {
   if (params.action !== "delegate" && params.action !== "continue") return;
@@ -3303,9 +3324,7 @@ export function herdrAliasMatchesIfReported(
   const aliases = [agent?.name].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
-  return (
-    aliases.length === 0 || aliases.every((alias) => alias === expectedAlias)
-  );
+  return aliases.every((alias) => alias === expectedAlias);
 }
 
 export function parsePresentationTokens(tokens: unknown): {
@@ -3352,14 +3371,17 @@ export function validateIdentity(
   agent?: any,
   options: { requireLiveSession?: boolean; requestId?: string } = {},
 ): void {
-  const differences: [string, unknown, unknown][] = [
+  const differences: [string, unknown, unknown][] = [];
+  const expectedValues: [string, unknown, unknown][] = [
     ["runId", state.runId, runtime.runId],
     ["ownerSessionId", state.ownerSessionId, runtime.ownerSessionId],
     ["workspaceId", state.workspaceId, runtime.workspaceId],
     ["agentLabel", state.agentLabel, runtime.label],
     ["paneId", state.paneId, runtime.paneId],
     ["rootSessionId", state.rootSessionId, runtime.rootSessionId],
-  ].filter(([, expected, actual]) => expected !== actual);
+  ];
+  for (const [field, expected, actual] of expectedValues)
+    if (expected !== actual) differences.push([field, expected, actual]);
   if (!sameCwd(state.cwd, runtime.cwd))
     differences.push(["cwd", state.cwd, runtime.cwd]);
   if (state.piSessionId !== runtime.piSessionId)
@@ -3380,10 +3402,13 @@ export function validateIdentity(
     const observation = sessionIdentity(agent.agent_session);
     const hasObservedSession =
       agent.agent_session !== undefined && agent.agent_session !== null;
-    const liveDifferences: [string, unknown, unknown][] = [
+    const liveDifferences: [string, unknown, unknown][] = [];
+    const liveValues: [string, unknown, unknown][] = [
       ["workspaceId", agent.workspace_id, runtime.workspaceId],
       ["paneId", agent.pane_id, runtime.paneId],
-    ].filter(([, expected, actual]) => expected !== actual);
+    ];
+    for (const [field, expected, actual] of liveValues)
+      if (expected !== actual) liveDifferences.push([field, expected, actual]);
     if (!sameCwd(agent.cwd, runtime.cwd))
       liveDifferences.push(["cwd", agent.cwd, runtime.cwd]);
     if (!herdrAliasMatchesIfReported(agent, runtime.herdrAgent))
@@ -3461,7 +3486,7 @@ export function requestRecordBytesFor(
     taskEvidenceId?: string;
     inheritedEvidence?: readonly RequiredEvidence[];
     localEvidence?: readonly RequiredEvidence[];
-    evidenceAssignmentId: string;
+    evidenceAssignmentId?: string;
     requiredEvidence: readonly RequiredEvidence[];
     currentEvidenceIds?: readonly string[];
   },
@@ -3479,15 +3504,7 @@ export function requestRecordBytesFor(
     ...(kind === "reply" ? { askId } : {}),
     text,
     ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
-    ...(evidence
-      ? {
-          ...evidence,
-          requiredEvidence: [...evidence.requiredEvidence],
-          ...(evidence.currentEvidenceIds
-            ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
-            : {}),
-        }
-      : {}),
+    ...(evidence ? requestEvidenceFields(evidence) : {}),
     createdAt,
   });
 }
@@ -3509,7 +3526,7 @@ export function prospectiveAssignmentFits(
     taskEvidenceId?: string;
     inheritedEvidence?: readonly RequiredEvidence[];
     localEvidence?: readonly RequiredEvidence[];
-    evidenceAssignmentId: string;
+    evidenceAssignmentId?: string;
     requiredEvidence: readonly RequiredEvidence[];
     currentEvidenceIds?: readonly string[];
   },
@@ -3527,18 +3544,51 @@ export function prospectiveAssignmentFits(
       kind: "task",
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
-      ...(evidence
-        ? {
-            ...evidence,
-            requiredEvidence: [...evidence.requiredEvidence],
-            ...(evidence.currentEvidenceIds
-              ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
-              : {}),
-          }
-        : {}),
+      ...(evidence ? requestEvidenceFields(evidence) : {}),
       createdAt,
     }) <= mailboxLimitBytes
   );
+}
+
+function requestEvidenceFields(evidence: {
+  projectAssignmentId?: string;
+  taskEvidenceId?: string;
+  evidenceAssignmentId?: string;
+  requiredEvidence: readonly RequiredEvidence[];
+  inheritedEvidence?: readonly RequiredEvidence[];
+  localEvidence?: readonly RequiredEvidence[];
+  currentEvidenceIds?: readonly string[];
+}): Pick<
+  RequestRecord,
+  | "projectAssignmentId"
+  | "taskEvidenceId"
+  | "evidenceAssignmentId"
+  | "requiredEvidence"
+  | "inheritedEvidence"
+  | "localEvidence"
+  | "currentEvidenceIds"
+> {
+  return {
+    ...(evidence.projectAssignmentId !== undefined
+      ? { projectAssignmentId: evidence.projectAssignmentId }
+      : {}),
+    ...(evidence.taskEvidenceId !== undefined
+      ? { taskEvidenceId: evidence.taskEvidenceId }
+      : {}),
+    ...(evidence.evidenceAssignmentId !== undefined
+      ? { evidenceAssignmentId: evidence.evidenceAssignmentId }
+      : {}),
+    requiredEvidence: [...evidence.requiredEvidence],
+    ...(evidence.inheritedEvidence !== undefined
+      ? { inheritedEvidence: [...evidence.inheritedEvidence] }
+      : {}),
+    ...(evidence.localEvidence !== undefined
+      ? { localEvidence: [...evidence.localEvidence] }
+      : {}),
+    ...(evidence.currentEvidenceIds !== undefined
+      ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
+      : {}),
+  };
 }
 
 export type ManagedAgentSnapshotCollection = {
@@ -3725,11 +3775,18 @@ export async function managedAgentSnapshots(
     const lifecycleState = agent
       ? normalizeHerdrLifecycleState(agent)
       : "unknown";
+    const controlLifecycleState =
+      lifecycleState === "idle" ||
+      lifecycleState === "working" ||
+      lifecycleState === "blocked" ||
+      lifecycleState === "done"
+        ? lifecycleState
+        : "unknown";
     const completionPending = completedResultsPending[index]!;
     const handoffPending = unacknowledgedRequestExists(path, state);
     const liveState = agent
       ? agentControlState(
-          lifecycleState,
+          controlLifecycleState,
           state.activeRequestId,
           completionPending,
           handoffPending,
@@ -4760,7 +4817,7 @@ export function createAgentController(
   ): Promise<{
     runtime: Runtime;
     agent: any;
-    controlState: import("./core.ts").AgentControlState;
+    controlState: ManagedAgentControlState;
   }> => {
     const snapshot = await snapshots(context, signal);
     const matches = snapshot.agents.filter(
@@ -4837,7 +4894,7 @@ export function createAgentController(
       evidence?: {
         projectAssignmentId?: string;
         taskEvidenceId?: string;
-        evidenceAssignmentId: string;
+        evidenceAssignmentId?: string;
         requiredEvidence: readonly RequiredEvidence[];
         inheritedEvidence?: readonly RequiredEvidence[];
         localEvidence?: readonly RequiredEvidence[];
@@ -4863,27 +4920,7 @@ export function createAgentController(
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       ...(submitOptions.evidence
-        ? {
-            ...submitOptions.evidence,
-            requiredEvidence: [...submitOptions.evidence.requiredEvidence],
-            ...(submitOptions.evidence.inheritedEvidence
-              ? {
-                  inheritedEvidence: [
-                    ...submitOptions.evidence.inheritedEvidence,
-                  ],
-                }
-              : {}),
-            ...(submitOptions.evidence.localEvidence
-              ? { localEvidence: [...submitOptions.evidence.localEvidence] }
-              : {}),
-            ...(submitOptions.evidence.currentEvidenceIds
-              ? {
-                  currentEvidenceIds: [
-                    ...submitOptions.evidence.currentEvidenceIds,
-                  ],
-                }
-              : {}),
-          }
+        ? requestEvidenceFields(submitOptions.evidence)
         : {}),
       createdAt,
     };
@@ -5345,9 +5382,10 @@ export function createAgentController(
           }))
         : [];
     const unresolved = unknown.length > 0;
+    const view: ManagedAgentSnapshotView = { ...snapshot, visible };
     const agents = visible.map((item) =>
       listRecord(
-        snapshot,
+        view,
         item,
         context.sessionManager.getSessionId(),
         scope,
@@ -6250,7 +6288,7 @@ export function createAgentController(
   ): Promise<void> => {
     recoveryComplete = false;
     if (signal.aborted) return;
-    for (const label of [...runtimes.keys()]) invalidateRuntime(label);
+    for (const label of runtimes.keys()) invalidateRuntime(label);
     let snapshot: ManagedAgentSnapshotCollection;
     try {
       snapshot = await snapshots(context, signal);
@@ -6479,7 +6517,7 @@ export function createAgentController(
   };
   const cancelAskRetries = (runtime: Runtime) => {
     const prefix = `${runtime.mailboxPath}:`;
-    for (const key of [...askDeliveryRetries.keys()])
+    for (const key of askDeliveryRetries.keys())
       if (key.startsWith(prefix)) {
         const timer = askDeliveryRetries.get(key);
         if (timer) clearTimeout(timer);
@@ -7045,7 +7083,7 @@ export function createAgentController(
       return;
     }
     const entries = context.sessionManager.getEntries();
-    for (const runtime of [...runtimes.values()]) {
+    for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId || !runtime.completedRequestId)
         continue;
       let result: ResultRecord | undefined;
@@ -7109,7 +7147,7 @@ export function createAgentController(
       initiatingRootGeneration!.sessionId !== initiatingSessionId
     )
       fail("invalid_request", "Root delegation session changed", p.action);
-    const limits = await messageLimits(ctx);
+    const limits = await messageLimits();
     const assignment =
       p.action === "delegate" || p.action === "continue"
         ? {
@@ -7123,12 +7161,6 @@ export function createAgentController(
         : undefined;
     let assignmentInput: ReturnType<typeof prepareMessageInput> | undefined;
     if (p.action === "delegate" || p.action === "continue") {
-      if (p.retain === true && p.action !== "delegate")
-        fail(
-          "invalid_request",
-          "retain is available only on delegate_agent",
-          p.action,
-        );
       if (!scope)
         fail(
           "not_running_inside_herdr",
@@ -7145,8 +7177,24 @@ export function createAgentController(
                   : undefined,
             })
           : undefined;
+      if (p.action === "continue" && !resumed)
+        fail(
+          "target_not_found",
+          "The requested Agent continuation could not be resolved",
+          "continue",
+        );
       await herdrVersion(pi, ctx, signal);
-      const agentDefinition = resumed ? resumed.definition : p.definition;
+      const agentDefinition =
+        p.action === "continue"
+          ? (
+              resumed ??
+              fail(
+                "target_not_found",
+                "The requested Agent continuation could not be resolved",
+                "continue",
+              )
+            ).definition
+          : p.definition;
       const agentCwd = resumed ? resumed.cwd : ctx.cwd;
       const requestedLabel =
         resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
@@ -7302,7 +7350,8 @@ export function createAgentController(
               )
             ) {
               if (
-                closedReceipt?.workspace_id === agent.workspace_id &&
+                closedReceipt &&
+                closedReceipt.workspace_id === agent.workspace_id &&
                 closedReceipt.pane_id === agent.pane_id &&
                 typeof agent.pane_id === "string"
               ) {
@@ -7376,10 +7425,7 @@ export function createAgentController(
         const projectAssignmentId =
           nestedEvidence?.projectAssignmentId ??
           continuationEvidence?.projectAssignmentId;
-        let projectEvidence: Awaited<
-          ReturnType<NonNullable<typeof options.projectEvidence>>
-        >;
-        projectEvidence =
+        const projectEvidence =
           scope.kind === "root"
             ? await options.projectEvidence?.(ctx, signal)
             : nestedEvidence && projectAssignmentId
@@ -7468,11 +7514,27 @@ export function createAgentController(
             return file;
           }
         };
-        if (p.retain === true) {
-          if (scope.kind !== "managed-agent" || !nestedEvidence)
+        if (p.action === "delegate" && p.retain === true) {
+          const retainedEvidenceScope = nestedEvidence;
+          if (scope.kind !== "managed-agent" || !retainedEvidenceScope)
             fail(
               "invalid_request",
               "Managed-Agent evidence scope is unavailable",
+              p.action,
+            );
+          if (!retainedEvidenceScope.evidenceAssignmentId)
+            fail(
+              "invalid_request",
+              "Managed-Agent evidence assignment identity is unavailable",
+              p.action,
+            );
+          if (
+            !retainedEvidenceScope.workspaceId ||
+            !retainedEvidenceScope.inheritedEvidence
+          )
+            fail(
+              "invalid_request",
+              "Managed-Agent evidence scope is incomplete",
               p.action,
             );
           if (!p.files?.length)
@@ -7484,7 +7546,8 @@ export function createAgentController(
           const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
           if (
             !state?.activeRequestId ||
-            state.projectAssignmentId !== nestedEvidence.projectAssignmentId
+            state.projectAssignmentId !==
+              retainedEvidenceScope.projectAssignmentId
           )
             fail(
               "invalid_request",
@@ -7502,8 +7565,12 @@ export function createAgentController(
           const existingPaths = new Set(
             requiredEvidence
               .filter(
-                (entry): entry is Extract<RequiredEvidence, { path: string }> =>
-                  "path" in entry,
+                (
+                  entry,
+                ): entry is Exclude<
+                  RequiredEvidence,
+                  { result: ResultBinding }
+                > => !("result" in entry),
               )
               .map((entry) => resolve(entry.path)),
           );
@@ -7521,46 +7588,52 @@ export function createAgentController(
           );
           const additions: RequiredEvidence[] = [];
           const retainedPaths = new Set<string>();
-          retainedSelections = supplied.flatMap((file) => {
-            if (typeof file === "string") {
-              let canonicalPath: string | undefined;
-              try {
-                canonicalPath = realpathSync(resolve(ctx.cwd, file));
-              } catch {
-                // Let snapshot validation report invalid paths as before.
+          retainedSelections = supplied.flatMap<MessageFileInput>(
+            (file): MessageFileInput[] => {
+              if (typeof file === "string") {
+                let canonicalPath: string | undefined;
+                try {
+                  canonicalPath = realpathSync(resolve(ctx.cwd, file));
+                } catch {
+                  // Let snapshot validation report invalid paths as before.
+                }
+                if (
+                  canonicalPath &&
+                  (existingPaths.has(canonicalPath) ||
+                    retainedPaths.has(canonicalPath))
+                )
+                  return [];
+                const [addition] = persistRequiredTextFiles(
+                  retainedEvidenceScope.evidenceAssignmentId,
+                  [file],
+                  ctx.cwd,
+                  p.action,
+                );
+                if (!addition || "result" in addition) return [];
+                if (canonicalPath) retainedPaths.add(canonicalPath);
+                additions.push(addition);
+                return [
+                  {
+                    kind: "retainedEvidence" as const,
+                    ref: semanticEvidenceRef(addition),
+                    name: addition.name,
+                    path: addition.path,
+                    sha256: addition.sha256,
+                  },
+                ];
               }
-              if (
-                canonicalPath &&
-                (existingPaths.has(canonicalPath) ||
-                  retainedPaths.has(canonicalPath))
-              )
-                return [];
-              const [addition] = persistRequiredTextFiles(
-                nestedEvidence.evidenceAssignmentId,
-                [file],
-                ctx.cwd,
-                p.action,
-              );
-              if (!addition) return [];
-              if (canonicalPath) retainedPaths.add(canonicalPath);
+              if ("kind" in file || existingRefs.has(file.ref)) return [file];
+              const addition = {
+                id: randomUUID(),
+                name: file.ref,
+                result: file,
+              };
               additions.push(addition);
-              return [
-                {
-                  kind: "retainedEvidence" as const,
-                  ref: semanticEvidenceRef(addition),
-                  name: addition.name,
-                  path: addition.path,
-                  sha256: addition.sha256,
-                },
-              ];
-            }
-            if ("kind" in file || existingRefs.has(file.ref)) return [file];
-            const addition = { id: randomUUID(), name: file.ref, result: file };
-            additions.push(addition);
-            return [file];
-          });
+              return [file];
+            },
+          );
           handoffAdditions = additions;
-          const localEvidence = [...nestedEvidence.localEvidence];
+          const localEvidence = [...retainedEvidenceScope.localEvidence];
           for (const addition of additions)
             if (
               !localEvidence.some((entry) =>
@@ -7585,16 +7658,20 @@ export function createAgentController(
             workspaceId: state.workspaceId,
             agentLabel: state.agentLabel,
             paneId: state.paneId,
-            projectAssignmentId: nestedEvidence.projectAssignmentId,
-            evidenceAssignmentId: nestedEvidence.evidenceAssignmentId,
-            taskEvidenceId: nestedEvidence.taskEvidenceId,
-            inheritedEvidence: nestedEvidence.inheritedEvidence,
+            projectAssignmentId: retainedEvidenceScope.projectAssignmentId,
+            evidenceAssignmentId: retainedEvidenceScope.evidenceAssignmentId,
+            taskEvidenceId: retainedEvidenceScope.taskEvidenceId,
+            inheritedEvidence: retainedEvidenceScope.inheritedEvidence,
             localEvidence,
-            ...(nestedEvidence.currentEvidenceIds !== undefined
-              ? { currentEvidenceIds: [...nestedEvidence.currentEvidenceIds] }
+            ...(retainedEvidenceScope.currentEvidenceIds !== undefined
+              ? {
+                  currentEvidenceIds: [
+                    ...retainedEvidenceScope.currentEvidenceIds,
+                  ],
+                }
               : {}),
           });
-          nestedEvidence = { ...nestedEvidence, localEvidence };
+          nestedEvidence = { ...retainedEvidenceScope, localEvidence };
           requiredEvidence = [
             ...nestedEvidence.inheritedEvidence,
             ...localEvidence,
@@ -7664,7 +7741,7 @@ export function createAgentController(
             "path" in entry,
         );
         const explicitFiles = (
-          p.retain === true
+          p.action === "delegate" && p.retain === true
             ? retainedSelections
             : resolveMessageFiles(
                 ctx,
@@ -7985,21 +8062,17 @@ export function createAgentController(
                 p.action,
               );
             }
-            try {
-              labels.add(label);
-              label = chooseLabel(agentDefinition, labels);
-              if (!validAgentLabel(label))
-                fail(
-                  "invalid_request",
-                  'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
-                  p.action,
-                );
-              assignmentInput = prepareAssignmentForLabel(label);
-              mailbox = agentMailboxPath(workspaceId, label);
-              continue;
-            } catch (retryError) {
-              throw retryError;
-            }
+            labels.add(label);
+            label = chooseLabel(agentDefinition, labels);
+            if (!validAgentLabel(label))
+              fail(
+                "invalid_request",
+                'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
+                p.action,
+              );
+            assignmentInput = prepareAssignmentForLabel(label);
+            mailbox = agentMailboxPath(workspaceId, label);
+            continue;
           }
           try {
             if (
@@ -8621,35 +8694,28 @@ export function createAgentController(
                   return;
                 }
                 await projectEvidence.revalidate(async () => {
-                  const current =
-                    scope.kind === "root"
-                      ? await options.projectEvidence?.(ctx, signal)
-                      : nestedEvidence && projectAssignmentId
-                        ? await options.managedProjectEvidence?.(
-                            ctx,
-                            nestedEvidence.workspaceId,
-                            projectAssignmentId,
-                          )
-                        : undefined;
-                  if (
-                    !current ||
-                    current.assignment.id !== projectAssignment.id ||
-                    (!resumed &&
-                      scope.kind === "root" &&
-                      (JSON.stringify(
-                        current.assignment.requiredEvidence ?? [],
-                      ) !== JSON.stringify(requiredEvidence) ||
-                        JSON.stringify(
-                          current.assignment.currentEvidenceIds ?? [],
-                        ) !==
-                          JSON.stringify(
-                            projectAssignment.currentEvidenceIds ?? [],
-                          )))
-                  )
-                    throw new Error(
-                      "Project assignment or required evidence changed during Agent startup; retry delegation",
+                  if (scope.kind === "root") {
+                    const current = await options.projectEvidence?.(
+                      ctx,
+                      signal,
                     );
-                  if (scope.kind === "root")
+                    if (
+                      !current ||
+                      current.assignment.id !== projectAssignment.id ||
+                      (!resumed &&
+                        (JSON.stringify(
+                          current.assignment.requiredEvidence ?? [],
+                        ) !== JSON.stringify(requiredEvidence) ||
+                          JSON.stringify(
+                            current.assignment.currentEvidenceIds ?? [],
+                          ) !==
+                            JSON.stringify(
+                              projectAssignment.currentEvidenceIds ?? [],
+                            )))
+                    )
+                      throw new Error(
+                        "Project assignment or required evidence changed during Agent startup; retry delegation",
+                      );
                     await current.publishIfCurrent((latest) => {
                       if (
                         !latest ||
@@ -8669,6 +8735,23 @@ export function createAgentController(
                         );
                       publish();
                     });
+                  } else {
+                    const current =
+                      nestedEvidence && projectAssignmentId
+                        ? await options.managedProjectEvidence?.(
+                            ctx,
+                            nestedEvidence.workspaceId,
+                            projectAssignmentId,
+                          )
+                        : undefined;
+                    if (
+                      !current ||
+                      current.assignment.id !== projectAssignment.id
+                    )
+                      throw new Error(
+                        "Project assignment or required evidence changed during Agent startup; retry delegation",
+                      );
+                  }
                 });
               },
             },
@@ -9033,10 +9116,12 @@ export function createAgentController(
       { agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }) },
       { additionalProperties: false },
     );
+    const agentExposure: ToolExposure = "model-only";
+    const agentExecutionMode: ToolExecutionMode = "sequential";
     const agentTool = {
       name: "list_agents",
       label: "list agents",
-      exposure: "model-only",
+      exposure: agentExposure,
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
@@ -9049,7 +9134,7 @@ export function createAgentController(
       ],
       description:
         "List current owned Agent state and refresh the Agent-definition roster. Do not use for progress polling.",
-      executionMode: "sequential",
+      executionMode: agentExecutionMode,
       parameters: agentListParameters,
       execute: async (
         _id: string,
@@ -10405,7 +10490,7 @@ export function createAgentController(
       return runtimes.get(label);
     },
     clearRuntimes() {
-      for (const label of [...runtimes.keys()]) invalidateRuntime(label);
+      for (const label of runtimes.keys()) invalidateRuntime(label);
     },
     invalidateRuntime,
     clearResultDeliveryState(runtime: Runtime) {

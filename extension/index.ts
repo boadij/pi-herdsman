@@ -4,7 +4,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { contentText, StringEnum } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
   getAgentDir,
@@ -12,8 +12,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync, unlinkSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -22,15 +21,7 @@ import {
   runtimeBuild,
   requireCompatibleBuild,
   sameRuntimeBuild,
-  type RuntimeBuild,
 } from "./compatibility.ts";
-import {
-  resultPath as canonicalResultPath,
-  resultRef,
-  parseSemanticResultRef,
-  reserveSemanticResultRef,
-  isResultBinding,
-} from "./storage.ts";
 import { Type } from "typebox";
 import { COORDINATOR_TARGET_PATTERN } from "./coordinator-target.ts";
 import {
@@ -47,90 +38,42 @@ import {
   type SelectItem,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { scanAgentStates } from "./mailbox.ts";
 import {
-  controlMarker,
-  claimAgentMailbox,
-  MailboxClaimOccupiedError,
-  parseControlMarker,
-  readRequest,
-  readAgentState,
-  scanAgentStates,
-  removeRequest,
-  removeAsk,
-  removeResult,
-  removeAgentMailbox,
-  resetAgentMailbox,
-  waitForState,
-  agentMailboxPath,
-  agentStatePath,
-  writeAsk,
-  writeRequest,
-  writeResult,
-  writeAgentState,
-  type RequestRecord,
-  type AskRecord,
-  type ResultPersistenceError,
-  type ResultRecord,
-  type ManagedAgentState,
-} from "./mailbox.ts";
-import {
-  chooseLabel,
   prepareMessageInput,
   FILE_HANDOFF_GUIDANCE,
   displayIdentity,
-  steerAcceptanceAllowed,
-  taskAcceptanceAllowed,
-  agentControlState,
   isSpawnPlacement,
   type LeadExecutionMode,
   type SpawnPlacement,
 } from "./core.ts";
 import {
   AGENT_COORDINATION_TOOLS,
-  agentLaunchArgs,
   agentDefinitionEnabled,
-  agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
-  configuredModel,
   contextAgentDefinitions,
   discoverRoleDefinition,
-  discoverAgentDefinitions,
   expandAgentBodyFiles,
-  projectAgentDefinition,
-  resolveChildModel,
   updateAgentOverride,
-  validateAgentDefinitionReferences,
   VALID_THINKING_LEVELS,
-  writePrivatePromptSnapshots,
   type AgentDefinition,
 } from "./agent-definitions.ts";
 import {
   captureStartupDiagnostic,
-  closeHerdrPane,
-  herdrAgentAlias,
   herdrSessionSnapshot,
-  listHerdrAgents,
   listAllHerdrAgents,
-  rollbackHerdrStart,
   runHerdr,
   worktreeGroupScope,
-  paneProcess,
   sessionIdentity,
   herdrSessionId,
   supervisedSessionFile,
   matchesExpectedSession,
-  startHerdrAgent,
   startHerdrAgentInPane,
   sameCwd,
   inspectHerdrAgent,
   stopHerdrAgentPreservingPane,
-  HerdrStartFailure,
-  validateHerdrStatus,
   type ExpectedSession,
-  type StartedHerdrAgent,
-  type HerdrStartPlacement,
-  type HerdrSessionSnapshot,
-  type RemovedHerdrWorktree,
+  type HerdrRecord,
 } from "./herdr.ts";
 import { reportLeadMetadata } from "./herdr.ts";
 import {
@@ -142,7 +85,6 @@ import {
   managedAgentIdentity,
   authorizedScopedResult,
   registerManagedAgentRuntime,
-  runtimeIdentityState,
   sameManagedAgentIdentity,
   sessionContextRetired,
 } from "./managed-agent-runtime.ts";
@@ -153,50 +95,33 @@ import {
   canonicalSessionPath,
   createAgentStatusRuntime,
   importResultBindings,
-  agentResultDetails,
-  hasDeliveredAsk as controllerHasDeliveredAsk,
   collectSessionUsage,
   openOwnedAssignmentSession,
   ownedAssignmentChildren,
-  resolveAssignmentSession,
   sessionAgentIdentity,
-  validId,
-  assertUniqueDurableIdentities,
   persistedTranscriptReady as controllerPersistedTranscriptReady,
-  durableIdentityKey,
   readAgentTranscript as controllerReadAgentTranscript,
   readPersistedTranscript as controllerReadPersistedTranscript,
   resolveMessageFiles as controllerResolveMessageFiles,
-  type ManagedAgentPresence,
   type ControllerScope,
   type RootDelegationPolicy,
-  type Params,
-  requestRecordBytesFor,
-  prospectiveAssignmentFits,
-  validateAssignmentCwd,
-  herdrSessionsMatch,
-  validateIdentity,
-  validateAssignmentRequest,
+  type AgentControllerOptions,
   visibleAgentCapabilities,
 } from "./agent-controller.ts";
 import {
   acquireProcessLock,
   claimAssignmentLock as claimManagedAssignmentLock,
-  claimSessionActivationLock as claimExactSessionActivationLock,
   ProcessLockOccupiedError,
-  readProcessLockStatus,
   tryClaimAssignmentLock,
 } from "./lock.ts";
 import {
   claimChiefLease,
-  chiefMessagePath,
   removeChiefMessage,
   quarantineChiefMessage,
   chiefMessageQuarantined,
   listChiefMessagePaths,
   supervisionRuntime,
   readChiefDescriptor,
-  readChiefMessage,
   writeChiefMessage,
   writeCoordinationMessage,
   chiefMessageBytes,
@@ -206,15 +131,11 @@ import {
   projectMessageBytes,
   writeProjectMessage,
   readProjectMessage,
-  listProjectMessages,
   removeProjectMessage,
   removeProjectMessagesForAssignment,
   recoverStaleProjectMessages,
   sessionLeadRoleState,
-  type ChiefLease,
   type SessionRole,
-  type ManagerLease,
-  type ManagerDescriptor,
   claimManagerLease,
   readManagerDescriptor,
   readManagerDescriptorStatus,
@@ -226,9 +147,6 @@ import {
   listProjectMessageHeaders,
   findProjectAssignmentBySession,
   retireProjectAssignment,
-  type ChiefDescriptor,
-  type ChiefMessageKind,
-  type ChiefMessageRecord,
   type WorkspaceProvenance,
   projectSupervision,
   projectWorkSnapshot,
@@ -250,17 +168,10 @@ import {
   drainCoordinationInbox,
   COORDINATION_MESSAGE_KINDS,
 } from "./supervision.ts";
-import {
-  fail,
-  markRetryAttempted,
-  OperationError,
-  type ErrorCategory,
-} from "./errors.ts";
+import { fail, OperationError } from "./errors.ts";
 
 import {
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
-  MAX_BYTE_LIMIT,
-  MIN_BYTE_LIMIT,
   readConfig,
   readEffectiveConfig,
   readProjectOverrides,
@@ -275,14 +186,12 @@ import {
   type LeadRuntimeState,
   registerLeadRuntime,
   createLeadRoleTransitions,
-  resolveLeadControllerRole,
 } from "./lead-runtime.ts";
 import { readRootOwners } from "./lead/coordination.ts";
 
 import {
   populateMenuFrame,
   collapseDisplayText,
-  formatToolModelResult,
   formatAgentDefinitions,
   renderAgentDefinitionsOverview,
   renderStopSummary,
@@ -306,7 +215,6 @@ import {
   hasWorkspaceWorktree,
   projectWorkspaceProvenance,
 } from "./presentation.ts";
-import type { SupervisionContextStatus } from "./presentation.ts";
 
 const HERDSMAN_VERSION = packageMetadata.version;
 
@@ -333,15 +241,6 @@ const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const HERDSMAN_BUILD = runtimeBuild(HERDSMAN_VERSION, HERDSMAN_EXTENSION_PATH);
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
-const AGENT_CONTEXT_RETIRED_ENTRY = "pi-herdsman-agent-context-retired";
-type HerdRunEntry =
-  | { phase: "started"; sessionId: string; startedAt: number }
-  | {
-      phase: "finished";
-      sessionId: string;
-      startedAt: number;
-      completedAt: number;
-    };
 const SUPERVISOR_TOOLS = ["message_supervisor"] as const;
 const LEAD_SUPERVISOR_TOOLS = SUPERVISOR_TOOLS;
 const PEER_TOOLS = ["list_peers", "message_peer"] as const;
@@ -412,18 +311,6 @@ ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
 ${AGENT_UNRESOLVED_GUIDANCE}
 ${SUPERVISION_EVENT_GUIDANCE}`;
 type Role = "lead" | "managed-agent" | "unmanaged";
-type ChiefMode = "inactive" | "active" | "suspended";
-type PeerParams =
-  | { action: "list" }
-  | { action: "message"; session: string; message: string; files?: string[] };
-const REQUEST_CLEANUP_ERROR_PREFIX =
-  "Acknowledged request could not be removed:";
-const RESULT_DELIVERY_ERROR_PREFIX = "Result delivery failed; retrying:";
-const BUILD_COMPATIBILITY_ERROR_PREFIX = "Incompatible Pi Herdsman build:";
-function clearRuntimeCleanupError(runtime: Runtime, prefix?: string): void {
-  if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
-    runtime.cleanupError = undefined;
-}
 function claimAssignmentLock(
   mailbox: string,
   operation = "close",
@@ -438,23 +325,6 @@ function claimAssignmentLock(
         nextAction:
           "Let the current managed assignment transition finish, then retry.",
       });
-    throw error;
-  }
-}
-
-function claimSessionActivationLock(sessionPath: string): () => void {
-  try {
-    return claimExactSessionActivationLock(canonicalSessionPath(sessionPath));
-  } catch (error) {
-    if (error instanceof ProcessLockOccupiedError)
-      fail(
-        "agent_busy",
-        "The exact Pi session is already being activated",
-        "delegate",
-        {
-          nextAction: "Let the current session activation finish, then retry.",
-        },
-      );
     throw error;
   }
 }
@@ -475,7 +345,6 @@ async function placementSettings(
 ): Promise<{ effective: SpawnPlacement }> {
   return { effective: readConfig().spawnPlacement };
 }
-const json = (v: unknown) => JSON.stringify(v, null, 2);
 function appendDurableError(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -554,17 +423,6 @@ function collectOwnedSessionUsage(
   );
 }
 
-async function herdrVersion(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  signal?: AbortSignal,
-): Promise<void> {
-  const status = await runHerdr(pi, ctx, ["status", "--json"], {
-    signal,
-    timeout: 10_000,
-  });
-  validateHerdrStatus(status);
-}
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
@@ -706,63 +564,6 @@ export async function workspacePresentationProvenance(
     }),
   );
 }
-function resultPath(runtime: Runtime, requestId: string): string {
-  return `${runtime.mailboxPath}/result-${requestId}.json`;
-}
-function nextBranchResultIndex(
-  entries: readonly unknown[],
-  agentLabel: string,
-): number {
-  let max = 0;
-
-  for (const entry of entries) {
-    const details = agentResultDetails(entry);
-    if (details?.agentLabel === agentLabel) {
-      const index = details.resultIndex;
-      if (
-        typeof index === "number" &&
-        Number.isSafeInteger(index) &&
-        index > max
-      )
-        max = index;
-    }
-
-    const imported = importedResultBinding(entry);
-    const semantic = imported && parseSemanticResultRef(imported.ref);
-    if (semantic?.agent === agentLabel) max = Math.max(max, semantic.index);
-  }
-
-  return max + 1;
-}
-function normalizeCloseFailure(
-  error: unknown,
-  ids: { label?: string; paneId?: string },
-  details: Record<string, unknown> = {},
-): OperationError {
-  if (error instanceof OperationError) {
-    return new OperationError({
-      ...error.detail,
-      operation: "close",
-      ids: { ...ids, ...error.detail.ids },
-      details: { ...error.detail.details, ...details },
-    });
-  }
-  return new OperationError({
-    category: "internal_failure",
-    message: String(error),
-    operation: "close",
-    rollbackOccurred: false,
-    retryAttempted: false,
-    ids,
-    details,
-  });
-}
-
-type StopReportCallbacks = {
-  onClosed?: (label: string) => void;
-  onCleanupFailure?: (label: string, message: string) => void;
-};
-
 type TestProjectAssignmentLockHooks = {
   afterAcquired?: (repoKey: string, branch: string) => Promise<void>;
   afterOccupied?: (repoKey: string, branch: string) => Promise<void>;
@@ -820,7 +621,11 @@ function registerExtensionImpl(
     return;
   }
   pi.registerEntryRenderer(AGENT_DEFINITIONS_ENTRY, (entry, options, theme) => {
-    const definitions = entry?.data?.definitions;
+    const data = entry?.data;
+    const definitions =
+      data && typeof data === "object" && "definitions" in data
+        ? data.definitions
+        : undefined;
     if (
       !Array.isArray(definitions) ||
       !definitions.every(
@@ -832,8 +637,11 @@ function registerExtensionImpl(
     )
       return undefined;
     const instructions =
-      typeof entry?.data?.instructions === "string"
-        ? entry.data.instructions
+      data &&
+      typeof data === "object" &&
+      "instructions" in data &&
+      typeof data.instructions === "string"
+        ? data.instructions
         : undefined;
     return expandablePresentation(options.expanded, (expanded) =>
       renderAgentDefinitionsOverview(definitions, theme, {
@@ -939,7 +747,10 @@ function registerExtensionImpl(
   }
   const controllerScope: ControllerScope | undefined =
     processRole === "lead" ? { kind: "root" } : undefined;
-  const controllerServices = {
+  const controllerServices: Omit<
+    AgentControllerOptions,
+    "scope" | "build" | "onWorkChanged" | "onWorktreeRemoved"
+  > = {
     afterRequestPublishedForTest: lockHooks?.afterRequestPublished,
     extensionPath: HERDSMAN_EXTENSION_PATH,
     isContextRetired: (manager) => retiredManagedSession(manager),
@@ -1211,8 +1022,9 @@ function registerExtensionImpl(
     herdrSessionId,
     runHerdr,
     readChiefDescriptor,
-    remoteChiefAgent: (...args: any[]) =>
-      leadRuntimes.remoteChiefAgent(...args),
+    remoteChiefAgent: (
+      ...args: Parameters<typeof leadRuntimes.remoteChiefAgent>
+    ) => leadRuntimes.remoteChiefAgent(...args),
     sameChiefDescriptor,
     formatContext: formatSupervisionContext,
     contextType: SUPERVISION_CONTEXT_TYPE,
@@ -1227,7 +1039,7 @@ function registerExtensionImpl(
     worktreeGroupScope,
     listProjectAssignments,
     projectWorkSnapshot,
-    supervisedSessionFile: (agent, sessionId) =>
+    supervisedSessionFile: (agent: HerdrRecord, sessionId: string) =>
       supervisedSessionFile(agent, sessionId, (cwd, id) =>
         SessionManager.findById(cwd, id),
       ),
@@ -1242,11 +1054,21 @@ function registerExtensionImpl(
     managerSupervisionItems,
     renderSupervisionPeek,
     inspectHerdrAgent,
+    build: HERDSMAN_BUILD,
+    resolveEffectiveSupervisor: (
+      ...args: Parameters<typeof roleTransitions.resolveEffectiveSupervisor>
+    ) => roleTransitions.resolveEffectiveSupervisor(...args),
+    persistedTranscriptReady: (
+      target: Parameters<typeof controllerPersistedTranscriptReady>[0],
+    ) =>
+      controllerPersistedTranscriptReady(target, (path) => {
+        const file = statSync(path, { throwIfNoEntry: false });
+        return !!file?.isFile() && file.size > 0;
+      }),
+    SessionManager,
   };
   const resetSupervisionSnapshot = (): void =>
     leadRuntimes?.supervisionUiRuntime?.reset();
-  const clearChiefStartPreflight = (): void =>
-    leadRuntimes.inboxRuntime!.clearStartPreflight();
   let prepareSupervisionMessage: (
     ctx: ExtensionContext,
   ) => Promise<
@@ -1279,16 +1101,9 @@ function registerExtensionImpl(
     );
   }
   const ownedTools = () => leadToolState.ownedTools;
-  const normalizeBaseTools = (tools: readonly string[]): string[] =>
-    leadToolState.normalizeBaseTools(tools);
-  const appendRegisteredTools = (
-    tools: readonly string[],
-    names: readonly string[],
-  ): string[] => leadToolState.appendRegisteredTools(tools, names);
   const normalizeLeadTools = (tools: readonly string[]): string[] =>
     leadToolState.normalizeLeadTools(tools);
   let roleTransitions: ReturnType<typeof createLeadRoleTransitions>;
-  const reconcileRoleTools = (): void => roleTransitions.reconcileRoleTools();
   const isCurrentChief = (ctx: ExtensionContext): boolean =>
     leadRuntime.chiefMode === "active" &&
     !!leadRuntime.chiefLease &&
@@ -1336,33 +1151,11 @@ function registerExtensionImpl(
   const enterSuspended = (
     ...args: Parameters<typeof leadRuntimes.enterSuspended>
   ) => leadRuntimes.enterSuspended(...args);
-  const assertCurrentLeadCoordination = (ctx: ExtensionContext): void =>
-    leadRuntimes.coordinationRuntime!.assertCurrentLeadCoordination(ctx);
-  const currentChief = (
-    failOnVerificationError = false,
-  ): ChiefDescriptor | undefined =>
-    roleTransitions.currentChief(failOnVerificationError);
-  const managerForScope = (
-    scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
-  ) => roleTransitions.managerForScope(scope);
-  const currentWorktreeScope = (ctx: ExtensionContext) =>
-    roleTransitions.currentWorktreeScope(ctx);
-  const currentManager = (
-    ctx: ExtensionContext,
-    scope:
-      Awaited<ReturnType<typeof worktreeGroupScope>> | undefined | null = null,
-  ): Promise<ManagerDescriptor | undefined> =>
-    roleTransitions.currentManager(ctx, scope);
-  const currentSupervisor = (ctx: ExtensionContext) =>
-    roleTransitions.currentSupervisor(ctx);
-  const liveAgent = (...args: any[]) => leadRuntimes.liveAgent(...args);
-  const remoteChiefAgent = (...args: any[]) =>
-    leadRuntimes.remoteChiefAgent(...args);
-  const liveLead = (...args: any[]) => leadRuntimes.liveLead(...args);
-  const currentChiefAuthority = (
-    ctx: ExtensionContext,
-    failOnVerificationError = false,
-  ) => roleTransitions.currentChiefAuthority(ctx, failOnVerificationError);
+  const remoteChiefAgent = (
+    ...args: Parameters<typeof leadRuntimes.remoteChiefAgent>
+  ) => leadRuntimes.remoteChiefAgent(...args);
+  const liveLead = (...args: Parameters<typeof leadRuntimes.liveLead>) =>
+    leadRuntimes.liveLead(...args);
   const activateChief = (
     ...args: Parameters<typeof roleTransitions.activateChief>
   ): Promise<string> => roleTransitions.activateChief(...args);
@@ -1395,11 +1188,16 @@ function registerExtensionImpl(
     invalidateLeadCoordinationState,
     enterChief,
     resetSupervisionSnapshot,
-    unlinkLeadCoordinationState: (runtime, sessionId) =>
-      unlinkSync(leadCoordinationStatePath(runtime, sessionId)),
+    unlinkLeadCoordinationState: (
+      runtime: Parameters<typeof leadCoordinationStatePath>[0],
+      sessionId: Parameters<typeof leadCoordinationStatePath>[1],
+    ) => unlinkSync(leadCoordinationStatePath(runtime, sessionId)),
     ownedTools,
-    worktreeGroupScope: (ctx, workspaceId, signal = ctx.signal) =>
-      worktreeGroupScope(pi, ctx, workspaceId, signal),
+    worktreeGroupScope: (
+      ctx: ExtensionContext,
+      workspaceId: string,
+      signal: AbortSignal | undefined = ctx.signal,
+    ) => worktreeGroupScope(pi, ctx, workspaceId, signal),
     claimManagerLease,
     readLeadCoordinationState,
     requireCompatibleBuild,
@@ -1407,8 +1205,13 @@ function registerExtensionImpl(
     projectAssignmentPath,
     acquireProcessLock,
     readProjectAssignment,
-    prepareCoordinationInput: (...args: any[]) =>
-      leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
+    prepareCoordinationInput: (
+      ...args: Parameters<
+        NonNullable<
+          typeof leadRuntimes.coordinationRuntime
+        >["prepareCoordinationInput"]
+      >
+    ) => leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
     projectMessageBytes,
     writeProjectMessage,
     afterProjectAssignmentLockAcquired: lockHooks?.afterAcquired,
@@ -1429,15 +1232,9 @@ function registerExtensionImpl(
     enterSuspended,
     activation: { activateChief },
   };
-  const deactivateChief = (...args: any[]) =>
-    roleTransitions.deactivateChief(...args);
-  const leaveChief = (...args: any[]) => roleTransitions.leaveChief(...args);
-  const failClosedRole = (...args: any[]) =>
-    roleTransitions.failClosedRole(...args);
-  const activateManager = (...args: any[]) =>
-    roleTransitions.activateManager(...args);
-  const leaveManager = (...args: any[]) =>
-    roleTransitions.leaveManager(...args);
+  const failClosedRole = (
+    ...args: Parameters<typeof roleTransitions.failClosedRole>
+  ) => roleTransitions.failClosedRole(...args);
   if (controllerScope) {
     let projectRuntime: NonNullable<
       ReturnType<typeof registerLeadRuntime>["projectRuntime"]
@@ -1457,7 +1254,7 @@ function registerExtensionImpl(
       const startedAt = leadHerdRunRuntime?.startedAt();
       queueLeadMetadata(ctx, {
         paneId,
-        name,
+        ...(name !== undefined ? { name } : {}),
         ...(startedAt !== undefined ? { herdRunStartedAt: startedAt } : {}),
         ...(percent == null ? {} : { contextPercent: Math.round(percent) }),
       });
@@ -1523,7 +1320,9 @@ function registerExtensionImpl(
       SessionManager,
       truncateModelText,
       inspectHerdrAgent,
-      readPersistedTranscript: (target) =>
+      readPersistedTranscript: (
+        target: Parameters<typeof controllerReadPersistedTranscript>[0],
+      ) =>
         controllerReadPersistedTranscript(
           target,
           (path) => readFileSync(path, "utf8"),
@@ -1763,6 +1562,15 @@ function registerExtensionImpl(
     };
     let leadCommandRuntime: any;
     const leadCommandHost = {
+      pi,
+      persistStopClosures: (
+        ctx: ExtensionContext,
+        closures: Parameters<typeof projectRuntime.persistStopClosures>[1],
+      ) => projectRuntime.persistStopClosures(ctx, closures),
+      getRemovalPreauthorization: (ctx: ExtensionContext) =>
+        projectRuntime.getRemovalPreauthorization(ctx),
+      setRemovalPreauthorization: (enabled: boolean, ctx: ExtensionContext) =>
+        projectRuntime.setRemovalPreauthorization(enabled, ctx),
       runHerdr,
       presentStopSummary,
       version: HERDSMAN_VERSION,
@@ -1955,7 +1763,8 @@ function registerExtensionImpl(
                 );
                 ctx.ui.notify(
                   result.content[0]?.text ?? "Removal finished.",
-                  result.details.ok || result.details.cancelled
+                  result.details.ok ||
+                    ("cancelled" in result.details && result.details.cancelled)
                     ? "info"
                     : "warning",
                 );
@@ -1968,7 +1777,8 @@ function registerExtensionImpl(
               const result = await projectRuntime.removeWorktree(args[1]!, ctx);
               ctx.ui.notify(
                 result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
-                result.details.ok || result.details.cancelled
+                result.details.ok ||
+                  ("cancelled" in result.details && result.details.cancelled)
                   ? "info"
                   : "warning",
               );
@@ -1985,7 +1795,8 @@ function registerExtensionImpl(
               );
               ctx.ui.notify(
                 result.content[0]?.text ?? `Forget of ${args[1]} finished.`,
-                result.details.ok || result.details.cancelled
+                result.details.ok ||
+                  ("cancelled" in result.details && result.details.cancelled)
                   ? "info"
                   : "warning",
               );
@@ -2016,8 +1827,13 @@ function registerExtensionImpl(
           "Send a nonblocking question, clarification, warning, risk, decision, scope change, or evidence only when it is material or needed by your direct supervisor. Avoid unsolicited routine progress updates and duplicate result announcements.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
-        execute: (...args: any[]) =>
-          leadRuntimes.coordinationRuntime!.supervisorMessage(...args),
+        execute: (
+          ...args: Parameters<
+            NonNullable<
+              typeof leadRuntimes.coordinationRuntime
+            >["supervisorMessage"]
+          >
+        ) => leadRuntimes.coordinationRuntime!.supervisorMessage(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
           renderCoordinationCall("supervisor", "message", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
@@ -2040,8 +1856,11 @@ function registerExtensionImpl(
           "Send task-relevant communication needed by another eligible coordinator, not routine broadcasts or gratuitous acknowledgments. Send to an eligible same-role Lead or Manager using its stable target. Ordinary Leads and Managers may discover eligible same-role peers on reachable saved Herdr machines; remote Leads must be ordinary and unassigned. An existing return correspondence may allow a reply-only target without independent discovery or current availability. Use only the exact target from list_peers; optional name/workspace labels are advisory display context.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
-        execute: (...args: any[]) =>
-          leadRuntimes.coordinationRuntime!.peerMessage(...args),
+        execute: (
+          ...args: Parameters<
+            NonNullable<typeof leadRuntimes.coordinationRuntime>["peerMessage"]
+          >
+        ) => leadRuntimes.coordinationRuntime!.peerMessage(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
           renderCoordinationCall("peer", "message", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
@@ -2057,9 +1876,10 @@ function registerExtensionImpl(
         exposure: "model-only" as const,
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
-        executionMode: "sequential",
+        executionMode: "sequential" as const,
         parameters: staffMessageParameters,
-        execute: (...args: any[]) => projectRuntime.executeStaff(...args),
+        execute: (...args: Parameters<typeof projectRuntime.executeStaff>) =>
+          projectRuntime.executeStaff(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
           renderCoordinationCall("staff", "message", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
@@ -2400,7 +2220,7 @@ function registerExtensionImpl(
           startupDefinitionRoster = roster;
         },
         isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
-        isManagedAgent: () => controllerScope.kind === "managed-agent",
+        isManagedAgent: () => false,
         sessionLeadRoleState,
         normalizeLeadTools,
         activeTools: () => pi.getActiveTools(),
@@ -2496,7 +2316,6 @@ function registerExtensionImpl(
           listProjectAssignments,
           listProjectMessageHeaders,
           readProjectMessage,
-          listProjectMessages,
           removeProjectMessage:
             lockHooks?.removeProjectMessage ?? removeProjectMessage,
           readProjectAssignment,

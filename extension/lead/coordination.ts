@@ -27,17 +27,10 @@ import {
   removePendingRetirement,
   removeProjectMessagesForAssignment,
   mightHaveProjectMessages,
-  listProjectAssignments,
-  removeChiefMessage,
-  readProjectAssignment,
-  listProjectMessageHeaders,
-  readProjectMessage,
-  supervisionRuntime,
   globalProjectAssignmentSnapshot,
+  projectMessageBytes,
   findProjectAssignmentBySession,
   withProjectAssignmentAuthority,
-  readPeerLeadRecord,
-  samePeerLeadGeneration,
   samePeerLeadAuthority,
   canMessagePeer,
   isRemoteOrdinaryLead,
@@ -46,7 +39,6 @@ import {
 
 import { OperationError } from "../errors.ts";
 
-import { contentText } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "../core.ts";
 import {
   persistPeerAttachment,
@@ -61,7 +53,6 @@ import type { HerdrRecord, HerdrSessionSnapshot } from "../herdr.ts";
 import {
   formatRuntimeBuild,
   isRuntimeBuild,
-  sameRuntimeBuild,
   type RuntimeBuild,
 } from "../compatibility.ts";
 import type { PeerCorrespondence } from "../peer-correspondence.ts";
@@ -74,8 +65,6 @@ import type { MessageFileInput } from "../core.ts";
 import type { ResultBinding } from "../storage.ts";
 
 import { createHash, randomUUID } from "node:crypto";
-
-import { join, resolve } from "node:path";
 
 import {
   listSavedPeerMachines,
@@ -182,7 +171,9 @@ type LeadCoordinationHost = LeadCoordinationBaseHost & {
   leadInstanceId(): string;
   workspaceId(): string | undefined;
   currentManager: LeadRoleTransitionRuntime["currentManager"];
-  currentProjectAssignment: LeadRoleTransitionRuntime["currentProjectAssignment"];
+  currentProjectAssignment(
+    ctx: ExtensionContext,
+  ): Promise<ProjectAssignment | undefined>;
   currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
   projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
   resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
@@ -328,18 +319,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     samePeerLeadRecord,
     writePeerLeadRecord,
     invalidateLeadCoordinationState,
-    runHerdr,
-    leadInstanceId,
     currentManager,
-    currentProjectAssignment,
     workspaceId,
     currentWorktreeScope,
-    projectAssignmentForScope,
     resolveEffectiveSupervisor,
-    currentChiefAuthority,
     currentSupervisor,
     sameManagerDescriptor,
-    requireCompatibleBuild,
     sameRuntimeBuild,
     samePeerLeadGeneration,
     writeCoordinationMessage,
@@ -354,6 +339,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     readProjectAssignment,
     importResultBindings,
   } = host;
+  const requireCompatibleBuild: LeadCoordinationHost["requireCompatibleBuild"] =
+    host.requireCompatibleBuild;
   const reportedProjectMessageCleanupErrors = new Set<string>();
   const reportedProjectMessageReadErrors = new Set<string>();
   const reportedRetirementErrors = new Set<string>();
@@ -384,7 +371,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         const record = recordForInput(candidate, resultBindings);
         return typeof record === "number"
           ? record
-          : host.chiefMessageBytes(record);
+          : "repoKey" in record
+            ? projectMessageBytes(record)
+            : host.chiefMessageBytes(record);
       },
     });
   };
@@ -481,7 +470,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     ++peerPresenceGeneration;
     removePeerPresence();
 
-    const sessionId = ctx?.sessionManager.getSessionId();
+    if (!ctx) return;
+    const sessionId = ctx.sessionManager.getSessionId();
     if (!sessionId) return;
 
     try {
@@ -1018,7 +1008,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     expectedSupervisor?: { piSessionId: string; leaseId: string },
     resultBindings: readonly ResultBinding[] = [],
     verifyEvidence?: () => void,
-  ): ChiefMessageRecord => {
+  ): Promise<ChiefMessageRecord> => {
     assertCurrentLeadCoordination(ctx);
     if (
       leadRuntime.controllerRole === "manager" &&
@@ -1132,7 +1122,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           candidate.messages.length > 0,
       );
     const message = entry?.messages[0];
-    return message ? contentText(message.content, "") : undefined;
+    return message?.role === "custom" && message.customType === customType
+      ? contentText(message.content, "")
+      : undefined;
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
     const content = await leadSupervisorState(ctx);
@@ -1259,7 +1251,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       let assignment: ProjectAssignment | undefined;
       if (identity.kind === "managed" && activeRole() === "lead") {
         try {
-          assignment = await currentProjectAssignment(ctx);
+          assignment = await host.currentProjectAssignment(ctx);
         } catch (error) {
           throw boundaryError(error);
         }
@@ -1642,6 +1634,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               }
             for (const remote of snapshot.peers) {
               const remoteRole = activeRole();
+              if (remoteRole !== "lead" && remoteRole !== "manager") continue;
               if (
                 remote.role !== remoteRole ||
                 (remoteRole === "lead" &&
@@ -1701,8 +1694,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               });
             }
             if (activeRole() === "manager" || activeRole() === "lead") {
-              for (const candidate of (pendingOutbounds ??=
-                listRemotePeerOutbounds())) {
+              if (!pendingOutbounds)
+                pendingOutbounds = listRemotePeerOutbounds();
+              for (const candidate of pendingOutbounds) {
                 if (
                   candidate.machine.id !== machine.id ||
                   candidate.session !== self ||
@@ -1773,14 +1767,15 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     envelope,
                     signal,
                   );
-                } catch (error) {
+                } catch {
                   // Keep ambiguous acceptance durable; retry status on a later reconciliation.
                 } finally {
                   releaseOutbound();
                 }
               }
-              for (const candidate of (pendingCorrespondences ??=
-                listPeerCorrespondences())) {
+              if (!pendingCorrespondences)
+                pendingCorrespondences = listPeerCorrespondences();
+              for (const candidate of pendingCorrespondences) {
                 if (
                   candidate.originSession !== self ||
                   (candidate.role ?? "manager") !== activeRole()
@@ -1795,15 +1790,16 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                     peer.piSessionId === candidate.recipientSession,
                 );
                 if (!remote) continue;
-                let correspondence: PeerCorrespondence | undefined;
-                try {
+                const correspondence = (() => {
                   try {
-                    correspondence = readPeerCorrespondence(candidate.id);
+                    return readPeerCorrespondence(candidate.id);
                   } catch {
-                    continue;
+                    return undefined;
                   }
+                })();
+                if (!correspondence) continue;
+                try {
                   if (
-                    !correspondence ||
                     correspondence.finalized ||
                     correspondence.capability !== candidate.capability ||
                     correspondence.acceptanceId !== candidate.acceptanceId ||
@@ -2140,23 +2136,23 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       const replyOnly = [...replyCorrespondences]
         .filter(
-          ([session, correspondence]) =>
-            correspondence !== null &&
+          (entry): entry is [string, PeerCorrespondence] =>
+            entry[1] !== null &&
             (activeRole() !== "lead" ||
               (!!own &&
                 assignmentSnapshot !== undefined &&
                 isRemoteOrdinaryLead(own, assignmentSnapshot))) &&
-            session !== self &&
-            !discovered.has(session) &&
-            !remotePeerRoutes.has(session) &&
-            !ambiguousRemoteSessions.has(session),
+            entry[0] !== self &&
+            !discovered.has(entry[0]) &&
+            !remotePeerRoutes.has(entry[0]) &&
+            !ambiguousRemoteSessions.has(entry[0]),
         )
         .map(([session, correspondence]) => ({
           session,
-          ...(correspondence!.originDisplay?.name
+          ...(correspondence.originDisplay?.name
             ? { name: correspondence.originDisplay.name }
             : {}),
-          ...(correspondence!.originDisplay?.workspaceLabel
+          ...(correspondence.originDisplay?.workspaceLabel
             ? { workspace_label: correspondence.originDisplay.workspaceLabel }
             : {}),
         }));
@@ -2222,11 +2218,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       );
     const recipientSession = resolvedTarget.sessionId;
     const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
+    if (!sender)
+      throw new Error(
+        "Peer target was not found or is no longer a live same-role peer [sender_unavailable]",
+      );
     const remoteRoute = remotePeerRoutes.get(recipientSession);
     const returnCorrespondences =
-      sender &&
-      (activeRole() === "manager" || activeRole() === "lead") &&
-      !remoteRoute
+      (activeRole() === "manager" || activeRole() === "lead") && !remoteRoute
         ? listPeerCorrespondences().filter(
             (item) =>
               (item.role ?? "manager") === activeRole() &&
@@ -2240,9 +2238,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const noAuthorizedLocalTarget =
       (!target || (target.role ?? "lead") !== activeRole()) &&
       returnCorrespondences.length !== 1;
-    const rejection = !sender
-      ? "sender_unavailable"
-      : (sender.role ?? "lead") !== activeRole()
+    const rejection =
+      (sender.role ?? "lead") !== activeRole()
         ? "sender_role_changed"
         : remoteRoute
           ? remoteRoute.role !== activeRole()
@@ -2395,9 +2392,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       );
       if (!currentTarget || current.dataRoot !== remoteRoute.dataRoot)
         throw new Error("Remote Manager changed; run `list_peers` again.");
+      if (!isRuntimeBuild(currentTarget.build))
+        throw new Error("Remote peer build is unavailable or invalid.");
       requireCompatibleBuild(
         HERDSMAN_BUILD,
-        currentTarget.build as RuntimeBuild,
+        currentTarget.build,
         "peer_message",
         `remote ${remoteRoute.role} ${params.target}`,
       );

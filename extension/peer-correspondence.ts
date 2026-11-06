@@ -81,14 +81,26 @@ export type PeerOriginDisplay = {
 };
 
 export function validPeerDisplayText(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= 512 &&
-    !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(
-      value,
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > 512
+  )
+    return false;
+  for (const character of value) {
+    const code = character.codePointAt(0)!;
+    if (
+      (code >= 0x0000 && code <= 0x001f) ||
+      (code >= 0x007f && code <= 0x009f) ||
+      code === 0x061c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x2028 && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
     )
-  );
+      return false;
+  }
+  return true;
 }
 
 function validOriginDisplay(value: unknown): value is PeerOriginDisplay {

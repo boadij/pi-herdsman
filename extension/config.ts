@@ -98,8 +98,16 @@ function validRepoIdentity(value: unknown): value is string {
     value !== "__proto__" &&
     value !== "constructor" &&
     value !== "prototype" &&
-    !/[\u0000-\u001f\u007f]/.test(value)
+    !containsControlCharacter(value)
   );
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function validManagerMergeOverrides(

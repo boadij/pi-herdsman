@@ -6,7 +6,6 @@ import {
   lstatSync,
   fstatSync,
   readdirSync,
-  rmSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -42,7 +41,10 @@ import {
   sameRuntimeBuild,
   type RuntimeBuild,
 } from "./compatibility.ts";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionActions,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
@@ -251,6 +253,13 @@ export function isRemoteOrdinaryLead(
 
 export type CoordinationMessageRecord = ChiefMessageRecord;
 
+type ChiefInboxSendMessage = Parameters<ExtensionActions["sendMessage"]>[0] & {
+  customType: string;
+  content: string;
+  display: true;
+  details: Record<string, unknown>;
+};
+
 export type ChiefInboxDrainOptions = {
   runtime: SupervisionRuntime;
   sessionId: string;
@@ -268,7 +277,7 @@ export type ChiefInboxDrainOptions = {
     record: ChiefMessageRecord,
   ) => string | undefined | Promise<string | undefined>;
   sendMessage: (
-    message: unknown,
+    message: ChiefInboxSendMessage,
     options: {
       deliverAs?: "steer" | "followUp";
       triggerTurn: boolean;
@@ -891,7 +900,7 @@ export function writeChiefMessage(
 ): string {
   if (!record.build)
     throw new Error("Coordination message build identity is required");
-  if (!validMessage(record) || record.bodyRef !== undefined)
+  if (!validMessage(record) || Reflect.get(record, "bodyRef") !== undefined)
     throw new Error("Invalid Chief message record");
   return withChiefMessageLock(
     chiefMessagePath(runtime, record.toSessionId, record.id),
@@ -2466,7 +2475,9 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
       (typeof r.checkoutPath === "string" &&
         isAbsolute(r.checkoutPath) &&
         normalize(r.checkoutPath) === r.checkoutPath &&
-        !/[\u0000-\u001f]/.test(r.checkoutPath))) &&
+        ![...r.checkoutPath].some(
+          (character) => character.charCodeAt(0) <= 0x1f,
+        ))) &&
     (r.piSessionFile === undefined ||
       (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||
@@ -3768,8 +3779,13 @@ export type ProjectWorkSnapshot = Readonly<{
   checkoutPath?: string;
 }>;
 export function projectTaskSummary(text: string): string | undefined {
-  const task = text
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+  const task = [...text]
+    .map((character) =>
+      character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
+        ? " "
+        : character,
+    )
+    .join("")
     .replace(/\s+/gu, " ")
     .trim();
 
@@ -4091,24 +4107,24 @@ export function projectSupervision(options: {
       )
     )
       continue;
-    if (options.localBuild && !isRuntimeBuild(state.build)) continue;
-    if (
-      options.localBuild &&
-      !sameRuntimeBuild(options.localBuild, state.build)
-    ) {
-      incompatible.push({
-        role: "lead",
-        session: agent.sessionId,
-        instanceId: state.instanceId,
-        displayName: `${agent.workspaceId}/lead-${agent.sessionId.slice(0, 8)}`,
-        workspaceId: agent.workspaceId,
-        paneId: agent.paneId,
-        tabId: agent.tabId,
-        runtimeState: agent.runtimeState ?? "unknown",
-        build: state.build,
-        reason: "incompatible_build",
-      });
-      continue;
+    const stateBuild = state.build;
+    if (options.localBuild) {
+      if (!isRuntimeBuild(stateBuild)) continue;
+      if (!sameRuntimeBuild(options.localBuild, stateBuild)) {
+        incompatible.push({
+          role: "lead",
+          session: agent.sessionId,
+          instanceId: state.instanceId,
+          displayName: `${agent.workspaceId}/lead-${agent.sessionId.slice(0, 8)}`,
+          workspaceId: agent.workspaceId,
+          paneId: agent.paneId,
+          tabId: agent.tabId,
+          runtimeState: agent.runtimeState ?? "unknown",
+          build: stateBuild,
+          reason: "incompatible_build",
+        });
+        continue;
+      }
     }
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =

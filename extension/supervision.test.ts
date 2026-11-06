@@ -2332,6 +2332,41 @@ test("inbox rechecks quarantine immediately before delivery", async () => {
   );
 });
 
+test("inbox does not send when its transaction token is stale or forged", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  const storedToken = { id: record.id, record };
+  let sent = false;
+  let delivered = false;
+
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => delivered,
+    sendMessage: () => {
+      sent = true;
+    },
+    transaction: {
+      begin: () => ({ ...storedToken, record: { ...record } }),
+      revalidate: (token) => {
+        if (
+          token !== storedToken ||
+          (token as typeof storedToken).record !== record
+        )
+          throw new Error("Stale inbox transaction");
+      },
+      clear: () => {},
+    },
+  });
+
+  assert.equal(sent, false);
+  assert.equal(delivered, false);
+  assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
+  assert.equal(readChiefMessage(path).id, record.id);
+});
+
 test("inbox rechecks quarantine before accepting an already-delivered record", async () => {
   const runtime = supervisionRuntime(socket());
   const record = message();

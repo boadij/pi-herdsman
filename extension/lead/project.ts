@@ -1,4 +1,5 @@
 import type {
+  AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -12,6 +13,7 @@ import type {
   ProjectAssignment,
   ChiefMessageRecord,
   SessionRole,
+  SupervisionSnapshot,
   UnverifiedLead,
 } from "../supervision.ts";
 import {
@@ -61,7 +63,7 @@ import type { MessageFileInput } from "../core.ts";
 import type { ManagedAgentState } from "../mailbox.ts";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 export type ManagerEvidence = (
   ctx: ExtensionContext,
@@ -195,7 +197,11 @@ export type LeadProjectHost = {
   captureStartupDiagnostic: typeof import("../herdr.ts").captureStartupDiagnostic;
   truncateModelText: typeof import("../presentation.ts").truncateModelText;
   inspectHerdrAgent: typeof import("../herdr.ts").inspectHerdrAgent;
-  readPersistedTranscript: typeof import("../agent-controller.ts").readPersistedTranscript;
+  readPersistedTranscript: (
+    target: Pick<ManagedAgentState, "piSessionId" | "piSessionFile">,
+  ) => ReturnType<
+    typeof import("../agent-controller.ts").readPersistedTranscript
+  >;
   stopHerdrAgentPreservingPane: typeof import("../herdr.ts").stopHerdrAgentPreservingPane;
   expectedSession(id: string, path?: string): ExpectedSession;
   herdrSessionSnapshot: typeof import("../herdr.ts").herdrSessionSnapshot;
@@ -247,7 +253,7 @@ export type LeadProjectHost = {
       tabId: string;
       instanceId: string;
     },
-  ): Promise<unknown>;
+  ): Promise<AgentToolResult<any>>;
   withProjectWorkLock<T>(key: string, operation: () => Promise<T>): Promise<T>;
   leadCoordinationTools: readonly string[];
   pi: ExtensionAPI;
@@ -1883,13 +1889,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     leadRuntime,
     HERDSMAN_BUILD,
     HERDSMAN_EXTENSION_PATH,
-    SessionManager,
     supervisedSessionFile,
     sameObservedSessionPath,
     currentManager,
-    currentProjectAssignment,
     sameManagerDescriptor,
-    worktreeGroupScope,
     supervisionRuntime,
     readProjectAssignment,
     runHerdr,
@@ -2065,7 +2068,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     expectedHead: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
-  ) => {
+  ): Promise<AgentToolResult<any>> => {
+    type Integration =
+      | {
+          kind: "integrated";
+          targetHead: string;
+          targetBranch: string;
+          alreadyIntegrated: boolean;
+        }
+      | {
+          kind: "blocked";
+          targetHead: string;
+          targetBranch: string;
+          integrated: boolean;
+          reason: string;
+        }
+      | { kind: "tool-result"; result: AgentToolResult<any> };
     const operationSignal = signal ?? ctx.signal;
     operationSignal?.throwIfAborted();
     if (!/^[0-9a-f]{40,64}$/i.test(expectedHead))
@@ -2428,7 +2446,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             host.withProjectAssignmentLock(
               candidate.manager.repoKey,
               branch,
-              async () => {
+              async (): Promise<Integration> => {
                 const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
                 const lease = host.acquireProcessLock(lockPath, {
                   name: "repository integration lock",
@@ -2469,23 +2487,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     !(await ancestry(preStopTarget, expectedHead))
                   )
                     return {
-                      content: [
-                        {
-                          type: "text" as const,
-                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                      kind: "tool-result",
+                      result: {
+                        content: [
+                          {
+                            type: "text" as const,
+                            text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                          },
+                        ],
+                        details: {
+                          ok: false,
+                          action: "merge",
+                          branch,
+                          target_branch: targetBranch,
+                          source_head: expectedHead,
+                          target_head: preStopTarget,
+                          status: "needs_update",
+                          integrated: false,
+                          checkout_removed: false,
+                          assignment_retired: false,
                         },
-                      ],
-                      details: {
-                        ok: false,
-                        action: "merge",
-                        branch,
-                        target_branch: targetBranch,
-                        source_head: expectedHead,
-                        target_head: preStopTarget,
-                        status: "needs_update",
-                        integrated: false,
-                        checkout_removed: false,
-                        assignment_retired: false,
                       },
                     };
                   if (current.liveLead)
@@ -2555,29 +2576,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     );
                   if (await ancestry(expectedHead, currentTarget))
                     return {
+                      kind: "integrated",
                       targetHead: currentTarget,
                       targetBranch,
                       alreadyIntegrated: true as const,
                     };
                   if (!(await ancestry(currentTarget, expectedHead)))
                     return {
-                      content: [
-                        {
-                          type: "text" as const,
-                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
+                      kind: "tool-result",
+                      result: {
+                        content: [
+                          {
+                            type: "text" as const,
+                            text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
+                          },
+                        ],
+                        details: {
+                          ok: false,
+                          action: "merge",
+                          branch,
+                          target_branch: targetBranch,
+                          source_head: expectedHead,
+                          target_head: currentTarget,
+                          status: "needs_update",
+                          integrated: false,
+                          checkout_removed: false,
+                          assignment_retired: false,
                         },
-                      ],
-                      details: {
-                        ok: false,
-                        action: "merge",
-                        branch,
-                        target_branch: targetBranch,
-                        source_head: expectedHead,
-                        target_head: currentTarget,
-                        status: "needs_update",
-                        integrated: false,
-                        checkout_removed: false,
-                        assignment_retired: false,
                       },
                     };
                   if (!permission().enabled)
@@ -2684,7 +2709,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     (merged.code !== 0 && !interrupted)
                   )
                     return {
-                      blocked: true as const,
+                      kind: "blocked",
                       targetHead: observedHead || currentTarget,
                       targetBranch,
                       integrated: integrationVerified,
@@ -2693,6 +2718,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                         : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
                     };
                   return {
+                    kind: "integrated",
                     targetHead: observedHead,
                     targetBranch,
                     alreadyIntegrated: false as const,
@@ -2705,7 +2731,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             ),
         ),
     );
-    if ("blocked" in integration)
+    if (integration.kind === "blocked")
       return {
         content: [
           {
@@ -2727,7 +2753,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           reason: integration.reason,
         },
       };
-    if ("details" in integration) return integration;
+    if (integration.kind === "tool-result") return integration.result;
     if (!permission().enabled)
       return {
         content: [
@@ -2973,6 +2999,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const queueResumeHandoff = async (includeAssignment: boolean) => {
       if (operation.action !== "resume" || !preparedResumeMessage)
         throw new Error("Resume handoff was not prepared");
+      const prepared = preparedResumeMessage;
       const createdAt = Date.now();
       try {
         // Publish the triggering instruction first so an inbox drain racing
@@ -2980,11 +3007,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         const publish = () => {
           resumeMessageQueueAttempted = true;
           writeChiefMessage(
-            resumeRecord(
-              preparedResumeMessage.text,
-              preparedResumeMessage.resultBindings,
-              createdAt + 1,
-            ),
+            resumeRecord(prepared.text, prepared.resultBindings, createdAt + 1),
           );
           if (includeAssignment)
             writeChiefMessage({
@@ -3197,7 +3220,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           already_running: true,
           message_queued: true,
           message_id: resumeMessageId,
-          ...(operation.retain === true ? { evidence_retained: true } : {}),
+          ...(operation.action === "resume" && operation.retain === true
+            ? { evidence_retained: true }
+            : {}),
           ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
@@ -3269,7 +3294,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const requiredEvidence = [projectBrief, ...attachedEvidence];
       const prepared = prepareMessageInput(
         operation.task,
-        attachedEvidence.flatMap((evidence) =>
+        attachedEvidence.flatMap<MessageFileInput>((evidence) =>
           "path" in evidence ? [evidence.path] : [evidence.result],
         ),
         ctx.cwd,
@@ -3417,9 +3442,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           );
       }
       if (
-        ![workspaceId, paneId, tabId, cwd].every(
-          (value) => typeof value === "string" && value,
-        )
+        typeof workspaceId !== "string" ||
+        !workspaceId ||
+        typeof paneId !== "string" ||
+        !paneId ||
+        typeof tabId !== "string" ||
+        !tabId ||
+        typeof cwd !== "string" ||
+        !cwd
       )
         throw new Error("Herdr did not return exact worktree identities");
       if (operation.action === "delegate") {
@@ -3906,7 +3936,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             message_id: resumeMessageId,
             recovery_verified: false,
             status: "recovery_unverified",
-            ...(operation.retain === true
+            ...(operation.action === "resume" && operation.retain === true
               ? { evidence_retained: evidenceRetained }
               : {}),
           },
@@ -3927,7 +3957,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             enqueue_uncertain: true,
             recovery_verified: false,
             status: "enqueue_unconfirmed",
-            ...(operation.retain === true
+            ...(operation.action === "resume" && operation.retain === true
               ? { evidence_retained: evidenceRetained }
               : {}),
           },
@@ -3964,7 +3994,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     signal: AbortSignal | undefined,
     _update: unknown,
     ctx: ExtensionContext,
-  ) => {
+  ): Promise<AgentToolResult<any>> => {
     if (activeRole() !== "chief" && activeRole() !== "manager")
       throw new Error("Staff is available only to active supervisors");
     const authority =
@@ -3985,6 +4015,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       if (!assignment) throw new Error("Project assignment was not found");
       const snapshot = await loadSupervisionSnapshot(ctx);
+      if ("managers" in snapshot)
+        throw new Error("Assigned work is unavailable in a Chief snapshot");
       const matches = snapshot.work?.filter(
         (work: any) =>
           work.branch === assignment.branch && work.session === assignment.id,
@@ -4014,7 +4046,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
       if (leads.length !== 1)
         throw new Error("Assigned Lead is not eligible for staff action");
-      return { assignment, lead: leads[0] };
+      const lead = leads[0]!;
+      if (!lead.instanceId)
+        throw new Error("Assigned Lead identity is unavailable");
+      return { assignment, lead: { ...lead, instanceId: lead.instanceId } };
     };
     if (params.action === "delegate" || params.action === "resume") {
       if (activeRole() !== "manager")
@@ -4059,11 +4094,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
       if (
         host.activeRole() !== "manager" ||
-        pending.sessionId !== ctx.sessionManager.getSessionId() ||
-        !host.sameManagerDescriptor(
-          await host.currentManager(ctx),
-          target.manager,
-        ) ||
+        pending.sessionId !== ctx.sessionManager.getSessionId()
+      )
+        throw new Error("Manager authority changed while preparing approval");
+      const currentManager = await host.currentManager(ctx);
+      if (
+        !currentManager ||
+        !host.sameManagerDescriptor(currentManager, target.manager) ||
         verifiedAgain.assignment.id !== pending.assignmentId ||
         verifiedAgain.checkoutPath !== pending.checkoutPath ||
         verifiedAgain.checkedOutBranch !== pending.checkedOutBranch ||
@@ -4119,7 +4156,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         })
       ).filter(
         (lead) =>
-          (lead.session ?? lead.lead) === selected.assignment.id &&
+          ("lead" in lead ? lead.lead : lead.session) ===
+            selected.assignment.id &&
+          "relationship" in lead &&
           lead.relationship === "assigned" &&
           lead.branch === selected.assignment.branch,
       );
@@ -4170,22 +4209,28 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
       [];
     let discoveryWarning: string | undefined;
-    let managerSnapshot:
-      Awaited<ReturnType<typeof loadSupervisionSnapshot>> | undefined;
+    let managerSnapshot: SupervisionSnapshot | undefined;
     if (params.action === "list") {
       const current = await loadSupervisionSnapshot(ctx);
-      if (activeRole() === "manager") managerSnapshot = current;
+      if (activeRole() === "manager") {
+        if ("managers" in current)
+          throw new Error("Manager snapshot is unavailable");
+        managerSnapshot = current;
+      }
       reports = [
-        ...(current.managers ?? []).map((item: any) => ({
+        ...("managers" in current ? current.managers : []).map((item: any) => ({
           ...item,
           role: "manager",
         })),
-        ...current.leads.map((item: any) => ({ ...item, role: "lead" })),
+        ...(current.leads ?? []).map((item: any) => ({
+          ...item,
+          role: "lead",
+        })),
       ];
       incompatibleReports = current.incompatible ?? [];
       if (
         incompatibleReports.length ||
-        (current.managers ?? []).some(
+        ("managers" in current ? current.managers : []).some(
           (manager: any) => manager.incompatibleLeadCount > 0,
         )
       )
@@ -4227,8 +4272,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 })) ?? [],
             }
           : {}),
-        reports: reports
-          .map((report: any) => {
+        reports: [
+          ...reports.map((report: any) => {
             const role = activeRole() === "chief" ? report.role : "lead";
             const relationship = report.relationship ?? "assigned";
             const actionable =
@@ -4283,16 +4328,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 : {}),
               available_tools: report.availableActions.map(staffToolName),
             };
-          })
-          .concat(
-            incompatibleReports.map((report) => ({
-              role: report.role,
-              display_name: report.displayName,
-              compatibility: "incompatible",
-              build: report.build,
-              available_tools: [],
-            })),
-          ),
+          }),
+          ...incompatibleReports.map((report) => ({
+            role: report.role,
+            display_name: report.displayName,
+            compatibility: "incompatible",
+            build: report.build,
+            available_tools: [],
+          })),
+        ],
         ...(discoveryWarning ? { warning: discoveryWarning } : {}),
       });
     }
@@ -4374,9 +4418,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Staff target role no longer matches the direct report. Rediscover with list_staff.",
       );
     if (
-      (selectedAssignment && lead.relationship !== "assigned") ||
+      (selectedAssignment &&
+        !("relationship" in lead && lead.relationship === "assigned")) ||
       (!selectedAssignment &&
         activeRole() === "manager" &&
+        "relationship" in lead &&
         lead.relationship === "assigned")
     )
       throw new Error(
@@ -4411,6 +4457,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       candidate: typeof lead,
       expected: typeof lead,
     ): boolean => sameLeadIdentity(candidate, expected);
+    const sameRelationship = (
+      candidate: typeof lead,
+      expected: typeof lead,
+    ): boolean =>
+      candidate.role === expected.role &&
+      (candidate.role !== "lead" ||
+        (expected.role === "lead" &&
+          candidate.relationship === expected.relationship));
     if (!lead.availableActions.includes(params.action))
       throw new Error(`Lead does not currently allow ${params.action}`);
     if (params.action === "inspect") {
@@ -4458,7 +4512,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         finalAuthority.leaseId !== authority.leaseId ||
         !currentLead ||
         !sameLeadIdentity(currentLead, lead) ||
-        currentLead.relationship !== lead.relationship ||
+        !sameRelationship(currentLead, lead) ||
         !currentLead.availableActions.includes("inspect") ||
         !assignmentStillCurrent()
       )
@@ -4479,7 +4533,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       });
     }
     if (params.action === "transcript") {
-      const sessionFile = lead.piSessionFile;
+      const sessionFile = lead.role === "lead" ? lead.piSessionFile : undefined;
       if (!sessionFile)
         throw new Error("Lead transcript is not currently available");
       const transcript = readPersistedTranscript({
@@ -4491,6 +4545,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
       const currentLead = await revalidateTarget();
+      const currentSessionFile =
+        currentLead?.role === "lead" ? currentLead.piSessionFile : undefined;
       const finalAuthority =
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
@@ -4502,8 +4558,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         finalAuthority.leaseId !== authority.leaseId ||
         !currentLead ||
         !sameLeadIdentity(currentLead, lead) ||
-        currentLead.piSessionFile !== sessionFile ||
-        currentLead.relationship !== lead.relationship ||
+        currentSessionFile !== sessionFile ||
+        !sameRelationship(currentLead, lead) ||
         !currentLead.availableActions.includes("transcript") ||
         !assignmentStillCurrent()
       )
@@ -4530,7 +4586,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       !currentLead ||
       !sameLeadTarget(currentLead, lead) ||
-      currentLead.relationship !== lead.relationship ||
+      !sameRelationship(currentLead, lead) ||
       !currentLead.availableActions.includes(params.action) ||
       !assignmentStillCurrent()
     )
@@ -4558,6 +4614,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const initialAssignment = assignmentMatches(lead);
     if (
       activeRole() === "manager" &&
+      lead.role === "lead" &&
       (lead.relationship === "assigned") !== !!initialAssignment
     )
       throw new Error("Lead assignment changed before the message was queued");
@@ -4628,13 +4685,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         finalAuthority.leaseId !== finalChief.leaseId ||
         !writeLead ||
         !sameLeadTarget(writeLead, currentLead) ||
-        writeLead.relationship !== lead.relationship ||
+        !sameRelationship(writeLead, lead) ||
         !writeLead.availableActions.includes(params.action) ||
         !assignmentStillCurrent()
       )
         throw new Error("Lead or Chief changed before the message was queued");
       if (
-        (writeLead.relationship === "assigned") !== !!writeAssignment ||
+        (writeLead.role === "lead" &&
+          (writeLead.relationship === "assigned") !== !!writeAssignment) ||
         writeAssignment?.branch !== initialAssignment?.branch ||
         writeAssignment?.id !== initialAssignment?.id
       )
@@ -5031,7 +5089,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       ? await host.managerEvidence?.(ctx, files ?? [])
       : undefined;
     return {
-      files: retainedFiles.flatMap((file) =>
+      files: retainedFiles.flatMap<MessageFileInput>((file) =>
         "result" in file ? [file.result] : [file.path],
       ),
       evidenceScope,

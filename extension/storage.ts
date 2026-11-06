@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import {
   chmodSync,
@@ -423,7 +423,7 @@ export function nodeOnlyAgentDir(): string {
     (process.platform === "win32" && directory.startsWith("~\\"))
   )
     return join(homedir(), directory.slice(2));
-  if (/^file:\/\//.test(directory)) return fileURLToPath(directory);
+  if (directory.startsWith("file://")) return fileURLToPath(directory);
   return directory;
 }
 
@@ -718,7 +718,11 @@ export function resolveScopedResult(
     const artifactStat = lstatSync(artifact);
     if (!artifactStat.isFile() || artifactStat.isSymbolicLink())
       return "invalid";
-    return record as PublishedResult;
+    return {
+      version: 1,
+      canonicalRef: record.canonicalRef,
+      rootSessionId: record.rootSessionId,
+    };
   } catch {
     return "invalid";
   }

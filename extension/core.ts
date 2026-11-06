@@ -308,13 +308,18 @@ export type MessagePreparationOptions = {
 };
 
 function escapeMessageFileName(path: string): string {
-  return path.replace(/[&"<>\u0000-\u001f\u007f-\u009f]/g, (character) => {
-    if (character === "&") return "&amp;";
-    if (character === '"') return "&quot;";
-    if (character === "<") return "&lt;";
-    if (character === ">") return "&gt;";
-    return `&#x${character.charCodeAt(0).toString(16)};`;
-  });
+  return [...path]
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      if (code <= 0x1f || (code >= 0x7f && code <= 0x9f))
+        return `&#x${code.toString(16)};`;
+      if (character === "&") return "&amp;";
+      if (character === '"') return "&quot;";
+      if (character === "<") return "&lt;";
+      if (character === ">") return "&gt;";
+      return character;
+    })
+    .join("");
 }
 
 function renderMessageFile(file: RegularFile, content?: string): string {
@@ -336,7 +341,7 @@ export function prepareMessageInput(
   files: readonly MessageFileInput[],
   cwd: string,
   operation: string,
-  heading: "Task" | "Steer" | "Reply" | "Question" | "Message",
+  heading: "Task" | "Steer" | "Reply" | "Question" | "Message" | "Interrupt",
   options: MessagePreparationOptions = {},
 ): PreparedMessageInput {
   if (!text.trim())
