@@ -8448,19 +8448,42 @@ test("Manager removal requires persisted session checkout provenance", async (t)
   assert.deepEqual(wrongSession.removals, []);
 });
 
-test("Manager removal refuses a same-branch replacement without persisted checkout provenance", async (t) => {
+test("Manager removal refuses a matching-branch worktree without checkout provenance", async (t) => {
   const fixture = await managerRemovalFixture(t, {
     runningLead: true,
     missingSessionProvenance: true,
+    legacyAssignment: true,
   });
   await assert.rejects(
     fixture.runtime.removeWorktree("feat/remove-test", fixture.ctx),
-    /Project checkout provenance is unavailable; worktree preserved/,
+    /Assigned checkout is not verified \(checkout provenance unavailable\)/,
   );
   assert.equal(fixture.confirmationCount(), 0);
   assert.equal(fixture.stoppedLeadCount(), 0);
   assert.deepEqual(fixture.removals, []);
   assert.ok(fixture.assignment());
+});
+
+test("Manager removes a verified checkout without a Pi session file", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    runningLead: true,
+    missingSessionProvenance: true,
+  });
+
+  const result = await fixture.runtime.removeWorktree(
+    "feat/remove-test",
+    fixture.ctx,
+  );
+
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.assignment_retired, true);
+  assert.equal(result.details.lead_stopped, true);
+  assert.equal(result.details.forced, false);
+
+  assert.equal(fixture.stoppedLeadCount(), 1);
+  assert.equal(fixture.stoppedWithHeldLocks(), true);
+  assert.equal(fixture.assignment(), undefined);
+  assert.deepEqual(fixture.removals, ["child-workspace"]);
 });
 
 test("Manager removal rejects primary workspace identity before and after confirmation", async (t) => {

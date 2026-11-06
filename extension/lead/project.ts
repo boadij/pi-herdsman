@@ -789,10 +789,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("The Manager's primary checkout cannot be removed");
     if (worktree.open_workspace_id === manager.workspaceId)
       throw new Error("The Manager's primary workspace cannot be removed");
-    if (!assignment.piSessionFile)
-      throw new Error(
-        "Project checkout provenance is unavailable; worktree preserved",
-      );
     if (assignment.piSessionFile) {
       try {
         const session = host.SessionManager.open(assignment.piSessionFile);
