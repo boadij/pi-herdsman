@@ -8531,13 +8531,10 @@ async function managerDelegateAssignmentTest(
   t: TestContext,
   projectTrusted: boolean,
   lockOrder?: "manager-first" | "lead-first",
-  targetDecision: boolean | null = projectTrusted,
+  targetDecision: boolean | null = null,
   ancestorDecision: boolean | null = null,
   extendedPaths = false,
   authorityContention?: "publication" | "binding" | "conflict" | "cancel",
-  expectApprovalRequired = false,
-  approvalChoice?: string,
-  protectedResource?: "mcp",
 ) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -8594,19 +8591,13 @@ async function managerDelegateAssignmentTest(
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(PI_AGENT_ROOT, null));
   const trustPath = extendedPaths ? toNamespacedPath(childCwd) : childCwd;
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
-  const targetTrusted = (targetDecision ?? ancestorDecision) === true;
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  if (protectedResource === "mcp") {
-    realFs.mkdirSync(join(childCwd, ".pi"), { recursive: true });
-    realFs.writeFileSync(join(childCwd, ".pi", "mcp.json"), "{}");
-  } else {
-    const managedLeadDir = join(childCwd, ".pi", "coordinators");
-    realFs.mkdirSync(managedLeadDir, { recursive: true });
-    realFs.writeFileSync(
-      join(managedLeadDir, "managed-lead.md"),
-      "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
-    );
-  }
+  const managedLeadDir = join(childCwd, ".pi", "coordinators");
+  realFs.mkdirSync(managedLeadDir, { recursive: true });
+  realFs.writeFileSync(
+    join(managedLeadDir, "managed-lead.md"),
+    "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
+  );
   let childSession = `lead-${randomUUID()}`;
   let lead: any;
   let leadCtx: any;
@@ -8936,13 +8927,13 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-extensions"), true);
       const thinkingIndex = args.indexOf("--thinking");
       assert.notEqual(thinkingIndex, -1);
-      assert.equal(args[thinkingIndex + 1] === "low", targetTrusted);
-      assert.equal(args.includes("--approve"), targetTrusted);
-      assert.equal(args.includes("--no-approve"), !targetTrusted);
+      assert.equal(args[thinkingIndex + 1] === "low", projectTrusted);
+      assert.equal(args.includes("--approve"), projectTrusted);
+      assert.equal(args.includes("--no-approve"), !projectTrusted);
       const promptIndex = args.indexOf("--append-system-prompt");
       assert.notEqual(promptIndex, -1);
       const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
-      if (targetTrusted) {
+      if (projectTrusted) {
         assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       } else {
         assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
@@ -9285,10 +9276,6 @@ async function managerDelegateAssignmentTest(
   try {
     const ctx = fakeContext(pi.entries) as any;
     ctx.isProjectTrusted = () => projectTrusted;
-    if (approvalChoice) {
-      ctx.hasUI = true;
-      ctx.ui.select = async () => approvalChoice;
-    }
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
@@ -9398,35 +9385,6 @@ async function managerDelegateAssignmentTest(
       } catch (error) {
         delegationError = error;
       }
-    }
-    if (expectApprovalRequired) {
-      assert.equal(delegationError, undefined);
-      assert.equal(
-        outcome.details?.status,
-        "approval_required",
-        JSON.stringify(outcome),
-      );
-      assert.equal(outcome.details.ok, false);
-      assert.equal(started, false);
-      const assignments = listProjectAssignments(supervisionRuntime(), repoKey);
-      assert.equal(assignments.length, 1, "blocked work remains recoverable");
-      assert.equal(assignments[0]!.piSessionFile, undefined);
-      assert.equal(
-        pi.calls.filter(
-          (args) => args[0] === "worktree" && args[1] === "create",
-        ).length,
-        1,
-      );
-      assert.equal(
-        listProjectMessages(
-          supervisionRuntime(),
-          repoKey,
-          assignments[0]!.branch,
-        ).length,
-        0,
-        "blocked activation does not publish a handoff",
-      );
-      return;
     }
     if (lockOrder === "lead-first") {
       assert.equal(delegationError, undefined);
@@ -10284,36 +10242,13 @@ test(
     ),
 );
 
-test("Manager target approval cancellation preserves recoverable work", (t) =>
-  managerDelegateAssignmentTest(
-    t,
-    true,
-    undefined,
-    null,
-    null,
-    false,
-    undefined,
-    true,
-    "Cancel",
-  ));
-
-test("Pi MCP config requires an explicit managed Lead trust decision", (t) =>
-  managerDelegateAssignmentTest(
-    t,
-    true,
-    undefined,
-    null,
-    null,
-    false,
-    undefined,
-    true,
-    undefined,
-    "mcp",
-  ));
-
-test("Manager trust cannot authorize a denied target decision", (t) =>
+test("trusted Manager approves an undecided delegated worktree", (t) =>
+  managerDelegateAssignmentTest(t, true, undefined, null));
+test("trusted Manager overrides a saved target denial", (t) =>
   managerDelegateAssignmentTest(t, true, undefined, false, true));
-test("saved target ancestor trust authorizes the target independently of Manager trust", (t) =>
+test("untrusted Manager restricts a saved-approved target", (t) =>
+  managerDelegateAssignmentTest(t, false, undefined, true));
+test("untrusted Manager does not inherit saved ancestor approval", (t) =>
   managerDelegateAssignmentTest(t, false, undefined, null, true));
 
 test("Manager session binding holds the assignment lock before Lead publication", (t) =>
