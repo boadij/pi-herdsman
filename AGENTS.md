@@ -173,8 +173,9 @@ review, and all intermediate checks must happen before formatting. Do not
 format during those phases. Before handoff, follow the detailed validation
 order in [Development validation](docs/development/validation.md): run
 `npm run format` once as the final pre-commit mutation, then run the read-only
-checks `npm run format:check`, `npm run check`, and `git diff --check` before
-staging or committing.
+checks `npm run format:check`, `npm run typecheck`,
+`npm run lint -- --deny-warnings`, `npm run check`, and `git diff --check`
+before staging or committing.
 
 For changes crossing the real Pi/Herdr runtime boundary, prefer the relevant
 simulated smoke scenario first when it covers the behavior. Pi, Herdsman, and
