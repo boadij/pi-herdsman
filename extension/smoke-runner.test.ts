@@ -1296,12 +1296,10 @@ test("core failure diagnostics distinguish nested result publication from delive
       requestId,
     );
     const scoutEntries = [{ type: "session", id: "private-scout" }];
-    await Promise.all([
-      writeFile(
-        join(piSessions, "scout.jsonl"),
-        scoutEntries.map((entry) => JSON.stringify(entry)).join("\n"),
-      ),
-    ]);
+    await writeFile(
+      join(piSessions, "scout.jsonl"),
+      scoutEntries.map((entry) => JSON.stringify(entry)).join("\n"),
+    );
     const mailbox = join(mailboxRoot, "a".repeat(32));
     await mkdir(mailbox);
     await writeFile(
@@ -7059,7 +7057,6 @@ test("manager-recovery starts work by task and resumes with fresh instructions",
 
 test("manager-recovery stops and resumes by branch", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
-  const session = "lead-session-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const close = managerRecoveryStopPrompt(branch);
   assert.match(close, /stop_lead exactly once/);

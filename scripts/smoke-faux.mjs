@@ -1157,8 +1157,6 @@ export function decide(model, context) {
     const branch = `herdsman/federation-smoke-${origin.slice(8, 16)}`;
     const assignment = correlatedCall(messages, "delegate_work", branch);
     if (!assignment) {
-      const forwardable =
-        text(inbound).split("Forwardable received files:\n")[1] ?? "";
       const refs = forwardableRefs(inbound);
       if (refs.length < 2)
         throw new Error(

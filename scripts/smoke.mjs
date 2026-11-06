@@ -716,6 +716,7 @@ export function chiefTreeBranchPlan(
 }
 
 export function chiefTreeFooter(output) {
+  // oxlint-disable-next-line no-control-regex -- ANSI CSI begins with ESC.
   const text = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
   const matches = [...text.matchAll(/^[ \t]*\((\d+)\/(\d+)\)(?:[ \t]|$)/gm)];
   if (!matches.length) return null;
@@ -728,6 +729,7 @@ export function chiefTreeFooter(output) {
 }
 
 export function chiefTreeSelectedRow(output, marker) {
+  // oxlint-disable-next-line no-control-regex -- ANSI CSI begins with ESC.
   output = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
   const expected = `assistant: ${marker}`;
   const rows = output.split(/\r?\n/).filter((line) => line.includes(expected));
@@ -2508,7 +2510,7 @@ export function assertNoFailedAgentDelegation(contents) {
   throw error;
 }
 
-function coreDelegationEdge(contents, label, ownerSessionId) {
+function coreDelegationEdge(contents, label, _ownerSessionId) {
   const entries = sessionEntries(contents);
   const calls = entries.flatMap((entry, index) =>
     entry.type === "message" && entry.message?.role === "assistant"
@@ -5396,7 +5398,7 @@ async function runManagerHandoffSmoke(ctx) {
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
   );
-  const delivered = await waitForEvidence(
+  await waitForEvidence(
     ctx,
     "manager-handoff-delivered",
     async () => {
@@ -6434,7 +6436,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
     ),
     "named disposable session is not present in its isolated Herdr config",
   );
-  const firstAgents = await waitForEvidence(
+  await waitForEvidence(
     ctx,
     "crash-recovery-accepted-generations",
     async () => {
@@ -7050,10 +7052,8 @@ export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
     evidence.some(
       ({ name, result }) =>
         name === "read" &&
-        result.includes(`\"name\": \"${expectedPackage.split("@")[0]}\"`) &&
-        result.includes(
-          `\"version\": \"${expectedPackage.split("@").at(-1)}\"`,
-        ),
+        result.includes(`"name": "${expectedPackage.split("@")[0]}"`) &&
+        result.includes(`"version": "${expectedPackage.split("@").at(-1)}"`),
     ),
     "correlated read result must contain the real package metadata",
   );
@@ -7379,7 +7379,6 @@ async function runCoreSmoke(ctx) {
 }
 
 async function runContinuationSmoke(ctx) {
-  const deadline = Date.now() + 6 * 60_000;
   const firstPrompt = ctx.initialPrompt;
   const firstMarker = "PI_HERDSMAN_CONTINUATION_FIRST";
   const secondMarker = "PI_HERDSMAN_CONTINUATION_SECOND";
@@ -8232,7 +8231,6 @@ async function captureManagerBootstrapFailure(ctx) {
 }
 
 async function runManagerRecoverySmoke(ctx) {
-  const deadline = Date.now() + 6 * 60_000;
   const branch = `herdsman/smoke-manager-recovery-${randomUUID()}`;
   const contextMarker = `MANAGER_RECOVERY_CONTEXT_${randomUUID()}`;
   ctx.managerRecovery = {
@@ -10282,7 +10280,7 @@ async function runChiefTreeSmoke(ctx) {
   };
 
   // Establish the exact pre-Chief assistant branch before changing roles.
-  const startup = await waitForEvidence(
+  await waitForEvidence(
     ctx,
     "chief-tree-startup",
     async () => {

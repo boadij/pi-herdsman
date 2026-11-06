@@ -156,7 +156,7 @@ $seen = [System.Collections.Generic.HashSet[int]]::new()
 [void]$seen.Add($runnerPid)
 $rows = [System.Collections.Generic.List[object]]::new()
 $truncated = $false
-$repoRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
+$repoRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd([char]92) + [char]92
 ${windowsTestFileClassifierScript}
 while ($queue.Count -gt 0) {
   $parent = $queue.Dequeue()

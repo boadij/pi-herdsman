@@ -1452,7 +1452,6 @@ test("private repository definitions overlay trusted linked worktrees without cr
     const globalRoles = join(global, "coordinators");
     mkdirSync(globalAgents);
     mkdirSync(globalRoles, { recursive: true });
-    const projectReviewer = join(primary, ".pi", "agents", "reviewer.md");
     const globalReviewer = join(globalAgents, "reviewer.md");
     const privateReviewer = join(privateRoot, "agents", "reviewer.md");
     write(

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -10,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { mock, test } from "node:test";
 import type { TestContext } from "node:test";
@@ -19,12 +18,7 @@ import type {
   BeforeAgentStartEvent,
   NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 
 import { claimProcessLock } from "./lock.ts";
 import {
@@ -3489,7 +3483,7 @@ test("lead herd runs start once and stay open through intermediate settlement", 
   }
 });
 
-test("restored herd run keeps its start and closes after settlement", async (t) => {
+test("restored herd run keeps its start and closes after settlement", async (_t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const socket = join(tmpdir(), `restored-handoff-${randomUUID()}.sock`);
@@ -4471,7 +4465,7 @@ test("unassigned Lead and Manager failure reports replay the exact Chief payload
   assert.deepEqual(roles, ["lead", "lead", "manager", "manager"]);
 });
 
-test("Lead failure report keeps its assigned-project destination across retirement", async (t) => {
+test("Lead failure report keeps its assigned-project destination across retirement", async (_t) => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
   const context = fakeContext(pi.entries);
@@ -8271,14 +8265,13 @@ test("managed Lead prepares upgraded evidence while another process holds global
   let accepted = 0;
   let starts = 0;
   let published = 0;
-  let agentGetCount = 0;
   let started!: () => void;
   const startupReached = new Promise<void>((resolve) => (started = resolve));
   const label = `fp-${randomUUID().slice(0, 8)}`;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
-    (count) => (agentGetCount = count),
+    undefined,
     undefined,
     false,
     () => {
@@ -8984,7 +8977,6 @@ test("unassigned Lead delegation does not receive project evidence implicitly", 
   setLeadEnvironment();
   const socket = join(tmpdir(), `ordinary-lead-evidence-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
-  const runtime = supervisionRuntime(socket);
   const foreignEvidence = persistRequiredEvidenceSnapshot(
     randomUUID(),
     "other-project.md",
@@ -12760,7 +12752,6 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     false,
     (request) => {
       accepted = request;
-      const state = readAgentState(startup.mailbox)!;
       const session = {
         id: DEFAULT_PI_SESSION_ID,
         path: sessionPath,
@@ -15491,21 +15482,19 @@ test("empty early launch cleans exact resources and same-label retry creates one
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              panes: [
-                ...(panePresent
-                  ? [
-                      {
-                        pane_id: "startup-pane",
-                        tab_id: "startup-tab",
-                        workspace_id: WORKSPACE,
-                        terminal_id: "startup-terminal",
-                        cwd: "/tmp",
-                        foreground_cwd: "/tmp",
-                        agent_status: "unknown",
-                      },
-                    ]
-                  : []),
-              ],
+              panes: panePresent
+                ? [
+                    {
+                      pane_id: "startup-pane",
+                      tab_id: "startup-tab",
+                      workspace_id: WORKSPACE,
+                      terminal_id: "startup-terminal",
+                      cwd: "/tmp",
+                      foreground_cwd: "/tmp",
+                      agent_status: "unknown",
+                    },
+                  ]
+                : [],
             },
           }),
           stderr: "",

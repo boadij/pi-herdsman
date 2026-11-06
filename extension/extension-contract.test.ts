@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -27,8 +27,6 @@ import {
   claimManagerLease,
   listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
-  listChiefMessagePaths,
-  readChiefDescriptor,
   readPeerLeadRecord,
   removePeerLeadRecord,
   removeProjectAssignment,
@@ -37,7 +35,6 @@ import {
   readChiefMessage,
   listProjectMessageHeaders,
   readProjectMessage,
-  writeChiefMessage,
   retireProjectAssignment,
   listPendingRetirements,
   supervisionRuntime,
@@ -48,17 +45,9 @@ import {
   writePeerLeadRecord,
   writeProjectAssignment,
 } from "./supervision.ts";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
-import { OperationError } from "./errors.ts";
+import type { RequestRecord } from "./mailbox.ts";
 import support, {
-  CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
-  PARENT_SESSION_ID,
   PI_AGENT_ROOT,
   PI_AGENTS_DIR,
   REQUEST_ID,
@@ -86,7 +75,6 @@ import support, {
   setLeadEnvironment,
   setAgentEnvironment,
   testGate,
-  skillBlock,
   startupExecutor,
   testTmpRoot,
   agentMailboxPath,
@@ -181,31 +169,29 @@ function assertPortableToolSchema(tool: any): void {
 }
 
 const REGISTERED_ROLE_TOOLS = [
-  ...[
-    "list_agents",
-    "delegate_agent",
-    "continue_agent",
-    "steer_agent",
-    "interrupt_agent",
-    "reply_agent",
-    "close_agent",
-    "inspect_agent",
-    "read_agent_transcript",
-    "read_evidence",
-    "message_supervisor",
-    "list_peers",
-    "message_peer",
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-    "delegate_work",
-    "resume_work",
-    "stop_lead",
-    "remove_worktree",
-    "integrate_branch",
-  ].map((name) => ({ name })),
-];
+  "list_agents",
+  "delegate_agent",
+  "continue_agent",
+  "steer_agent",
+  "interrupt_agent",
+  "reply_agent",
+  "close_agent",
+  "inspect_agent",
+  "read_agent_transcript",
+  "read_evidence",
+  "message_supervisor",
+  "list_peers",
+  "message_peer",
+  "list_staff",
+  "inspect_staff",
+  "read_staff_transcript",
+  "message_staff",
+  "delegate_work",
+  "resume_work",
+  "stop_lead",
+  "remove_worktree",
+  "integrate_branch",
+].map((name) => ({ name }));
 
 const SEMANTIC_TOOL_CASES = [
   ["list_agents", {}, { agent: "x" }, []],
@@ -2722,12 +2708,14 @@ test("read staff transcript advertises persisted candidates and revalidates the 
       observedManager.open = originalOpen;
     }
     assertToolResult(listed);
-    const listedLead = (listed.details?.reports as any[])[0];
+    assert.ok(listed.details?.reports);
+    const listedLead = (listed.details.reports as any[])[0];
+    assert.ok(listedLead);
     assert.equal(listedLead.target, coordinatorTarget("lead", leadId));
     assert.equal(listedLead.role, "lead");
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
-      listedLead?.available_tools,
+      listedLead.available_tools,
       ["inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(listed.details),
     );
@@ -2742,13 +2730,14 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     assertToolResult(transcript);
     assert.equal(transcript.details?.target, listedLead.target);
     assert.equal("lead" in (transcript.details ?? {}), false);
-    assert.match(transcript.details?.transcript, /visible user/);
-    assert.match(transcript.details?.transcript, /visible assistant/);
-    assert.match(transcript.details?.transcript, /visible argument/);
-    assert.match(transcript.details?.transcript, /visible tool result/);
+    assert.ok(transcript.details);
+    assert.match(transcript.details.transcript, /visible user/);
+    assert.match(transcript.details.transcript, /visible assistant/);
+    assert.match(transcript.details.transcript, /visible argument/);
+    assert.match(transcript.details.transcript, /visible tool result/);
     for (const hidden of ["HIDDEN_SYSTEM", "HIDDEN_REASONING", "HIDDEN_CUSTOM"])
-      assert.doesNotMatch(transcript.details?.transcript, new RegExp(hidden));
-    assert.doesNotMatch(transcript.details?.transcript, /__PI_HERDSMAN/);
+      assert.doesNotMatch(transcript.details.transcript, new RegExp(hidden));
+    assert.doesNotMatch(transcript.details.transcript, /__PI_HERDSMAN/);
 
     writeFileSync(
       leadPath,
@@ -2763,8 +2752,9 @@ test("read staff transcript advertises persisted candidates and revalidates the 
       context,
     );
     assertToolResult(malformed);
+    assert.ok(malformed.details?.reports);
     assert.equal(
-      (malformed.details?.reports as any[]).some(
+      (malformed.details.reports as any[]).some(
         (report) => report.target === listedLead.target,
       ),
       false,
@@ -2798,7 +2788,8 @@ test("read staff transcript advertises persisted candidates and revalidates the 
         context,
       );
       assertToolResult(mismatched);
-      const mismatchedLead = (mismatched.details?.reports as any[]).find(
+      assert.ok(mismatched.details?.reports);
+      const mismatchedLead = (mismatched.details.reports as any[]).find(
         (report) => report.target === listedLead.target,
       );
       assert.ok(mismatchedLead);
@@ -7649,7 +7640,8 @@ test("periodic health loss reminders do not open transcripts for missing mailbox
   const reminder = pi.sentMessageCalls.find(
     ({ message }: any) => message?.customType === "pi-herdsman-agent-lost",
   );
-  assert.equal((reminder?.message as any).details.agentDefinition, "unknown");
+  assert.ok(reminder);
+  assert.equal((reminder.message as any).details.agentDefinition, "unknown");
   assert.equal(openCalls, 0);
 });
 

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { sameDirectory } from "../herdr.ts";
 import {
   AGENT_ID,
   HERDSMAN_BUILD,

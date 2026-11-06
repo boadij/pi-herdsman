@@ -1,16 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { mock, test } from "node:test";
-import { Value } from "typebox/value";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { test } from "node:test";
+import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import support, {
@@ -43,7 +36,6 @@ import support, {
   managedState,
   nativeSessions,
   agentControllerExecutor,
-  readPendingAsk,
   readRequest,
   readResult,
   readAgentState,
