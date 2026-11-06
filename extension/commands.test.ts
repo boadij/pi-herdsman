@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,16 +13,11 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
-import { mock, test, type TestContext } from "node:test";
+import { test, type TestContext } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import type { ManagedAgentState } from "./mailbox.ts";
 import {
   acquireProcessLock,
   claimProcessLock,
@@ -66,11 +60,7 @@ import {
   rememberCoordinatorTarget,
 } from "./coordinator-target.ts";
 import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
-import {
-  herdsmanTempRoot,
-  readRequiredEvidenceSnapshot,
-  resultPath,
-} from "./storage.ts";
+import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
 
 const tuiMenuKeybindings = {
@@ -603,7 +593,7 @@ const peerTopologyExec = (_command: string, args: string[]) =>
         code: 0,
       }
     : { stdout: "{}", stderr: "", code: 0 };
-import support, {
+import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
   NON_PI_AGENT,
@@ -2632,7 +2622,6 @@ const {
   readEffectiveConfig,
   readProjectOverrides,
   updateConfig,
-  updateProjectOverride,
 } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find(
@@ -4131,7 +4120,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   }
 });
 
-test("failed Manager activation preserves late inherited tools through rollback", async (t) => {
+test("failed Manager activation preserves late inherited tools through rollback", async (_t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-inherited-pane";
   process.env.HERDR_TAB_ID = "manager-inherited-tab";
@@ -5191,10 +5180,10 @@ function managerBootstrapHarness(
     cleanup: async () => {
       await pi.events.get("session_shutdown")?.[0]();
       realFs.rmSync(cwd, { recursive: true, force: true });
-      for (const key of names)
-        previous[key] === undefined
-          ? delete process.env[key]
-          : (process.env[key] = previous[key]!);
+      for (const key of names) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key]!;
+      }
       setLeadEnvironment();
     },
   };
@@ -5409,7 +5398,7 @@ test("Manager activation rejects identity changes during repository discovery", 
   assert.ok(harness.notices.some((notice) => /identity/i.test(notice)));
 });
 
-test("Manager activation ignores inherited workspace source but rejects explicit cross-repository association", async (t) => {
+test("Manager activation ignores inherited workspace source but rejects explicit cross-repository association", async (_t) => {
   for (const conflicting of [false, true]) {
     const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-cross-repo-"));
     const association = {
@@ -8423,6 +8412,14 @@ async function managerDelegateAssignmentTest(
       ? `\\\\.\\pipe\\herdr-${randomUUID()}`
       : `/tmp/herdr-${randomUUID()}.sock`;
   const lifecycleSocketPath = process.env.HERDR_SOCKET_PATH;
+  t.after(() => {
+    if (process.platform === "win32") return;
+    try {
+      realFs.unlinkSync(lifecycleSocketPath!);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  });
   const repoPath = join(
     PI_AGENT_ROOT,
     `herdsman-command-repo-key-${randomUUID()}`,
@@ -9559,11 +9556,6 @@ async function managerDelegateAssignmentTest(
       childSession,
     );
     assert.equal(paths.length, 2);
-    const assignmentFile = projectAssignmentPath(
-      supervisionRuntime(),
-      repoKey,
-      assignment!.branch,
-    );
     const assignmentDeliveryPath = paths.find(
       (path) => readChiefMessage(path).kind === "project_assignment",
     )!;
@@ -9964,13 +9956,6 @@ async function managerDelegateAssignmentTest(
       await new Promise<void>((resolve) =>
         lifecycleServer!.close(() => resolve()),
       );
-    if (process.platform !== "win32") {
-      try {
-        realFs.unlinkSync(lifecycleSocketPath!);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -12895,16 +12880,9 @@ test("managed peer scope loss rejects stale local group and defers transient fai
     },
   ];
   let topology: "available" | "not-git" | "unavailable" | "moved" = "available";
-  let unavailableLookups = 0;
   const receiver = fakeChiefPi({
     entries,
     exec: (_command, args) => {
-      if (
-        args[0] === "worktree" &&
-        args[1] === "list" &&
-        topology === "unavailable"
-      )
-        unavailableLookups++;
       return args[0] === "worktree" &&
         args[1] === "list" &&
         topology === "not-git"
@@ -14141,7 +14119,7 @@ test("/agents placement subtree writes flat config outside project settings", as
   }
 });
 
-test("Chief profile drives the turn-start tools, prompt, and tool-call guard", async (t) => {
+test("Chief profile drives the turn-start tools, prompt, and tool-call guard", async (_t) => {
   setLeadEnvironment();
   const overridePath = join(PI_AGENT_ROOT, "coordinators", "chief.md");
   mkdirSync(dirname(overridePath), { recursive: true });
@@ -14322,7 +14300,7 @@ test("root assignment rejects a role generation changed during preflight", async
   let held = false;
   let assignmentStarted = false;
   const pi = fakeChiefPi({
-    exec: async (command, args) => {
+    exec: async (command, _args) => {
       if (command === "herdr" && assignmentStarted && !held) {
         held = true;
         enteredPreflight();
@@ -17293,7 +17271,7 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
     );
     assert.match(renders[1][executionFooter - 2], /orchestrate/u);
     assert.ok(renders[1]?.some((line) => /^→ flexible\s+current/u.test(line)));
-    assert.ok(renders[2]?.some((line) => /^→ orchestrate/u.test(line)));
+    assert.ok(renders[2]?.some((line) => line.startsWith("→ orchestrate")));
     assert.ok(
       renders[3]?.some((line) => /^→ Execution\s+flexible/u.test(line)),
     );
@@ -17438,7 +17416,7 @@ test("Definitions contextual help uses the selected definition description", asy
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
     const withoutHelp = observed.find((lines) =>
-      lines.some((line) => /^→ aaa-no-help/u.test(line)),
+      lines.some((line) => line.startsWith("→ aaa-no-help")),
     );
     assert.ok(
       withoutHelp,
@@ -18998,7 +18976,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
       await pi.events.get("session_shutdown")?.[0]();
     }
     return {
-      entry: [...pi.entries.slice(initialEntryCount)]
+      entry: pi.entries
+        .slice(initialEntryCount)
         .reverse()
         .find(
           (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
@@ -20025,7 +20004,7 @@ test("Definitions separates Agent definitions and preserves provenance", async (
         /implementer.*bundled \+ global/u.test(option),
       ),
     );
-    assert.ok(definitions.every((option) => !/^---/u.test(option)));
+    assert.ok(definitions.every((option) => !option.startsWith("---")));
     assert.ok(definitions.every((option) => !/\[project\]|\*/u.test(option)));
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -22117,17 +22096,18 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       context.ui = {
         setWidget: (_key: string, content: unknown) => {
           registrations++;
-          if (typeof content === "function")
-            (factories.push(content as (tui: any, theme: any) => StatusWidget),
-              widgets.push(
-                (content as (tui: any, theme: any) => StatusWidget)(
-                  { requestRender: () => undefined },
-                  {
-                    fg: (_color: string, text: string) => text,
-                    bold: (text: string) => text,
-                  },
-                ),
-              ));
+          if (typeof content === "function") {
+            factories.push(content as (tui: any, theme: any) => StatusWidget);
+            widgets.push(
+              (content as (tui: any, theme: any) => StatusWidget)(
+                { requestRender: () => undefined },
+                {
+                  fg: (_color: string, text: string) => text,
+                  bold: (text: string) => text,
+                },
+              ),
+            );
+          }
         },
       };
       return context;

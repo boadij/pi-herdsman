@@ -1098,7 +1098,6 @@ test("stale recovery cannot remove a replacement owner", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const claimDir = join(path, ".starting");
   const staleId = randomUUID();
-  const freshId = randomUUID();
   resetAgentMailbox(path);
   mkdirSync(claimDir);
   writeFileSync(
@@ -1225,50 +1224,10 @@ test("malformed JSON and legacy protocol records are rejected", () => {
   );
   assert.throws(() => readResult(path, requestId), /protocol version/);
 });
-test("lists malformed current mailbox state as bounded diagnostics", () => {
+test("lists malformed current mailbox state as bounded diagnostics", (t) => {
   const path = agentMailboxPath("unknown-workspace", "unknown-agent");
   mkdirSync(path, { recursive: true });
-  try {
-    for (const [kind, setup, expected] of [
-      [
-        "malformed JSON",
-        () => writeFileSync(join(path, "state.json"), "not json"),
-        /Unexpected token|JSON/,
-      ],
-      [
-        "invalid shape",
-        () =>
-          writeFileSync(
-            join(path, "state.json"),
-            JSON.stringify({ ...state, extra: true }),
-          ),
-        /Unknown mailbox field/,
-      ],
-      [
-        "oversized state",
-        () => writeFileSync(join(path, "state.json"), "x".repeat(65 * 1024)),
-        /Mailbox record is too large/,
-      ],
-      [
-        "state read failure",
-        () => mkdirSync(join(path, "state.json")),
-        /EISDIR|directory/,
-      ],
-    ] as const) {
-      setup();
-      const issue = listAgentStateIssues().find(
-        (candidate) => candidate.path === path,
-      );
-      assert.ok(issue, kind);
-      assert.match(issue.diagnostic, expected);
-      assert.match(issue.diagnostic, /^Mailbox state unavailable:/);
-      assert.ok(
-        issue.diagnostic.length <= 256 + "Mailbox state unavailable: ".length,
-      );
-      if (kind === "state read failure") rmdirSync(join(path, "state.json"));
-      else unlinkSync(join(path, "state.json"));
-    }
-  } finally {
+  t.after(() => {
     try {
       if (statSync(join(path, "state.json")).isDirectory())
         rmdirSync(join(path, "state.json"));
@@ -1276,6 +1235,45 @@ test("lists malformed current mailbox state as bounded diagnostics", () => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     removeAgentMailbox(path);
+  });
+  for (const [kind, setup, expected] of [
+    [
+      "malformed JSON",
+      () => writeFileSync(join(path, "state.json"), "not json"),
+      /Unexpected token|JSON/,
+    ],
+    [
+      "invalid shape",
+      () =>
+        writeFileSync(
+          join(path, "state.json"),
+          JSON.stringify({ ...state, extra: true }),
+        ),
+      /Unknown mailbox field/,
+    ],
+    [
+      "oversized state",
+      () => writeFileSync(join(path, "state.json"), "x".repeat(65 * 1024)),
+      /Mailbox record is too large/,
+    ],
+    [
+      "state read failure",
+      () => mkdirSync(join(path, "state.json")),
+      /EISDIR|directory/,
+    ],
+  ] as const) {
+    setup();
+    const issue = listAgentStateIssues().find(
+      (candidate) => candidate.path === path,
+    );
+    assert.ok(issue, kind);
+    assert.match(issue.diagnostic, expected);
+    assert.match(issue.diagnostic, /^Mailbox state unavailable:/);
+    assert.ok(
+      issue.diagnostic.length <= 256 + "Mailbox state unavailable: ".length,
+    );
+    if (kind === "state read failure") rmdirSync(join(path, "state.json"));
+    else unlinkSync(join(path, "state.json"));
   }
 });
 test("valid results round-trip and atomic temporary files are removed", () => {

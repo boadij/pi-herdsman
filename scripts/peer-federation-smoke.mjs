@@ -1375,10 +1375,7 @@ try {
     console.log(
       `[peer-smoke-summary] ${JSON.stringify(managedLeadRejectionSummary(managedAttempt, rejectionTarget))}`,
     );
-  const rejectionResult = matchedUnboundTargetRejection(
-    managedAttempt,
-    rejectionTarget,
-  );
+  matchedUnboundTargetRejection(managedAttempt, rejectionTarget);
   stage("managed-lead-discovery-excluded-and-unbound-target-rejected");
   const ordinaryLeadSession = resources.a.ordinaryLead.sessionPath;
   const discoveryStartLine = Number(
@@ -1915,7 +1912,6 @@ try {
     );
     if (resources.diagnosticsEnabled)
       stage("peer-correlation", { events: readBDecisionDiagnostics() });
-    const delivered = bRead.delivered;
     const checks = {
       deliveredOnce: bRead.matchingDeliveryCount === 1,
       correctRecipient: bRead.correctRecipient,

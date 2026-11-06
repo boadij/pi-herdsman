@@ -2627,7 +2627,6 @@ async function startAgentCase(
   const cwd = paths?.requested ?? "/tmp/case-agent";
   const observedCwd = paths?.observed ?? cwd;
   const calls: string[][] = [];
-  let processInfoCalls = 0;
   let agentStarts = 0;
   const response = (value: unknown) => ({
     code: 0,
@@ -2717,7 +2716,6 @@ async function startAgentCase(
         });
       }
       if (key === "pane process-info") {
-        processInfoCalls++;
         return response({ process_info: processInfo() });
       }
       if (key === "pane get")
@@ -6091,16 +6089,16 @@ test("exited-start rollback refuses agent, process, tab, and foreign-pane owners
         calls.push(args);
         const key = args.slice(0, 2).join(" ");
         if (key === "agent list")
-          return response({
-            ...(changed === "agent-list" && agentLists++ > 0
+          return response(
+            changed === "agent-list" && agentLists++ > 0
               ? {}
               : {
                   agents:
                     changed === "agent"
                       ? [{ name: "replacement", pane_id: "pane-1" }]
                       : [],
-                }),
-          });
+                },
+          );
         if (key === "tab list")
           return response({
             tabs:

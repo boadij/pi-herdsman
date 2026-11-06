@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { mock, test } from "node:test";
+import { test } from "node:test";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
@@ -24,12 +17,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import type { AskRecord, RequestRecord, ManagedAgentState } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import {
   herdsmanDataRoot,

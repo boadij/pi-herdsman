@@ -29,7 +29,6 @@ import {
   hasPeerDeliveryReceipt,
   peerRuntime,
   readCoordinationMessage,
-  writeCoordinationMessage,
   writePeerDeliveryReceipt,
   writePeerLeadRecord,
   writeProjectAssignment,

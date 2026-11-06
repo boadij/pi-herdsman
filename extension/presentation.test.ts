@@ -463,7 +463,7 @@ const lead = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-test("Supervision context formatting preserves state, safety, and bounded records", (t) => {
+test("Supervision context formatting preserves state, safety, and bounded records", (_t) => {
   {
     const snapshot = {
       diagnostics: ["one live identity was unresolved"],
@@ -525,8 +525,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
       /For a straightforward message or reply, use the actionable selector directly; do not call list_staff, inspect_staff, or another read command first\./,
     );
     assert.ok(
-      formatted.indexOf("display_name: workspace\/api") <
-        formatted.indexOf("display_name: workspace\/research"),
+      formatted.indexOf("display_name: workspace/api") <
+        formatted.indexOf("display_name: workspace/research"),
     );
     for (const value of [
       "target: lead:0123456789",
@@ -692,7 +692,7 @@ test("Manager supervision context uses the assigned branch and ordinary session"
   assert.match(text, /target: lead:0123456789/);
 });
 
-test("Supervision ambient projections share status and empty-state semantics", (t) => {
+test("Supervision ambient projections share status and empty-state semantics", (_t) => {
   {
     const widget = createSupervisionWidget(
       () => [],
@@ -752,7 +752,7 @@ test("Supervision ambient projections share status and empty-state semantics", (
   }
 });
 
-test("Chief ambient projection pluralizes counts and handles unavailable state", (t) => {
+test("Chief ambient projection pluralizes counts and handles unavailable state", (_t) => {
   {
     const cases = [
       { leads: [], label: "no reports" },
@@ -800,7 +800,7 @@ test("Chief notification counts incompatible Manager children", () => {
   assert.match(notification, /2 compatible leads · 1 incompatible lead/);
 });
 
-test("Chief ambient projection preserves branch and hidden-lead rendering", (t) => {
+test("Chief ambient projection preserves branch and hidden-lead rendering", (_t) => {
   {
     const rows = renderSupervisionLeads(
       [
@@ -893,7 +893,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
   }
 });
 
-test("Supervision lead projection disambiguates labels and groups stably", (t) => {
+test("Supervision lead projection disambiguates labels and groups stably", (_t) => {
   {
     const displays = buildSupervisedLeadDisplays([
       lead({ lead: "session-z", displayName: "same" }),
@@ -975,7 +975,7 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
   }
 });
 
-test("Supervision display labels remain unique under suffix collisions", (t) => {
+test("Supervision display labels remain unique under suffix collisions", (_t) => {
   {
     const displays = buildSupervisedLeadDisplays([
       lead({ lead: "12345678-alpha", displayName: "same" }),
@@ -1082,7 +1082,7 @@ test("Supervision notifications retain exact lifecycle labels and order", () => 
   );
 });
 
-test("Supervision rows cap ordinary leads, retain attention, and fit every width", (t) => {
+test("Supervision rows cap ordinary leads, retain attention, and fit every width", (_t) => {
   {
     const leads = [
       lead({ lead: "ask", displayName: "attention" }),
@@ -1115,7 +1115,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
   }
 });
 
-test("Supervision peeks remain bounded while exposing safe process evidence", (t) => {
+test("Supervision peeks remain bounded while exposing safe process evidence", (_t) => {
   {
     const output = renderSupervisionPeek(
       lead({
@@ -1183,7 +1183,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
   }
 });
 
-test("Supervision selection uses opaque handles and moves safely", (t) => {
+test("Supervision selection uses opaque handles and moves safely", (_t) => {
   {
     const leads = [
       lead({ lead: "a" }),
@@ -1226,7 +1226,7 @@ test("Supervision selection uses opaque handles and moves safely", (t) => {
   }
 });
 
-test("status projection renders the complete stable tree with aligned columns", (t) => {
+test("status projection renders the complete stable tree with aligned columns", (_t) => {
   {
     const agents = [
       {
@@ -1380,7 +1380,7 @@ test("status projection renders the complete stable tree with aligned columns", 
   }
 });
 
-test("Status tree ordering, running options, and responsive rows share invariants", (t) => {
+test("Status tree ordering, running options, and responsive rows share invariants", (_t) => {
   {
     const agents = [
       { label: "scout:a", definition: "scout", state: "starting" as const },
@@ -1747,7 +1747,7 @@ test("status widget styles herd duration separately and remains width-safe", (t)
     );
 });
 
-test("display text is normalized and only ellipsized when needed", (t) => {
+test("display text is normalized and only ellipsized when needed", (_t) => {
   {
     assert.equal(collapseDisplayText("  hello\n\tworld  "), "hello world");
     assert.equal(collapseDisplayText("abcdef", 4), "abc…");
@@ -3506,6 +3506,7 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
   assert.match(expanded, /base host · Herdr reachability not confirmed/);
   assert.doesNotMatch(
     expanded,
+    // oxlint-disable-next-line no-control-regex -- sanitization rejects control characters.
     /[\u0000-\u0009\u000b-\u001f\u007f]|ssh:|credential|target\.example/u,
   );
 
@@ -4548,7 +4549,7 @@ test("widget uses logical labels in the shared row formatter", (t) => {
   }
 });
 
-test("tail truncation keeps the end and reuses its deterministic path", (t) => {
+test("tail truncation keeps the end and reuses its deterministic path", (_t) => {
   {
     const options = { keep: "tail" as const, sessionId: "stable", key: "same" };
     const first = truncateModelText("head\n".repeat(2500) + "tail", options);
@@ -4568,7 +4569,7 @@ test("tail truncation keeps the end and reuses its deterministic path", (t) => {
   }
 });
 
-test("Completion result persistence is deterministic, bounded, and fail-closed", (t) => {
+test("Completion result persistence is deterministic, bounded, and fail-closed", (_t) => {
   {
     const options = {
       keep: "head" as const,
@@ -4651,7 +4652,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
   }
 });
 
-test("tool and completion renderers retain structured action details", (t) => {
+test("tool and completion renderers retain structured action details", (_t) => {
   {
     assert.equal(
       renderedText(
@@ -4771,7 +4772,7 @@ test("tool and completion renderers retain structured action details", (t) => {
   }
 });
 
-test("Completion rendering preserves details, failures, elapsed time, and width bounds", (t) => {
+test("Completion rendering preserves details, failures, elapsed time, and width bounds", (_t) => {
   {
     const theme = {
       fg: (_name: string, text: string) => text,
@@ -5327,7 +5328,7 @@ test("generic attention messages keep compact output small and expanded identity
   );
 });
 
-test("agent definition overview uses a compact human hierarchy", (t) => {
+test("agent definition overview uses a compact human hierarchy", (_t) => {
   {
     const home = homedir();
     const projectSource = join(
@@ -5473,7 +5474,7 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
   }
 });
 
-test("Agent definition overview preserves provenance, status, and heading semantics", (t) => {
+test("Agent definition overview preserves provenance, status, and heading semantics", (_t) => {
   {
     const projectOnly = join(tmpdir(), "project", ".pi", "agents", "only.md");
     const projectGlobal = join(
@@ -5565,7 +5566,7 @@ test("Agent definition overview preserves provenance, status, and heading semant
   }
 });
 
-test("agent definition instructions are durable, expandable, and complete", (t) => {
+test("agent definition instructions are durable, expandable, and complete", (_t) => {
   {
     const theme = {
       fg: (_token: string, text: string) => text,
@@ -5723,7 +5724,7 @@ test("expanded agent definitions show their effective extension policy", () => {
   );
 });
 
-test("stop summary renderer is width-safe and keeps its transcript text", (t) => {
+test("stop summary renderer is width-safe and keeps its transcript text", (_t) => {
   {
     const theme = {
       fg: (_token: string, text: string) => text,
@@ -5746,7 +5747,7 @@ test("stop summary renderer is width-safe and keeps its transcript text", (t) =>
   }
 });
 
-test("agent definition display helpers keep authoritative values untouched", (t) => {
+test("agent definition display helpers keep authoritative values untouched", (_t) => {
   {
     const home = homedir();
     assert.equal(
@@ -5766,7 +5767,7 @@ test("agent definition display helpers keep authoritative values untouched", (t)
   }
 });
 
-test("Agent definition skills remain readable, deduplicated, and width-safe", (t) => {
+test("Agent definition skills remain readable, deduplicated, and width-safe", (_t) => {
   {
     const theme = {
       fg: (_token: string, text: string) => text,
@@ -5867,7 +5868,7 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
   }
 });
 
-test("List output preserves definitions and agent action state", (t) => {
+test("List output preserves definitions and agent action state", (_t) => {
   {
     assert.match(
       formatToolModelResult("list", {
@@ -5900,7 +5901,7 @@ test("List output preserves definitions and agent action state", (t) => {
   }
 });
 
-test("Definition formatting preserves model, status, and source contracts", (t) => {
+test("Definition formatting preserves model, status, and source contracts", (_t) => {
   {
     assert.deepEqual(
       formatAgentDefinitions([
@@ -5961,7 +5962,7 @@ test("Definition formatting preserves model, status, and source contracts", (t) 
   }
 });
 
-test("list model output renders only direct agents", (t) => {
+test("list model output renders only direct agents", (_t) => {
   {
     const parent = { agent: "parent", agent_definition: "reviewer" };
     const rendered = formatToolModelResult("list", {
@@ -5981,7 +5982,7 @@ test("list model output renders only direct agents", (t) => {
   }
 });
 
-test("List output preserves recovery, session, and diagnostic evidence", (t) => {
+test("List output preserves recovery, session, and diagnostic evidence", (_t) => {
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
@@ -6036,7 +6037,7 @@ test("List output preserves recovery, session, and diagnostic evidence", (t) => 
   }
 });
 
-test("Capability summaries preserve deterministic tool and skill policy output", (t) => {
+test("Capability summaries preserve deterministic tool and skill policy output", (_t) => {
   {
     for (const [label, definition, expected] of [
       ["default tools", {}, "default"],
@@ -6230,7 +6231,7 @@ test("steer result reports queued non-preemptive delivery", () => {
   }
 });
 
-test("successful control results contain factual assignment evidence", (t) => {
+test("successful control results contain factual assignment evidence", (_t) => {
   const receipt = formatToolModelResult("delegate", {
     ok: true,
     agent: "reviewer",
@@ -6315,7 +6316,7 @@ test("ordinary attachment receipt filenames escape newline section injection", (
   }
 });
 
-test("Model output preserves inspection, concise controls, and structured errors", (t) => {
+test("Model output preserves inspection, concise controls, and structured errors", (_t) => {
   {
     const rendered = formatToolModelResult("inspect", {
       ok: true,
@@ -6529,7 +6530,7 @@ test("Status rows drop task text before protected columns at every width", (t) =
   }
 });
 
-test("Large model truncation remains bounded at ordinary and boundary inputs", (t) => {
+test("Large model truncation remains bounded at ordinary and boundary inputs", (_t) => {
   {
     const result = truncateModelText("x\n".repeat(3000), {
       keep: "head",
@@ -8694,6 +8695,7 @@ test("hierarchical coordination messages show semantic endpoints and exact expan
       presentationTheme,
     ),
   );
+  // oxlint-disable-next-line no-control-regex -- ESC is the sanitization input.
   assert.doesNotMatch(unsafe, /\u001b|\nlead/);
   assert.match(unsafe, /Lead · api lead → Manager/);
 });

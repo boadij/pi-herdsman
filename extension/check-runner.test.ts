@@ -162,17 +162,19 @@ test("Windows snapshot attribution uses the repository root outside the checkout
   });
 
   let snapshotCwdIsRepositoryRoot = false;
+  let snapshotScript = "";
   process.chdir(outsideDirectory);
   const { promise } = snapshotWindowsTestWorkers(
     1,
     new AbortController().signal,
     (
       _command: string,
-      _args: string[],
+      args: string[],
       options: { cwd?: string },
       callback: (error: null, stdout: string) => void,
     ) => {
       snapshotCwdIsRepositoryRoot = options.cwd === repositoryRoot;
+      snapshotScript = args.at(-1)!;
       const child = new EventEmitter() as ChildProcess;
       Object.assign(child, { pid: 1 });
       queueMicrotask(() => {
@@ -201,6 +203,7 @@ test("Windows snapshot attribution uses the repository root outside the checkout
     true,
     "snapshot runs with the configured repository root as its cwd",
   );
+  assert.ok(snapshotScript.includes("TrimEnd([char]92) + [char]92"));
   assert.equal(
     workerDiagnostic,
     "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts\ncheck: unattributed node workers=0\ncheck: unattributed workers ambiguous-test-path=0\ncheck: unattributed workers command-line-unavailable=0\ncheck: unattributed workers file-uri-argument=0\ncheck: unattributed workers in-repo-path-validation-failure=0\ncheck: unattributed workers resolve-path-invalid-form=0\ncheck: unattributed workers resolve-path-not-found=0\ncheck: unattributed workers resolve-path-other-error=0\ncheck: unattributed workers resolved-outside-repo=0\ncheck: unattributed workers unrecognized-arguments=0\ncheck: other descendants=0\ncheck: snapshot truncated=false",
@@ -842,27 +845,7 @@ test(
     const pidPath = join(directory, "pids.json");
     t.after(() => rm(directory, { recursive: true, force: true }));
     let pids: { parent: number; child: number } | undefined;
-    try {
-      const deadline = waitForPids(pidPath, 5_000).then((ready) => {
-        pids = ready;
-        process.kill(ready.parent);
-        return Date.now() - 1;
-      });
-      // shortcut: an unpublished detached child lives at most 60 seconds; use a release mechanism if that bound is too long.
-      const result = await runTestRunner(
-        [
-          "-e",
-          "const {spawn}=require('node:child_process'); const fs=require('node:fs'); const c=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{detached:true,stdio:'ignore'}); c.unref(); fs.writeFileSync(process.argv[1]+'.tmp',JSON.stringify({parent:process.pid,child:c.pid})); fs.renameSync(process.argv[1]+'.tmp',process.argv[1]); setInterval(()=>{},1000)",
-          pidPath,
-        ],
-        deadline,
-        "detached fixture",
-      );
-      assert.ok(pids);
-      process.kill(pids.child, 0);
-      assert.equal(result.treeGone, undefined);
-      assert.match(result.diagnostic, /descendant cleanup unverified/);
-    } finally {
+    t.after(async () => {
       if (pids) {
         try {
           process.kill(pids.child);
@@ -881,7 +864,26 @@ test(
           await sleep(25);
         }
       }
-    }
+    });
+    const deadline = waitForPids(pidPath, 5_000).then((ready) => {
+      pids = ready;
+      process.kill(ready.parent);
+      return Date.now() - 1;
+    });
+    // shortcut: an unpublished detached child lives at most 60 seconds; use a release mechanism if that bound is too long.
+    const result = await runTestRunner(
+      [
+        "-e",
+        "const {spawn}=require('node:child_process'); const fs=require('node:fs'); const c=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{detached:true,stdio:'ignore'}); c.unref(); fs.writeFileSync(process.argv[1]+'.tmp',JSON.stringify({parent:process.pid,child:c.pid})); fs.renameSync(process.argv[1]+'.tmp',process.argv[1]); setInterval(()=>{},1000)",
+        pidPath,
+      ],
+      deadline,
+      "detached fixture",
+    );
+    assert.ok(pids);
+    process.kill(pids.child, 0);
+    assert.equal(result.treeGone, undefined);
+    assert.match(result.diagnostic, /descendant cleanup unverified/);
   },
 );
 

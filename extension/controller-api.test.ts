@@ -17,12 +17,7 @@ import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
 import { test, type TestContext } from "node:test";
 import { Value } from "typebox/value";
-import type {
-  AskRecord,
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-definitions.ts";
 import {
@@ -69,8 +64,6 @@ import support, {
   managedState,
   nativeSessions,
   agentControllerExecutor,
-  promptLaunchContents,
-  promptLaunchPaths,
   readRequest,
   readResult,
   readAgentState,
@@ -91,7 +84,6 @@ import support, {
   agentMailboxPath,
   delegationLockPathForTest,
   writeAsk,
-  writePromptDefinition,
   writeRequest,
   writeResult,
   writeAgentState,
@@ -612,10 +604,6 @@ test(
       )!;
       const send = (message: string) =>
         tool.execute("message", { message }, undefined, undefined, ctx);
-      const records = (id: string) =>
-        listChiefMessagePaths(runtime, id).map((path) =>
-          readChiefMessage(path),
-        );
 
       const identityEntry = pi.entries.find(
         (entry: any) =>
@@ -3475,22 +3463,12 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
     tmpdir(),
     `delegate-recovery-${randomUUID()}.sock`,
   );
-  const socketPath = process.env.HERDR_SOCKET_PATH;
   const childWorkspace = `child-${randomUUID()}`;
   let childSession = "";
   let topologyCreated = false;
   let createCalls = 0;
   let openCalls = 0;
   let started = false;
-  let delayReadiness = false;
-  let releaseReadiness!: () => void;
-  let markReadinessStarted!: () => void;
-  const readinessPending = new Promise<void>(
-    (resolve) => (releaseReadiness = resolve),
-  );
-  const readinessStarted = new Promise<void>(
-    (resolve) => (markReadinessStarted = resolve),
-  );
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -3600,7 +3578,6 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
         },
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "run") {
-      if (delayReadiness) markReadinessStarted();
       return respond({});
     }
     if (
@@ -3608,7 +3585,6 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
       args[0] === "pane" &&
       args[1] === "wait-output"
     ) {
-      if (delayReadiness) await readinessPending;
       return respond({});
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
@@ -3696,8 +3672,6 @@ test("Manager does not publish an assignment when worktree creation fails", asyn
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
-    const staffResume = pi.tools.find((tool) => tool.name === "resume_work")!;
-    const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     await assert.rejects(
       staff.execute(
         "delegate",
@@ -3847,7 +3821,6 @@ async function runManagerStartupScenario(
   if (largeEvidence) writeFileSync(attachmentPath, "evidence\n".repeat(4096));
   let recipientIdle = true;
   let created = false;
-  let createdBranch = "";
   let shellReady = false;
   let started =
     mode === "recovery" ||
@@ -4160,7 +4133,6 @@ async function runManagerStartupScenario(
           "--base",
           branch,
         ]);
-      createdBranch = branch;
       gitBranchOutput = branch;
       return respond({
         workspace: { workspace_id: childWorkspace },
@@ -5121,7 +5093,6 @@ async function runManagerStartupScenario(
         "active-missing-ambiguous",
         "verified-absence-resume",
       ].includes(mode);
-      if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
         id: staleId,
@@ -6366,6 +6337,8 @@ async function runManagerStartupScenario(
         const { SelectList } = await import("@earendil-works/pi-tui");
         let renderedList: any;
         t!.mock.method(SelectList.prototype, "render", function (this: any) {
+          // Capture this instance to drive the selection state asserted below.
+          // oxlint-disable-next-line no-this-alias
           renderedList = this;
           return this.items.map((item: any) =>
             [item.label, item.description].filter(Boolean).join(" · "),
@@ -6963,7 +6936,7 @@ async function runManagerStartupScenario(
         beforeMutation.requiredEvidence?.map((entry) => entry.id) ?? [],
       );
       let sourceChanged = false;
-      const mutateOnSnapshotRead = (path: unknown) => {
+      const mutateOnSnapshotRead = (_path: unknown) => {
         support.fileReadHook = undefined;
         let currentAssignment;
         try {
@@ -12238,7 +12211,7 @@ test("accepted assignment survives post-ack lock contention and next submit clea
     false,
     false,
     false,
-    (request) => {
+    (_request) => {
       acceptedCount++;
       if (acceptedCount === 1)
         heldRelease = claimProcessLock(assignmentLockPath(startup.mailbox), {
