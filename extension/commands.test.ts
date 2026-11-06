@@ -3718,9 +3718,27 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Leave technical investigation, implementation, review, validation, and\s+integration to that Lead and its Agents rather than doing or delegating\s+the work yourself/i,
     );
+    const rolePrompt =
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(
-      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /When assigned Leads need technical information from one another, prefer[\s\S]*direct peer coordination when eligible[\s\S]*Resolve concrete\s+cross-assignment scope, priority, or sequencing conflicts with the smallest\s+decision needed for progress[\s\S]*Do not require repeated confirmations before\s+unaffected work continues/,
+      rolePrompt,
+      /Independent assignments remain independent by default/,
+    );
+    assert.match(
+      rolePrompt,
+      /Potential overlap,[\s\S]*do not justify initiating or\s+directing cross-assignment coordination/,
+    );
+    assert.match(
+      rolePrompt,
+      /report the evidence and affected work to the user for direction/,
+    );
+    assert.match(
+      rolePrompt,
+      /When cross-assignment coordination is requested by the user or needed to\s+carry out an already established direction/,
+    );
+    assert.doesNotMatch(
+      rolePrompt,
+      /When assigned Leads need technical information from one another, prefer/,
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
