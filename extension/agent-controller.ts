@@ -14,7 +14,7 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
-import { realpathSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -886,6 +886,33 @@ function guardMailboxOccupancy(
       operation,
     );
   return true;
+}
+
+function requireHistoricalMailboxCleared(
+  mailbox: string,
+  ownStartupClaim = false,
+): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(mailbox);
+  } catch (error) {
+    if (!ownStartupClaim && (error as NodeJS.ErrnoException).code === "ENOENT")
+      return;
+    fail(
+      "invalid_request",
+      "Cannot verify historical mailbox cleanup",
+      "continue",
+    );
+  }
+  if (
+    (ownStartupClaim && !entries.includes(".starting")) ||
+    entries.some((name) => !ownStartupClaim || name !== ".starting")
+  )
+    fail(
+      "invalid_request",
+      "Historical mailbox contains unresolved entries",
+      "continue",
+    );
 }
 
 function agentToolName(action: string): string {
@@ -2707,25 +2734,12 @@ export function resolveAssignmentSession(
             "Conflicting terminal and closure provenance",
             "continue",
           );
-        try {
-          statSync(
-            agentMailboxPath(
-              historicalClose.workspace_id as string,
-              historicalClose.agent as string,
-            ),
-          );
-          fail(
-            "invalid_request",
-            "Cannot verify mailbox cleanup because the historical mailbox still exists",
-            "continue",
-          );
-        } catch (error) {
-          if (
-            error instanceof OperationError ||
-            (error as NodeJS.ErrnoException).code !== "ENOENT"
-          )
-            throw error;
-        }
+        requireHistoricalMailboxCleared(
+          agentMailboxPath(
+            historicalClose.workspace_id as string,
+            historicalClose.agent as string,
+          ),
+        );
       }
       if (hasProjectEvidenceHistory && !currentState) {
         if (!evidenceBranch)
@@ -2804,25 +2818,12 @@ export function resolveAssignmentSession(
             "continue",
           );
         if (!historicalClose) {
-          try {
-            statSync(
-              agentMailboxPath(
-                historicalTerminal!.workspaceId as string,
-                historicalTerminal!.agentLabel as string,
-              ),
-            );
-            fail(
-              "invalid_request",
-              "Cannot verify mailbox cleanup because the historical mailbox still exists",
-              "continue",
-            );
-          } catch (error) {
-            if (
-              error instanceof OperationError ||
-              (error as NodeJS.ErrnoException).code !== "ENOENT"
-            )
-              throw error;
-          }
+          requireHistoricalMailboxCleared(
+            agentMailboxPath(
+              historicalTerminal!.workspaceId as string,
+              historicalTerminal!.agentLabel as string,
+            ),
+          );
         }
       }
       const exactIdState =
@@ -8148,6 +8149,7 @@ export function createAgentController(
           id: string;
           commit?: () => void | Promise<void>;
         }> = [];
+        let historicalMailboxPreflightFailed = false;
         try {
           try {
             promptPaths = writePrivatePromptSnapshots([
@@ -8163,6 +8165,14 @@ export function createAgentController(
             label,
           });
           try {
+            if (resumed && !reusableCompletedState) {
+              try {
+                requireHistoricalMailboxCleared(mailbox, true);
+              } catch (error) {
+                historicalMailboxPreflightFailed = true;
+                throw error;
+              }
+            }
             resetAgentMailbox(mailbox);
           } finally {
             resetRelease();
@@ -8792,6 +8802,7 @@ export function createAgentController(
             evidence: evidenceReceipt,
           };
         } catch (caught) {
+          if (historicalMailboxPreflightFailed) throw caught;
           if (promptWriteFailed) throw caught;
           const startupFailure =
             caught instanceof HerdrStartFailure ? caught : undefined;
