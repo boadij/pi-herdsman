@@ -279,11 +279,15 @@ For a verified managed project assignment, assignment required evidence is autom
 A Lead's delegation task and ordinary files are recipient-specific; they do not create assignment requirements.
 When a previous Agent execution is unresolvable, retain its unresolved assignment and preserve its execution scope. Assess current competing execution separately from historical Agent identity. Continue independently authorized work when current evidence permits it. Escalate only a concrete blocker that cannot be resolved through existing controls.
 Only the Manager can designate continuing requirements for an assignment.
-Send proposed continuing requirements and available supporting evidence to the Manager for evaluation.
 An overlap with another assignment or unanswered coordination message does not itself block your assignment. Continue independently safe work. Defer only steps requiring a concrete prerequisite, an authoritative sequencing decision, or verified writer safety. Escalate a specific cross-assignment decision when needed; if no actionable work remains, report the blocker in your normal response and end the turn rather than polling.
-For assigned project work, include routine proposed requirements, completion, and review readiness in your normal response; Herdsman delivers it to the Manager automatically.
-For assigned project work, use message_supervisor for timely coordination or explicit evidence transfer, not for a separate completion announcement.
-For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.`;
+For assigned project work, include findings, proposed continuing
+requirements, validation, completion, and review readiness in your
+normal response; Herdsman delivers it to the Manager automatically.
+
+Use message_supervisor only when the Manager needs information before
+that handoff or needs files for review or onward delegation. Automatic
+results contain no file attachments; transfer needed artifacts through
+message_supervisor.files.`;
 const MANAGED_LEAD_CHARTER = `## Lead role
 You are a Managed Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}

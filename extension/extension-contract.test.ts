@@ -4458,6 +4458,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     ordinaryCharter,
     /Herdsman delivers it to the Manager automatically/,
   );
+  assert.doesNotMatch(
+    ordinaryCharter,
+    /Use message_supervisor only when the Manager needs information before/,
+  );
   assertProtectedHandoff(ordinaryCharter);
   assert.match(
     ordinaryCharter,
@@ -4626,6 +4630,22 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     );
     assert.match(charter, /unavailable or retired assignment state/);
     assert.match(charter, /Avoid unsolicited routine progress updates/);
+    assert.match(
+      charter,
+      /include findings, proposed continuing\s+requirements, validation, completion, and review readiness in your\s+normal response/,
+    );
+    assert.match(
+      charter,
+      /Use message_supervisor only when the Manager needs information before\s+that handoff or needs files/,
+    );
+    assert.match(
+      charter,
+      /transfer needed artifacts through\s+message_supervisor\.files/,
+    );
+    assert.doesNotMatch(
+      charter,
+      /Send proposed continuing requirements and available supporting evidence/,
+    );
     assert.match(
       charter,
       /assignment required evidence is automatically inherited/,
