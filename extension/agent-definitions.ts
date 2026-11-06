@@ -1201,7 +1201,7 @@ export function agentLaunchArgs(
     sharedPromptPath: options.sharedPromptPath,
     cwd: options.cwd ?? process.cwd(),
     managedAgent: options.managedAgent ?? false,
-    approveProject: options.approveProject ?? false,
+    approveProject: options.approveProject,
     inheritedModel: options.inheritedModel,
     inheritedThinking: options.inheritedThinking,
   };
@@ -1212,7 +1212,8 @@ export function agentLaunchArgs(
       `agent ${agent.name} has a body but no bodyPromptPath was provided`,
     );
   const args: string[] = [];
-  if (approveProject) args.push("--approve");
+  if (approveProject === true) args.push("--approve");
+  else if (approveProject === false) args.push("--no-approve");
   const requestedModel = configuredModel(frontmatter) ?? inheritedModel;
   const decision =
     options.modelDecision ??

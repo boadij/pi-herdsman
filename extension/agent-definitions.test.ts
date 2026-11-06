@@ -1332,12 +1332,18 @@ test("project discovery tolerates a missing directory and rejects a file", () =>
   });
 });
 
-test("project approval is emitted only when requested", () => {
+test("project trust launch flags preserve approval, denial, and omission", () => {
   const agent = { name: "test", path: "test", frontmatter: {}, body: "" };
-  assert.deepEqual(agentLaunchArgs(agent, {}).includes("--approve"), false);
+  const trustFlags = (args: string[]) =>
+    args.filter((arg) => arg === "--approve" || arg === "--no-approve");
+  assert.deepEqual(trustFlags(agentLaunchArgs(agent, {})), []);
   assert.deepEqual(
-    agentLaunchArgs(agent, { approveProject: true }).includes("--approve"),
-    true,
+    trustFlags(agentLaunchArgs(agent, { approveProject: true })),
+    ["--approve"],
+  );
+  assert.deepEqual(
+    trustFlags(agentLaunchArgs(agent, { approveProject: false })),
+    ["--no-approve"],
   );
 });
 
