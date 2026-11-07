@@ -284,7 +284,8 @@ jobs:
             terminal-failure \
             agent-terminal-failure \
             manager-handoff \
-            agent-crash-recovery
+            agent-crash-recovery \
+            deep-chain
           do
             echo "::group::Simulated smoke: $scenario"
             npm run smoke -- "$scenario" --simulated

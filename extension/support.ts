@@ -1080,6 +1080,7 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_WORKSPACE_ID",
     "PI_HERDSMAN_AGENT_DEFINITION",
     "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
+    "PI_HERDSMAN_DEPTH",
     "HERDR_PANE_ID",
     "HERDR_SOCKET_PATH",
   ])
@@ -1114,6 +1115,7 @@ export function setAgentEnvironment(
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+  delete process.env.PI_HERDSMAN_DEPTH;
   process.env.HERDR_PANE_ID = "registered-pane";
   if (allowedAgentDefinitions === undefined)
     delete process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS;
@@ -3217,3 +3219,39 @@ export default {
     fileReadHook = value;
   },
 };
+
+// Durable ownership records for an Agent at `depth`: depth - 1 ancestors, each
+// owning the next, the first owned by the root controller. Returns the session
+// ID of the Agent's direct owner (the root's for depth 1) and a cleanup.
+export function seedAncestors(depth: number): {
+  owner: string;
+  cleanup(): void;
+  /** Deletes the direct owner's record, leaving a hole in the chain. */
+  dropOwner(): void;
+} {
+  const mailboxes: string[] = [];
+  let owner = LEAD_SESSION_ID;
+  for (let level = 1; level < depth; level++) {
+    const label = `ancestor-${level}-${randomUUID().slice(0, 6)}`;
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const sessionId = randomUUID();
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, {
+      ...managedState(label),
+      ownerSessionId: owner,
+      paneId: `ancestor-pane-${level}`,
+      piSessionId: sessionId,
+      piSessionFile: `/tmp/ancestor-${level}.jsonl`,
+    });
+    mailboxes.push(mailbox);
+    owner = sessionId;
+  }
+  return {
+    owner,
+    cleanup: () => mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox)),
+    dropOwner: () => {
+      const last = mailboxes.at(-1);
+      if (last) resetAgentMailbox(last);
+    },
+  };
+}

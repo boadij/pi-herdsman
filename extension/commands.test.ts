@@ -17465,6 +17465,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Manager local merge  Global off",
     "Status widget rows  8",
+    "Max Agent depth  2",
     "Message limits",
     "Project overrides…",
   ]);
@@ -18092,6 +18093,7 @@ test("settings navigation exposes message limits and one rough token formatter",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Manager local merge  Global off",
       "Status widget rows  8",
+      "Max Agent depth  2",
       "Message limits",
       "Project overrides…",
     ]);
@@ -18316,7 +18318,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
           component.handleInput("\r");
           break;
         case 1:
-          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 2:

@@ -766,6 +766,18 @@ function withoutDelegationCapability(
   };
 }
 
+/**
+ * Agents are numbered by generation below the root controller: an Agent
+ * started by the Lead, Manager or Chief has depth 1, its children depth 2, and
+ * so on. An Agent whose depth has reached `maxAgentDepth` is a leaf.
+ */
+export function agentScopeAtDepth(
+  depth: number,
+  maxAgentDepth: number,
+): AgentDefinitionScope {
+  return depth >= maxAgentDepth ? "leaf" : "delegating";
+}
+
 export function projectAgentDefinition(
   agent: AgentDefinition,
   scope: AgentDefinitionScope,

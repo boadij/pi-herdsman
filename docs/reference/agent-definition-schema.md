@@ -357,8 +357,10 @@ tools: `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
 `read_agent_transcript`. Thus omitted `tools` permits delegation, and explicit
 ordinary tools permit it unless one of those opt-outs applies. An omitted or
-empty `agents` list always makes the agent a leaf. Every managed agent receives
-`ask_owner`.
+empty `agents` list always makes the agent a leaf, as does reaching the
+configured `maxAgentDepth` (see [Configuration](configuration.md)); the depth
+limit applies even to a definition that lists `agents`. Every managed agent
+receives `ask_owner`.
 
 The tool name `agent` is configuration-policy evidence only; it is not
 registered or callable. In `tools`, it opts into delegation when `noTools: true`

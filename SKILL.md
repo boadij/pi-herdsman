@@ -210,7 +210,8 @@ execution ownership to that agent until the assignment resolves; do not execute
 or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. Delegate bounded execution work when an Agent can
+agents delegate further only within the configured maximum nesting depth and
+are leaves beyond it. Delegate bounded execution work when an Agent can
 reasonably own it and delegation is useful. Reuse adequate supplied evidence
 rather than rediscovering it. Integrate direct agent results before completing. The lead
 retains architecture, approved scope, acceptance of Agent outputs, and
@@ -294,8 +295,8 @@ A Lead may delegate to available definitions permitted by its effective
 `agents` field; omission permits all, while an empty list permits none.
 
 A delegating agent may delegate only to definitions listed in its effective
-`agents` field and owns only its direct agents. Agent-started agents are
-leaves even when the definition is delegation-capable at the lead level.
+`agents` field and owns only its direct agents. An Agent at the configured
+`maxAgentDepth` is a leaf even when its definition is delegation-capable.
 
 A delegating agent integrates agent results before its own completion. Direct
 agent work and undelivered agent results gate completion.

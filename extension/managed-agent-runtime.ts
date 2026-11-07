@@ -2651,6 +2651,7 @@ export function registerManagedAgentRuntime(
       event.input.timeout = options.shellTimeoutSeconds;
   });
   const allowedAgentDefinitions = allowedAgentDefinitionsFromEnv();
+  const agentDepth = agentDepthFromEnv();
   const delegationEnabled = allowedAgentDefinitions.length > 0;
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
@@ -2666,9 +2667,11 @@ export function registerManagedAgentRuntime(
             );
           return rootSessionId;
         },
+        managedAgentState: (ctx) => managedAgentControllerIdentity(ctx),
         scope: {
           kind: "managed-agent",
           allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+          depth: agentDepth,
         },
         build: options.build,
       })
@@ -2677,6 +2680,7 @@ export function registerManagedAgentRuntime(
     const scope = {
       kind: "managed-agent" as const,
       allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+      depth: agentDepth,
     };
     options.statusRuntime.configure({
       pendingStartEntries: () => controller.pendingStartEntries(),
@@ -3115,6 +3119,7 @@ export function registerManagedAgentRuntime(
           {
             kind: "managed-agent",
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+            depth: agentDepth,
           },
         ),
       };
@@ -3460,6 +3465,21 @@ function parseAllowedAgentDefinitions(raw: string | undefined): string[] {
   return value;
 }
 
+function parseAgentDepth(raw: string | undefined): number {
+  // Agents started before depth tracking existed carry no depth and were
+  // always root-started, i.e. depth 1.
+  if (raw === undefined) return 1;
+  if (!/^[1-9][0-9]{0,8}$/.test(raw))
+    throw new Error(
+      "PI_HERDSMAN_DEPTH must be a positive integer; it is set by the launching Herdsman controller, so restart this Agent from its owner instead of editing the environment",
+    );
+  return Number(raw);
+}
+
+export function agentDepthFromEnv(): number {
+  return parseAgentDepth(process.env.PI_HERDSMAN_DEPTH);
+}
+
 export function allowedAgentDefinitionsFromEnv(): string[] {
   return parseAllowedAgentDefinitions(
     process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS,
@@ -3490,6 +3510,7 @@ export function managedAgentEnvironmentError(): string | undefined {
   if (!e.HERDR_PANE_ID?.trim()) return "HERDR_PANE_ID missing";
   try {
     parseAllowedAgentDefinitions(e.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS);
+    parseAgentDepth(e.PI_HERDSMAN_DEPTH);
   } catch (error) {
     return String(error).replace(/^Error: /, "");
   }

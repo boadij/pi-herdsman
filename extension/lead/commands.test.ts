@@ -5,7 +5,11 @@ import {
   claimDelegationLock,
   visibleAgentSnapshots,
 } from "../agent-controller.ts";
-import { readConfig, validStatusWidgetMaxRows } from "../config.ts";
+import {
+  readConfig,
+  validMaxAgentDepth,
+  validStatusWidgetMaxRows,
+} from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 
@@ -75,6 +79,71 @@ test("status widget rows Settings validates choices and reports persistence erro
         notices.some(([, level]) => level !== "error"),
         false,
       );
+  }
+});
+
+test("max Agent depth Settings validates choices and reports persistence errors", async () => {
+  for (const scenario of [
+    { choices: ["4"], inputs: [], expected: [4], errors: 0 },
+    { choices: ["default"], inputs: [], expected: [2], errors: 0 },
+    {
+      choices: ["custom", "custom", "custom", "custom"],
+      inputs: ["0", "-1", "1.5", " 6 "],
+      expected: [6],
+      errors: 3,
+    },
+    { choices: ["reset"], inputs: [], expected: [undefined], errors: 0 },
+    {
+      choices: ["custom", undefined],
+      inputs: [undefined],
+      expected: [],
+      errors: 0,
+    },
+    {
+      choices: ["3", undefined],
+      inputs: [],
+      expected: [],
+      errors: 1,
+      fail: true,
+    },
+  ]) {
+    const choices = [...scenario.choices];
+    const inputs = [...scenario.inputs];
+    const updates: (number | undefined)[] = [];
+    const notices: [string, string | undefined][] = [];
+    let settings = 0;
+    const runtime = createLeadCommandRuntime({
+      readConfig,
+      validMaxAgentDepth,
+      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+        if (title === "Settings") {
+          assert.equal(
+            items.find((item) => item.value === "max-agent-depth").description,
+            "2",
+          );
+          return settings++ === 0 ? "max-agent-depth" : undefined;
+        }
+        return choices.shift();
+      },
+      input: async () => inputs.shift(),
+      updateConfig: (key: string, value: number | undefined) => {
+        assert.equal(key, "maxAgentDepth");
+        if (scenario.fail) throw new Error("disk failure");
+        updates.push(value);
+      },
+    } as any);
+    await runtime.openSettingsMenu({
+      isProjectTrusted: () => false,
+      ui: {
+        notify: (message: string, level?: string) =>
+          notices.push([message, level]),
+      },
+    } as any);
+    assert.deepEqual(updates, scenario.expected);
+    assert.equal(
+      notices.filter(([, level]) => level === "error").length,
+      scenario.errors,
+    );
   }
 });
 
