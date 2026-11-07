@@ -144,6 +144,15 @@ in `AGENTS.md`.
 - `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
 - `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
 
+## GitHub issue creation
+
+Before creating or substantially revising a GitHub issue, follow the
+[issue guidance](CONTRIBUTING.md#issues), including its AI-assisted issue
+creation rules. Evaluate the proposal against relevant evidence, explain
+material inconsistencies to the user, and seek their decision before
+changing the intended scope or outcome. Preserve uncertainty and review
+the exact outgoing content under the public disclosure policy above.
+
 ## GitHub workflow
 
 - Work on a feature branch, either in this repository or a fork, depending
