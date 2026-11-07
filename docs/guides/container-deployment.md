@@ -100,12 +100,13 @@ explicitly in the selected file list.
 Tailscale needs `/dev/net/tun` and the networking capabilities declared in
 the overlay. Nested containers (for example, Proxmox LXC) may require host-side
 TUN passthrough first. Configure that on the host; Herdsman does not do it.
-Create a non-ephemeral auth key in your Tailscale admin console, then enter it
-without including it in the shell command or history:
+Create a non-ephemeral auth key in your Tailscale admin console. In a
+**Bash** shell, enter the key without echoing it or including it in command
+history (other shells need their own hidden-input equivalent):
 
-```sh
+```bash
 printf 'Tailscale auth key: '
-read -rs TS_AUTHKEY
+IFS= read -rs TS_AUTHKEY
 printf '\n'
 export TS_AUTHKEY
 SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
