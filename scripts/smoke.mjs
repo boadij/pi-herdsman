@@ -7502,6 +7502,43 @@ export function assertDeepChainEvidence(sessions) {
     new Set(delegations.map(({ owner }) => owner)).size === DEEP_CHAIN_DEPTH,
     "deep-chain delegations must come from four distinct owner sessions",
   );
+  const successfulCalls = (name, match) =>
+    sessions.flatMap(({ entries }) => {
+      const messages = entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message);
+      return messages.flatMap((message) =>
+        message?.role === "assistant"
+          ? (message.content ?? []).filter(
+              (part) =>
+                part.type === "toolCall" &&
+                part.name === name &&
+                match(part.arguments) &&
+                messages.some(
+                  (result) =>
+                    result?.role === "toolResult" &&
+                    result.toolCallId === part.id &&
+                    !result.isError,
+                ),
+            )
+          : [],
+      );
+    });
+  requireSmokeEvidence(
+    successfulCalls(
+      "ask_owner",
+      (args) => args?.question === "SMOKE_DEEP_QUESTION",
+    ).length === 1,
+    "deep-chain leaf must escalate one ask_owner to its owner",
+  );
+  requireSmokeEvidence(
+    successfulCalls(
+      "reply_agent",
+      (args) =>
+        args?.agent === "smoke-deep-4" && args?.message === "SMOKE_DEEP_ANSWER",
+    ).length === 1,
+    "deep-chain depth-3 owner must reply to the leaf's ask",
+  );
   const leaf = delegations.find(({ label }) => label === "smoke-deep-4");
   requireSmokeEvidence(
     leaf?.result.includes("L4:SMOKE_DEEP_LEAF"),

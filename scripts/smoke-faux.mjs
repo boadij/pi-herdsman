@@ -470,6 +470,14 @@ function deepChainDecision(context) {
   if (level === DEEP_CHAIN_DEPTH) {
     if (tools.includes("delegate_agent"))
       throw new Error("The Agent at the depth limit must be a leaf");
+    // Escalate to the direct owner (level 3) and finish only after its reply.
+    if (!correlatedCall(messages, "ask_owner"))
+      return call("ask_owner", { question: "SMOKE_DEEP_QUESTION" });
+    const answered = messages.some(
+      (message) =>
+        message.role === "user" && text(message).includes("SMOKE_DEEP_ANSWER"),
+    );
+    if (!answered) return waitForResult("Waiting for the owner's reply.");
     return fauxAssistantMessage(`L${level}:SMOKE_DEEP_LEAF`);
   }
   if (!tools.includes("delegate_agent"))
@@ -486,6 +494,17 @@ function deepChainDecision(context) {
         : `L${level}:${bubbled}`,
     );
   }
+  const asked = messages.some(
+    (message) =>
+      message.role === "user" && text(message).includes("SMOKE_DEEP_QUESTION"),
+  );
+  if (level === DEEP_CHAIN_DEPTH - 1 && asked) {
+    if (!correlatedCall(messages, "reply_agent", label))
+      return call("reply_agent", {
+        agent: label,
+        message: "SMOKE_DEEP_ANSWER",
+      });
+  }
   if (correlatedCall(messages, "delegate_agent"))
     return waitForResult(`Waiting for ${label}'s completed result.`);
   return call("delegate_agent", {
@@ -494,7 +513,7 @@ function deepChainDecision(context) {
     task: `SMOKE_DEEP_LEVEL_${next}: ${
       next < DEEP_CHAIN_DEPTH
         ? `delegate exactly smoke-deep-${next + 1} and return its result prefixed with L${next}:`
-        : "you are the leaf; return L4:SMOKE_DEEP_LEAF"
+        : "you are the leaf; call ask_owner with SMOKE_DEEP_QUESTION, wait for the reply, then return L4:SMOKE_DEEP_LEAF"
     }`,
   });
 }

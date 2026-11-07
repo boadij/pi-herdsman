@@ -97,7 +97,9 @@ root delegates a chain `smoke-deep-1` through `smoke-deep-4`. It verifies, with
 real Pi, Herdsman, and Herdr, that each of levels 1 through 3 holds the
 delegation tool while the level-4 Agent at the limit does not, that each
 Agent's completed result reaches its direct owner, and that the leaf's marker
-bubbles up through every level to the root's final message. It asserts
+bubbles up through every level to the root's final message. The level-4 Agent
+also escalates one `ask_owner` to its level-3 owner, which answers with
+`reply_agent`, and the scenario asserts both calls. It asserts
 completion and result delivery, not UI timing.
 
 `manager-merge` is an independently invoked simulated Manager integration
