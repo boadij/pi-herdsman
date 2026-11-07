@@ -53,7 +53,24 @@ pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
-In your project directory, start herdr and then Pi inside its pane:
+**Docker Compose (prebuilt SSH environment):** Requires Docker Compose and an
+SSH public key.
+
+```sh
+mkdir -p pi-herdsman && cd pi-herdsman
+curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.yaml
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
+ssh -p 2222 herdsman@localhost
+```
+
+The included [Compose file](compose.yaml) uses a prebuilt image and persistent
+Docker volumes. Herdr opens on SSH login; select a workspace and run `pi`.
+Replace `localhost` with the Docker host address for remote access. SSH port
+2222 is published on host interfaces by default; see
+[Container deployment](docs/guides/container-deployment.md) for networking,
+storage, and update options.
+
+For a native installation, start herdr in your project directory, then Pi in its pane:
 
 ```sh
 herdr

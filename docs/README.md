@@ -11,7 +11,8 @@ do not drift into competing contracts.
 Start with [Getting started](getting-started.md).
 
 It covers installation, the first asynchronous Agent delegation, `/herdsman`,
-configuration, and where to go next.
+configuration, and where to go next. For a prebuilt SSH-accessible environment,
+use [Container deployment](guides/container-deployment.md).
 
 ## Orchestrate project work
 
@@ -35,7 +36,6 @@ authority, project-scope, and ownership model.
 - [Customizing bundled Agents](guides/customizing-agents.md)
 - [Agent-definition schema](reference/agent-definition-schema.md)
 - [Configuration](reference/configuration.md)
-- [Container deployment](guides/container-deployment.md)
 
 ## Use the coordination API
 
