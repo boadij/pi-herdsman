@@ -5626,7 +5626,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.match(
     role,
-    /Agent-started agents are leaves\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
+    /Agent-started agents delegate further only within the configured maximum nesting depth and\s+are leaves beyond it\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
   );
   assert.doesNotMatch(
     description,

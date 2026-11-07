@@ -1540,12 +1540,18 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       join(PI_AGENTS_DIR, "agent.md"),
       '---\nname: agent\nagents: ["agent"]\n---\nagent instructions\n',
     );
+    // Each Agent has its own Pi session; the durable ownership chain rejects an
+    // Agent whose owner session is its own.
+    const parentSessionId =
+      parentLabel === aLabel
+        ? "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        : randomUUID();
     const parent = {
       ...managedState(parentLabel, parentRequest.requestId),
       runId: parentRequest.runId,
       ownerSessionId: parentRequest.ownerSessionId,
       paneId: parentRequest.paneId,
-      piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      piSessionId: parentSessionId,
     };
     const mailbox = agentMailboxPath(WORKSPACE, parentLabel);
     writeAgentState(mailbox, parent);
@@ -1605,6 +1611,7 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       },
     };
     const context = fakeAgentContext([identity, accepted]);
+    context.sessionManager.getSessionId = () => parentSessionId;
     registerExtension!(pi.pi as never);
     try {
       for (const handler of pi.events.get("session_start") ?? [])

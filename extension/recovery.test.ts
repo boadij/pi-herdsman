@@ -4610,6 +4610,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
       recoveryIdentity("unrelated-child"),
     ),
     ownerSessionId: PARENT_SESSION_ID,
+    // A distinct durable identity: stop availability now proves the whole
+    // cascade, which rejects states that share a Pi session.
+    piSessionId: "99999999-9999-4999-8999-999999999999",
     lastActivityAt: now - 11 * 60_000,
   };
   for (const state of [parent, child, unrelated])

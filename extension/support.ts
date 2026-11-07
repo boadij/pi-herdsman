@@ -1080,6 +1080,7 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_WORKSPACE_ID",
     "PI_HERDSMAN_AGENT_DEFINITION",
     "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
+    "PI_HERDSMAN_DEPTH",
     "HERDR_PANE_ID",
     "HERDR_SOCKET_PATH",
   ])
@@ -1114,6 +1115,7 @@ export function setAgentEnvironment(
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+  delete process.env.PI_HERDSMAN_DEPTH;
   process.env.HERDR_PANE_ID = "registered-pane";
   if (allowedAgentDefinitions === undefined)
     delete process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS;
