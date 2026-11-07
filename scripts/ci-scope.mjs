@@ -165,7 +165,11 @@ function classify(paths) {
       continue;
     }
 
-    if (path === "compose.yaml" || path === "compose.tailscale.yaml") {
+    if (
+      path === "compose.yaml" ||
+      path === "compose.tailscale.yaml" ||
+      path === "compose.bind-mount.yaml"
+    ) {
       config();
       continue;
     }
@@ -234,15 +238,17 @@ if (process.argv[2] === "--self-test") {
     peer: true,
   });
 
-  assert.deepEqual(classify(["compose.yaml"]), {
-    format: true,
-    tests: false,
-    package: false,
-    container: "config",
-    smoke: false,
-    bootstrap: false,
-    peer: false,
-  });
+  for (const path of ["compose.yaml", "compose.tailscale.yaml", "compose.bind-mount.yaml"]) {
+    assert.deepEqual(classify([path]), {
+      format: true,
+      tests: false,
+      package: false,
+      container: "config",
+      smoke: false,
+      bootstrap: false,
+      peer: false,
+    });
+  }
 
   assert.deepEqual(classify([".github/workflows/release.yml"]), {
     format: true,
