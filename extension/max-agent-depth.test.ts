@@ -589,7 +589,11 @@ test("closing an Agent cascades through every level, deepest first", () => {
 });
 
 // A delivered Agent's own Agents must be closed with it, whatever its depth.
-async function cleanDeliveredChild(options: { grandchild: boolean }) {
+async function cleanDeliveredChild(options: {
+  grandchild: boolean;
+  /** a3's mailbox exists but its state cannot be parsed. */
+  unreadable?: boolean;
+}) {
   const { createAgentController } = await import("./agent-controller.ts");
   const controllerLabel = "cleanup-a1";
   setAgentEnvironment(controllerLabel, ["worker"]);
@@ -618,6 +622,12 @@ async function cleanDeliveredChild(options: { grandchild: boolean }) {
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, state);
   }
+  if (options.unreadable)
+    writeFileSync(
+      join(agentMailboxPath(WORKSPACE, a3.agentLabel), "state.json"),
+      "{ not json",
+    );
+  const cleanupErrors: unknown[] = [];
   const lifecycle = cascadeExecutor(states);
   const pi = fakePi({ exec: lifecycle.exec });
   const controller = createAgentController(
@@ -644,7 +654,8 @@ async function cleanDeliveredChild(options: { grandchild: boolean }) {
       sendAskMessage: () => undefined,
       sessionRetired: () => false,
       appendError: (_ctx: unknown, _kind: string, error: unknown) => {
-        throw error;
+        if (!options.unreadable) throw error;
+        cleanupErrors.push(error);
       },
       onChanged: () => undefined,
       onWorkChanged: () => undefined,
@@ -678,10 +689,17 @@ async function cleanDeliveredChild(options: { grandchild: boolean }) {
     return {
       done,
       closeOrder: lifecycle.closeOrder,
+      cleanupErrors,
       remaining: states
-        .filter((state) =>
-          readAgentState(agentMailboxPath(WORKSPACE, state.agentLabel)),
-        )
+        .filter((state) => {
+          try {
+            return readAgentState(
+              agentMailboxPath(WORKSPACE, state.agentLabel),
+            );
+          } catch {
+            return false; // the deliberately unreadable descendant
+          }
+        })
         .map(({ agentLabel }) => agentLabel),
     };
   } finally {
@@ -707,6 +725,16 @@ test("cleanup of a delivered Agent closes its own Agents first instead of orphan
   assert.equal(done, true);
   assert.deepEqual(closeOrder, ["cleanup-a3", "cleanup-a2"]);
   assert.deepEqual(remaining, []);
+});
+
+test("cleanup of a delivered Agent fails closed when a descendant mailbox is unreadable", async () => {
+  const { done, closeOrder, cleanupErrors, remaining } =
+    await cleanDeliveredChild({ grandchild: true, unreadable: true });
+  assert.equal(done, false);
+  assert.deepEqual(closeOrder, [], "nothing was closed");
+  // The delivered Agent keeps its durable ownership record, so it stays recoverable.
+  assert.deepEqual(remaining, ["cleanup-a2"]);
+  assert.match(String(cleanupErrors[0]), /unresolved state/);
 });
 
 test("durable depth counts recorded owners and rejects a cycle or a foreign workspace", () => {

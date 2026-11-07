@@ -6771,13 +6771,19 @@ export function createAgentController(
         throw new Error("agent has newer mailbox work");
       // A delivered Agent that still owns Agents of its own (possible once
       // maxAgentDepth allows more than one delegating level) must take them
-      // down with it, exactly as a root controller's cleanup does.
+      // down with it, exactly as a root controller's cleanup does. An
+      // unreadable mailbox might be a descendant, so unresolved state also
+      // takes the cascade path, which fails closed on it.
       const ownsDescendants = listAgentStates().some(
         ({ state: candidate }) =>
           candidate.workspaceId === state.workspaceId &&
           candidate.ownerSessionId === state.piSessionId,
       );
-      if (managedAgent && !ownsDescendants)
+      if (
+        managedAgent &&
+        !ownsDescendants &&
+        listAgentStateIssues().length === 0
+      )
         await finalizeDeliveredRoot(context, state, result.requestId, signal);
       else await closeCascade(context, state, signal, result.requestId);
       return true;
