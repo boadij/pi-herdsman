@@ -181,8 +181,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - if: ${{ needs.scope.outputs.container == 'smoke' }}
-        run: scripts/container-smoke.sh
       - run: docker compose config
       - name: Verify persistent optional Compose selections
         shell: bash
@@ -226,6 +224,8 @@ jobs:
               any(.services.herdsman.volumes[]; .target == "/var/lib/herdsman/ssh" and .type == "volume")
             ' <<< "$resolved" >/dev/null
           done
+      - if: ${{ needs.scope.outputs.container == 'smoke' }}
+        run: scripts/container-smoke.sh
 
   smoke:
     name: Simulated smoke
