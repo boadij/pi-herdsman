@@ -435,7 +435,18 @@ function structuredHerdrError(value: any): any | undefined {
   );
 }
 
-function throwHerdrFailure(operation: string, result: ExecResult): never {
+type HerdrExecResult = Pick<ExecResult, "stdout" | "stderr" | "code"> &
+  Partial<Pick<ExecResult, "killed" | "truncated">>;
+
+type HerdrExecAPI = {
+  exec(
+    command: string,
+    args: string[],
+    options?: Parameters<ExtensionAPI["exec"]>[2],
+  ): Promise<HerdrExecResult>;
+};
+
+function throwHerdrFailure(operation: string, result: HerdrExecResult): never {
   const stdout = String(result.stdout ?? "");
   const stderr = String(result.stderr ?? "");
   const stdoutDiagnostic = boundedDiagnostic(stdout);
@@ -472,7 +483,7 @@ function throwHerdrFailure(operation: string, result: ExecResult): never {
 }
 
 export async function runHerdr(
-  pi: ExtensionAPI,
+  pi: HerdrExecAPI,
   ctx: ExtensionContext,
   args: string[],
   options: {
@@ -663,7 +674,7 @@ export async function localRepositoryScope(
 }
 
 export async function worktreeGroupScope(
-  pi: ExtensionAPI,
+  pi: HerdrExecAPI,
   ctx: ExtensionContext,
   workspaceId: string,
   signal?: AbortSignal,
