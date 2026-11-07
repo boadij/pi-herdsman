@@ -6,17 +6,39 @@ Run Pi Herdsman as a portable SSH-accessible coding-agent environment with Pi, H
 
 ## Quick start
 
+The repository includes a ready-to-use [compose.yaml](../../compose.yaml)
+with a prebuilt image, SSH access, and persistent Docker-managed volumes.
+You need Docker Compose and an SSH public key (for example,
+`~/.ssh/id_ed25519.pub`).
+
+If you cloned the repository, use its root directory. Otherwise, download
+the Compose file into a new directory:
+
+```sh
+mkdir -p pi-herdsman && cd pi-herdsman
+curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.yaml
+```
+
+Choose [Tailscale](#use-tailscale) or a [host bind mount](#use-a-host-bind-mount)
+before first start if needed, to avoid changing networking or migrating data
+later. The default named volumes require no permission setup.
+
 Start:
 
 ```sh
 SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
 ```
 
-Connect:
+Connect from the Docker host:
 
 ```sh
-ssh -p 2222 herdsman@your-host
+ssh -p 2222 herdsman@localhost
 ```
+
+For a remote connection, replace `localhost` with the Docker host's name or
+address. The default configuration publishes SSH port 2222 on the host's
+network interfaces; restrict network access accordingly. SSH requires a
+public key and does not permit password login.
 
 Herdr opens automatically. Select a workspace and run:
 
@@ -24,7 +46,7 @@ Herdr opens automatically. Select a workspace and run:
 pi
 ```
 
-That's it.
+Use `/login` if Pi needs model-provider authentication.
 
 ## Add it to Herdr
 
@@ -41,6 +63,13 @@ herdr machine add my-herd --label my-herd
 The remote machine then appears alongside Local in Herdr.
 
 ## Use Tailscale
+
+If you downloaded only the base Compose file, also download the
+[Tailscale overlay](../../compose.tailscale.yaml) into the same directory:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.tailscale.yaml
+```
 
 Start with the Tailscale sidecar:
 
@@ -91,12 +120,18 @@ Run `/reload` in each affected Pi session to adopt the update; running sessions
 do not adopt it automatically. No container restart is needed. If builds
 overlap, incompatible coordination fails closed rather than proceeding.
 
-To update the image-owned Pi and Herdr runtimes:
+To update the image-owned Pi and Herdr runtimes, finish active work first,
+then run from the same Compose project directory:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
+
+If you started with additional `-f` Compose files for Tailscale or a bind
+mount, use the same file list for **both** update commands. Otherwise, the
+base-only configuration can change the published ports or mounted home.
+Container recreation terminates running processes.
 
 Persistent state, including the npm-managed Herdsman version, survives container
 replacement. A Herdsman update may require a newer image for a compatible Pi and
@@ -104,7 +139,8 @@ Herdr runtime.
 
 ## Use a host bind mount
 
-The default Docker-managed volume needs no manual permission setup.
+The default Docker-managed volume needs no manual permission setup. Configure
+a bind mount before first start if you want to avoid later state migration.
 
 For a Linux or NAS bind mount, prepare the directory for the UID/GID the
 container will use:
@@ -170,7 +206,9 @@ Tools installed with mise persist in the home volume.
 | `/home/herdsman`        | Pi and Herdr state, repositories, config, credentials, SSH state, installed tools |
 | `/var/lib/herdsman/ssh` | SSH server identity                                                               |
 
-Running processes do not survive a container restart.
+Running processes do not survive a container restart. Named volumes survive
+`docker compose down`, but `docker compose down -v` deletes them; do not use
+`-v` when retaining state.
 
 Run only one active Herdsman runtime against a writable home volume. Linux
 lock recovery verifies process identity within the current PID namespace;
