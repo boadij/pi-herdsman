@@ -105,9 +105,11 @@ runtime-profile fields described in the [schema](../reference/agent-definition-s
 Manager and Chief default to `tools: []`, exposing only their required
 coordination capabilities. Manager's saved ordinary Lead tool baseline remains
 intact and is restored when Manager mode ends. Explicit trusted-project or
-global Manager overrides can enable registered ordinary tools. Explicit
-ordinary tool policies cannot activate Herdsman-owned tools or remove the
-role's mandatory coordination tools. For example:
+global Manager overrides can enable registered ordinary tools. Matching tools
+that register after activation are included at the next Manager run or
+continuation; tools outside the policy are removed at those boundaries and
+blocked if called while stale. Explicit ordinary tool policies cannot activate
+Herdsman-owned tools or remove the role's mandatory coordination tools. For example:
 
 ```yaml
 ---

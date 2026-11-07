@@ -9,6 +9,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentTools,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -7180,6 +7181,181 @@ test("owner ask waits while busy and delivers once after settlement", async () =
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+  }
+});
+
+test("Manager event boundaries enforce actual faux-provider declarations on first and continuation requests", async () => {
+  const { createLeadAgentEventRuntime, createLeadToolState } =
+    await import("./lead-runtime.ts");
+  const allowedLateTool = "mcp__forgejo__get_issue_by_index";
+
+  for (const explicit of [false, true]) {
+    const faux = fauxProvider({
+      provider: `manager-policy-${randomUUID()}`,
+      models: [{ id: "test", reasoning: false, input: ["text"] }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    const requestDeclarations: string[][] = [];
+    let continuationToolsRegistered = false;
+    let firstLateToolAutoActivated = false;
+    let continuationLateToolAutoActivated = false;
+    const definition = {
+      name: "manager",
+      path: "",
+      frontmatter: { tools: explicit ? [allowedLateTool] : [] },
+      body: "",
+    } as any;
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        (api) => {
+          api.registerTool({
+            name: "manager_probe",
+            label: "manager probe",
+            description: "Complete one deterministic tool batch.",
+            parameters: Type.Object({}),
+            execute: async () => ({
+              content: [{ type: "text", text: "probe completed" }],
+            }),
+          });
+          const toolState = createLeadToolState(
+            () => api.getAllTools(),
+            [],
+            [],
+          );
+          const permittedTools = () =>
+            toolState.projectRoleTools([], definition, ["manager_probe"]);
+          const events = createLeadAgentEventRuntime({
+            isCurrentChief: () => false,
+            isActiveManager: () => true,
+            isRoleSuspended: () => false,
+            setActiveTools: (tools: readonly string[]) =>
+              api.setActiveTools([...tools]),
+            managerTools: ["manager_probe"],
+            currentManagerAllowedTools: permittedTools,
+            reconcileRoleTools: () => api.setActiveTools(permittedTools()),
+            roleCharter: () => "Manager profile active.",
+            prepareSupervisionMessage: async () => undefined,
+            drainRetirementNotices: async () => 0,
+            sendMessage: () => {},
+          } as any);
+          api.on("session_start", () => api.setActiveTools(["manager_probe"]));
+          api.on("before_agent_start", () => {
+            if (explicit) {
+              api.registerTool({
+                name: allowedLateTool,
+                label: "allowed late tool",
+                description: "Explicitly permitted late registration.",
+                parameters: Type.Object({}),
+                execute: async () => ({
+                  content: [{ type: "text", text: "unused" }],
+                }),
+              });
+            }
+            api.registerTool({
+              name: "late_unallowed_first_request",
+              label: "late unallowed tool",
+              description: "Automatically activated after Manager activation.",
+              parameters: Type.Object({}),
+              execute: async () => ({
+                content: [{ type: "text", text: "unused" }],
+              }),
+            });
+            firstLateToolAutoActivated = api
+              .getActiveTools()
+              .includes("late_unallowed_first_request");
+          });
+          api.on("turn_end", () => {
+            if (continuationToolsRegistered) return;
+            continuationToolsRegistered = true;
+            api.registerTool({
+              name: "late_continuation_unallowed",
+              label: "late continuation tool",
+              description: "Registered during the Manager run.",
+              parameters: Type.Object({}),
+              execute: async () => ({
+                content: [{ type: "text", text: "unused" }],
+              }),
+            });
+            continuationLateToolAutoActivated = api
+              .getActiveTools()
+              .includes("late_continuation_unallowed");
+          });
+          api.on("before_agent_start", (event, ctx) =>
+            events.beforeAgentStart(event, ctx as any),
+          );
+          api.on("turn_end", () => events.turnEnd());
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    faux.setResponses([
+      (context) => {
+        requestDeclarations.push(
+          getCurrentTools(context.messages).map((tool) => tool.name),
+        );
+        return fauxAssistantMessage([fauxToolCall("manager_probe", {})], {
+          stopReason: "toolUse",
+        });
+      },
+      (context) => {
+        requestDeclarations.push(
+          getCurrentTools(context.messages).map((tool) => tool.name),
+        );
+        return fauxAssistantMessage("Finished.");
+      },
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(WORKSPACE),
+    });
+    try {
+      await session.prompt("Run the deterministic Manager probe.");
+      assert.equal(requestDeclarations.length, 2);
+      assert.equal(firstLateToolAutoActivated, true);
+      assert.equal(continuationLateToolAutoActivated, true);
+      for (const [index, declarations] of requestDeclarations.entries()) {
+        assert.ok(
+          declarations.includes("manager_probe"),
+          `manager mandatory tool absent from request ${index + 1}: ${declarations}`,
+        );
+        assert.ok(
+          !declarations.includes("late_unallowed_first_request"),
+          `first-run late tool absent from faux-provider request ${index + 1}: ${declarations}`,
+        );
+        assert.ok(
+          !declarations.includes("late_continuation_unallowed"),
+          `continuation late tool absent from faux-provider request ${index + 1}: ${declarations}`,
+        );
+        if (explicit)
+          assert.ok(
+            declarations.includes(allowedLateTool),
+            `explicitly permitted late tool present in faux-provider request ${index + 1}`,
+          );
+        else assert.ok(!declarations.includes(allowedLateTool));
+      }
+    } finally {
+      await session.dispose();
+    }
   }
 });
 
