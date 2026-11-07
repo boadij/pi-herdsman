@@ -36,19 +36,33 @@ A delegating agent:
 - integrates direct agent results into its own assignment;
 - remains subordinate to the lead's approved objective.
 
-Agent-started agents are leaves. Their effective metadata and launch policy
-remove the `agents` allowlist and delegation tools. This keeps the supported
-structure bounded:
+Nesting is bounded by the global `maxAgentDepth` setting (see
+[Configuration](../reference/configuration.md)). Agents are numbered by
+generation below the root controller: an agent started by a Lead, Manager, or
+Chief has depth 1, its direct agents have depth 2, and so on. An agent whose
+depth has reached `maxAgentDepth` is a leaf: its effective metadata and launch
+policy remove the `agents` allowlist and delegation tools. With the default
+`maxAgentDepth` of `2` the structure is:
 
 ```text
 root controller (Lead, Manager, or Chief)
-└── delegating agent
-    └── agent
+└── delegating agent        (depth 1)
+    └── agent               (depth 2, leaf)
 ```
 
-A root controller may have many direct agents, and each direct agent that is explicitly
-delegation-enabled may have its own direct agents. A delegation-capable agent
-remains an agent at every depth; it is not a separate public role.
+A root controller may have many direct agents, and each direct agent below the
+limit that is explicitly delegation-enabled may have its own direct agents. A
+delegation-capable agent remains an agent at every depth; it is not a separate
+public role. `maxAgentDepth: 1` makes every agent a leaf; `maxAgentDepth: 4`
+allows chains of four agents. Delegation at every level still requires the
+launching agent's definition to list `agents`, and each level may delegate only
+to definitions in its own allowlist. When a delegated agent's result is
+delivered and cleaned up, any agents it still owns are closed with it, as they
+are for a root controller. Questions from `ask_owner`, results, stop, and
+continuation always go through the direct owner, so each level behaves the
+same whatever its depth. Lowering `maxAgentDepth` never removes running
+agents: they stay manageable, but agents at the new limit can no longer start
+further agents.
 
 Physical placement is presentation only and never determines ownership. A
 Lead's placement setting controls direct agents: `tab` shares one tab per lead,
