@@ -238,7 +238,11 @@ if (process.argv[2] === "--self-test") {
     peer: true,
   });
 
-  for (const path of ["compose.yaml", "compose.tailscale.yaml", "compose.bind-mount.yaml"]) {
+  for (const path of [
+    "compose.yaml",
+    "compose.tailscale.yaml",
+    "compose.bind-mount.yaml",
+  ]) {
     assert.deepEqual(classify([path]), {
       format: true,
       tests: false,
