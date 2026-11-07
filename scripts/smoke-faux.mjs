@@ -22,6 +22,7 @@ const MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED =
 const modelIds = [
   "core",
   "continuation",
+  "deep-chain",
   "chief-tree",
   "supervisor-agent",
   "terminal-failure",
@@ -445,6 +446,57 @@ function coreDecision(context) {
     return fauxAssistantMessage(JSON.stringify(packageDetails(attached[2])));
   }
   throw new Error("Unexpected core transcript");
+}
+
+const DEEP_CHAIN_DEPTH = 4;
+
+// Root -> smoke-deep-1 -> ... -> smoke-deep-4. Each level delegates the next
+// and returns `L<level>:` plus its child's result, so the root's final marker
+// proves every result was delivered one hop at a time. The delegation tool must
+// be present at levels 1-3 and absent at the limit.
+function deepChainDecision(context) {
+  const messages = context.messages;
+  const tools = getCurrentTools(messages).map(({ name }) => name);
+  const levels = messages
+    .filter((message) => message.role === "user")
+    .flatMap((message) =>
+      [...text(message).matchAll(/SMOKE_DEEP_LEVEL_(\d)/gu)].map((match) =>
+        Number(match[1]),
+      ),
+    );
+  const level = levels.length ? Math.max(...levels) : 0;
+  if (level === 0 && !rootAgentPrompt(messages, "SMOKE_DEEP_ROOT"))
+    throw new Error("Unexpected deep-chain transcript");
+  if (level === DEEP_CHAIN_DEPTH) {
+    if (tools.includes("delegate_agent"))
+      throw new Error("The Agent at the depth limit must be a leaf");
+    return fauxAssistantMessage(`L${level}:SMOKE_DEEP_LEAF`);
+  }
+  if (!tools.includes("delegate_agent"))
+    throw new Error(`Depth ${level} Agent must be able to delegate`);
+  const next = level + 1;
+  const label = `smoke-deep-${next}`;
+  const result = deliveredAgentResult(messages, "delegate_agent", label);
+  if (result) {
+    const bubbled = result.match(new RegExp(`L${next}:\\S+`, "u"))?.[0];
+    if (!bubbled) throw new Error(`${label} result omitted its bubbled marker`);
+    return fauxAssistantMessage(
+      level === 0
+        ? `PI_HERDSMAN_DEEP_CHAIN_OK ${bubbled}`
+        : `L${level}:${bubbled}`,
+    );
+  }
+  if (correlatedCall(messages, "delegate_agent"))
+    return waitForResult(`Waiting for ${label}'s completed result.`);
+  return call("delegate_agent", {
+    definition: label,
+    label,
+    task: `SMOKE_DEEP_LEVEL_${next}: ${
+      next < DEEP_CHAIN_DEPTH
+        ? `delegate exactly smoke-deep-${next + 1} and return its result prefixed with L${next}:`
+        : "you are the leaf; return L4:SMOKE_DEEP_LEAF"
+    }`,
+  });
 }
 
 function continuationDecision(messages) {
@@ -1335,6 +1387,7 @@ export function decide(model, context) {
   }
   if (model === "core") return coreDecision(context);
   if (model === "continuation") return continuationDecision(messages);
+  if (model === "deep-chain") return deepChainDecision(context);
   if (model.startsWith("agent-crash-"))
     return agentCrashRecoveryDecision(
       model === "agent-crash-recovery" ? "agent-crash-root" : model,

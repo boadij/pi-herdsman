@@ -158,6 +158,7 @@ import {
   cleanup,
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
+  assertDeepChainEvidence,
 } from "../scripts/smoke.mjs";
 
 test("preflight uses worktree Pi instead of a conflicting PATH executable", async () => {
@@ -2856,7 +2857,11 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.equal(initialPromptForScenario("manager-bootstrap", {}), undefined);
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
-  for (const scenario of ["agent-terminal-failure", "manager-handoff"]) {
+  for (const scenario of [
+    "agent-terminal-failure",
+    "manager-handoff",
+    "deep-chain",
+  ]) {
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).scenario, scenario);
     assert.throws(() => parseSmokeArgs([scenario]), /requires --simulated/);
   }
@@ -9513,4 +9518,142 @@ test("Manager removal variants target only the exact owned checkout without forc
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+const deepTool = { name: "delegate_agent", description: "", parameters: {} };
+const deepMessages = (task: string, withTool: boolean) => [
+  {
+    role: "system" as const,
+    content: "",
+    ...(withTool ? { toolsAdded: [deepTool] } : {}),
+    timestamp: 1,
+  },
+  { role: "user" as const, content: task, timestamp: 2 },
+];
+const firstToolCall = (message: any) =>
+  message.content.find((part: any) => part.type === "toolCall");
+
+test("deep-chain faux requires delegation below the limit and a leaf at it", () => {
+  const level2 = deepMessages("SMOKE_DEEP_LEVEL_2: go", true);
+  assert.equal(
+    firstToolCall(decideSmokeFaux("deep-chain", { messages: level2 })).arguments
+      .label,
+    "smoke-deep-3",
+  );
+  assert.throws(
+    () =>
+      decideSmokeFaux("deep-chain", {
+        messages: deepMessages("SMOKE_DEEP_LEVEL_2: go", false),
+      }),
+    /Depth 2 Agent must be able to delegate/,
+  );
+  const leaf = decideSmokeFaux("deep-chain", {
+    messages: deepMessages("SMOKE_DEEP_LEVEL_4: go", false),
+  });
+  assert.equal(
+    leaf.content[0]?.type === "text" && leaf.content[0].text,
+    "L4:SMOKE_DEEP_LEAF",
+  );
+  assert.throws(
+    () =>
+      decideSmokeFaux("deep-chain", {
+        messages: deepMessages("SMOKE_DEEP_LEVEL_4: go", true),
+      }),
+    /depth limit must be a leaf/,
+  );
+});
+
+const deepSession = (
+  id: string,
+  child?: { label: string; result: string },
+) => ({
+  id,
+  entries: child
+    ? [
+        { type: "session", id },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: `call-${child.label}`,
+                name: "delegate_agent",
+                arguments: { label: child.label },
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: `call-${child.label}`,
+            toolName: "delegate_agent",
+            content: [{ type: "text", text: "accepted" }],
+          },
+        },
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            agentLabel: child.label,
+            status: "completed",
+            ownerSessionId: id,
+          },
+          content: `Agent result · agent=${child.label} · definition=${child.label} · status=completed\n\n${child.result}`,
+        },
+      ]
+    : [{ type: "session", id }],
+});
+
+test("deep-chain evidence needs one delegation per level and the leaf marker", () => {
+  const good = [
+    deepSession("s0", {
+      label: "smoke-deep-1",
+      result: "L1:L2:L3:L4:SMOKE_DEEP_LEAF",
+    }),
+    deepSession("s1", {
+      label: "smoke-deep-2",
+      result: "L2:L3:L4:SMOKE_DEEP_LEAF",
+    }),
+    deepSession("s2", {
+      label: "smoke-deep-3",
+      result: "L3:L4:SMOKE_DEEP_LEAF",
+    }),
+    deepSession("s3", { label: "smoke-deep-4", result: "L4:SMOKE_DEEP_LEAF" }),
+    deepSession("s4"),
+  ];
+  assert.deepEqual(assertDeepChainEvidence(good), [
+    "smoke-deep-1",
+    "smoke-deep-2",
+    "smoke-deep-3",
+    "smoke-deep-4",
+  ]);
+  assert.throws(
+    () => assertDeepChainEvidence(good.slice(0, 4)),
+    /expected 5 Pi sessions/,
+  );
+  assert.throws(
+    () =>
+      assertDeepChainEvidence([
+        ...good.slice(0, 3),
+        deepSession("s3", { label: "smoke-deep-4", result: "L4:WRONG" }),
+        deepSession("s4"),
+      ]),
+    /leaf result must reach its owner/,
+  );
+  assert.throws(
+    () =>
+      assertDeepChainEvidence([
+        ...good.slice(0, 3),
+        deepSession("s3", {
+          label: "smoke-deep-3",
+          result: "L3:L4:SMOKE_DEEP_LEAF",
+        }),
+        deepSession("s4"),
+      ]),
+    /exactly one delegation per level/,
+  );
 });
