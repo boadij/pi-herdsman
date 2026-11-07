@@ -16,6 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh 
 irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.ps1 | iex
 ```
 
+**Docker Compose:** For a prebuilt SSH-accessible environment instead of a
+native installation, follow [Container deployment](guides/container-deployment.md).
+
 **Already have Pi and Herdr?**
 
 ```sh
@@ -23,19 +26,23 @@ pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
-The bootstraps install missing components and preserve compatible newer
+The native bootstraps install missing components and preserve compatible newer
 versions. If installation fails, follow the reported recovery instructions.
 For manual installation, see [Pi's Quickstart](https://pi.dev/docs/latest/quickstart)
 and [Herdr's installation guide](https://herdr.dev/docs/install/).
 
 ## Start Pi in Herdr
 
-In your project directory, start Herdr, then Pi in its pane:
+For a native installation, start Herdr in your project directory, then Pi
+in its pane:
 
 ```sh
 herdr
 pi
 ```
+
+With Docker, [connect to the container](guides/container-deployment.md#quick-start)
+and run `pi` in the Herdr pane instead.
 
 ## Delegate your first task
 
