@@ -92,7 +92,10 @@ COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml
 
 Keep any other `.env` settings when editing it. The `:` separator applies on
 Linux and macOS; use `;` on Windows. Shell-level `COMPOSE_FILE` and explicit
-`-f` arguments can override this selection.
+`-f` arguments can override this selection. Setting `COMPOSE_FILE` also
+disables automatic `compose.override.yaml` discovery: if an existing stack
+uses that file, either keep the default discovery behavior or include it
+explicitly in the selected file list.
 
 Tailscale needs `/dev/net/tun` and the networking capabilities declared in
 the overlay. Nested containers (for example, Proxmox LXC) may require host-side
