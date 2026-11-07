@@ -1383,6 +1383,11 @@ function registerExtensionImpl(
       ) => leadRuntimes.supervisoryProfileBody(ctx, role),
       currentChiefAllowedTools: (ctx: ExtensionContext) =>
         leadRuntimes.currentChiefAllowedTools(ctx),
+      currentManagerAllowedTools: (ctx: ExtensionContext) =>
+        leadRuntimes.currentManagerAllowedTools(ctx),
+      reconcileRoleTools: () =>
+        leadRuntimes.roleTransitions.reconcileRoleTools(),
+      managerTools: MANAGER_TOOLS,
       isActiveManager: () =>
         activeRole() === "manager" && !leadRuntime.roleSuspended,
       isActiveLead: () => activeRole() === "lead",
