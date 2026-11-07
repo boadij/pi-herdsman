@@ -8721,7 +8721,11 @@ test("visible capabilities omit unlaunchable parents and non-capability metadata
   assert.deepEqual(
     visibleAgentCapabilities(
       [definition("parent", { agents: ["child"] }), definition("child", {})],
-      { kind: "managed-agent", allowedAgentDefinitions: new Set(["parent"]) },
+      {
+        kind: "managed-agent",
+        allowedAgentDefinitions: new Set(["parent"]),
+        depth: 1,
+      },
     ),
     [{ name: "parent", tools: "default", skills: "none" }],
   );

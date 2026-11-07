@@ -46,6 +46,7 @@ schema is:
 ```json
 {
   "statusWidgetMaxRows": 8,
+  "maxAgentDepth": 2,
   "defaultLeadExecution": "flexible",
   "spawnPlacement": "subtree",
   "contextRetirement": true,
@@ -64,6 +65,7 @@ An absent file means these defaults:
 | Field                                    |            Default | Allowed values                                                                |
 | ---------------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
 | `statusWidgetMaxRows`                    |                `8` | integer from 1 through 100; global-only                                       |
+| `maxAgentDepth`                          |                `2` | positive integer; global-only; maximum agent nesting depth                    |
 | `defaultLeadExecution`                   |         `flexible` | `flexible`, `orchestrate`                                                     |
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
@@ -84,6 +86,31 @@ widget, including its header and any overflow line. Settings offers presets,
 a custom value, and reset; reset removes the override and restores the default.
 This global-only display preference does not limit authoritative snapshots or
 expanded inspection. See [Status widget](status-widget.md) for layout details.
+
+`maxAgentDepth` bounds agent nesting. Agents are numbered by generation below
+the root controller: an agent started by a Lead, Manager, or Chief has depth 1
+and its direct agents have depth 2. An agent whose depth equals
+`maxAgentDepth` is a leaf, so `1` means agents never delegate, `2` (the
+default) allows one delegating level, and `4` allows chains of four agents.
+The setting is read from this user-wide file only and cannot be overridden by
+project settings, so deeper nesting is always an explicit user-level opt-in. It
+is also available in the `/herdsman` Settings menu as Max Agent depth.
+
+The limit is read when `delegate_agent` or `continue_agent` prepares a launch
+and checked again immediately before the agent starts; a launch whose limit
+changed in between is rejected and can be retried. `PI_HERDSMAN_DEPTH`, which
+the launching controller sets in an agent's environment, is only a startup
+hint: before an agent delegates, its depth is verified against the durable
+ownership records, which must lead from the agent to its verified root
+session without a gap or an ambiguous record. A disagreement, a gap, or an
+ambiguous chain refuses the launch with an error naming the cause.
+The definition roster shown to an agent is advisory (it uses the hint); the
+launch check is authoritative.
+Running agents keep their capabilities when the limit is lowered
+and stay listable, inspectable, stoppable, and recoverable; an agent already at
+or beyond the lowered limit is refused further delegation with an error naming
+`maxAgentDepth`. Each agent still needs `agents` in its definition to
+delegate.
 
 `defaultLeadExecution` selects the initial profile only for a future ordinary
 Lead session that has no persisted execution choice. Its values select
