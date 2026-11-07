@@ -284,7 +284,8 @@ the active controller contract remains authoritative for delegation behavior.
 
 A non-empty `agents` list is required but does not alone enable delegation;
 the effective tool policy also governs eligibility. Every managed agent retains
-mandatory `ask_owner`, and Agent-started agents are leaves. See
+mandatory `ask_owner`, and an Agent at the configured maximum nesting depth
+is a leaf. See
 [Delegation](../concepts/delegation.md) for the ownership model and the
 [agent-definition schema](../reference/agent-definition-schema.md#managed-agent-coordination-tools)
 for the exact tool-policy rules.

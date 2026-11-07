@@ -249,9 +249,9 @@ Each actionable live agent record includes:
 `available_tools` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`.
 `stop_agent` is listed only when the current snapshot passes the applicable stop
-preflight. For a root-owned delegating agent, that preflight covers the complete
-owned descendant cascade because closing the parent closes that cascade
-child-first. Invocation always reacquires current evidence and revalidates
+preflight. For a delegating agent owned by any controller, that preflight
+covers the complete owned descendant cascade at every depth because closing the
+parent closes that cascade child-first. Invocation always reacquires current evidence and revalidates
 identity, ownership, mailbox state, durable results, and lifecycle before
 mutation. Active work may list `steer_agent`; a valid correlated pending
 `ask_owner` may list `reply_agent`. A currently working agent may list
@@ -282,7 +282,11 @@ Root controllers see enabled definitions available under their current
 delegation policy and agents whose durable ownership chain resolves to their
 exact Pi session. Manager/Chief definition discovery is filtered by the
 effective `agents` allowlist. Delegating agents see only
-allowed enabled leaf definitions and their direct agents. Live records are
+allowed enabled definitions, projected as leaf or delegating according to
+their children's depth, and their direct agents; an agent that has reached
+`maxAgentDepth` sees no definitions. A root controller's `list_agents` nests
+deeper ownership chains under their owners; only a record whose parent is not
+visible is listed as unmatched ancestry. Live records are
 separate from definition availability: an already-active Agent may still appear
 after its definition is disabled, with its current ownership, lifecycle,
 available actions, and recovery evidence. Unrooted, ambiguous, or cyclic
@@ -559,9 +563,9 @@ See [`ask_owner` API](ask-owner.md).
 ```
 
 Call `stop_agent` with `agent`. Stopping requires exact direct ownership
-and a current applicable stop preflight. For a root-owned parent, that
-preflight covers the complete owned descendant cascade because closing the
-parent closes that cascade child-first. Invocation always reacquires current
+and a current applicable stop preflight. For a delegating parent, that
+preflight covers the complete owned descendant cascade at every depth because
+closing the parent closes that cascade child-first. Invocation always reacquires current
 evidence and revalidates identity, ownership, mailbox state, durable results,
 and lifecycle before mutation. Stopping abandons the unfinished assignment,
 including a pending owner question; stopping a delegating agent cascades through
