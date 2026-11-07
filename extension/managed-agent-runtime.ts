@@ -856,6 +856,7 @@ export function createManagedAgentExecutionState() {
           outcome?: "completed" | "aborted" | "error";
           responseEntryId?: string;
           responseText?: string;
+          askOwnerCapacityError?: string;
         }
       | undefined,
     pendingResult: undefined as ResultRecord | undefined,
@@ -1620,7 +1621,7 @@ export function registerManagedAgentAskOwnerTool(
       "Ask this managed agent's direct owner for a required decision",
     promptGuidelines: [FILE_HANDOFF_GUIDANCE],
     description:
-      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
+      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn. Wait for the reply only after the tool confirms the question was sent; if rejected, address the error or report a non-empty blocker. Only one question may be outstanding.",
     executionMode: "sequential",
     parameters: Type.Object(
       {
@@ -2435,7 +2436,10 @@ export function registerManagedAgentSettlementHandlers(
                   ? "Selected handoff evidence could not be verified"
                   : outcome === "error"
                     ? "Agent model execution failed"
-                    : "Agent produced no assistant text",
+                    : observation?.requestId === state.activeRequestId &&
+                        observation.askOwnerCapacityError
+                      ? `Agent produced no assistant text. Earlier in this execution, ask_owner rejected its attachments: ${observation.askOwnerCapacityError}. The question was not sent.`
+                      : "Agent produced no assistant text",
             },
           }),
       contextUsage: ctx.getContextUsage(),
@@ -3057,55 +3061,71 @@ export function registerManagedAgentRuntime(
       };
     },
   );
-  registerManagedAgentAskOwnerTool(
-    pi,
-    createManagedAgentAskOwnerHandler({
-      state: () => execution.assignment,
-      setState: (state) => {
-        execution.assignment = state;
-      },
-      sameIdentity: sameManagedAgentIdentity,
-      eligible: requestState.eligibleToAsk,
-      rejectionReason: requestState.askRejectionReason,
-      isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
-      messageLimits: options.messageLimits,
-      prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
-        prepareMessageInput(
-          question,
-          options.resolveMessageFiles(ctx, files, "ask_owner"),
-          state.cwd,
+  const executeAskOwner = createManagedAgentAskOwnerHandler({
+    state: () => execution.assignment,
+    setState: (state) => {
+      execution.assignment = state;
+    },
+    sameIdentity: sameManagedAgentIdentity,
+    eligible: requestState.eligibleToAsk,
+    rejectionReason: requestState.askRejectionReason,
+    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
+    messageLimits: options.messageLimits,
+    prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
+      prepareMessageInput(
+        question,
+        options.resolveMessageFiles(ctx, files, "ask_owner"),
+        state.cwd,
+        "ask_owner",
+        "Question",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          mailboxLimitBytes: limits.mailbox.bytes,
+          requireInline: true,
+          serializedBytes: (text, bindings) =>
+            askRecordBytes(state, askId, text, createdAt, bindings),
+        },
+      ),
+    checkMailboxSize: (bytes, limit) => {
+      if (bytes > limit)
+        fail(
+          "invalid_request",
+          `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
           "ask_owner",
-          "Question",
-          {
-            inlineLimitBytes: limits.inline.bytes,
-            mailboxLimitBytes: limits.mailbox.bytes,
-            requireInline: true,
-            serializedBytes: (text, bindings) =>
-              askRecordBytes(state, askId, text, createdAt, bindings),
-          },
-        ),
-      checkMailboxSize: (bytes, limit) => {
-        if (bytes > limit)
-          fail(
-            "invalid_request",
-            `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
-            "ask_owner",
-          );
-      },
-      claimLock: (mailbox, state) =>
-        options.claimAssignmentLock(mailbox, "ask_owner", {
-          label: state.agentLabel,
-          paneId: state.paneId,
-        }),
-      readState: readAgentState,
-      writeState: writeAgentState,
-      writeAsk,
-      removeAsk: removeMailboxAsk,
-      latest: (value) => {
-        execution.latest = value;
-      },
-    }),
-  );
+          { details: { capacity: true } },
+        );
+    },
+    claimLock: (mailbox, state) =>
+      options.claimAssignmentLock(mailbox, "ask_owner", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      }),
+    readState: readAgentState,
+    writeState: writeAgentState,
+    writeAsk,
+    removeAsk: removeMailboxAsk,
+    latest: (value) => {
+      execution.latest = value;
+    },
+  });
+  registerManagedAgentAskOwnerTool(pi, async (...args) => {
+    const observation = execution.observation;
+    try {
+      return await executeAskOwner(...args);
+    } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.operation === "ask_owner" &&
+        error.detail.details?.capacity === true &&
+        observation?.requestId &&
+        observation === execution.observation &&
+        execution.assignment?.activeRequestId === observation.requestId &&
+        !execution.assignment.pendingAskId
+      )
+        observation.askOwnerCapacityError = error.message.slice(0, 512);
+      throw error;
+    }
+  });
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {

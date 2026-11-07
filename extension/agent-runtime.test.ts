@@ -77,7 +77,7 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
-const { updateConfig } = await import("./config.ts");
+const { readConfig, updateConfig } = await import("./config.ts");
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,
@@ -1987,7 +1987,7 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
         undefined,
         context,
       ),
-      /could not be fully embedded/i,
+      /per-file inline limit/i,
     );
     assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
     assert.equal(realFs.existsSync(join(mailbox, "ask.json")), false);
@@ -1995,6 +1995,128 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
     agent?.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
     realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("agent ask_owner capacity rejection is reported when execution completes empty", async () => {
+  const mailbox = setAgentEnvironment();
+  const previousInlineLimit = readConfig().inlineAttachmentLimitBytes;
+  const previousMailboxLimit = readConfig().mailboxPayloadLimitBytes;
+  updateConfig("inlineAttachmentLimitBytes", 4096);
+  updateConfig("mailboxPayloadLimitBytes", 4096);
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const branch: unknown[] = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "ask_owner" }],
+      },
+    },
+  ];
+  const context = fakeAgentContext([], branch);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const initial = readAgentState(mailbox)!;
+    const assignment: RequestRecord = {
+      version: 5,
+      runId: initial.runId,
+      requestId: randomUUID(),
+      ownerSessionId: initial.ownerSessionId,
+      workspaceId: initial.workspaceId,
+      agentLabel: initial.agentLabel,
+      paneId: initial.paneId,
+      kind: "task",
+      text: "Ask the owner for a decision.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, assignment);
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(assignment.requestId) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    removeRequest(mailbox, assignment.requestId);
+    agent.events.get("agent_start")![0]();
+
+    const first = join(testTmpRoot, "ask-capacity-first.md");
+    const second = join(testTmpRoot, "ask-capacity-second.md");
+    realFs.writeFileSync(first, "a".repeat(3000));
+    realFs.writeFileSync(second, "b".repeat(3000));
+    const current = readAgentState(mailbox)!;
+    const expectedPayloadBytes = Buffer.byteLength(
+      JSON.stringify({
+        version: 5,
+        askId: "00000000-0000-4000-8000-000000000000",
+        requestId: assignment.requestId,
+        runId: current.runId,
+        ownerSessionId: current.ownerSessionId,
+        workspaceId: current.workspaceId,
+        agentLabel: current.agentLabel,
+        paneId: current.paneId,
+        piSessionId: current.piSessionId,
+        question: `<file name="${realFs.realpathSync(first)}" bytes="3000">\n${"a".repeat(3000)}\n</file>\n\n<file name="${realFs.realpathSync(second)}" bytes="3000">\n${"b".repeat(3000)}\n</file>\n\nQuestion:\nWhich option?`,
+        createdAt: 1_000_000_000_000,
+      }),
+      "utf8",
+    );
+    let reportedPayloadBytes: number | undefined;
+    await assert.rejects(
+      agent.tools
+        .find((tool) => tool.name === "ask_owner")!
+        .execute(
+          "capacity-rejected",
+          { question: "Which option?", files: [first, second] },
+          undefined,
+          undefined,
+          context,
+        ),
+      (error: unknown) => {
+        const match =
+          error instanceof Error &&
+          error.message.match(
+            /Mailbox payload is (\d+) bytes; configured limit is 4096 bytes/i,
+          );
+        if (!match) return false;
+        reportedPayloadBytes = Number(match[1]);
+        return true;
+      },
+    );
+    assert.equal(reportedPayloadBytes, expectedPayloadBytes);
+    assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
+    assert.equal(realFs.existsSync(join(mailbox, "ask.json")), false);
+
+    emitAgentTurn(agent, context, { role: "assistant", content: "" });
+    agent.events.get("agent_before_settle")![0](
+      { outcome: "completed" },
+      context,
+    );
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+    const result = readResult(mailbox, assignment.requestId);
+    assert.equal(result?.status, "failed");
+    assert.equal(result?.error?.code, "empty_result");
+    assert.match(
+      result?.error?.message ?? "",
+      /Agent produced no assistant text/i,
+    );
+    assert.match(
+      result?.error?.message ?? "",
+      new RegExp(
+        `Mailbox payload is ${expectedPayloadBytes} bytes; configured limit is 4096 bytes`,
+        "i",
+      ),
+    );
+    assert.match(result?.error?.message ?? "", /The question was not sent/i);
+  } finally {
+    updateConfig("inlineAttachmentLimitBytes", previousInlineLimit);
+    updateConfig("mailboxPayloadLimitBytes", previousMailboxLimit);
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(join(testTmpRoot, "ask-capacity-first.md"), { force: true });
+    realFs.rmSync(join(testTmpRoot, "ask-capacity-second.md"), { force: true });
   }
 });
 

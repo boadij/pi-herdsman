@@ -385,6 +385,10 @@ export function prepareMessageInput(
         ? options.serializedBytes(value, bindings)
         : Buffer.byteLength(value, "utf8")) <=
       (options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES));
+  const capacityMessage = (file: RegularFile) =>
+    file.bytes > (options.inlineLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES)
+      ? `Attachment is ${file.bytes} bytes; per-file inline limit is ${options.inlineLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes: ${file.input}`
+      : `Attachment could not fit within the configured message limit: ${file.input}`;
   if (!fits(rendered(), resultBindings))
     fail(
       "invalid_request",
@@ -439,7 +443,7 @@ export function prepareMessageInput(
         if (options.requireInline)
           fail(
             "invalid_request",
-            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
+            `Attachment changed between validation and reading: ${file.input}`,
             operation,
           );
         continue;
@@ -472,12 +476,9 @@ export function prepareMessageInput(
           ));
       if (cannotInline && !verified) {
         if (options.requireInline)
-          fail(
-            "invalid_request",
-            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
-            operation,
-            { details: { capacity: true } },
-          );
+          fail("invalid_request", capacityMessage(file), operation, {
+            details: { capacity: true },
+          });
         continue;
       }
       bytes = Buffer.allocUnsafe(current.size);
@@ -522,12 +523,9 @@ export function prepareMessageInput(
         );
       if (cannotInline) {
         if (options.requireInline)
-          fail(
-            "invalid_request",
-            `Attachment could not be fully embedded within the configured limits: ${file.input}`,
-            operation,
-            { details: { capacity: true } },
-          );
+          fail("invalid_request", capacityMessage(file), operation, {
+            details: { capacity: true },
+          });
         continue;
       }
     } catch (error) {
@@ -576,11 +574,18 @@ export function prepareMessageInput(
     transportSections[index] = renderMessageFile(file, markers[index]!);
     attachmentTexts[index] = content;
     if (!fits(rendered(), resultBindings)) {
+      const actualBytes = options.fits
+        ? undefined
+        : options.serializedBytes
+          ? options.serializedBytes(rendered(), resultBindings)
+          : Buffer.byteLength(rendered(), "utf8");
       sections[index] = prior;
       if (options.requireInline)
         fail(
           "invalid_request",
-          `Attachment could not be fully embedded within the configured limits: ${file.input}`,
+          actualBytes === undefined
+            ? `Attachment could not fit within the configured message limit: ${file.input}`
+            : `Mailbox payload is ${actualBytes} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes while embedding ${file.input}`,
           operation,
           { details: { capacity: true } },
         );
