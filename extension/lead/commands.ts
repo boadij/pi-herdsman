@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
+  DEFAULT_MAX_AGENT_DEPTH,
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   effectiveMergePolicy,
   setManagerMergeOverride,
@@ -116,6 +117,7 @@ type LeadCommandHost = {
   formatMessageLimit(bytes: number): string;
   validByteLimit(bytes: number): boolean;
   validStatusWidgetMaxRows: typeof import("../config.ts").validStatusWidgetMaxRows;
+  validMaxAgentDepth: typeof import("../config.ts").validMaxAgentDepth;
   input(
     ctx: ExtensionCommandContext,
     label: string,
@@ -1000,6 +1002,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Maximum ambient widget lines, including header and overflow (1–100).",
             },
             {
+              value: "max-agent-depth",
+              label: "Max Agent depth",
+              description: String(config.maxAgentDepth),
+              help: "Longest chain of nested Agents below the Lead, Manager or Chief (1 = Agents never delegate). Global only; checked at each launch. Existing Agents stay manageable when it is lowered.",
+            },
+            {
               value: "message-limits",
               label: "Message limits",
               help: "Configure inline attachment and managed mailbox payload byte limits.",
@@ -1061,6 +1069,53 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             } catch (error) {
               ctx.ui.notify(
                 `Could not update status widget rows: ${String(error)}`,
+                "error",
+              );
+            }
+          }
+        } else if (selected === "max-agent-depth") {
+          while (true) {
+            const choice = await host.selectMenu(ctx, "Max Agent depth", [
+              {
+                value: "default",
+                label: `Default (${DEFAULT_MAX_AGENT_DEPTH})`,
+              },
+              ...[1, 2, 3, 4, 5].map((depth) => ({
+                value: String(depth),
+                label: String(depth),
+              })),
+              { value: "custom", label: "Custom…" },
+              { value: "reset", label: "Reset" },
+            ]);
+            if (!choice) break;
+            let value: number | undefined;
+            if (choice === "reset") value = undefined;
+            else if (choice === "custom") {
+              const input = await host.input(
+                ctx,
+                "Custom max Agent depth (positive integer)",
+              );
+              if (input === undefined) continue;
+              value = Number(input.trim());
+              if (
+                !/^\d+$/u.test(input.trim()) ||
+                !host.validMaxAgentDepth(value)
+              ) {
+                ctx.ui.notify("Enter a positive integer", "error");
+                continue;
+              }
+            } else
+              value =
+                choice === "default" ? DEFAULT_MAX_AGENT_DEPTH : Number(choice);
+            try {
+              host.updateConfig("maxAgentDepth", value);
+              ctx.ui.notify(
+                `Max Agent depth: ${value === undefined ? "reset" : value}`,
+              );
+              break;
+            } catch (error) {
+              ctx.ui.notify(
+                `Could not update max Agent depth: ${String(error)}`,
                 "error",
               );
             }

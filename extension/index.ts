@@ -178,6 +178,7 @@ import {
   updateProjectOverride,
   updateConfig,
   validByteLimit,
+  validMaxAgentDepth,
   validStatusWidgetMaxRows,
 } from "./config.ts";
 import {
@@ -1613,6 +1614,7 @@ function registerExtensionImpl(
       formatMessageLimit,
       validByteLimit,
       validStatusWidgetMaxRows,
+      validMaxAgentDepth,
       input: (ctx: ExtensionCommandContext, label: string) =>
         ctx.ui.input(label),
       updateSpawnPlacement: (placement: string) =>
