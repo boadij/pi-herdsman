@@ -18,6 +18,24 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.42.0](https://github.com/boadij/pi-herdsman/compare/v0.41.0...v0.42.0) (2026-11-07)
+
+
+### Features
+
+* **agents:** add a configurable maximum agent nesting depth ([#866](https://github.com/boadij/pi-herdsman/issues/866)) ([787601a](https://github.com/boadij/pi-herdsman/commit/787601a0faf35940f247d5e8c2ce031268491923))
+
+
+### Fixes
+
+* **agent:** preserve extension-backed models on continuation ([#864](https://github.com/boadij/pi-herdsman/issues/864)) ([8909d29](https://github.com/boadij/pi-herdsman/commit/8909d29e25aae6da8f8282310be1202864e98b86))
+* **manager:** enforce tool policy across late registration ([#868](https://github.com/boadij/pi-herdsman/issues/868)) ([2e189b2](https://github.com/boadij/pi-herdsman/commit/2e189b2e73844687cf46afcdcbe06ec43a5e6e82)), closes [#832](https://github.com/boadij/pi-herdsman/issues/832)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.4 ([#873](https://github.com/boadij/pi-herdsman/issues/873)) ([c1fd32b](https://github.com/boadij/pi-herdsman/commit/c1fd32bc71646d1989222a9d626d1de5453ead7f))
+
 ## [0.41.0](https://github.com/boadij/pi-herdsman/compare/v0.40.0...v0.41.0) (2026-11-07)
 
 
