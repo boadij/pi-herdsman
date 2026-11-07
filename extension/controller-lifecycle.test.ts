@@ -1557,6 +1557,26 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
     };
     const mailbox = agentMailboxPath(WORKSPACE, parentLabel);
     writeAgentState(mailbox, parent);
+    // The owning Agent's record must exist for the durable ownership chain.
+    const ownerMailbox = agentMailboxPath(WORKSPACE, aLabel);
+    const ownsRecord = parent.ownerSessionId !== parent.rootSessionId;
+    // b is the second delegating generation, which needs a limit above the
+    // default and a depth hint that matches the ownership chain.
+    if (ownsRecord) {
+      realFs.mkdirSync(dirname(herdsmanConfigPath()), { recursive: true });
+      realFs.writeFileSync(
+        herdsmanConfigPath(),
+        JSON.stringify({ maxAgentDepth: 3 }),
+      );
+      process.env.PI_HERDSMAN_DEPTH = "2";
+    }
+    if (ownsRecord)
+      writeAgentState(ownerMailbox, {
+        ...managedState(aLabel, a!.requestId),
+        runId: a!.runId,
+        paneId: a!.paneId,
+        piSessionId: parent.ownerSessionId,
+      });
     Object.assign(process.env, {
       PI_HERDSMAN_MAILBOX: mailbox,
       PI_HERDSMAN_RUN_ID: parent.runId,
@@ -1676,6 +1696,11 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       pi.events.get("session_shutdown")?.[0]();
       stop?.();
       resetAgentMailbox(mailbox);
+      if (ownsRecord) {
+        resetAgentMailbox(ownerMailbox);
+        realFs.rmSync(herdsmanConfigPath(), { force: true });
+        delete process.env.PI_HERDSMAN_DEPTH;
+      }
       resetAgentMailbox(agentMailboxPath(WORKSPACE, childLabel));
     }
   };

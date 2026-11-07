@@ -216,6 +216,8 @@ async function launch(options: {
   max?: number;
   root?: boolean;
   parentLabel?: string;
+  /** Removes the ownership record of the Agent's direct owner. */
+  dropOwnerRecord?: boolean;
   /** Runs while the launch is being prepared, before the Agent starts. */
   duringPreparation?: () => void;
 }): Promise<{
@@ -240,6 +242,7 @@ async function launch(options: {
     '---\nname: worker\nagents: ["worker"]\n---\nworker\n',
   );
   const ancestors = seedAncestors(options.root ? 1 : (options.depth ?? 1));
+  if (options.dropOwnerRecord) ancestors.dropOwner();
   if (!options.root) process.env.PI_HERDSMAN_OWNER_SESSION_ID = ancestors.owner;
   const parent = {
     ...managedState(parentLabel),
@@ -740,15 +743,37 @@ test("cleanup of a delivered Agent fails closed when a descendant mailbox is unr
 test("durable depth counts recorded owners and rejects a cycle or a foreign workspace", () => {
   assert.equal(durableAgentDepth(chain, chain[0]!), 1);
   assert.equal(durableAgentDepth(chain, chain[3]!), 4);
-  // Owners recorded in another workspace are not part of this chain.
-  assert.equal(
-    durableAgentDepth(
-      chain.map((state, index) =>
-        index === 1 ? { ...state, workspaceId: "other-workspace" } : state,
+  // An owner recorded in another workspace is not part of this chain, so the
+  // chain no longer reaches its root and is rejected instead of truncated.
+  assert.throws(
+    () =>
+      durableAgentDepth(
+        chain.map((state, index) =>
+          index === 1 ? { ...state, workspaceId: "other-workspace" } : state,
+        ),
+        chain[3]!,
       ),
-      chain[3]!,
-    ),
-    2,
+    /does not reach its verified root/,
+  );
+  // A missing intermediate owner is not the root.
+  assert.throws(
+    () => durableAgentDepth([chain[0]!, chain[2]!, chain[3]!], chain[3]!),
+    /does not reach its verified root/,
+  );
+  // Duplicate records for one owner are ambiguous.
+  assert.throws(
+    () =>
+      durableAgentDepth(
+        [...chain, { ...chain[1]!, agentLabel: "a2-duplicate" }],
+        chain[3]!,
+      ),
+    /2 ownership records.*ambiguous/,
+  );
+  // Without a verified root the chain cannot be checked.
+  const { rootSessionId: _root, ...unrooted } = chain[0]!;
+  assert.throws(
+    () => durableAgentDepth([unrooted], unrooted),
+    /no verified root session/,
   );
   const loop = [
     { ...chain[0]!, ownerSessionId: chain[1]!.piSessionId },
@@ -771,6 +796,22 @@ test("a PI_HERDSMAN_DEPTH hint that disagrees with the ownership chain is refuse
   }
   // Negative control: the same chain with a matching hint launches.
   assert.equal((await launch({ depth: 2, max: 4 })).ok, true);
+});
+
+test("a missing intermediate owner is refused even when the hint equals the truncated count", async () => {
+  // Chain: root -> (missing) -> parent. Counting only the parent gives 1.
+  const { ok, details, env } = await launch({
+    depth: 2,
+    hint: 1,
+    max: 4,
+    dropOwnerRecord: true,
+  });
+  assert.equal(ok, false);
+  assert.match(
+    JSON.stringify(details),
+    /does not reach its verified root.*restart it from its owner/,
+  );
+  assert.deepEqual(env, [], "nothing was started");
 });
 
 test("a limit that changes while a launch is prepared rejects the launch", async () => {

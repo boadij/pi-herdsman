@@ -3226,6 +3226,8 @@ export default {
 export function seedAncestors(depth: number): {
   owner: string;
   cleanup(): void;
+  /** Deletes the direct owner's record, leaving a hole in the chain. */
+  dropOwner(): void;
 } {
   const mailboxes: string[] = [];
   let owner = LEAD_SESSION_ID;
@@ -3247,5 +3249,9 @@ export function seedAncestors(depth: number): {
   return {
     owner,
     cleanup: () => mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox)),
+    dropOwner: () => {
+      const last = mailboxes.at(-1);
+      if (last) resetAgentMailbox(last);
+    },
   };
 }

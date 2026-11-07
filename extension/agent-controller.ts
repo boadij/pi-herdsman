@@ -3131,14 +3131,15 @@ export function childAgentDepth(scope: ControllerScope): number {
 
 /**
  * Depth of a managed Agent according to the durable ownership records: 1 when
- * its owner is not itself a recorded Agent (a root controller), otherwise one
- * more than its owner's depth. `PI_HERDSMAN_DEPTH` is only a startup hint and
- * must agree with this before an Agent may delegate further.
+ * its owner is its verified root controller, otherwise one more than its
+ * owner's depth. `PI_HERDSMAN_DEPTH` is only a startup hint and must agree
+ * with this before an Agent may delegate further.
  *
- * An owner with no stored state counts as the root. A forged or stale record
- * could therefore under-count, but the caller compares the result with the
- * hint, so any disagreement refuses the launch (it fails closed), and a root
- * controller is the only owner that legitimately has no Agent record.
+ * The chain must end at the Agent's `rootSessionId`: an owner with no stored
+ * state that is not that root is a missing intermediate Agent, not the root,
+ * so it is rejected rather than counted as the root. Duplicate records for one
+ * owner are ambiguous and rejected too. Both fail closed; the caller refuses
+ * the launch with the cause.
  */
 export function durableAgentDepth(
   states: readonly ManagedAgentState[],
@@ -3148,12 +3149,27 @@ export function durableAgentDepth(
   let depth = 1;
   let current = agent;
   for (;;) {
-    const owner = states.find(
+    const owners = states.filter(
       (candidate) =>
         candidate.workspaceId === agent.workspaceId &&
         candidate.piSessionId === current.ownerSessionId,
     );
-    if (!owner) return depth;
+    if (owners.length > 1)
+      throw new Error(
+        `owner session ${current.ownerSessionId} has ${owners.length} ownership records, so the chain is ambiguous`,
+      );
+    const owner = owners[0];
+    if (!owner) {
+      if (!agent.rootSessionId?.trim())
+        throw new Error(
+          "its record has no verified root session, so the ownership chain cannot be checked",
+        );
+      if (current.ownerSessionId !== agent.rootSessionId)
+        throw new Error(
+          `the ownership chain does not reach its verified root: owner session ${current.ownerSessionId} has no ownership record and is not root session ${agent.rootSessionId}`,
+        );
+      return depth;
+    }
     if (seen.has(owner.piSessionId))
       throw new Error("Managed Agent ownership records form a cycle");
     seen.add(owner.piSessionId);

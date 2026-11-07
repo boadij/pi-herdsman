@@ -101,8 +101,9 @@ and checked again immediately before the agent starts; a launch whose limit
 changed in between is rejected and can be retried. `PI_HERDSMAN_DEPTH`, which
 the launching controller sets in an agent's environment, is only a startup
 hint: before an agent delegates, its depth is verified against the durable
-ownership records, and a disagreement refuses the launch with an error naming
-both values. The definition roster shown to an agent is advisory (it uses the
+ownership records, which must lead from the agent to its verified root
+session without a gap or an ambiguous record. A disagreement, a gap, or an
+ambiguous chain refuses the launch with an error naming the cause. The definition roster shown to an agent is advisory (it uses the
 hint); the launch check is authoritative. Running agents keep their capabilities when the limit is lowered
 and stay listable, inspectable, stoppable, and recoverable; an agent already at
 or beyond the lowered limit is refused further delegation with an error naming
