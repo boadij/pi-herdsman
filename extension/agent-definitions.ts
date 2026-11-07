@@ -1059,7 +1059,7 @@ export function configuredModel(frontmatter: Frontmatter): string | undefined {
  */
 export type ChildModelDecision =
   /** Nothing to pass: the child uses its own default. */
-  | { kind: "none" }
+  | { kind: "none"; extensionDiscovery: boolean }
   /**
    * Pass `--model`. `extensionDiscovery` is true when the model's provider is
    * registered by an extension, in which case the child must not be launched
@@ -1072,14 +1072,30 @@ export function resolveChildModel(input: {
   configured?: string;
   /** The spawning controller's model; Pi already resolved its provider. */
   inherited?: { provider: string; token: string };
+  /** Selection already stored in a resumed Pi session; never passed as CLI model. */
+  saved?: { provider: string; modelId: string };
+  /** Historical model entries conflict and cannot be resolved in this registry. */
+  savedUnresolved?: boolean;
   /** True when `providerId` is registered by an extension. */
   isForeignProvider: (providerId: string) => boolean;
+  isKnownModel?: (providerId: string, modelId: string) => boolean;
 }): ChildModelDecision {
   // A pinned model is passed through as written: the definition's own extension
   // policy governs it, so nothing here needs to interpret the value.
   if (input.configured !== undefined && input.configured.trim() !== "")
     return { kind: "use", model: input.configured, extensionDiscovery: false };
-  if (input.inherited === undefined) return { kind: "none" };
+  if (input.inherited === undefined) {
+    const saved = input.saved;
+    return {
+      kind: "none",
+      extensionDiscovery:
+        input.savedUnresolved === true ||
+        (!!saved &&
+          (input.isForeignProvider(saved.provider) ||
+            (input.isKnownModel !== undefined &&
+              !input.isKnownModel(saved.provider, saved.modelId)))),
+    };
+  }
   return {
     kind: "use",
     model: input.inherited.token,
@@ -1218,14 +1234,13 @@ export function agentLaunchArgs(
   const decision =
     options.modelDecision ??
     (requestedModel === undefined
-      ? { kind: "none" as const }
+      ? { kind: "none" as const, extensionDiscovery: false }
       : {
           kind: "use" as const,
           model: requestedModel,
           extensionDiscovery: false,
         });
   if (decision.kind === "use") args.push("--model", decision.model);
-
   const thinking = configuredThinking(agent) ?? inheritedThinking;
   if (thinking !== undefined) {
     args.push("--thinking", thinking);
@@ -1304,9 +1319,7 @@ export function agentLaunchArgs(
   // A model whose provider comes from an extension cannot resolve inside a
   // child denied extension discovery, so the model's needs outrank the
   // definition's preference to stay lean.
-  const extensionDiscovery =
-    decision.kind === "use" && decision.extensionDiscovery;
-  if (frontmatter.noExtensions && !extensionDiscovery)
+  if (frontmatter.noExtensions && !decision.extensionDiscovery)
     args.push("--no-extensions");
   for (const extension of frontmatter.extensions ?? [])
     args.push("--extension", extension);

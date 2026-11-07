@@ -1420,6 +1420,26 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
       availability: "ready",
     } as never),
   );
+  const attested = {
+    ...value,
+    startupAttestation: {
+      kind: "model_restore" as const,
+      assignmentId: value.piSessionId,
+      generation: value.instanceId,
+      result: "verified" as const,
+    },
+  };
+  writeLeadCoordinationState(runtime, attested);
+  assert.deepEqual(readLeadCoordinationState(runtime, "lead"), attested);
+  assert.throws(() =>
+    writeLeadCoordinationState(runtime, {
+      ...attested,
+      startupAttestation: {
+        ...attested.startupAttestation,
+        generation: randomUUID(),
+      },
+    } as never),
+  );
   writeFileSync(path, JSON.stringify({ ...value, piSessionId: "other" }));
   assert.throws(
     () => readLeadCoordinationState(runtime, "lead"),

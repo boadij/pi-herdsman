@@ -39,7 +39,10 @@ import {
   readRequiredEvidenceSnapshot,
   type RequiredEvidence,
 } from "../storage.ts";
-import { acceptedCloseProof } from "../agent-controller.ts";
+import {
+  acceptedCloseProof,
+  resolveSavedSessionModelSelection,
+} from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
 import {
@@ -60,6 +63,38 @@ import type { ManagedAgentState } from "../mailbox.ts";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+
+export function isFreshLeadStartupAttestation(
+  state:
+    | {
+        instanceId: string;
+        piSessionId: string;
+        updatedAt: number;
+        startupAttestation?: {
+          kind: string;
+          assignmentId: string;
+          generation: string;
+          result: string;
+        };
+      }
+    | undefined,
+  sessionId: string,
+  previousInstanceId: string | undefined,
+  startedAt: number,
+): boolean {
+  return (
+    !!state &&
+    state.piSessionId === sessionId &&
+    state.instanceId !== previousInstanceId &&
+    state.updatedAt >= startedAt &&
+    state.startupAttestation?.kind === "model_restore" &&
+    state.startupAttestation.assignmentId === sessionId &&
+    state.startupAttestation.generation === state.instanceId &&
+    ["verified", "definition_override", "no_saved_model"].includes(
+      state.startupAttestation.result,
+    )
+  );
+}
 
 export type ManagerEvidence = (
   ctx: ExtensionContext,
@@ -3106,17 +3141,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       resumeMessageQueued = true;
     };
+    const live =
+      operation.action === "resume"
+        ? await liveAgent(ctx, currentAssignment!.id)
+        : [];
+    if (live.length === 1 && currentAssignment!.piSessionFile)
+      await bindLeadSessionFile(currentAssignment!, live[0]);
     let savedSessionCwd: string | undefined;
+    let savedModel:
+      ReturnType<typeof resolveSavedSessionModelSelection> | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
+      let saved: ReturnType<typeof host.SessionManager.open>;
       try {
-        const saved = host.SessionManager.open(
-          currentAssignment!.piSessionFile!,
+        saved = host.SessionManager.open(currentAssignment!.piSessionFile!);
+      } catch (error) {
+        throw new Error(
+          `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history is unavailable or unreadable; existing work was preserved. ${error instanceof Error ? error.message : String(error)}`,
         );
-        if (saved.getSessionId() === currentAssignment!.id)
-          savedSessionCwd = saved.getCwd();
-      } catch {
-        // Keep unavailable exact-session provenance fail-closed.
       }
+      if (saved.getSessionId() !== currentAssignment!.id)
+        throw new Error(
+          `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history has a mismatched session ID; existing work was preserved.`,
+        );
+      savedSessionCwd = saved.getCwd();
+      savedModel = resolveSavedSessionModelSelection(
+        saved,
+        (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+      );
     }
     const placement =
       operation.action === "resume"
@@ -3175,10 +3226,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
-    const live =
-      operation.action === "resume"
-        ? await liveAgent(ctx, currentAssignment!.id)
-        : [];
     if (live.length > 1)
       throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
     if (live.length === 1) {
@@ -3633,6 +3680,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       await assertUnoccupied(workspaceId!);
       let lead: any;
       let startedLead = false;
+      let previousLeadInstanceId: string | undefined;
+      let leadStartupStartedAt: number | undefined;
+      let freshRestorationAttestation = false;
       const verifyLeadCandidate = (candidate: any): boolean => {
         const reported = sessionIdentity(candidate?.agent_session);
         if (!reported) return false;
@@ -3664,6 +3714,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Existing session in new worktree has a conflicting role or identity",
           );
+        if (startedLead) {
+          freshRestorationAttestation =
+            leadStartupStartedAt !== undefined &&
+            isFreshLeadStartupAttestation(
+              state,
+              assignment.id,
+              previousLeadInstanceId,
+              leadStartupStartedAt,
+            );
+          if (!freshRestorationAttestation) return false;
+        }
         return state?.role === "lead" && state.piSessionId === assignment.id;
       };
       const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
@@ -3756,8 +3817,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     token: `${ctx.model.provider}/${ctx.model.id}`,
                   }
                 : undefined,
+            saved:
+              operation.action === "resume" && savedModel?.kind === "resolved"
+                ? savedModel.model
+                : undefined,
+            savedUnresolved:
+              operation.action === "resume" &&
+              (savedModel === undefined || savedModel.kind === "unresolved"),
             isForeignProvider: (providerId) =>
               registeredProviderIds.has(providerId),
+            isKnownModel: (provider, modelId) =>
+              ctx.modelRegistry.find(provider, modelId) !== undefined,
           });
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
@@ -3769,6 +3839,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               : {}),
             modelDecision,
           });
+          previousLeadInstanceId = readLeadCoordinationState(
+            supervisionRuntime(),
+            assignment.id,
+          )?.instanceId;
+          leadStartupStartedAt = Date.now();
           await startHerdrAgentInPane(pi, ctx, {
             primaryWorkspaceId,
             workspaceId,
@@ -3789,6 +3864,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let herdrSessionReported = false;
       let sessionIdResolved = false;
       let leadStateObserved = false;
+      let leadIdentityObserved = false;
       while (!lead && Date.now() < deadline) {
         const inventory = await herdrSessionSnapshot(pi, ctx, signal);
         const candidates = inventory.agents.filter(
@@ -3810,6 +3886,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             assignment.id,
           );
           leadStateObserved = Boolean(candidateState);
+          leadIdentityObserved =
+            candidateState?.role === "lead" &&
+            candidateState.piSessionId === assignment.id;
           if (candidateState)
             requireCompatibleBuild(
               HERDSMAN_BUILD,
@@ -3851,7 +3930,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ? "Herdr session reported, but Herdsman Lead coordination state was never published"
               : !sessionIdResolved
                 ? "Lead state was present but Herdr's session path is not yet materialized"
-                : "Lead coordination state was present but not a valid Lead identity";
+                : !leadIdentityObserved
+                  ? "Lead coordination state was present but not a valid Lead identity"
+                  : startedLead && !freshRestorationAttestation
+                    ? "Lead model restoration attestation was absent or stale for the new startup generation"
+                    : "Lead coordination state was present but not a valid Lead identity";
         let processInfo = "unavailable";
         try {
           const process = await runHerdr(
