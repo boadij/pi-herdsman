@@ -69,13 +69,37 @@ for (const scenario of [
       }[],
     };
     let startupReturnedAt: number | undefined;
+    let agentStarted = false;
     const pi = fakePi({
       exec: async (command, args, options) => {
         const operation = safeHerdrOperation(command, args);
         const startedAt = performance.now();
         try {
+          if (agentStarted && operation === "pane-process-info")
+            return {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  process_info: {
+                    pane_id: "startup-pane",
+                    shell_pid: 123,
+                    foreground_process_group_id: 456,
+                    foreground_processes: [{ pid: 456, argv0: "node" }],
+                  },
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+          if (command === "herdr" && isPreservePaneStop(args))
+            return {
+              stdout: "",
+              stderr: "fixture rollback stop failed",
+              code: 1,
+            };
           const result = await startup.exec(command, args, options);
           if (operation === "agent-start") {
+            agentStarted = true;
             const outcome = readAgentStartupOutcome(startup.mailbox)!;
             if (scenario === "failed")
               writeAgentStartupOutcome(startup.mailbox, {

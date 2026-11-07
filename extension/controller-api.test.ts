@@ -2509,7 +2509,9 @@ for (const reachable of [true, false]) {
     const pi = fakeChiefPi({
       activeTools: ["read"],
       exec,
-      sendMessage: (message) => managerHistory.push(message),
+      sendMessage: (message) => {
+        managerHistory.push(message);
+      },
     });
     let failRemovalForId: string | undefined;
     registerExtensionForTest!(pi.pi as never, {
@@ -6803,11 +6805,11 @@ async function runManagerStartupScenario(
       assignment.requiredEvidence?.length ?? 0,
       largeEvidence ? 2 : 1,
     );
-    if (largeEvidence)
-      assert.match(
-        assignment.requiredEvidence?.[0]?.sha256 ?? "",
-        /^[a-f0-9]{64}$/,
-      );
+    if (largeEvidence) {
+      const evidence = assignment.requiredEvidence?.[0];
+      assert.ok(evidence && !("result" in evidence));
+      assert.match(evidence.sha256, /^[a-f0-9]{64}$/);
+    }
     assert.equal(createCalls, 1);
     assert.equal(startCalls, mode === "recovery" ? 0 : 1);
     assert.equal(openCalls, 0);

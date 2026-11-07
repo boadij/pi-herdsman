@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
+import type {
+  RequestRecord,
+  ManagedAgentState,
+  ResultRecord,
+} from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import support, {
@@ -153,7 +157,9 @@ test("recovery delivers Manager-owned results and asks only to the exact owner",
   const pi = fakePi({
     entries,
     exec: agentControllerExecutor(parent, states.slice(1)),
-    sendMessage: (message) => entries.push(message),
+    sendMessage: (message) => {
+      entries.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries);
@@ -272,7 +278,9 @@ test("combined status reports a completed agent as pending, not active", async (
   const pi = fakePi({
     entries,
     exec: agentControllerExecutor(parent, [trigger, pending, settling]),
-    sendMessage: (message) => entries.push(message),
+    sendMessage: (message) => {
+      entries.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   try {
@@ -4719,7 +4727,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parentPi = fakePi({
     exec,
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   registerExtension!(parentPi.pi as never);
   const parentContext = fakeAgentContext([
@@ -4845,7 +4855,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   const rootSent: unknown[] = [];
   const rootPi = fakePi({
     exec: agentControllerExecutor(parent, [child, unrelated]),
-    sendMessage: (message) => rootSent.push(message),
+    sendMessage: (message) => {
+      rootSent.push(message);
+    },
   });
   registerExtension!(rootPi.pi as never);
   await rootPi.events.get("session_start")![0](undefined, fakeContext());
@@ -5081,7 +5093,9 @@ test("health scanner alerts true runtime blocking", async () => {
       true,
       "blocked",
     ),
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -5150,7 +5164,9 @@ test("health attention stays idle-only and does not queue resolved stale work", 
       DEFAULT_PI_SESSION_ID,
       identity,
     ),
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   const context = fakeContext();
   (context as any).isIdle = () => false;
@@ -6667,7 +6683,9 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
         DEFAULT_PI_SESSION_ID,
       )(command, args);
     },
-    sendMessage: (message) => sends.push(message),
+    sendMessage: (message) => {
+      sends.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });

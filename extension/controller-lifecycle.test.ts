@@ -22,6 +22,7 @@ import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 
 import { claimProcessLock } from "./lock.ts";
 import {
+  semanticEvidenceRef,
   persistRequiredEvidenceSnapshot,
   readRequiredEvidenceSnapshot,
   resultPath,
@@ -208,6 +209,8 @@ import {
   writeResult,
   writeAgentState,
   writeAgentStartupOutcome,
+  type ExecHandler,
+  type FixtureIdentity,
   testTmpRoot,
 } from "./support.ts";
 
@@ -2039,12 +2042,12 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       assert.equal(published!.text.split(ref).length - 1, 1);
     }
     assert.equal(published!.text.split("result:reviewer#2").length - 1, 1);
-    assert.ok(!published!.text.includes(published!.requiredEvidence![3]!.path));
     assert.match(published!.text, /evidence:plan#1 — plan\.md/);
     assert.match(published!.text, /evidence:review#1 — review\.md/);
     assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
     const retained = published!.requiredEvidence![3]!;
     assert.ok(!("result" in retained));
+    assert.ok(!published!.text.includes(retained.path));
     realFs.rmSync(retainedFile, { force: true });
     realFs.rmSync(retainedFileAfterResult, { force: true });
     realFs.rmSync(resultArtifact, { force: true });
@@ -7535,7 +7538,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
     );
     assert.equal(scopeAssignments[0]!.id, assignment.id);
     assert.deepEqual(
-      scopeAssignments[0]!.requiredEvidence?.map((entry) => entry.ref),
+      scopeAssignments[0]!.requiredEvidence?.map(semanticEvidenceRef),
       [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
       "normal active-Lead access upgrades legacy evidence without resume_work",
     );
@@ -7574,7 +7577,7 @@ test("assigned Lead migrates legacy project evidence and preserves attachment or
       "active assignment migration preserves existing evidence identities",
     );
     assert.deepEqual(
-      migratedAssignment?.requiredEvidence?.map((entry) => entry.ref),
+      migratedAssignment?.requiredEvidence?.map(semanticEvidenceRef),
       [snapshot.ref, olderBrief.ref, historicalBrief.ref, longEvidence.ref],
       "active Lead delegation persists stable refs without resume_work",
     );
@@ -8805,9 +8808,14 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
       projectAssignmentPath(runtime, assignment.repoKey, branch),
       JSON.stringify(assignment),
     );
+    const legacyEvidence = readProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      branch,
+    )?.requiredEvidence?.[0];
+    assert.ok(legacyEvidence && !("result" in legacyEvidence));
     assert.equal(
-      readProjectAssignment(runtime, assignment.repoKey, branch)
-        ?.requiredEvidence?.[0]?.ref,
+      legacyEvidence.ref,
       undefined,
       "the authority-lock case starts from legacy evidence",
     );
@@ -8844,9 +8852,15 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     assert.equal(recovered.details.ok, true, JSON.stringify(recovered.details));
     await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
     assert.equal(starts, 1);
+    const recoveredEvidence = readProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      branch,
+    )?.requiredEvidence?.[0];
     assert.ok(
-      readProjectAssignment(runtime, assignment.repoKey, branch)
-        ?.requiredEvidence?.[0]?.ref,
+      recoveredEvidence &&
+        !("result" in recoveredEvidence) &&
+        recoveredEvidence.ref,
       "recovery persists the semantic evidence reference",
     );
   } finally {
@@ -9354,15 +9368,14 @@ test("legacy project evidence gets a durable ref before resume and keeps it acro
       "repo-key",
       branch,
     )!;
-    const ref = upgraded.requiredEvidence![0]!.ref;
-    assert.match(ref!, /^evidence:accepted-plan#[1-9][0-9]*$/);
-    assert.equal(upgraded.requiredEvidence![0]!.id, snapshot.id);
-    assert.equal(
-      upgraded.requiredEvidence![0]!.sourceAssignmentId,
-      LEAD_SESSION_ID,
-    );
-    assert.equal(upgraded.requiredEvidence![0]!.path, snapshot.path);
-    assert.equal(upgraded.requiredEvidence![0]!.sha256, snapshot.sha256);
+    const upgradedEvidence = upgraded.requiredEvidence![0]!;
+    assert.ok(!("result" in upgradedEvidence));
+    assert.ok(upgradedEvidence.ref);
+    assert.match(upgradedEvidence.ref, /^evidence:accepted-plan#[1-9][0-9]*$/);
+    assert.equal(upgradedEvidence.id, snapshot.id);
+    assert.equal(upgradedEvidence.sourceAssignmentId, LEAD_SESSION_ID);
+    assert.equal(upgradedEvidence.path, snapshot.path);
+    assert.equal(upgradedEvidence.sha256, snapshot.sha256);
     assert.deepEqual(
       readProjectAssignment(runtime, "repo-key", branch),
       upgraded,

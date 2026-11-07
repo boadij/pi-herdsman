@@ -59,7 +59,10 @@ import {
   coordinatorTarget,
   rememberCoordinatorTarget,
 } from "./coordinator-target.ts";
-import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
+import {
+  AGENT_COORDINATION_TOOLS,
+  type AgentDefinition,
+} from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
 
@@ -647,6 +650,8 @@ import {
   writeResult,
   writeAgentState,
   writeAgentStartupOutcome,
+  type ExecResult,
+  type FixtureIdentity,
 } from "./support.ts";
 import {
   createLeadToolState,
@@ -12908,7 +12913,9 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
       const receiver = fakeChiefPi({
         entries,
         exec: peerTopologyExec,
-        sendMessage: (message) => entries.push(message),
+        sendMessage: (message) => {
+          entries.push(message);
+        },
         activeTools: ["read", "bash"],
       });
       const context = fakeContext(entries) as any;
@@ -21409,7 +21416,7 @@ test("delegating managed Agents focus only fresh owned child-row identities", as
   ]) as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -21724,7 +21731,7 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
   const ctx = fakeContext() as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -21886,7 +21893,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   ctx.mode = "tui";
   ctx.hasUI = true;
   ctx.cwd = process.cwd();
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -22101,7 +22108,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   context.sessionManager.getSessionId = () => currentSessionId;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
@@ -22195,7 +22202,7 @@ test("status session preparation drops the previous session snapshot", async (t)
     runtimeForLabel: () => undefined,
     ownToolsSnapshot: () => ({}),
   });
-  const widgets: StatusWidget[] = [];
+  const widgets: InstanceType<typeof StatusWidget>[] = [];
   const context = () => {
     const ctx = fakeContext() as any;
     ctx.mode = "tui";
@@ -22343,7 +22350,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
     theme,
   );
   assert.ok(component instanceof StatusWidget);
-  (component as StatusWidget).setSnapshot({
+  (component as InstanceType<typeof StatusWidget>).setSnapshot({
     agents: [{ label: "agent", definition: "agent", state: "working" }],
     stale: false,
     unavailable: false,
@@ -22352,7 +22359,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
   assert.notEqual(factory, component);
   const leadSignal = pi.execOptions.find((options) => options.signal)?.signal;
   assert.ok(leadSignal);
-  (component as StatusWidget).dispose();
+  (component as InstanceType<typeof StatusWidget>).dispose();
   await pi.events.get("session_shutdown")?.[0]();
   assert.equal(leadSignal.aborted, true);
 });
@@ -22366,8 +22373,11 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     resolve: (value: { stdout: string; stderr: string; code: number }) => void;
     signal?: AbortSignal;
   }[] = [];
-  const widgets: StatusWidget[] = [];
-  const factories: ((tui: any, theme: any) => StatusWidget)[] = [];
+  const widgets: InstanceType<typeof StatusWidget>[] = [];
+  const factories: ((
+    tui: any,
+    theme: any,
+  ) => InstanceType<typeof StatusWidget>)[] = [];
   const originalDispose = StatusWidget.prototype.dispose;
   let disposeCalls = 0;
   let registrations = 0;
@@ -22426,9 +22436,19 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
         setWidget: (_key: string, content: unknown) => {
           registrations++;
           if (typeof content === "function") {
-            factories.push(content as (tui: any, theme: any) => StatusWidget);
+            factories.push(
+              content as (
+                tui: any,
+                theme: any,
+              ) => InstanceType<typeof StatusWidget>,
+            );
             widgets.push(
-              (content as (tui: any, theme: any) => StatusWidget)(
+              (
+                content as (
+                  tui: any,
+                  theme: any,
+                ) => InstanceType<typeof StatusWidget>
+              )(
                 { requestRender: () => undefined },
                 {
                   fg: (_color: string, text: string) => text,
@@ -22843,7 +22863,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   const context = fakeContext() as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -22999,7 +23019,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   const context = fakeContext() as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -23047,6 +23067,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   });
   await t.waitFor(() => {
     assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
+    assert.ok(widget);
     const rendered = widget.render(160).join("\n");
     assert.match(rendered, /● lead\s+× 1/);
     assert.match(rendered, /fresh-widget-agent/);
@@ -23138,7 +23159,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
   };
   let startedRunId = AGENT_ID;
   let startedOwnerSessionId = LEAD_SESSION_ID;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   try {
     setLeadEnvironment();
     resetAgentMailbox(mailbox);

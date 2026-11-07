@@ -560,6 +560,7 @@ test("delegation copies retained evidence under the destination and rejects stal
     (entry: any) => entry.name === source.name,
   );
   assert.ok(copy);
+  assert.ok(!("result" in copy));
   assert.equal(copy.sourceAssignmentId, accepted.published.id);
   assert.notEqual(copy.ref, source.ref);
   assert.equal(
@@ -784,11 +785,11 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   changeRoleUnderLock = false;
   role = "manager";
   const before = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
-  assert.equal(
-    before.requiredEvidence?.find((item) => item.id === "inherited")
-      ?.sourceAssignmentId,
-    "parent-assignment",
+  const inheritedEvidence = before.requiredEvidence?.find(
+    (item) => item.id === "inherited",
   );
+  assert.ok(inheritedEvidence && !("result" in inheritedEvidence));
+  assert.equal(inheritedEvidence.sourceAssignmentId, "parent-assignment");
 
   // Cancel means the UI does not invoke the removal callback.
   const confirmation = "cancel";

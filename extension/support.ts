@@ -6,6 +6,7 @@ import { basename, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 import type {
   RequestRecord,
@@ -114,6 +115,8 @@ realFs.writeFileSync(
   "---\nname: agent\n---\nagent instructions\n",
 );
 const {
+  ModelRegistry: NativeModelRegistry,
+  ModelRuntime: NativeModelRuntime,
   buildContextEntries: nativeBuildContextEntries,
   buildSessionProjection: nativeBuildSessionProjection,
   CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
@@ -122,6 +125,12 @@ const {
   parseSessionEntries: nativeParseSessionEntries,
   truncateTail: nativeTruncateTail,
 } = await import("@earendil-works/pi-coding-agent");
+const fakeModelRuntime = await NativeModelRuntime.create({
+  authPath: join(testTmpRoot, "fake-auth.json"),
+  modelsPath: null,
+  refreshOnCreate: false,
+});
+const fakeModelRegistry = new NativeModelRegistry(fakeModelRuntime);
 process.on("exit", () => {
   realFs.rmSync(testTmpRoot, { recursive: true, force: true });
   realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true });
@@ -778,15 +787,22 @@ export function assignmentLockPathForTest(mailbox: string): string {
 export function fakeContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
-): Context {
+): ExtensionContext {
   return {
     cwd: "/tmp",
     hasUI: false,
     mode: "tui",
+    modelRegistry: fakeModelRegistry,
+    model: undefined,
+    scopedModels: [],
+    signal: undefined,
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
     hasPendingMessages: () => false,
+    shutdown: () => undefined,
+    compact: () => undefined,
+    getSystemPrompt: () => "",
     waitForIdle: async () => undefined,
     getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
@@ -835,7 +851,7 @@ export function seedLeadRole(
 export function fakeAgentContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
-): Context {
+): ExtensionContext {
   const context = fakeContext(entries, branch);
   context.sessionManager = {
     ...context.sessionManager,
@@ -856,6 +872,11 @@ export type ExecHandler = (
   args: string[],
   options?: { timeout?: number; signal?: AbortSignal },
 ) => ExecResult | Promise<ExecResult>;
+type SyncExecHandler = (
+  command: string,
+  args: string[],
+  options?: { timeout?: number; signal?: AbortSignal },
+) => ExecResult;
 
 const HERDR_STATUS_RESPONSE = JSON.stringify({
   client: { version: "0.9.1" },
@@ -880,7 +901,12 @@ export function fakePi(
     allTools?: unknown[] | (() => unknown[]);
   } = {},
 ) {
-  const events = new Map<string, ((event: any, ctx: Context) => unknown)[]>();
+  type StoredEventHandler = (
+    event?: unknown,
+    ctx?: ExtensionContext,
+  ) => unknown;
+  const events = new Map<string, StoredEventHandler[]>();
+  const eventListeners = new Map<string, ((event: unknown) => unknown)[]>();
   const commands: string[] = [];
   const commandOptions = new Map<string, any>();
   const entryRenderers: { customType: string; renderer: unknown }[] = [];
@@ -902,14 +928,17 @@ export function fakePi(
       : [...(options.activeTools ?? [])];
   const pi = {
     events: {
-      on(name: string, handler: (event: any) => unknown) {
-        events.set(name, [...(events.get(name) ?? []), handler]);
+      on(name: string, handler: (event: unknown) => unknown) {
+        eventListeners.set(name, [
+          ...(eventListeners.get(name) ?? []),
+          handler,
+        ]);
       },
       emit(name: string, event: any) {
-        for (const handler of events.get(name) ?? []) handler(event);
+        for (const handler of eventListeners.get(name) ?? []) handler(event);
       },
     },
-    on(name: string, handler: (event: any, ctx: Context) => unknown) {
+    on(name: string, handler: StoredEventHandler) {
       events.set(name, [...(events.get(name) ?? []), handler]);
     },
     registerCommand(name: string, options: any) {
@@ -1245,7 +1274,7 @@ export function leadExec(
   identity: FixtureIdentity = defaultFixtureIdentity,
   useAgentStatus = false,
   agentStatus: unknown = status,
-): ExecHandler {
+): SyncExecHandler {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   consumeMailboxRequest(mailbox, (request) => {
     if (onRequest) onRequest(mailbox, controlMarker(request.requestId));
@@ -1394,7 +1423,7 @@ export function agentFromState(
 export function agentControllerExecutor(
   parent: ManagedAgentState,
   children: ManagedAgentState[] = [],
-): ExecHandler {
+): SyncExecHandler {
   for (const child of [parent, ...children])
     consumeMailboxRequest(
       agentMailboxPath(child.workspaceId, child.agentLabel),
@@ -1512,7 +1541,7 @@ export function delegatedLifecycleExecutor(
   testCwd = "/tmp",
   callerPane?: { paneId: string; tabId: string },
 ): {
-  exec: ExecHandler;
+  exec: SyncExecHandler;
   live: Map<string, ManagedAgentState>;
   closeOrder: string[];
   environmentCommands: string[];
@@ -1896,7 +1925,7 @@ export function cascadeExecutor(
     omitPaneLabels?: string[];
   } = {},
 ): {
-  exec: ExecHandler;
+  exec: SyncExecHandler;
   closeOrder: string[];
   live: Map<string, ManagedAgentState>;
 } {
@@ -2454,7 +2483,7 @@ export function createStagedAssignmentFixture(
   const context = fakeContext(pi.entries) as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       assertWidgetContent(content);
@@ -2485,7 +2514,7 @@ export function createStagedAssignmentFixture(
     startup,
     sessionStart,
     mailbox: startup.mailbox,
-    get widgetValue(): StatusWidget {
+    get widgetValue(): InstanceType<typeof StatusWidget> {
       assert.ok(widget, "staged fixture did not create a status widget");
       return widget;
     },
@@ -2600,7 +2629,11 @@ export function startupExecutor(
   sessionObservationId?: string,
   testPaneId = "startup-pane",
 ): {
-  exec: ExecHandler;
+  exec: (
+    command: string,
+    args: string[],
+    options?: { timeout?: number; signal?: AbortSignal },
+  ) => ExecResult;
   mailbox: string;
   getCount: () => number;
   stopMailboxConsumer: () => void;

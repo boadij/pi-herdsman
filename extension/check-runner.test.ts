@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ExecFileException,
+} from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -133,9 +138,10 @@ test("suite timeout reuses the completed proactive snapshot", async () => {
     "ignore",
     { snapshotAt: 10, emit: (text: string) => (emitted = text) },
   );
-  assert.equal(result.kind, "suite-timeout");
+  assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
   assert.equal(starts, 1);
   assert.match(emitted, /phase=pre-deadline elapsed=/);
+  assert.ok(result.workerDiagnostic);
   assert.match(result.workerDiagnostic, /unattributed node workers=1/);
 });
 
@@ -167,8 +173,8 @@ test("Windows snapshot attribution uses the repository root outside the checkout
     (
       _command: string,
       args: string[],
-      options: { cwd?: string },
-      callback: (error: null, stdout: string) => void,
+      options: { cwd?: string | URL },
+      callback: (error: ExecFileException | null, stdout: string) => void,
     ) => {
       snapshotCwdIsRepositoryRoot = options.cwd === repositoryRoot;
       snapshotScript = args.at(-1)!;
@@ -457,17 +463,16 @@ test(
       "hanging fixture",
     );
 
-    assert.equal(result.ok, false);
-    assert.equal(result.kind, "suite-timeout");
-    assert.equal(result.timedOut, true);
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.match(result.diagnostic, /suite deadline/);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
     );
     if (process.platform === "win32") {
-      assert.equal(result.runnerGone, true);
+      assert.ok(result.runnerGone);
       assert.match(result.diagnostic, /descendant cleanup unverified/);
+      assert.ok(result.workerDiagnostic);
       assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
     } else {
       assert.equal(result.workerDiagnostic, undefined);
@@ -498,7 +503,9 @@ test(
         "hanging fixture",
         snapshot,
       );
-      assert.equal(result.kind, "suite-timeout");
+      assert.ok(
+        !result.ok && result.kind === "suite-timeout" && result.timedOut,
+      );
       assert.equal(
         result.treeGone,
         process.platform === "win32" ? undefined : true,
@@ -549,9 +556,7 @@ test(
         return pending;
       },
     );
-    assert.equal(result.ok, false);
-    assert.equal(result.kind, "suite-timeout");
-    assert.equal(result.timedOut, true);
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
@@ -585,7 +590,7 @@ test(
     );
     assert.equal(snapshotStarted, true);
     assert.equal(snapshotSignal?.aborted, true);
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts",
@@ -762,8 +767,11 @@ test(
     );
 
     assert.equal(escalationAttempted, true);
-    assert.equal(result.kind, "suite-timeout-cleanup-failed");
-    assert.equal(result.captureStopUnconfirmed, true);
+    assert.ok(
+      !result.ok &&
+        result.kind === "suite-timeout-cleanup-failed" &&
+        result.captureStopUnconfirmed,
+    );
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot unavailable (capture stop unconfirmed)",
@@ -822,7 +830,7 @@ test(
     assert.equal(runnerAliveAtSnapshotAbort, true);
     assert.equal(aborted, true);
     assert.equal(snapshotSettled, true);
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot unavailable (capture deadline)",
@@ -879,6 +887,7 @@ test(
     );
     assert.ok(pids);
     process.kill(pids.child, 0);
+    assert.ok(!result.ok && result.kind === "suite-timeout-cleanup-failed");
     assert.equal(result.treeGone, undefined);
     assert.match(result.diagnostic, /descendant cleanup unverified/);
   },
@@ -925,12 +934,13 @@ test(
         process.env.NODE_TEST_CONTEXT = testContext;
     }
     const result = await run;
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
     );
     if (process.platform === "win32") {
+      assert.ok(result.workerDiagnostic);
       assert.match(result.workerDiagnostic, /Windows timeout snapshot/);
       assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
       for (const line of result.workerDiagnostic.split("\n")) {

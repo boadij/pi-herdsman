@@ -286,7 +286,9 @@ test("legacy snapshot records remain valid and upgrade without changing provenan
       readRequiredEvidenceSnapshot(assignmentId, upgraded),
       "plan\n",
     );
-    assert.equal(upgradeRequiredEvidence(legacy).ref, upgraded.ref);
+    const upgradedAgain = upgradeRequiredEvidence(legacy);
+    assert.ok(!("result" in upgradedAgain));
+    assert.equal(upgradedAgain.ref, upgraded.ref);
   } finally {
     rmSync(requiredEvidenceDirectory(assignmentId), {
       recursive: true,

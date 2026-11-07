@@ -5430,10 +5430,10 @@ test("acceptance upgrades legacy evidence durably without rewriting saved contin
       managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence,
       [{ ...legacyEvidence, ref: snapshot.ref }],
     );
-    assert.equal(
-      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0]?.ref,
-      snapshot.ref,
-    );
+    const reloadedEvidence =
+      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0];
+    assert.ok(reloadedEvidence && !("result" in reloadedEvidence));
+    assert.equal(reloadedEvidence.ref, snapshot.ref);
     const reader = agent.tools.find((tool) => tool.name === "read_evidence");
     assert.ok(reader);
     const read = await reader.execute(
