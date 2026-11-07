@@ -1996,6 +1996,122 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   }
 });
 
+test("registered Manager turn_end adapter reconciles late tools in the live policy", async () => {
+  setLeadEnvironment();
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
+  mkdirSync(dirname(managerOverride), { recursive: true });
+  const previousOverride = realFs.existsSync(managerOverride)
+    ? readFileSync(managerOverride, "utf8")
+    : undefined;
+  process.env.HERDR_PANE_ID = "manager-late-tools-pane";
+  process.env.HERDR_TAB_ID = "manager-late-tools-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-late-tools-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeRepositoryChiefPi({
+    activeTools: ["read", "bash"],
+    autoActivateRegisteredTools: true,
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "/tmp",
+                repo_name: "project",
+              },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [managerAgentIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
+                : respond({}),
+  });
+  const context = fakeContext(pi.entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    const ordinaryBaseline = pi.pi.getActiveTools();
+    await pi.commandOptions.get("manager").handler("", context);
+
+    pi.pi.registerTool({ name: "late_unallowed" });
+    assert.ok(pi.pi.getActiveTools().includes("late_unallowed"));
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    pi.pi.setActiveTools([...pi.pi.getActiveTools(), "late_unallowed"]);
+    assert.deepEqual(
+      pi.events.get("tool_call")![0]({ toolName: "late_unallowed" }, context),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Manager profile.",
+      },
+    );
+
+    writeFileSync(
+      managerOverride,
+      "---\nname: manager\ntools: [mcp__forgejo__get_issue_by_index]\n---\n",
+    );
+    await pi.commandOptions.get("manager").handler("refresh", context);
+    pi.pi.registerTool({ name: "mcp__forgejo__get_issue_by_index" });
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(
+      pi.pi.getActiveTools().includes("mcp__forgejo__get_issue_by_index"),
+    );
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    assert.equal(
+      pi.events.get("tool_call")![0](
+        { toolName: "mcp__forgejo__get_issue_by_index" },
+        context,
+      ),
+      undefined,
+    );
+    const validTools = pi.pi.getActiveTools();
+    writeFileSync(managerOverride, "---\nname: manager\ntools: invalid\n---\n");
+    await pi.commandOptions.get("manager").handler("refresh", context);
+    assert.deepEqual(pi.pi.getActiveTools(), validTools);
+
+    pi.pi.registerTool({ name: "late_during_continuation" });
+    const turnEndHandlers = pi.events.get("turn_end") ?? [];
+    assert.equal(turnEndHandlers.length, 1);
+    // This handler was installed by registerExtension -> registerLeadRuntime;
+    // it must reach the production roleTransitions.reconcileRoleTools adapter.
+    await turnEndHandlers[0]!({}, context);
+    assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
+    assert.equal(sessionLeadRoleState(pi.entries)?.role, "manager");
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), ordinaryBaseline);
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    if (previousOverride === undefined)
+      rmSync(managerOverride, { force: true });
+    else writeFileSync(managerOverride, previousOverride);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+  }
+});
+
 test("ordinary Leads deliver peer messages across non-Git sockets", async (t) => {
   setLeadEnvironment();
   const runtime = peerRuntime();
@@ -3639,6 +3755,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       leadPromptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Delegate bounded execution work when an Agent can reasonably own it/,
     );
+    assert.equal(
+      await first.events.get("tool_call")![0](
+        { toolName: "list_agents", input: {} },
+        ctx1,
+      ),
+      undefined,
+      "ordinary Lead retains its existing Agent coordination behavior",
+    );
     failManagerMetadata = true;
     failManagerRename = true;
     await first.commandOptions.get("manager").handler("", ctx1);
@@ -3768,12 +3892,16 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.ok(managerContext);
     assert.deepEqual(managerContext.options, { triggerTurn: false });
-    assert.equal(
+    assert.deepEqual(
       await first.events.get("tool_call")![0](
         { toolName: "list_agents", input: {} },
         ctx1,
       ),
-      undefined,
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Manager profile.",
+      },
+      "bundled Manager policy does not authorize Agent discovery",
     );
     const staff = first.tools.find((tool) => tool.name === "delegate_work");
     const resume = first.tools.find((tool) => tool.name === "resume_work");

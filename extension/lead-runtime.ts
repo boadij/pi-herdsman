@@ -370,7 +370,7 @@ type LeadRuntimeHost = Omit<
 type SupervisoryProfile = {
   role: "manager" | "chief";
   definition: AgentDefinition;
-  tools: string[];
+  baseline: string[];
   sessionId: string;
   valid: boolean;
 };
@@ -1386,6 +1386,7 @@ export function createLeadAgentEventRuntime(host: {
   isCurrentChief(ctx: ExtensionContext): boolean;
   setActiveTools(tools: readonly string[]): void;
   chiefTools: readonly string[];
+  managerTools?: readonly string[];
   leadInboxRuntime: Pick<
     LeadInboxRuntime,
     "holdStartPreflight" | "agentSettled"
@@ -1406,6 +1407,10 @@ export function createLeadAgentEventRuntime(host: {
   currentChiefAllowedTools(
     ctx: ExtensionContext,
   ): readonly string[] | undefined;
+  currentManagerAllowedTools?(
+    ctx: ExtensionContext,
+  ): readonly string[] | undefined;
+  reconcileRoleTools?(): void;
   supervisoryProfileBody(
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -1462,6 +1467,13 @@ export function createLeadAgentEventRuntime(host: {
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
         await host.drainRetirementNotices(ctx, true);
+        try {
+          host.reconcileRoleTools?.();
+        } catch (error) {
+          host.setActiveTools([]);
+          throw error;
+        }
+        sections.pi_herdsman_role = host.roleCharter(ctx);
         return;
       }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
@@ -1497,20 +1509,50 @@ export function createLeadAgentEventRuntime(host: {
           .catch(() => {});
       }
     },
+    turnEnd(): void {
+      if (!host.isActiveManager() || host.isRoleSuspended()) return;
+      try {
+        host.reconcileRoleTools?.();
+      } catch (error) {
+        host.setActiveTools([]);
+        throw error;
+      }
+    },
     toolCall(
       event: any,
       ctx: ExtensionContext,
     ): { block: true; reason: string } | undefined {
-      if (
-        !host.isCurrentChief(ctx) ||
-        (host.currentChiefAllowedTools(ctx) ?? host.chiefTools).includes(
-          event.toolName,
+      if (host.isCurrentChief(ctx)) {
+        if (
+          (host.currentChiefAllowedTools(ctx) ?? host.chiefTools).includes(
+            event.toolName,
+          )
         )
-      )
-        return undefined;
+          return undefined;
+        return {
+          block: true,
+          reason: "Tool is unavailable in the active Chief profile.",
+        };
+      }
+      if (!host.isActiveManager()) return undefined;
+      try {
+        if (
+          (
+            host.currentManagerAllowedTools?.(ctx) ??
+            host.managerTools ??
+            []
+          ).includes(event.toolName)
+        )
+          return undefined;
+      } catch {
+        return {
+          block: true,
+          reason: "Manager tool authorization is unavailable.",
+        };
+      }
       return {
         block: true,
-        reason: "Tool is unavailable in the active Chief profile.",
+        reason: "Tool is unavailable in the active Manager profile.",
       };
     },
   };
@@ -1576,12 +1618,7 @@ export function registerLeadRuntime(
     return {
       role,
       definition: prepared,
-      tools: leadToolState.projectRoleTools(baseline, prepared, [
-        ...(role === "manager"
-          ? options.roleTransitionHost.managerTools
-          : options.roleTransitionHost.chiefTools),
-        ...supervisoryAgentTools(ctx, prepared),
-      ]),
+      baseline,
       sessionId: ctx.sessionManager.getSessionId(),
       valid: true,
     };
@@ -1598,12 +1635,7 @@ export function registerLeadRuntime(
       frontmatter: {},
       body: "",
     },
-    tools: leadToolState.appendRegisteredTools(
-      [],
-      role === "manager"
-        ? options.roleTransitionHost.managerTools
-        : options.roleTransitionHost.chiefTools,
-    ),
+    baseline: [],
     sessionId: ctx.sessionManager.getSessionId(),
     valid: false,
   });
@@ -1792,7 +1824,18 @@ export function registerLeadRuntime(
         return policy === "all" || policy.size > 0;
       }),
     );
-    const tools = profile.tools.filter(
+    const required = [
+      ...(role === "manager"
+        ? options.roleTransitionHost.managerTools
+        : options.roleTransitionHost.chiefTools),
+      ...supervisoryAgentTools(ctx, profile.definition),
+    ];
+    const projected = leadToolState.projectRoleTools(
+      profile.baseline,
+      profile.definition,
+      required,
+    );
+    const tools = projected.filter(
       (name) =>
         !(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
         permitted.has(name),
@@ -4022,13 +4065,15 @@ export function registerLeadRuntime(
     if (!options.hasPane()) return;
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
-  pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
+  pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     if (isQuarantinedSession(ctx)) return;
     if (
       activeLeadRole(leadRuntime) === "lead" ||
       herdRunRuntime!.hasActiveTurn()
     )
       herdRunRuntime!.turnEnd(event);
+    if (activeLeadRole(leadRuntime) === "manager" && !leadRuntime.roleSuspended)
+      agentEvents.turnEnd();
     options.queueLeadPresentation(ctx);
   });
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
@@ -4087,6 +4132,10 @@ export function registerLeadRuntime(
         : "",
     currentChiefAllowedTools: (ctx: ExtensionContext) =>
       supervisoryTools(ctx, "chief"),
+    currentManagerAllowedTools: (ctx: ExtensionContext) =>
+      supervisoryTools(ctx, "manager"),
+    reconcileRoleTools: () => roleTransitions.reconcileRoleTools(),
+    managerTools: [...options.roleTransitionHost.managerTools],
   };
 }
 
