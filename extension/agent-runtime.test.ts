@@ -6855,6 +6855,47 @@ test("failed startup outcome publication preserves the original initialization f
   }
 });
 
+test("saved-model restoration failure is published before request pumping", async () => {
+  const mailbox = setAgentEnvironment("restore-model-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries) as any;
+  context.sessionManager.getBranch = () => [
+    {
+      type: "model_change",
+      provider: "saved-provider",
+      modelId: "saved-model",
+    },
+  ];
+  context.sessionManager.buildSessionContext = () => ({
+    messages: [],
+    model: { provider: "saved-provider", modelId: "saved-model" },
+  });
+  context.modelRegistry = { find: () => undefined };
+  context.model = { provider: "fallback-provider", id: "fallback-model" };
+  const previous = process.env.PI_HERDSMAN_RESTORE_MODEL;
+  process.env.PI_HERDSMAN_RESTORE_MODEL = "saved-session";
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const outcome = readAgentStartupOutcome(mailbox);
+    assert.equal(outcome?.status, "failed");
+    if (outcome?.status === "failed") {
+      assert.equal(outcome.stage, "model_restore");
+      assert.match(outcome.error, /saved-provider\/saved-model/u);
+      assert.match(outcome.error, /fallback-provider\/fallback-model/u);
+    }
+    assert.equal(
+      agent.calls.some((args) => args[0] === "send_user_message"),
+      false,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PI_HERDSMAN_RESTORE_MODEL;
+    else process.env.PI_HERDSMAN_RESTORE_MODEL = previous;
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("conflicting state preserves the other generation's startup outcome", async () => {
   const mailbox = setAgentEnvironment();
   const state = { ...managedState("registered-agent"), runId: randomUUID() };

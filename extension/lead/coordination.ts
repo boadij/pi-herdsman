@@ -288,6 +288,8 @@ export function readRootOwners(
 
 export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   let leadCoordinationHealthy = true;
+  let startupAttestation:
+    import("../supervision.ts").LeadStartupAttestation | undefined;
   let peerPresenceLease: ReturnType<typeof host.acquireProcessLock> | undefined;
   let peerPresenceRecord: PeerLeadRecord | undefined;
   let peerPresenceGeneration = 0;
@@ -377,12 +379,15 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       },
     });
   };
-  const persistCoordinatorState = (): boolean => {
+  const persistCoordinatorState = (
+    attestation?: import("../supervision.ts").LeadStartupAttestation,
+  ): boolean => {
     try {
+      if (attestation) startupAttestation = attestation;
       pi.appendEntry("pi-herdsman-lead-state", {
         instanceId: host.leadInstanceId(),
       });
-      return persistLeadCoordination();
+      return persistLeadCoordination(startupAttestation);
     } catch (error) {
       markLeadCoordinationUnhealthy();
       if (leadRuntime.leadContext)
@@ -395,7 +400,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       return false;
     }
   };
-  const persistLeadCoordination = (): boolean => {
+  const persistLeadCoordination = (
+    attestation = startupAttestation,
+  ): boolean => {
     if (
       controllerScope?.kind !== "root" ||
       leadRuntime.chiefMode !== "inactive" ||
@@ -412,6 +419,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         piSessionId:
           leadRuntime.leadContext?.sessionManager.getSessionId() ?? "",
         updatedAt: Date.now(),
+        ...(attestation &&
+        attestation.assignmentId ===
+          leadRuntime.leadContext?.sessionManager.getSessionId() &&
+        attestation.generation === host.leadInstanceId()
+          ? { startupAttestation: attestation }
+          : {}),
       });
       leadCoordinationHealthy = true;
       if (!wasHealthy && leadRuntime.leadContext)
@@ -2841,6 +2854,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   return {
     persistCoordinatorState,
     persistLeadCoordination,
+    invalidateStartupCoordinationState: (sessionId: string) =>
+      host.invalidateLeadCoordinationState(supervisionRuntime(), sessionId),
     removePeerPresence,
     markLeadCoordinationUnhealthy,
     schedulePeerPresence,

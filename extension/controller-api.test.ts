@@ -4472,17 +4472,25 @@ async function runManagerStartupScenario(
         started &&
         startupObservations === 3 &&
         !["missing-state", "managed-agent"].includes(mode)
-      )
+      ) {
+        const instanceId = randomUUID();
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: mode === "conflict" ? "manager" : "lead",
           ...(mode === "incompatible-build"
             ? { build: OTHER_HERDSMAN_BUILD }
             : {}),
-          instanceId: randomUUID(),
+          instanceId,
           piSessionId: childSession,
           updatedAt: Date.now(),
+          startupAttestation: {
+            kind: "model_restore",
+            assignmentId: childSession,
+            generation: instanceId,
+            result: "verified",
+          },
         });
+      }
       if (mode === "managed-agent" && started && startupObservations === 2) {
         const identity = {
           paneId: "child-pane",
@@ -9607,14 +9615,14 @@ test("owned continuation requires a matching persisted child edge", () => {
       },
     };
     const requestId = accepted.message.details.request_id;
-    const close = {
+    const stop = {
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "close_agent",
+        toolName: "stop_agent",
         details: {
           ok: true,
-          action: "close",
+          action: "stop",
           closed_assignment: {
             owner_session_id: LEAD_SESSION_ID,
             session_id: id,
@@ -9630,13 +9638,13 @@ test("owned continuation requires a matching persisted child edge", () => {
       },
     };
     assert.equal(
-      resolveAssignmentSession(fakeContext([accepted, close]), id).id,
+      resolveAssignmentSession(fakeContext([accepted, stop]), id).id,
       id,
     );
     const stopped = {
       type: "custom",
       customType: "pi-herdsman-agent-closed-assignment",
-      data: { version: 1, proof: close.message.details.closed_assignment },
+      data: { version: 1, proof: stop.message.details.closed_assignment },
     };
     assert.equal(
       resolveAssignmentSession(fakeContext([accepted, stopped]), id).id,
@@ -9686,7 +9694,7 @@ test("owned continuation requires a matching persisted child edge", () => {
     );
     assert.throws(
       () =>
-        resolveAssignmentSession(fakeContext([accepted, stopped, close]), id),
+        resolveAssignmentSession(fakeContext([accepted, stopped, stop]), id),
       /ownership tree/,
       "conflicting closure representations fail closed",
     );
@@ -9699,7 +9707,7 @@ test("owned continuation requires a matching persisted child edge", () => {
               ...stopped,
               data: {
                 version: 2,
-                proof: close.message.details.closed_assignment,
+                proof: stop.message.details.closed_assignment,
               },
             },
           ]),
@@ -9727,7 +9735,7 @@ test("owned continuation requires a matching persisted child edge", () => {
       id,
       "non-message entries are not treated as newer accepted receipts",
     );
-    const closeAsNonMessage = { ...close, type: "custom" };
+    const closeAsNonMessage = { ...stop, type: "custom" };
     assert.throws(
       () =>
         resolveAssignmentSession(
@@ -9748,7 +9756,7 @@ test("owned continuation requires a matching persisted child edge", () => {
       /latest accepted assignment outcome/,
       "a completed older generation cannot authorize an accepted generation without an outcome",
     );
-    const latestClose = structuredClone(close);
+    const latestClose = structuredClone(stop);
     latestClose.message.details.closed_assignment.request_id =
       latestAcceptance.message.details.request_id;
     assert.equal(
@@ -9767,7 +9775,7 @@ test("owned continuation requires a matching persisted child edge", () => {
     assert.throws(
       () =>
         resolveAssignmentSession(
-          fakeContext([accepted, close, contradictoryTerminal]),
+          fakeContext([accepted, stop, contradictoryTerminal]),
           id,
         ),
       /Conflicting terminal and closure provenance/,
@@ -9778,11 +9786,11 @@ test("owned continuation requires a matching persisted child edge", () => {
           fakeContext([
             accepted,
             {
-              ...close,
+              ...stop,
               message: {
-                ...close.message,
+                ...stop.message,
                 details: {
-                  ...close.message.details,
+                  ...stop.message.details,
                   cleanup_error: "incomplete",
                 },
               },
@@ -9798,13 +9806,13 @@ test("owned continuation requires a matching persisted child edge", () => {
           fakeContext([
             accepted,
             {
-              ...close,
+              ...stop,
               message: {
-                ...close.message,
+                ...stop.message,
                 details: {
-                  ...close.message.details,
+                  ...stop.message.details,
                   closed_assignment: {
-                    ...close.message.details.closed_assignment,
+                    ...stop.message.details.closed_assignment,
                     request_id: randomUUID(),
                   },
                 },

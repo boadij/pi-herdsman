@@ -73,6 +73,7 @@ export type ManagedAgentStartupStage =
   | "bootstrap"
   | "mailbox_state"
   | "controller_recovery"
+  | "model_restore"
   | "request_observer"
   | "metadata";
 export interface ResultPersistenceError {
@@ -409,6 +410,7 @@ function validate(
             "bootstrap",
             "mailbox_state",
             "controller_recovery",
+            "model_restore",
             "request_observer",
             "metadata",
           ].includes(v.stage)

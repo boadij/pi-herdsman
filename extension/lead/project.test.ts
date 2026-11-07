@@ -17,13 +17,111 @@ import {
   readRequiredEvidenceSnapshot,
 } from "../storage.ts";
 
-const { createLeadProjectRuntime, parseGitWorktreeInventory } =
-  await import("./project.ts");
+const {
+  createLeadProjectRuntime,
+  isFreshLeadStartupAttestation,
+  parseGitWorktreeInventory,
+} = await import("./project.ts");
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
 const { claimManagerLease } = await import("../supervision.ts");
 
 const lifecycleStop = "stop after assignment publication";
+
+test("Lead startup attestation requires the exact session and a fresh generation", () => {
+  const priorGeneration = randomUUID();
+  const fresh = {
+    instanceId: randomUUID(),
+    piSessionId: "assigned-session",
+    updatedAt: 101,
+    startupAttestation: {
+      kind: "model_restore",
+      assignmentId: "assigned-session",
+      generation: "",
+      result: "verified",
+    },
+  };
+  fresh.startupAttestation.generation = fresh.instanceId;
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      fresh,
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    true,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      {
+        instanceId: fresh.instanceId,
+        piSessionId: fresh.piSessionId,
+        updatedAt: fresh.updatedAt,
+      },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      { ...fresh, piSessionId: "other-session" },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      {
+        ...fresh,
+        startupAttestation: {
+          ...fresh.startupAttestation,
+          assignmentId: "other-session",
+        },
+      },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      { ...fresh, instanceId: priorGeneration },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      { ...fresh, updatedAt: 99 },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+  assert.equal(
+    isFreshLeadStartupAttestation(
+      {
+        ...fresh,
+        startupAttestation: {
+          ...fresh.startupAttestation,
+          generation: priorGeneration,
+        },
+      },
+      "assigned-session",
+      priorGeneration,
+      100,
+    ),
+    false,
+  );
+});
 
 test("stop Lead observes liveness after waiting for project-work serialization", async () => {
   const ctx = fakeContext() as any;
@@ -1268,6 +1366,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
     branch: "feature/resume",
     text: "original",
     checkoutPath: checkout,
+    piSessionFile: join(tmpdir(), `saved-lead-${id}.jsonl`),
   };
   writeProjectAssignment(
     { root: assignmentRoot, assignments: assignmentRoot } as any,
@@ -1282,6 +1381,11 @@ test("resume preserves queued manager message when controlled recovery fails", a
   let snapshotCalls = 0;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
+  ctx.modelRegistry = {
+    getRegisteredProviderIds: () => ["mistral-native"],
+    find: () => undefined,
+  };
+  let launchedArgs: string[] | undefined;
   const runtime = createLeadProjectRuntime({
     pi: {
       exec: async (command: string) => ({
@@ -1305,6 +1409,16 @@ test("resume preserves queued manager message when controlled recovery fails", a
       }),
     } as any,
     leadRuntime: { managerLease: { descriptor: manager } },
+    SessionManager: {
+      open: () => ({
+        getSessionId: () => id,
+        getCwd: () => checkout,
+        getBranch: () => [],
+        buildSessionContext: () => ({
+          model: { provider: "mistral-native", modelId: "zai-glm-5-3" },
+        }),
+      }),
+    } as any,
     activeRole: () => "manager",
     currentManager: async () => manager,
     managerLease: () => ({ descriptor: manager }),
@@ -1411,8 +1525,13 @@ test("resume preserves queued manager message when controlled recovery fails", a
       resultBindings: [],
     }),
     writeChiefMessage: (message: any) => events.push(message),
-    startHerdrAgentInPane: async () => {
+    startHerdrAgentInPane: async (
+      _pi: unknown,
+      _ctx: unknown,
+      options: any,
+    ) => {
       launches++;
+      launchedArgs = options.agentArgs;
       events.push("launch");
       throw new Error("controlled launch failed");
     },
@@ -1424,9 +1543,21 @@ test("resume preserves queued manager message when controlled recovery fails", a
     new AbortController().signal,
   )) as any;
   assert.equal(launches, 1);
+  assert.ok(launchedArgs);
+  assert.equal(launchedArgs!.includes("--no-extensions"), false);
+  assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
   assert.equal(result.details.recovery_verified, false);
+  assert.equal(
+    readProjectAssignment(
+      { root: assignmentRoot, assignments: assignmentRoot } as any,
+      repoKey,
+      assignment.branch,
+    )?.id,
+    id,
+  );
+  assert.equal(realFs.existsSync(checkout), true);
   assert.deepEqual(
     events.map((event) => (typeof event === "string" ? event : event.kind)),
     ["manager_message", "project_assignment", "launch"],

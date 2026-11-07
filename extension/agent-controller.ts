@@ -1010,6 +1010,8 @@ type ResolvedAssignmentSession = {
   definition: string;
   label: string;
   cwd: string;
+  savedModel?: { provider: string; modelId: string };
+  savedModelUnresolved?: boolean;
   evidence?: {
     requestId: string;
     projectAssignmentId?: string;
@@ -1021,6 +1023,110 @@ type ResolvedAssignmentSession = {
     terminal?: Record<string, unknown>;
   };
 };
+
+export type SavedSessionModelSelection =
+  | { kind: "none" }
+  | { kind: "resolved"; model: { provider: string; modelId: string } }
+  | {
+      kind: "unresolved";
+      candidates: { provider: string; modelId: string }[];
+    };
+
+export function resolveSavedSessionModelSelection(
+  manager: {
+    getBranch?: () => SessionEntry[];
+    buildSessionContext?: () => {
+      model: { provider: string; modelId: string } | null;
+    };
+  },
+  catalogModel: (
+    provider: string,
+    modelId: string,
+  ) => { api: string } | undefined,
+): SavedSessionModelSelection {
+  const contextModel = manager.buildSessionContext?.().model ?? undefined;
+  if (typeof manager.getBranch !== "function")
+    return contextModel
+      ? { kind: "resolved", model: contextModel }
+      : { kind: "none" };
+  const branch = manager.getBranch();
+  let change: { provider: string; modelId: string } | undefined;
+  let changeIndex = -1;
+  let response: { provider: string; modelId: string } | undefined;
+  let responseIndex = -1;
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index]!;
+    if (entry.type === "model_change") {
+      change = entry;
+      changeIndex = index;
+    } else if (
+      entry.type === "message" &&
+      (entry as any).message?.role === "assistant" &&
+      (entry as any).message?.stopReason !== "error" &&
+      typeof (entry as any).message?.provider === "string" &&
+      typeof (entry as any).message?.model === "string"
+    ) {
+      response = {
+        provider: (entry as any).message.provider,
+        modelId: (entry as any).message.model,
+      };
+      responseIndex = index;
+    }
+  }
+  if (!change && !response)
+    return contextModel
+      ? { kind: "resolved", model: contextModel }
+      : { kind: "none" };
+  if (change && changeIndex > responseIndex)
+    return {
+      kind: "resolved",
+      model: { provider: change.provider, modelId: change.modelId },
+    };
+  if (
+    change &&
+    response &&
+    (change.provider !== response.provider ||
+      change.modelId !== response.modelId)
+  ) {
+    const catalog = catalogModel(change.provider, change.modelId);
+    if (catalog?.api === "pi-virtual")
+      return {
+        kind: "resolved",
+        model: { provider: change.provider, modelId: change.modelId },
+      };
+    if (!catalog)
+      return {
+        kind: "unresolved",
+        candidates: [
+          { provider: change.provider, modelId: change.modelId },
+          response,
+        ],
+      };
+  }
+  return response
+    ? { kind: "resolved", model: response }
+    : change
+      ? { kind: "resolved", model: change }
+      : { kind: "none" };
+}
+
+/** Read the model selection represented by a validated Pi session branch. */
+export function savedSessionModelSelection(
+  manager: {
+    getBranch?: () => SessionEntry[];
+    buildSessionContext?: () => {
+      model: { provider: string; modelId: string } | null;
+    };
+  },
+  isVirtualModel: (provider: string, modelId: string) => boolean = () => false,
+): { provider: string; modelId: string } | undefined {
+  const selection = resolveSavedSessionModelSelection(
+    manager,
+    (provider, modelId) =>
+      isVirtualModel(provider, modelId) ? { api: "pi-virtual" } : undefined,
+  );
+  return selection.kind === "resolved" ? selection.model : undefined;
+}
 
 function requiredEvidenceEntriesForRequest(
   entries: readonly any[],
@@ -3085,6 +3191,17 @@ export function resolveAssignmentSession(
         definition: child.definition,
         label: child.label,
         cwd: manager.getCwd(),
+        ...(() => {
+          const selection = resolveSavedSessionModelSelection(
+            manager,
+            (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+          );
+          return selection.kind === "resolved"
+            ? { savedModel: selection.model }
+            : selection.kind === "unresolved"
+              ? { savedModelUnresolved: true }
+              : {};
+        })(),
         ...(evidence ? { evidence } : {}),
       };
     }
@@ -8295,9 +8412,18 @@ export function createAgentController(
               !resumed && ctx.model
                 ? { provider: ctx.model.provider, token: modelToken(ctx.model) }
                 : undefined,
+            saved: resumed?.savedModel,
+            savedUnresolved: resumed?.savedModelUnresolved,
             isForeignProvider: (providerId) =>
               registeredProviderIds.has(providerId),
+            isKnownModel: (provider, id) =>
+              ctx.modelRegistry.find(provider, id) !== undefined,
           });
+          if (
+            (resumed?.savedModel || resumed?.savedModelUnresolved) &&
+            !configuredModel(effectiveDefinition.frontmatter)
+          )
+            env.push("PI_HERDSMAN_RESTORE_MODEL=saved-session");
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(effectiveDefinition.body
               ? { bodyPromptPath: promptPaths[0] }

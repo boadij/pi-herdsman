@@ -9138,6 +9138,23 @@ async function managerDelegateAssignmentTest(
     ) {
       lockPhase = "manager-bind";
     }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        childSession,
+      );
+      assert.ok(state);
+      writeLeadCoordinationState(supervisionRuntime(), {
+        ...state,
+        updatedAt: Date.now(),
+        startupAttestation: {
+          kind: "model_restore",
+          assignmentId: childSession,
+          generation: state.instanceId,
+          result: "verified",
+        },
+      });
+    }
     return result;
   };
   const pi = fakeChiefPi({
@@ -9166,8 +9183,9 @@ async function managerDelegateAssignmentTest(
       }
     },
     afterOccupied: async (lockedRepo: string) => {
-      if (lockedRepo === repoKey && lockOrder === "lead-first")
+      if (lockedRepo === repoKey && lockOrder === "lead-first") {
         signalManagerWait();
+      }
     },
     afterAcquired: async (lockedRepo: string, branch: string) => {
       if (
@@ -21780,6 +21798,10 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
 
 test("managed Lead marker focuses its verified Manager pane", async (t) => {
   setLeadEnvironment();
+  writeFileSync(
+    join(PI_AGENTS_DIR, "mcp-runner.md"),
+    "---\nname: mcp-runner\n---\n",
+  );
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `managed-marker-navigation-${randomUUID()}.sock`,
