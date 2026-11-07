@@ -1148,14 +1148,6 @@ export function createLeadSessionStartRuntime(host: {
           await host.failClosedRole(ctx, error);
         }
         if (sessionSignal.aborted) return;
-        try {
-          await host.verifyManagedLeadModelRestoration?.(ctx, sessionSignal);
-        } catch (error) {
-          await host.failClosedRole(ctx, error);
-          host.setLeadExecutionPending(false);
-          return;
-        }
-        if (sessionSignal.aborted) return;
         host.herdRun.restoreSession(ctx.sessionManager.getEntries(), sessionId);
         let persistedRole: SessionRole = "lead";
         let hasPersistedRole = false;
@@ -1225,6 +1217,14 @@ export function createLeadSessionStartRuntime(host: {
           !host.roleTransitions.restoreChiefState(ctx)
         )
           malformedRole = true;
+        try {
+          await host.verifyManagedLeadModelRestoration?.(ctx, sessionSignal);
+        } catch (error) {
+          await host.failClosedRole(ctx, error);
+          host.setLeadExecutionPending(false);
+          return;
+        }
+        if (sessionSignal.aborted) return;
         if (malformedRole) host.roleTransitions.suspendMalformedRole(ctx);
         if (host.roleTransitions.shouldRestoreChief(persistedRole)) {
           try {

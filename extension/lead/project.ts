@@ -3141,24 +3141,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       resumeMessageQueued = true;
     };
+    const live =
+      operation.action === "resume"
+        ? await liveAgent(ctx, currentAssignment!.id)
+        : [];
+    if (live.length === 1 && currentAssignment!.piSessionFile)
+      await bindLeadSessionFile(currentAssignment!, live[0]);
     let savedSessionCwd: string | undefined;
     let savedModel:
       ReturnType<typeof resolveSavedSessionModelSelection> | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
+      let saved: ReturnType<typeof host.SessionManager.open>;
       try {
-        const saved = host.SessionManager.open(
-          currentAssignment!.piSessionFile!,
+        saved = host.SessionManager.open(currentAssignment!.piSessionFile!);
+      } catch (error) {
+        throw new Error(
+          `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history is unavailable or unreadable; existing work was preserved. ${error instanceof Error ? error.message : String(error)}`,
         );
-        if (saved.getSessionId() === currentAssignment!.id) {
-          savedSessionCwd = saved.getCwd();
-          savedModel = resolveSavedSessionModelSelection(
-            saved,
-            (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
-          );
-        }
-      } catch {
-        // Keep unavailable exact-session provenance fail-closed.
       }
+      if (saved.getSessionId() !== currentAssignment!.id)
+        throw new Error(
+          `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history has a mismatched session ID; existing work was preserved.`,
+        );
+      savedSessionCwd = saved.getCwd();
+      savedModel = resolveSavedSessionModelSelection(
+        saved,
+        (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+      );
     }
     const placement =
       operation.action === "resume"
@@ -3217,10 +3226,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
-    const live =
-      operation.action === "resume"
-        ? await liveAgent(ctx, currentAssignment!.id)
-        : [];
     if (live.length > 1)
       throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
     if (live.length === 1) {

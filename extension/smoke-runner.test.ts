@@ -126,6 +126,7 @@ import {
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   matchPiProvenance,
+  assertContinuationFauxEvidence,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -5776,6 +5777,76 @@ test("continuation installs the faux extension on the isolated implementer defin
   } finally {
     await rm(piAgent, { recursive: true, force: true });
   }
+});
+
+test("continuation requires configured faux extension and provider evidence for both generations", () => {
+  const sessionId = "saved-session";
+  const pids = [101, 202];
+  const starts = pids.map((pid) => ({ sessionId, pid }));
+  const provenance = pids.map((pid) => ({
+    sessionId,
+    pid,
+    model: "continuation",
+  }));
+  assert.doesNotThrow(() =>
+    assertContinuationFauxEvidence(starts, provenance, sessionId, pids),
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts.slice(0, 1),
+        provenance,
+        sessionId,
+        pids,
+      ),
+    /missing faux session_start evidence/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts,
+        provenance.slice(0, 1),
+        sessionId,
+        pids,
+      ),
+    /missing faux continuation provider request/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
+    /distinct PIDs/,
+  );
+});
+
+test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
+  const ctx = {};
+  const sessionId = "saved-session";
+  const pid = 202;
+  const provenance = [{ sessionId, pid: 101, model: "continuation" }];
+  let inspections = 0;
+  const waitedPid = await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      inspections++;
+      if (inspections === 1)
+        setTimeout(
+          () => provenance.push({ sessionId, pid, model: "continuation" }),
+          5,
+        );
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      );
+      return { done: found, value: pid, progress: { found } };
+    },
+    { timeoutMs: 1_000, stallMs: 1_000, pollMs: 1 },
+  );
+  assert.equal(waitedPid, pid);
+  assert.ok(inspections > 1);
+  assert.equal(ctx.stage, "continuation-second-provider-request");
 });
 
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {

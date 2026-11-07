@@ -3837,7 +3837,8 @@ async function startCandidate(ctx) {
   ctx.rootWorkspaceId = pane.workspace_id;
   assert.equal(resolve(pane.cwd), ctx.rootCwd);
   ctx.rootPaneId = paneId;
-  const prompt = ctx.initialPrompt;
+  const prompt =
+    ctx.scenario === "continuation" ? undefined : ctx.initialPrompt;
   assert.ok(
     prompt === undefined || typeof prompt === "string",
     "candidate initial prompt must be a string when present",
@@ -4010,6 +4011,37 @@ export function matchPiProvenance(
   } catch (error) {
     error.code = "SMOKE_EVIDENCE";
     throw error;
+  }
+}
+
+export function assertContinuationFauxEvidence(
+  sessionStarts,
+  provenance,
+  sessionId,
+  pids,
+) {
+  assert.equal(pids.length, 2, "expected two continuation generation PIDs");
+  assert.notEqual(
+    pids[0],
+    pids[1],
+    "continuation generations must use distinct PIDs",
+  );
+  for (const pid of pids) {
+    assert.ok(
+      sessionStarts.some(
+        (record) => record.sessionId === sessionId && record.pid === pid,
+      ),
+      `missing faux session_start evidence for ${sessionId} PID ${pid}`,
+    );
+    assert.ok(
+      provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      ),
+      `missing faux continuation provider request for ${sessionId} PID ${pid}`,
+    );
   }
 }
 
@@ -7615,6 +7647,42 @@ async function runContinuationSmoke(ctx) {
       stallMs: CONTROL_STALL_MS,
       pollMs: 200,
     },
+  );
+
+  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) =>
+    (await readFile(join(runtimeEvidence, name), "utf8"))
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      const provenance = await readJsonl("smoke-faux-provenance.jsonl");
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === firstSession.id &&
+          record.pid === firstGeneration &&
+          record.model === "continuation",
+      );
+      return {
+        done: found,
+        progress: { secondGenerationProviderRequest: found },
+        evidence: { sessionId: firstSession.id, pid: firstGeneration },
+      };
+    },
+    {
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      stallMs: CONTROL_STALL_MS,
+      pollMs: 200,
+    },
+  );
+  assertContinuationFauxEvidence(
+    await readJsonl("smoke-faux-session-start.jsonl"),
+    await readJsonl("smoke-faux-provenance.jsonl"),
+    firstSession.id,
+    [firstPids.values().next().value, firstGeneration],
   );
 
   await waitForEvidence(
@@ -13121,6 +13189,13 @@ async function main() {
       pkg.piHerdsman.runtime.herdr.version,
     );
     ctx.rootPaneId = await startCandidate(ctx);
+    if (scenario === "continuation")
+      await nestedCommand(ctx, [
+        "agent",
+        "prompt",
+        ctx.rootPaneId,
+        ctx.initialPrompt,
+      ]);
     if (scenario === "agent-crash-recovery") {
       await waitForEvidence(
         ctx,

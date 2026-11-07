@@ -1379,6 +1379,8 @@ test("resume preserves queued manager message when controlled recovery fails", a
   let alreadyRunning = false;
   let startingUnverifiedPi = false;
   let snapshotCalls = 0;
+  let sessionOpenError: Error | undefined;
+  let openedSessionId = id;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   ctx.modelRegistry = {
@@ -1410,14 +1412,17 @@ test("resume preserves queued manager message when controlled recovery fails", a
     } as any,
     leadRuntime: { managerLease: { descriptor: manager } },
     SessionManager: {
-      open: () => ({
-        getSessionId: () => id,
-        getCwd: () => checkout,
-        getBranch: () => [],
-        buildSessionContext: () => ({
-          model: { provider: "mistral-native", modelId: "zai-glm-5-3" },
-        }),
-      }),
+      open: () => {
+        if (sessionOpenError) throw sessionOpenError;
+        return {
+          getSessionId: () => openedSessionId,
+          getCwd: () => checkout,
+          getBranch: () => [],
+          buildSessionContext: () => ({
+            model: { provider: "mistral-native", modelId: "zai-glm-5-3" },
+          }),
+        };
+      },
     } as any,
     activeRole: () => "manager",
     currentManager: async () => manager,
@@ -1537,6 +1542,40 @@ test("resume preserves queued manager message when controlled recovery fails", a
     },
     appendDurableError: () => {},
   } as any);
+  for (const [failure, expected] of [
+    [
+      new Error("ENOENT: saved session missing"),
+      /history is unavailable or unreadable/,
+    ],
+    [undefined, /mismatched session ID/],
+  ] as const) {
+    sessionOpenError = failure;
+    openedSessionId = failure ? id : randomUUID();
+    await assert.rejects(
+      runtime.activateProjectLead(
+        { action: "resume", branch: assignment.branch, message: "continue" },
+        ctx,
+        new AbortController().signal,
+      ),
+      (error: unknown) => {
+        assert.match((error as Error).message, expected);
+        return true;
+      },
+    );
+    assert.equal(launches, 0);
+    assert.deepEqual(events, []);
+    assert.equal(
+      readProjectAssignment(
+        { root: assignmentRoot, assignments: assignmentRoot } as any,
+        repoKey,
+        assignment.branch,
+      )?.id,
+      id,
+    );
+    assert.equal(realFs.existsSync(checkout), true);
+  }
+  sessionOpenError = undefined;
+  openedSessionId = id;
   const result = (await runtime.activateProjectLead(
     { action: "resume", branch: assignment.branch, message: "continue" },
     ctx,

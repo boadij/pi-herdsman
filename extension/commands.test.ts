@@ -22717,6 +22717,131 @@ test("session-start roster uses current delegation policy and ignores superseded
   ]);
 });
 
+test("managed model-restore attestation survives Lead identity restoration and later writes", async () => {
+  const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
+  const sessionId = "managed-session";
+  let instanceId = "initial-instance";
+  let startupAttestation:
+    | { kind: "model_restore"; assignmentId: string; generation: string }
+    | undefined;
+  let finalState: Record<string, unknown> = {};
+  const persistCoordinatorState = (attestation = startupAttestation) => {
+    finalState = {
+      instanceId,
+      ...(attestation?.assignmentId === sessionId &&
+      attestation.generation === instanceId
+        ? { startupAttestation: attestation }
+        : {}),
+    };
+  };
+  const host = {
+    diagnostic() {},
+    controller: {
+      abortSession() {},
+      clearPendingStarts() {},
+      beginSession: () => new AbortController().signal,
+      sessionStart() {},
+      recoverRuntimes: async () => undefined,
+      startHealthScanner() {},
+    },
+    leadInboxRuntime: { beginSession() {}, start() {} },
+    leadStatusRuntime: {
+      prepareSession() {},
+      prime() {},
+      setSnapshot() {},
+      start() {},
+      requestRefresh() {},
+    },
+    isRoot: () => true,
+    isManagedAgent: () => false,
+    clearLeadExecution() {},
+    setLeadExecutionPending() {},
+    hasLeadExecutionState: () => false,
+    clearDefinitionRoster() {},
+    clearChiefStartPreflight() {},
+    initializeSessionKind: async () => undefined,
+    verifyManagedLeadModelRestoration: async () => {
+      startupAttestation = {
+        kind: "model_restore",
+        assignmentId: sessionId,
+        generation: instanceId,
+      };
+      persistCoordinatorState(startupAttestation);
+    },
+    roleTransitions: {
+      beginSessionRole: () => ({
+        previousChiefMode: "inactive",
+        previousControllerRole: "lead",
+      }),
+      reconcileRoleTools() {},
+      canRestoreChiefState: () => true,
+      restoreChiefState() {
+        instanceId = "restored-instance";
+        persistCoordinatorState();
+        return true;
+      },
+      resolveControllerRole: async () => undefined,
+      finalizeOptionalManagerStartup() {
+        persistCoordinatorState();
+      },
+      activeManager: () => false,
+      shouldRestoreChief: () => false,
+      chiefModeActive: () => false,
+      chiefModeInactive: () => true,
+      canStartChiefInbox: () => false,
+      mayPublishLeadPresence: () => false,
+      currentRoleGeneration: () => 0,
+    },
+    sessionLeadRoleState: () => undefined,
+    normalizeBaseTools: (tools: string[]) => tools,
+    normalizeLeadTools: (tools: string[]) => tools,
+    setLeadTools() {},
+    activeTools: () => [],
+    failClosedRole: async (_ctx: unknown, error: unknown) => {
+      throw error;
+    },
+    publishLeadRole() {
+      persistCoordinatorState();
+    },
+    activateChief: async () => "",
+    restoreLeadExecution: async () => undefined,
+    enterSuspended() {},
+    enterLead() {},
+    schedulePeerPresence: async () => undefined,
+    herdRun: { restoreSession() {}, finishIfIdle() {} },
+    discoverSessionDefinitions: async () => ({
+      definitions: [],
+      roleDefinitions: [],
+      projectTrusted: true,
+    }),
+    prepareLeadExecution: async () => undefined,
+    queueLeadPresentation() {},
+    setOwnTools() {},
+    initialStatusBreadcrumb: () => [],
+    ownToolsSnapshot: () => ({}),
+    startSupervisionUI() {},
+    visibleAgentCapabilities: async () => [],
+    setDefinitionRoster() {},
+    appendRoleError() {},
+    appendDefinitionError() {},
+    autoActivateManager: () => true,
+  } as any;
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => sessionId,
+  };
+
+  await createLeadSessionStartRuntime(host).sessionStart(ctx);
+
+  assert.equal(finalState.instanceId, "restored-instance");
+  assert.deepEqual(finalState.startupAttestation, {
+    kind: "model_restore",
+    assignmentId: sessionId,
+    generation: "restored-instance",
+  });
+});
+
 test("TUI status refresh consumes the coherent Herdr session snapshot", async (t) => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", false);
