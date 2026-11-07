@@ -2,6 +2,48 @@
 
 Contributions are welcome. Please keep changes focused and avoid unrelated refactors.
 
+## Issues
+
+Use the Bug Report, Improvement, or Investigation form when it fits; a blank
+issue is also fine. Search existing issues and related pull requests first to
+avoid duplicates.
+
+Keep reports focused on an independently understandable problem or decision:
+
+- **Bugs:** Expected versus observed behavior, impact, and available
+  reproduction or source evidence.
+- **Improvements:** Current limitation, motivation, and desired outcome,
+  without prematurely prescribing an implementation.
+- **Investigations:** The question, known facts and unknowns, and what
+  evidence would enable a decision. No change may be the right outcome.
+
+Include relevant versions, dates, commits, environment, related work, and
+documentation when known. Distinguish user reports, independently reproduced
+behavior, source-supported findings, and hypotheses. Do not invent evidence
+or require logs, reproduction steps, or a proposed fix when unavailable.
+Include acceptance criteria only when they clarify the intended outcome.
+Conventional Commit formatting applies to commits and PR titles, not issues.
+
+## AI-assisted issue creation
+
+Agents creating or substantially revising issues for users should evaluate
+the proposal, not merely reformat it. Inspect existing issues and PRs,
+current behavior, relevant code and documentation, product boundaries, and
+active ADRs to the extent needed to support the claims being made.
+
+Explain material mistakes, duplicates, unsupported assumptions, and conflicts
+with existing capabilities or decisions. Offer an evidence-supported,
+appropriately scoped alternative. Correct minor inaccuracies without
+unnecessary questions, but seek the user's decision before materially
+changing the requested scope or outcome. An active ADR is relevant context,
+not a ban on explicitly proposing a different architectural decision.
+
+Create an issue when it faithfully represents the user's intent and known
+evidence. Otherwise explain why an existing issue, investigation, or no new
+issue is more appropriate. Do not claim checks or reproduction that were not
+performed. Apply the public disclosure and private security reporting
+requirements below.
+
 ## Before opening a pull request
 
 Open an issue first for:
