@@ -7984,7 +7984,7 @@ test("managed project delegation references supported evidence larger than the i
       false,
       "unretained current attachments must not degrade to path-only delivery",
     );
-    assert.match(JSON.stringify(result.details), /could not be fully embedded/);
+    assert.match(JSON.stringify(result.details), /per-file inline limit is/);
     assert.equal(
       accepted,
       undefined,

@@ -117,7 +117,10 @@ Ordinary files supplied to `message_staff`, `message_supervisor`, or
 `message_peer` are delivered as complete supported UTF-8 text within the
 configured per-file and complete-message budgets; unsupported, changed, or
 non-fitting files reject the handoff instead of becoming path-only references.
-Other `files` operations retain their existing preparation behavior. Ordinary
+Other `files` operations retain their existing preparation behavior. In
+particular, `ask_owner` requires supported UTF-8 text attachments to fit fully
+within its per-file and complete-message budgets; rejection does not fall back
+to a path-only reference. Ordinary
 coordination attachments are per-message evidence unless retained through an
 eligible operation with `retain: true`.
 
@@ -145,10 +148,12 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
-Strict UTF-8 text is embedded when it fits; ordinary non-text and non-fitting
-files are canonical local references and are not copied or snapshotted. The
-required-assignment exception preserves supported text snapshots and can
-reference those snapshots when they do not fit inline; see
+For coordination operations that allow reference fallback, strict UTF-8 text is
+embedded when it fits; ordinary non-text and non-fitting files are canonical
+local references and are not copied or snapshotted. `ask_owner` is stricter:
+its explicit files must be embedded supported UTF-8 text, or the request is
+rejected. The required-assignment exception preserves supported text snapshots
+and can reference those snapshots when they do not fit inline; see
 [Required assignment evidence](#required-assignment-evidence).
 
 ## Coordination `files`
