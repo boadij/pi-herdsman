@@ -586,6 +586,7 @@ type TestProjectAssignmentLockHooks = {
     mailboxPath: string,
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
+  afterManagedSessionIdentityInitialized?: () => void;
   removeProjectMessage?: typeof removeProjectMessage;
 };
 
@@ -2207,6 +2208,8 @@ function registerExtensionImpl(
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
       const sessionStartOptions = {
+        afterManagedSessionIdentityInitialized:
+          lockHooks?.afterManagedSessionIdentityInitialized,
         rejectNativeAgentRestore: (ctx: ExtensionContext) => {
           const sessionId = ctx.sessionManager.getSessionId();
           try {

@@ -126,6 +126,7 @@ import {
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   matchPiProvenance,
+  assertContinuationFauxEvidence,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -5587,6 +5588,60 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
   }
 });
 
+test("continuation root prompt waits for a session-backed idle or done Agent", async () => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("export async function promptContinuationRoot(");
+  const end = source.indexOf("\nasync function waitForNestedHerdr", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source
+    .slice(start, end)
+    .trim()
+    .replace(/^export /u, "");
+  for (const status of ["idle", "done"]) {
+    const ctx = { rootPaneId: "w1:p1", initialPrompt: "same prompt" };
+    let polls = 0;
+    let prompted = false;
+    const run = new Function(
+      "waitForEvidence",
+      "tryNestedCommand",
+      "nestedCommand",
+      "CONTROL_STALL_MS",
+      `return (${implementation});`,
+    )(waitForEvidence, undefined, undefined, 1_000);
+    const list = async (_ctx, args) => {
+      assert.deepEqual(args, ["agent", "list"]);
+      polls++;
+      const agents =
+        polls === 1
+          ? []
+          : [
+              {
+                pane_id: "w1:p1",
+                agent_status: status,
+                ...(polls === 3
+                  ? { agent_session: { value: "" } }
+                  : polls >= 4
+                    ? { agent_session: { value: "session-id" } }
+                    : {}),
+              },
+            ];
+      return { ok: true, value: { agents } };
+    };
+    const prompt = async (_ctx, args) => {
+      assert.ok(polls >= 4, "prompt must follow the readiness poll");
+      assert.deepEqual(args, ["agent", "prompt", "w1:p1", "same prompt"]);
+      prompted = true;
+    };
+    const task = run(ctx, waitForEvidence, list, prompt);
+    await task;
+    assert.ok(polls >= 4, "unready rows must be polled again");
+    assert.equal(prompted, true);
+  }
+});
+
 test("evidence progress changes reset inactivity, identical evidence and read errors do not", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   let count = 0;
@@ -5781,6 +5836,76 @@ test("continuation installs the faux extension on the isolated implementer defin
   } finally {
     await rm(piAgent, { recursive: true, force: true });
   }
+});
+
+test("continuation requires configured faux extension and provider evidence for both generations", () => {
+  const sessionId = "saved-session";
+  const pids = [101, 202];
+  const starts = pids.map((pid) => ({ sessionId, pid }));
+  const provenance = pids.map((pid) => ({
+    sessionId,
+    pid,
+    model: "continuation",
+  }));
+  assert.doesNotThrow(() =>
+    assertContinuationFauxEvidence(starts, provenance, sessionId, pids),
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts.slice(0, 1),
+        provenance,
+        sessionId,
+        pids,
+      ),
+    /missing faux session_start evidence/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts,
+        provenance.slice(0, 1),
+        sessionId,
+        pids,
+      ),
+    /missing faux continuation provider request/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
+    /distinct PIDs/,
+  );
+});
+
+test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
+  const ctx = {};
+  const sessionId = "saved-session";
+  const pid = 202;
+  const provenance = [{ sessionId, pid: 101, model: "continuation" }];
+  let inspections = 0;
+  const waitedPid = await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      inspections++;
+      if (inspections === 1)
+        setTimeout(
+          () => provenance.push({ sessionId, pid, model: "continuation" }),
+          5,
+        );
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      );
+      return { done: found, value: pid, progress: { found } };
+    },
+    { timeoutMs: 1_000, stallMs: 1_000, pollMs: 1 },
+  );
+  assert.equal(waitedPid, pid);
+  assert.ok(inspections > 1);
+  assert.equal(ctx.stage, "continuation-second-provider-request");
 });
 
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {

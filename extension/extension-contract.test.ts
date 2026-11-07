@@ -71,6 +71,7 @@ import support, {
   realFs,
   recoveryIdentity,
   registerExtension,
+  registerExtensionForTest,
   resetAgentMailbox,
   setLeadEnvironment,
   setAgentEnvironment,
@@ -1482,16 +1483,15 @@ test("registered failed-turn reporting uses exact Managed session identity befor
       },
     },
   ];
-  const definitionsReached = testGate<void>();
+  const identityInitialized = testGate<void>();
   const pi = fakePi({ entries });
-  registerExtension!(pi.pi as never);
+  registerExtensionForTest!(pi.pi as never, {
+    afterManagedSessionIdentityInitialized: () => identityInitialized.resolve(),
+  });
   const context = fakeContext(entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
-  };
-  support.fileReadHook = (path) => {
-    if (path === join(PI_AGENTS_DIR, "agent.md")) definitionsReached.resolve();
   };
   let sessionStartFinished = false;
   const starting = pi.events
@@ -1502,7 +1502,7 @@ test("registered failed-turn reporting uses exact Managed session identity befor
   try {
     // Session identity has been initialized, but prepareLeadExecution has not
     // run yet, so the mutable execution profile is still absent.
-    await definitionsReached.promise;
+    await identityInitialized.promise;
     assert.equal(sessionStartFinished, false);
     assert.ok(
       entries.some(
@@ -1557,7 +1557,6 @@ test("registered failed-turn reporting uses exact Managed session identity befor
     assert.equal(mismatchedReport?.data?.target, "chief");
   } finally {
     await starting;
-    support.fileReadHook = undefined;
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();

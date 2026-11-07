@@ -42,6 +42,7 @@ import {
   AGENT_DEFINITION_ENTRY,
   DELEGATING_AGENT_SCOPE_DESCRIPTION,
   sessionAgentIdentity,
+  resolveSavedSessionModelSelection,
   validateManagedAgentControllerIdentity,
   validId,
   type Runtime,
@@ -3766,6 +3767,43 @@ export function registerManagedAgentSessionStartHandler(
         options.captureOwnTools(options.getActiveTools());
       options.ensureAgentIdentity(ctx);
       verified = candidate;
+      const restoreModel = process.env.PI_HERDSMAN_RESTORE_MODEL;
+      if (restoreModel) {
+        startupStage = "model_restore";
+        if (restoreModel !== "saved-session")
+          throw new Error(
+            "Cannot continue Agent: saved model expectation is invalid",
+          );
+        const selection = resolveSavedSessionModelSelection(
+          ctx.sessionManager,
+          (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+        );
+        const actual = ctx.model
+          ? { provider: ctx.model.provider, modelId: ctx.model.id }
+          : undefined;
+        if (selection.kind === "none")
+          throw new Error(
+            `Cannot continue Agent: saved model selection could not be recovered. Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+        if (selection.kind === "unresolved")
+          throw new Error(
+            `Cannot continue Agent: saved model history is ambiguous (${selection.candidates.map((model) => `${model.provider}/${model.modelId}`).join(" vs ")}). Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+        const expected = selection.model;
+        const available = ctx.modelRegistry.find(
+          expected.provider,
+          expected.modelId,
+        );
+        if (
+          !available ||
+          !actual ||
+          actual.provider !== expected.provider ||
+          actual.modelId !== expected.modelId
+        )
+          throw new Error(
+            `Cannot continue Agent: saved model ${expected.provider}/${expected.modelId} was not restored${available ? "" : " (unavailable in the loaded model registry)"}. Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+      }
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       const existing = readAgentState(mailbox);
       if (existing && !options.sameIdentity(existing, candidate))
@@ -3998,7 +4036,10 @@ export function registerManagedAgentSessionStartHandler(
                 agentLabel: verified.agentLabel,
                 paneId: verified.paneId,
                 status: "failed",
-                error: "Managed Agent initialization failed",
+                error:
+                  startupStage === "model_restore"
+                    ? String(error).slice(0, 256)
+                    : "Managed Agent initialization failed",
                 stage: startupStage,
               });
           } finally {

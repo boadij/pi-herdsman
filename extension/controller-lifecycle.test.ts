@@ -52,6 +52,78 @@ import {
 import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
 
+test("saved-session model selection respects native branch chronology and virtual models", async () => {
+  const { resolveSavedSessionModelSelection } =
+    await import("./agent-controller.ts");
+  const change = (provider: string, modelId: string) => ({
+    type: "model_change",
+    provider,
+    modelId,
+  });
+  const response = (provider: string, model: string) => ({
+    type: "message",
+    message: { role: "assistant", provider, model, stopReason: "stop" },
+  });
+  const resolve = (branch: unknown[], catalog: Record<string, string> = {}) =>
+    resolveSavedSessionModelSelection(
+      {
+        getBranch: () => branch,
+        buildSessionContext: () => ({ model: null }),
+      } as any,
+      (provider, id) =>
+        catalog[`${provider}/${id}`]
+          ? { api: catalog[`${provider}/${id}`]! }
+          : undefined,
+    );
+  assert.deepEqual(resolve([]), { kind: "none" });
+  assert.deepEqual(
+    resolve([change("physical", "old"), response("physical", "new")], {
+      "physical/old": "openai-completions",
+    }),
+    { kind: "resolved", model: { provider: "physical", modelId: "new" } },
+  );
+  assert.deepEqual(
+    resolve([change("virtual", "router"), response("physical", "routed")], {
+      "virtual/router": "pi-virtual",
+    }),
+    { kind: "resolved", model: { provider: "virtual", modelId: "router" } },
+  );
+  assert.deepEqual(
+    resolve([change("missing", "router"), response("physical", "routed")]),
+    {
+      kind: "unresolved",
+      candidates: [
+        { provider: "missing", modelId: "router" },
+        { provider: "physical", modelId: "routed" },
+      ],
+    },
+  );
+  assert.deepEqual(
+    resolve([response("physical", "old"), change("new", "selected")]),
+    { kind: "resolved", model: { provider: "new", modelId: "selected" } },
+  );
+});
+
+test("Managed Lead restoration rejects a different model unless the trusted definition overrides it", async () => {
+  const { assertManagedLeadModelRestored } = await import("./lead-runtime.ts");
+  const saved = { provider: "mistral-native", modelId: "zai-glm-5-3" };
+  assert.throws(
+    () =>
+      assertManagedLeadModelRestored(saved, {
+        provider: "mistral",
+        modelId: "devstral-medium-latest",
+      }),
+    /Managed Lead model restoration failed: saved model mistral-native\/zai-glm-5-3 was not restored/u,
+  );
+  assert.doesNotThrow(() =>
+    assertManagedLeadModelRestored(
+      saved,
+      { provider: "mistral", modelId: "devstral-medium-latest" },
+      true,
+    ),
+  );
+});
+
 test("Agent status observer publishes freshness and invalidates old refreshes", async (t) => {
   const { createAgentStatusRuntime } = await import("./agent-controller.ts");
   const runtime = createAgentStatusRuntime();
@@ -221,6 +293,10 @@ test("Lead startup requests status refresh after execution profile initializatio
   const entered = new Promise<void>((resolve) => (preparing = resolve));
   const deferred = new Promise<void>((resolve) => (release = resolve));
   const signal = new AbortController().signal;
+  let restorationFailure = false;
+  let prepareCalls = 0;
+  const previousHerdrSocketPath = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/tmp/test-herdr.sock";
   const host = {
     diagnostic() {},
     controller: {
@@ -231,7 +307,10 @@ test("Lead startup requests status refresh after execution profile initializatio
       async recoverRuntimes() {},
       startHealthScanner() {},
     },
-    leadInboxRuntime: { beginSession() {} },
+    leadInboxRuntime: {
+      beginSession() {},
+      start: () => calls.push("inbox"),
+    },
     leadStatusRuntime: {
       prepareSession() {},
       prime: () => calls.push("prime"),
@@ -256,7 +335,7 @@ test("Lead startup requests status refresh after execution profile initializatio
       async resolveControllerRole() {},
       shouldRestoreChief: () => false,
       mayPublishLeadPresence: () => false,
-      canStartChiefInbox: () => false,
+      canStartChiefInbox: () => true,
       chiefModeInactive: () => true,
       chiefModeActive: () => false,
       activeManager: () => false,
@@ -278,10 +357,19 @@ test("Lead startup requests status refresh after execution profile initializatio
       roleDefinitions: [],
       projectTrusted: true,
     }),
+    verifyManagedLeadModelRestoration: async () => {
+      calls.push("restore model");
+      if (restorationFailure) throw new Error("model mismatch");
+    },
     prepareLeadExecution: async () => {
+      prepareCalls++;
+      calls.push("prepare start");
       preparing();
       await deferred;
       calls.push("prepared");
+    },
+    failClosedRole: async (_ctx: unknown, error: Error) => {
+      calls.push(`failclosed:${error.message}`);
     },
     publishLeadRole() {},
     visibleAgentCapabilities: async () => [],
@@ -290,6 +378,9 @@ test("Lead startup requests status refresh after execution profile initializatio
   const startup =
     createLeadSessionStartRuntime(host).sessionStart(fakeContext());
   await entered;
+  assert.ok(calls.indexOf("restore model") >= 0);
+  assert.ok(calls.indexOf("restore model") < calls.indexOf("inbox"));
+  assert.ok(calls.indexOf("restore model") < calls.indexOf("prepare start"));
   assert.ok(calls.includes("prime"));
   assert.ok(calls.includes("snapshot"));
   assert.equal(calls.includes("refresh"), false);
@@ -302,6 +393,18 @@ test("Lead startup requests status refresh after execution profile initializatio
     "refresh",
   ]);
   assert.equal(calls.filter((call) => call === "refresh").length, 1);
+  restorationFailure = true;
+  await createLeadSessionStartRuntime(host).sessionStart(fakeContext());
+  assert.equal(
+    prepareCalls,
+    1,
+    "failed restoration must not prepare Lead work",
+  );
+  assert.ok(calls.includes("failclosed:model mismatch"));
+  assert.equal(calls.filter((call) => call === "inbox").length, 1);
+  if (previousHerdrSocketPath === undefined)
+    delete process.env.HERDR_SOCKET_PATH;
+  else process.env.HERDR_SOCKET_PATH = previousHerdrSocketPath;
 });
 
 test("read_evidence is added only to assigned project Lead tools", async () => {
@@ -728,7 +831,7 @@ test("parent delegates two same-definition children with exact ownership", async
       const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
         .find((tool) => tool.name === "stop_agent")!
-        .execute("close", { agent: label }, undefined, undefined, context);
+        .execute("stop", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
       assert.deepEqual(closed.details.closed_assignment, {
         owner_session_id: beforeClose.ownerSessionId,
@@ -2496,7 +2599,7 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
     );
 
     const closePromise = registeredAgentTool(leadPi, "stop").execute(
-      "close",
+      "stop",
       { agent: parent.agentLabel },
       undefined,
       undefined,
@@ -3228,7 +3331,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
 
     const closed = await registeredAgentTool(pi, "stop").execute(
-      "close",
+      "stop",
       { agent: label },
       undefined,
       undefined,

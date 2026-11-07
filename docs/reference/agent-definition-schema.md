@@ -206,6 +206,25 @@ the root lead. Pi clamps a thinking level to the selected model's capabilities.
 Fresh-delegation settings are snapshotted at launch; changing the controller
 does not change an active agent.
 
+On continuation, an omitted definition `model` uses the model selected in the
+saved Pi session; Herdsman does not pass that saved selection as a fresh
+command-line model. The continued Agent restores it from session history and
+checks it against the loaded model registry and Pi's active model before it
+observes requests or accepts work. If the history is ambiguous, the model is
+unavailable, or Pi selected a different model, startup fails rather than
+continuing with a different model. If resolving the saved model requires a
+provider registered by an extension, extension discovery remains enabled even
+when `noExtensions: true`. An explicit definition `model` takes precedence
+over saved history and uses the definition's own extension policy.
+
+The same saved-model check applies when a Manager restarts an assigned managed
+Lead with no explicit `managed-lead` model override. The Lead verifies the
+restored model before activating its inbox or preparing work; unresolved or
+mismatched restoration fails startup. A fresh, session- and generation-bound
+startup result is required for Manager readiness. An explicit `managed-lead`
+model override takes precedence over the saved selection. With no saved model,
+there is no saved-model comparison to perform.
+
 `enabled` controls Agent-definition availability. A disabled definition remains
 visible in the `/agents definitions` UI so it can be enabled again, but it is
 omitted from the runtime `agent_definitions` capability summary. A definition
@@ -317,14 +336,15 @@ Explicit `extensions` entries remain separate launch inputs and are passed to
 Pi normally. Launcher-injected infrastructure remains separate from the
 definition's extension and tool policy.
 
-One launch-derived exception applies, and only to an inherited model. Fresh
-delegation inherits the spawning controller's model, and when that model's
-provider is registered by an extension, discovery stays available for that
-launch even when `noExtensions` is `true`, because a child denied discovery
-cannot resolve a model whose provider only an extension supplies. A model
-pinned in the definition is passed to Pi as written and keeps the definition's
-own extension policy, so a definition that pins such a model must set
-`noExtensions: false` itself.
+Launch model requirements can require extension discovery even when
+`noExtensions: true`. For fresh delegation, this applies when the inherited
+controller model's provider is registered by an extension. On continuation,
+the saved selection may likewise require discovery to resolve its provider (or
+to determine that it cannot be resolved); if restoration is ambiguous or
+unavailable, continuation fails closed. A model pinned in the definition is
+passed to Pi as written and keeps the definition's own extension policy, so a
+definition that pins an extension-provided model must set `noExtensions: false`
+itself.
 
 ## Managed-agent coordination tools
 

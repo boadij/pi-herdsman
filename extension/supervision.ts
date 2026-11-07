@@ -3564,6 +3564,14 @@ export function mightHaveProjectMessages(
   return false;
 }
 
+/** One-startup result only; never contains the saved model selection. */
+export type LeadStartupAttestation = {
+  kind: "model_restore";
+  assignmentId: string;
+  generation: string;
+  result: "verified" | "definition_override" | "no_saved_model";
+};
+
 export type CoordinatorState = {
   version: 1;
   build?: RuntimeBuild;
@@ -3571,6 +3579,7 @@ export type CoordinatorState = {
   instanceId: string;
   piSessionId: string;
   updatedAt: number;
+  startupAttestation?: LeadStartupAttestation;
 };
 export type LeadCoordinationState = CoordinatorState;
 
@@ -3952,11 +3961,28 @@ function validLeadState(value: unknown): value is CoordinatorState {
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
     Object.keys(r).some(
-      (k) => !keys.includes(k) && k !== "role" && k !== "build",
+      (k) =>
+        !keys.includes(k) &&
+        k !== "role" &&
+        k !== "build" &&
+        k !== "startupAttestation",
     ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
     return false;
+  const attestation = r.startupAttestation;
+  const validAttestation =
+    attestation === undefined ||
+    (!!attestation &&
+      typeof attestation === "object" &&
+      !Array.isArray(attestation) &&
+      Object.keys(attestation).length === 4 &&
+      (attestation as any).kind === "model_restore" &&
+      (attestation as any).assignmentId === r.piSessionId &&
+      (attestation as any).generation === r.instanceId &&
+      ["verified", "definition_override", "no_saved_model"].includes(
+        (attestation as any).result,
+      ));
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
@@ -3964,7 +3990,8 @@ function validLeadState(value: unknown): value is CoordinatorState {
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
     Number.isInteger(r.updatedAt) &&
-    (r.updatedAt as number) >= 0
+    (r.updatedAt as number) >= 0 &&
+    validAttestation
   );
 }
 export function readLeadCoordinationState(

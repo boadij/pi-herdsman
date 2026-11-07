@@ -2826,6 +2826,7 @@ test("a child with no requested model passes no --model at all", () => {
     resolveChildModel({ isForeignProvider: noForeignProviders }),
     {
       kind: "none",
+      extensionDiscovery: false,
     },
   );
 });
@@ -2836,8 +2837,26 @@ test("a blank configured model is treated as no model", () => {
       configured: "   ",
       isForeignProvider: noForeignProviders,
     }),
-    { kind: "none" },
+    { kind: "none", extensionDiscovery: false },
   );
+});
+
+test("saved extension models enable discovery without a CLI model override", () => {
+  const decision = resolveChildModel({
+    saved: { provider: "acme", modelId: "zai-glm-5-3" },
+    isForeignProvider: (id) => id === "acme",
+    isKnownModel: () => true,
+  });
+  assert.deepEqual(decision, { kind: "none", extensionDiscovery: true });
+  const definition = {
+    name: "scout",
+    path: "/agents/scout.md",
+    frontmatter: { name: "scout", noExtensions: true },
+    body: "",
+  };
+  const args = agentLaunchArgs(definition, { modelDecision: decision });
+  assert.equal(args.includes("--no-extensions"), false);
+  assert.equal(args.includes("--model"), false);
 });
 
 test("a built-in or config provider keeps the child lean", () => {

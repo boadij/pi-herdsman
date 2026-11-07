@@ -3772,6 +3772,67 @@ async function tryNestedCommand(ctx, args) {
   });
 }
 
+export async function promptContinuationRoot(
+  ctx,
+  wait = waitForEvidence,
+  list = tryNestedCommand,
+  prompt = nestedCommand,
+) {
+  try {
+    await wait(
+      ctx,
+      "continuation-root-ready",
+      async () => {
+        const result = await list(ctx, ["agent", "list"]);
+        if (!result.ok) return { done: false, observationError: result.error };
+        const agent = (result.value.agents ?? []).find(
+          (item) => item.pane_id === ctx.rootPaneId,
+        );
+        return {
+          done:
+            typeof agent?.agent_session?.value === "string" &&
+            agent.agent_session.value.trim().length > 0 &&
+            ["idle", "done"].includes(agent.agent_status),
+          progress: {
+            registered: !!agent,
+            hasSession: typeof agent?.agent_session?.value === "string",
+            status: agent?.agent_status,
+          },
+        };
+      },
+      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+    );
+  } catch (error) {
+    if (error.code !== "SMOKE_TIMEOUT" && error.code !== "SMOKE_STALLED")
+      throw error;
+    const [terminal, process] = await Promise.allSettled([
+      nestedPaneText(ctx, ctx.rootPaneId, "recent-unwrapped"),
+      tryNestedCommand(ctx, ["pane", "process-info", "--pane", ctx.rootPaneId]),
+    ]);
+    const terminalText = terminal.status === "fulfilled" ? terminal.value : "";
+    const processInfo =
+      process.status === "fulfilled" && process.value.ok
+        ? process.value.value?.process_info
+        : null;
+    const lines = sanitizeManagerBootstrapText(terminalText, ctx)
+      .split("\n")
+      .slice(-40)
+      .map((line) => line.slice(0, 300));
+    error.smoke.lastEvidence = {
+      ...error.smoke.lastEvidence,
+      paneRecentOutput: lines,
+      processInfo: {
+        observed: !!processInfo,
+        argvPresent: (processInfo?.foreground_processes ?? []).some(
+          (item) => Array.isArray(item.argv) && item.argv.length > 0,
+        ),
+      },
+    };
+    throw error;
+  }
+  await prompt(ctx, ["agent", "prompt", ctx.rootPaneId, ctx.initialPrompt]);
+}
+
 async function waitForNestedHerdr(ctx) {
   return waitForEvidence(
     ctx,
@@ -3839,7 +3900,8 @@ async function startCandidate(ctx) {
   ctx.rootWorkspaceId = pane.workspace_id;
   assert.equal(resolve(pane.cwd), ctx.rootCwd);
   ctx.rootPaneId = paneId;
-  const prompt = ctx.initialPrompt;
+  const prompt =
+    ctx.scenario === "continuation" ? undefined : ctx.initialPrompt;
   assert.ok(
     prompt === undefined || typeof prompt === "string",
     "candidate initial prompt must be a string when present",
@@ -4020,6 +4082,37 @@ export function matchPiProvenance(
   } catch (error) {
     error.code = "SMOKE_EVIDENCE";
     throw error;
+  }
+}
+
+export function assertContinuationFauxEvidence(
+  sessionStarts,
+  provenance,
+  sessionId,
+  pids,
+) {
+  assert.equal(pids.length, 2, "expected two continuation generation PIDs");
+  assert.notEqual(
+    pids[0],
+    pids[1],
+    "continuation generations must use distinct PIDs",
+  );
+  for (const pid of pids) {
+    assert.ok(
+      sessionStarts.some(
+        (record) => record.sessionId === sessionId && record.pid === pid,
+      ),
+      `missing faux session_start evidence for ${sessionId} PID ${pid}`,
+    );
+    assert.ok(
+      provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      ),
+      `missing faux continuation provider request for ${sessionId} PID ${pid}`,
+    );
   }
 }
 
@@ -7784,6 +7877,42 @@ async function runContinuationSmoke(ctx) {
       stallMs: CONTROL_STALL_MS,
       pollMs: 200,
     },
+  );
+
+  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) =>
+    (await readFile(join(runtimeEvidence, name), "utf8"))
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      const provenance = await readJsonl("smoke-faux-provenance.jsonl");
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === firstSession.id &&
+          record.pid === firstGeneration &&
+          record.model === "continuation",
+      );
+      return {
+        done: found,
+        progress: { secondGenerationProviderRequest: found },
+        evidence: { sessionId: firstSession.id, pid: firstGeneration },
+      };
+    },
+    {
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      stallMs: CONTROL_STALL_MS,
+      pollMs: 200,
+    },
+  );
+  assertContinuationFauxEvidence(
+    await readJsonl("smoke-faux-session-start.jsonl"),
+    await readJsonl("smoke-faux-provenance.jsonl"),
+    firstSession.id,
+    [firstPids.values().next().value, firstGeneration],
   );
 
   await waitForEvidence(
@@ -13312,6 +13441,7 @@ async function main() {
       pkg.piHerdsman.runtime.herdr.version,
     );
     ctx.rootPaneId = await startCandidate(ctx);
+    if (scenario === "continuation") await promptContinuationRoot(ctx);
     if (scenario === "agent-crash-recovery") {
       await waitForEvidence(
         ctx,

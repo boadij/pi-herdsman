@@ -80,6 +80,7 @@ import {
   openOwnedAssignmentSession,
   ownedAssignmentChildren,
   resolveAssignmentSession,
+  resolveSavedSessionModelSelection,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
   type AgentControllerOptions,
@@ -109,6 +110,7 @@ import {
 } from "./coordinator-target.ts";
 import {
   AGENT_COORDINATION_TOOLS,
+  configuredModel,
   configuredToolPolicy,
   discoverRoleDefinitions,
   discoverAgentDefinitions,
@@ -757,6 +759,22 @@ export type LeadRuntimeState = {
   chiefActivationRollback: boolean;
 };
 
+export function assertManagedLeadModelRestored(
+  saved: { provider: string; modelId: string },
+  actual: { provider: string; modelId: string } | undefined,
+  explicitModelOverride = false,
+): void {
+  if (explicitModelOverride) return;
+  if (
+    !actual ||
+    actual.provider !== saved.provider ||
+    actual.modelId !== saved.modelId
+  )
+    throw new Error(
+      `Managed Lead model restoration failed: saved model ${saved.provider}/${saved.modelId} was not restored; Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+    );
+}
+
 export function createLeadRuntimeState(): LeadRuntimeState {
   return {
     instanceId: randomUUID(),
@@ -1033,6 +1051,11 @@ export function createLeadSessionStartRuntime(host: {
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void>;
+  afterManagedSessionIdentityInitialized?(): void;
+  verifyManagedLeadModelRestoration?(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void>;
   rejectNativeAgentRestore?(ctx: ExtensionContext): boolean;
   quarantineNativeAgentRestore?(ctx: ExtensionContext): void;
   resetNativeAgentRestoreQuarantine?(ctx: ExtensionContext): void;
@@ -1194,6 +1217,14 @@ export function createLeadSessionStartRuntime(host: {
           !host.roleTransitions.restoreChiefState(ctx)
         )
           malformedRole = true;
+        try {
+          await host.verifyManagedLeadModelRestoration?.(ctx, sessionSignal);
+        } catch (error) {
+          await host.failClosedRole(ctx, error);
+          host.setLeadExecutionPending(false);
+          return;
+        }
+        if (sessionSignal.aborted) return;
         if (malformedRole) host.roleTransitions.suspendMalformedRole(ctx);
         if (host.roleTransitions.shouldRestoreChief(persistedRole)) {
           try {
@@ -3266,6 +3297,7 @@ export function registerLeadRuntime(
         sessionKind = identity;
         managedLifecycle = "unavailable";
         options.sessionStartOptions.appendRoleError(ctx, error);
+        options.sessionStartOptions.afterManagedSessionIdentityInitialized?.();
         return;
       }
       assignment = scope
@@ -3317,6 +3349,8 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, []);
     }
     managedLifecycle = assignment ? "assigned" : "unavailable";
+    if (resolved.kind === "managed")
+      options.sessionStartOptions.afterManagedSessionIdentityInitialized?.();
   };
   const currentProjectAssignment = async (
     ctx: ExtensionContext,
@@ -3529,6 +3563,56 @@ export function registerLeadRuntime(
       ),
     };
   };
+  const managedLeadDefinition = (ctx: ExtensionContext): AgentDefinition =>
+    options.commandHost.discoverRoleDefinition(
+      MANAGED_LEAD_DEFINITION_NAME,
+      ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+    );
+  const verifyManagedLeadModelRestoration = async (
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (sessionKind?.kind !== "managed") return;
+    coordinationRuntime.invalidateStartupCoordinationState(
+      ctx.sessionManager.getSessionId(),
+    );
+    const definition = managedLeadDefinition(ctx);
+    if (signal.aborted) return;
+    const saved = resolveSavedSessionModelSelection(
+      ctx.sessionManager,
+      (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+    );
+    const explicitModelOverride =
+      configuredModel(definition.frontmatter) !== undefined;
+    if (saved.kind === "unresolved" && !explicitModelOverride)
+      throw new Error(
+        `Managed Lead model restoration failed: saved selection is ambiguous (${saved.candidates.map(({ provider, modelId }) => `${provider}/${modelId}`).join(" vs ")}).`,
+      );
+    if (saved.kind === "resolved") {
+      const actual = ctx.model
+        ? { provider: ctx.model.provider, modelId: ctx.model.id }
+        : undefined;
+      assertManagedLeadModelRestored(
+        saved.model,
+        actual,
+        explicitModelOverride,
+      );
+    }
+    const startupAttestation = {
+      kind: "model_restore" as const,
+      assignmentId: ctx.sessionManager.getSessionId(),
+      generation: leadRuntime.instanceId,
+      result: explicitModelOverride
+        ? ("definition_override" as const)
+        : saved.kind === "none"
+          ? ("no_saved_model" as const)
+          : ("verified" as const),
+    };
+    if (!coordinationRuntime.persistCoordinatorState(startupAttestation))
+      throw new Error(
+        "Managed Lead model restoration was verified, but its fresh startup attestation could not be published",
+      );
+  };
   const prepareLeadExecution = async (
     ctx: ExtensionContext,
     signal: AbortSignal,
@@ -3593,10 +3677,7 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, baseline);
     if (sessionKind?.kind === "managed") {
       try {
-        const definition = options.commandHost.discoverRoleDefinition(
-          MANAGED_LEAD_DEFINITION_NAME,
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+        const definition = managedLeadDefinition(ctx);
         if (signal.aborted) return;
         leadExecution = { mode, definition, valid: true, managed: true };
       } catch (error) {
@@ -3831,6 +3912,7 @@ export function registerLeadRuntime(
       };
     },
     initializeSessionKind,
+    verifyManagedLeadModelRestoration,
     quarantineNativeAgentRestore: (ctx: ExtensionContext) => {
       quarantinedSessionId = ctx.sessionManager.getSessionId();
       roleTransitions.suspendMalformedRole(ctx);
