@@ -18,6 +18,13 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.41.1](https://github.com/boadij/pi-herdsman/compare/v0.41.0...v0.41.1) (2026-11-07)
+
+
+### Fixes
+
+* **agent:** preserve extension-backed models on continuation ([#864](https://github.com/boadij/pi-herdsman/issues/864)) ([8909d29](https://github.com/boadij/pi-herdsman/commit/8909d29e25aae6da8f8282310be1202864e98b86))
+
 ## [0.41.0](https://github.com/boadij/pi-herdsman/compare/v0.40.0...v0.41.0) (2026-11-07)
 
 
