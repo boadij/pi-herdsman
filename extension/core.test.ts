@@ -1290,13 +1290,22 @@ test("strict message preparation rejects reference-only attachments", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-strict-"));
   const path = join(cwd, "candidate");
   writeFileSync(path, "x".repeat(100));
-  assert.throws(
-    () =>
+  let oversized: unknown;
+  assert.throws(() => {
+    try {
       prepareMessageInput("check", [path], cwd, "message_staff", "Message", {
         inlineLimitBytes: 10,
         requireInline: true,
-      }),
-    /could not be fully embedded within the configured limits/,
+      });
+    } catch (error) {
+      oversized = error;
+      throw error;
+    }
+  }, /Attachment is 100 bytes; per-file inline limit is 10 bytes/);
+  assert.equal(
+    (oversized as { detail: { details?: Record<string, unknown> } }).detail
+      .details?.capacity,
+    true,
   );
   for (const bytes of [Buffer.from([0xff]), Buffer.from([0])]) {
     writeFileSync(path, bytes);

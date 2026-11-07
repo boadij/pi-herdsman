@@ -12527,7 +12527,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(oversizedSteer.details.ok, false);
   assert.match(
     oversizedSteer.details.error.message,
-    /Attachment could not be fully embedded within the configured limits/,
+    /per-file inline limit is/,
   );
   assert.deepEqual(
     realFs
