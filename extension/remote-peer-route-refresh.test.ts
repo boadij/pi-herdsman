@@ -3,12 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
+import type { RemotePeerSnapshot, SavedPeerMachine } from "./peer-transport.ts";
 
 const realTransport = await import("./peer-transport.ts");
 const realCorrespondence = await import("./peer-correspondence.ts");
 const { acquireProcessLock } = await import("./lock.ts");
-type Machine = realTransport.SavedPeerMachine;
-type Snapshot = realTransport.RemotePeerSnapshot;
+type Machine = SavedPeerMachine;
+type Snapshot = RemotePeerSnapshot;
 const machines: Machine[] = [];
 let listMachinesImpl: () => Promise<Machine[]> = async () => machines;
 const correspondences: any[] = [];
@@ -740,6 +741,8 @@ test("internal peer reconciliation does not persist model-facing target bindings
   );
   assert.deepEqual(entries, before);
   const visible = await list(f.runtime, f.context);
+  assert.ok(visible.details && "peers" in visible.details);
+  assert.ok(visible.details.peers[0] && "target" in visible.details.peers[0]);
   assert.equal(
     visible.details?.peers[0].target,
     coordinatorTarget("manager", "remote-manager"),
@@ -806,7 +809,7 @@ test("Lead send reports failed authorization predicates without rejecting a vali
   const remoteLead = {
     ...remote("remote-lead"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
@@ -826,7 +829,7 @@ test("ambiguous remote routes are excluded and report route_ambiguous", async (t
   const remoteLead = {
     ...remote("ambiguous-peer"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
@@ -925,7 +928,7 @@ test("Lead send does not reuse a Manager correspondence for the same remote sess
   const remoteLead = {
     ...remote("peer-old"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
