@@ -3770,6 +3770,67 @@ async function tryNestedCommand(ctx, args) {
   });
 }
 
+export async function promptContinuationRoot(
+  ctx,
+  wait = waitForEvidence,
+  list = tryNestedCommand,
+  prompt = nestedCommand,
+) {
+  try {
+    await wait(
+      ctx,
+      "continuation-root-ready",
+      async () => {
+        const result = await list(ctx, ["agent", "list"]);
+        if (!result.ok) return { done: false, observationError: result.error };
+        const agent = (result.value.agents ?? []).find(
+          (item) => item.pane_id === ctx.rootPaneId,
+        );
+        return {
+          done:
+            typeof agent?.agent_session?.value === "string" &&
+            agent.agent_session.value.trim().length > 0 &&
+            ["idle", "done"].includes(agent.agent_status),
+          progress: {
+            registered: !!agent,
+            hasSession: typeof agent?.agent_session?.value === "string",
+            status: agent?.agent_status,
+          },
+        };
+      },
+      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+    );
+  } catch (error) {
+    if (error.code !== "SMOKE_TIMEOUT" && error.code !== "SMOKE_STALLED")
+      throw error;
+    const [terminal, process] = await Promise.allSettled([
+      nestedPaneText(ctx, ctx.rootPaneId, "recent-unwrapped"),
+      tryNestedCommand(ctx, ["pane", "process-info", "--pane", ctx.rootPaneId]),
+    ]);
+    const terminalText = terminal.status === "fulfilled" ? terminal.value : "";
+    const processInfo =
+      process.status === "fulfilled" && process.value.ok
+        ? process.value.value?.process_info
+        : null;
+    const lines = sanitizeManagerBootstrapText(terminalText, ctx)
+      .split("\n")
+      .slice(-40)
+      .map((line) => line.slice(0, 300));
+    error.smoke.lastEvidence = {
+      ...error.smoke.lastEvidence,
+      paneRecentOutput: lines,
+      processInfo: {
+        observed: !!processInfo,
+        argvPresent: (processInfo?.foreground_processes ?? []).some(
+          (item) => Array.isArray(item.argv) && item.argv.length > 0,
+        ),
+      },
+    };
+    throw error;
+  }
+  await prompt(ctx, ["agent", "prompt", ctx.rootPaneId, ctx.initialPrompt]);
+}
+
 async function waitForNestedHerdr(ctx) {
   return waitForEvidence(
     ctx,
@@ -13189,13 +13250,7 @@ async function main() {
       pkg.piHerdsman.runtime.herdr.version,
     );
     ctx.rootPaneId = await startCandidate(ctx);
-    if (scenario === "continuation")
-      await nestedCommand(ctx, [
-        "agent",
-        "prompt",
-        ctx.rootPaneId,
-        ctx.initialPrompt,
-      ]);
+    if (scenario === "continuation") await promptContinuationRoot(ctx);
     if (scenario === "agent-crash-recovery") {
       await waitForEvidence(
         ctx,

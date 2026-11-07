@@ -5583,6 +5583,60 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
   }
 });
 
+test("continuation root prompt waits for a session-backed idle or done Agent", async () => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("export async function promptContinuationRoot(");
+  const end = source.indexOf("\nasync function waitForNestedHerdr", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source
+    .slice(start, end)
+    .trim()
+    .replace(/^export /u, "");
+  for (const status of ["idle", "done"]) {
+    const ctx = { rootPaneId: "w1:p1", initialPrompt: "same prompt" };
+    let polls = 0;
+    let prompted = false;
+    const run = new Function(
+      "waitForEvidence",
+      "tryNestedCommand",
+      "nestedCommand",
+      "CONTROL_STALL_MS",
+      `return (${implementation});`,
+    )(waitForEvidence, undefined, undefined, 1_000);
+    const list = async (_ctx, args) => {
+      assert.deepEqual(args, ["agent", "list"]);
+      polls++;
+      const agents =
+        polls === 1
+          ? []
+          : [
+              {
+                pane_id: "w1:p1",
+                agent_status: status,
+                ...(polls === 3
+                  ? { agent_session: { value: "" } }
+                  : polls >= 4
+                    ? { agent_session: { value: "session-id" } }
+                    : {}),
+              },
+            ];
+      return { ok: true, value: { agents } };
+    };
+    const prompt = async (_ctx, args) => {
+      assert.ok(polls >= 4, "prompt must follow the readiness poll");
+      assert.deepEqual(args, ["agent", "prompt", "w1:p1", "same prompt"]);
+      prompted = true;
+    };
+    const task = run(ctx, waitForEvidence, list, prompt);
+    await task;
+    assert.ok(polls >= 4, "unready rows must be polled again");
+    assert.equal(prompted, true);
+  }
+});
+
 test("evidence progress changes reset inactivity, identical evidence and read errors do not", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   let count = 0;
