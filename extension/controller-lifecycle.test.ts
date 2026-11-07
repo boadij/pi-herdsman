@@ -28,6 +28,7 @@ import {
   resultRef,
   publishScopedResult,
   herdsmanDataRoot,
+  herdsmanConfigPath,
 } from "./storage.ts";
 import {
   listProjectAssignments,
@@ -196,6 +197,7 @@ import {
   resultEntryDetails,
   leadExec,
   runScopedHerdrAlias,
+  seedAncestors,
   setLeadEnvironment,
   setAgentEnvironment,
   startupExecutor,
@@ -13042,7 +13044,17 @@ test("scoped assignment result delivery persists terminal ownership and removes 
   }
 });
 
-test("managed parent resumes its completed scoped child after normal cleanup with accepted evidence", async () => {
+// Runs at `depth` 1 (started by the root) and at depth 3 with the limit
+// raised to 4, so continuation is exercised for a nested Agent too.
+async function exerciseManagedParentResume(depth: number) {
+  const ancestors = seedAncestors(depth);
+  if (depth > 1) {
+    realFs.mkdirSync(dirname(herdsmanConfigPath()), { recursive: true });
+    realFs.writeFileSync(
+      herdsmanConfigPath(),
+      JSON.stringify({ maxAgentDepth: 4 }),
+    );
+  }
   const parentLabel = `resume-parent-${randomUUID().slice(0, 8)}`;
   const childLabel = `resume-child-${randomUUID().slice(0, 8)}`;
   const parentMailbox = agentMailboxPath(WORKSPACE, parentLabel);
@@ -13084,6 +13096,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       piSessionFile: parentSessionPath,
     }),
     projectAssignmentId,
+    ownerSessionId: ancestors.owner,
   };
   resetAgentMailbox(parentMailbox);
   writeAgentState(parentMailbox, parent);
@@ -13103,6 +13116,8 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
   process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify(["agent"]);
   process.env.HERDR_PANE_ID = parent.paneId;
+  if (depth > 1) process.env.PI_HERDSMAN_DEPTH = String(depth);
+  else delete process.env.PI_HERDSMAN_DEPTH;
 
   const identity = {
     type: "custom",
@@ -13690,7 +13705,18 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     realFs.rmSync(childSessionPath, { force: true });
     removeProjectAssignment(authorityRuntime, "repo-key", authorityBranch);
     delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.PI_HERDSMAN_DEPTH;
+    ancestors.cleanup();
+    if (depth > 1) realFs.rmSync(herdsmanConfigPath(), { force: true });
   }
+}
+
+test("managed parent resumes its completed scoped child after normal cleanup with accepted evidence", async () => {
+  await exerciseManagedParentResume(1);
+});
+
+test("a depth-3 Agent continues its completed child with the limit at 4", async () => {
+  await exerciseManagedParentResume(3);
 });
 
 test("continuation after a later unscoped assignment does not revive prior required evidence", async () => {

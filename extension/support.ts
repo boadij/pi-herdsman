@@ -3219,3 +3219,33 @@ export default {
     fileReadHook = value;
   },
 };
+
+// Durable ownership records for an Agent at `depth`: depth - 1 ancestors, each
+// owning the next, the first owned by the root controller. Returns the session
+// ID of the Agent's direct owner (the root's for depth 1) and a cleanup.
+export function seedAncestors(depth: number): {
+  owner: string;
+  cleanup(): void;
+} {
+  const mailboxes: string[] = [];
+  let owner = LEAD_SESSION_ID;
+  for (let level = 1; level < depth; level++) {
+    const label = `ancestor-${level}-${randomUUID().slice(0, 6)}`;
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const sessionId = randomUUID();
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, {
+      ...managedState(label),
+      ownerSessionId: owner,
+      paneId: `ancestor-pane-${level}`,
+      piSessionId: sessionId,
+      piSessionFile: `/tmp/ancestor-${level}.jsonl`,
+    });
+    mailboxes.push(mailbox);
+    owner = sessionId;
+  }
+  return {
+    owner,
+    cleanup: () => mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox)),
+  };
+}

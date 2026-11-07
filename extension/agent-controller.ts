@@ -3134,6 +3134,11 @@ export function childAgentDepth(scope: ControllerScope): number {
  * its owner is not itself a recorded Agent (a root controller), otherwise one
  * more than its owner's depth. `PI_HERDSMAN_DEPTH` is only a startup hint and
  * must agree with this before an Agent may delegate further.
+ *
+ * An owner with no stored state counts as the root. A forged or stale record
+ * could therefore under-count, but the caller compares the result with the
+ * hint, so any disagreement refuses the launch (it fails closed), and a root
+ * controller is the only owner that legitimately has no Agent record.
  */
 export function durableAgentDepth(
   states: readonly ManagedAgentState[],
@@ -3193,8 +3198,11 @@ export function visibleAgentCapabilities(
   rootPolicy: RootDelegationPolicy = "all",
   maxAgentDepth: number = readConfig().maxAgentDepth,
 ) {
-  // An Agent already at the limit (for example after the limit was lowered)
-  // cannot start any Agent, so it is advertised none.
+  // The roster is advisory: it trusts the PI_HERDSMAN_DEPTH hint in `scope`,
+  // while the launch re-verifies depth against the durable ownership chain and
+  // is authoritative. A forged hint can only advertise definitions the launch
+  // then refuses. An Agent already at the limit (for example after the limit
+  // was lowered) cannot start any Agent, so it is advertised none.
   if (scope.kind === "managed-agent" && scope.depth >= maxAgentDepth) return [];
   const childScope = agentScopeAtDepth(childAgentDepth(scope), maxAgentDepth);
   const availableNames = new Set(

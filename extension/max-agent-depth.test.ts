@@ -49,6 +49,7 @@ import {
   registerExtension,
   resetAgentMailbox,
   resultEntryDetails,
+  seedAncestors,
   setAgentEnvironment,
   setLeadEnvironment,
   writeAgentState,
@@ -205,33 +206,6 @@ test("updateConfig validates maxAgentDepth and project settings cannot override 
     rmSync(cwd, { recursive: true, force: true });
   }
 });
-
-// Durable ownership records for an Agent at `depth`: depth - 1 ancestors, each
-// owning the next, the first owned by the root controller. Returns the session
-// ID of the Agent's direct owner (the root's for depth 1) and a cleanup.
-function seedAncestors(depth: number): { owner: string; cleanup(): void } {
-  const mailboxes: string[] = [];
-  let owner = LEAD_SESSION_ID;
-  for (let level = 1; level < depth; level++) {
-    const label = `ancestor-${level}-${randomUUID().slice(0, 6)}`;
-    const mailbox = agentMailboxPath(WORKSPACE, label);
-    const sessionId = randomUUID();
-    resetAgentMailbox(mailbox);
-    writeAgentState(mailbox, {
-      ...managedState(label),
-      ownerSessionId: owner,
-      paneId: `ancestor-pane-${level}`,
-      piSessionId: sessionId,
-      piSessionFile: `/tmp/ancestor-${level}.jsonl`,
-    });
-    mailboxes.push(mailbox);
-    owner = sessionId;
-  }
-  return {
-    owner,
-    cleanup: () => mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox)),
-  };
-}
 
 // Launch simulation: a managed Agent at `depth` (or the root) starts a child,
 // and the child's environment is read back from the launch command.
@@ -880,6 +854,8 @@ async function fromMiddleAgent(
     max: number;
     pendingAsk?: boolean;
     grandchildResult?: boolean;
+    /** a3's pane is gone from Herdr, so its generation is lost. */
+    lostChild?: boolean;
   },
   scenario: (run: {
     tool(name: string, args: Record<string, unknown>): Promise<any>;
@@ -948,7 +924,9 @@ async function fromMiddleAgent(
       text: "undelivered",
       completedAt: Date.now(),
     });
-  const pi = fakePi({ exec: agentControllerExecutor(a2, [a3, a4]) });
+  const pi = fakePi({
+    exec: agentControllerExecutor(a2, options.lostChild ? [a4] : [a3, a4]),
+  });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext([
     {
@@ -1041,6 +1019,24 @@ test("lowering the limit keeps existing Agents manageable but forbids more deleg
     const delegate = await tool("delegate_agent", {
       definition: "worker",
       task: "more work",
+    });
+    assert.match(
+      JSON.stringify(delegate.details),
+      /depth 2 and maxAgentDepth is 2.*cannot start another Agent/,
+    );
+  });
+});
+
+test("a lost deep Agent stays recoverable after the limit is lowered", async () => {
+  await fromMiddleAgent({ max: 2, lostChild: true }, async ({ tool }) => {
+    const listing = await tool("list_agents", {});
+    const entry = listing.details.agents.find((a: any) => a.agent === "a3");
+    assert.equal(entry.state, "lost", JSON.stringify(entry));
+    // Recovery stays available to the owner even though a3 is deeper than the limit.
+    assert.ok(listedTools(listing, "a3").includes("stop_agent"));
+    const delegate = await tool("delegate_agent", {
+      definition: "worker",
+      task: "replacement",
     });
     assert.match(
       JSON.stringify(delegate.details),
