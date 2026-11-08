@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  chmodSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -176,6 +177,169 @@ test("Agent status observer publishes freshness and invalidates old refreshes", 
   runtime.start(ctx);
   assert.equal(typeof widgets.at(-1), "function");
   runtime.shutdown();
+});
+
+const flush = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+const mailboxRootDirectory = () =>
+  dirname(agentMailboxPath("w-descendant", "probe"));
+const watchingMailboxRoot = () =>
+  (watchedMailboxDirectories.get(mailboxRootDirectory())?.size ?? 0) > 0;
+
+async function descendantStatusRuntime(t: TestContext) {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  t.mock.timers.enable({ apis: ["setInterval", "setImmediate"] });
+  const runtime = createAgentStatusRuntime();
+  const notices: string[] = [];
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      setWidget() {},
+      notify: (message: string) => notices.push(message),
+    },
+  } as any;
+  const state = { loads: 0, live: false, afterLoad: () => {} };
+  runtime.configure({
+    loadSnapshot: async () => {
+      state.loads++;
+      const snapshot = {
+        agents: state.live
+          ? [{ label: "child", definition: "child", state: "working" }]
+          : [],
+        stale: false,
+        unavailable: false,
+      };
+      state.afterLoad();
+      return snapshot;
+    },
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  const paths: string[] = [];
+  t.after(() => {
+    runtime.shutdown();
+    for (const path of paths) rmSync(path, { recursive: true, force: true });
+  });
+  const publish = (label: string) => {
+    const path = agentMailboxPath("w-descendant", label);
+    paths.push(path);
+    writeAgentState(path, {
+      ...managedState(label),
+      workspaceId: "w-descendant",
+    });
+  };
+  const refreshNow = async () => {
+    runtime.requestRefresh();
+    await flush();
+  };
+  // Starts the observer with one live Agent and the watcher running.
+  const startLive = async () => {
+    state.live = true;
+    runtime.prepareSession(ctx);
+    runtime.startObserver(ctx, () => {});
+    await flush();
+    assert.equal(watchingMailboxRoot(), true);
+  };
+  return { runtime, ctx, state, notices, publish, refreshNow, startLive };
+}
+
+test("Agent status observer watches for descendants only while Agents are live", async (t) => {
+  const { runtime, ctx, state, publish, refreshNow } =
+    await descendantStatusRuntime(t);
+  runtime.prepareSession(ctx);
+  runtime.startObserver(ctx, () => {});
+  await flush();
+  assert.equal(state.loads, 1);
+  assert.equal(watchingMailboxRoot(), false, "no Agents, so no watcher");
+  publish("a");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, 1, "an idle controller does not reload for state");
+
+  state.live = true;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), true, "a live Agent starts the watcher");
+  t.mock.timers.tick(2_000);
+  await flush();
+  const settled = state.loads;
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, settled, "state present at start is not new");
+  publish("b");
+  t.mock.timers.tick(1_000);
+  await flush();
+  assert.equal(state.loads, settled + 1, "a descendant's state.json refreshes");
+
+  state.live = false;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), false, "all Agents finished stops it");
+  const stopped = state.loads;
+  publish("c");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, stopped);
+
+  state.live = true;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), true, "a later launch restarts it");
+  runtime.shutdown();
+  assert.equal(watchingMailboxRoot(), false, "shutdown stops it");
+});
+
+test("Agent status observer catches a state published before the watcher starts", async (t) => {
+  const { runtime, ctx, state, publish } = await descendantStatusRuntime(t);
+  state.live = true;
+  // Published after the snapshot is read and before the watcher's baseline scan.
+  state.afterLoad = () => {
+    if (state.loads === 1) publish("racing");
+  };
+  runtime.prepareSession(ctx);
+  runtime.startObserver(ctx, () => {});
+  await flush();
+  assert.equal(state.loads, 2, "watcher start requests one catch-up refresh");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, 2, "the catch-up does not repeat");
+});
+
+test("Agent status observer stops its watcher on clear and on session preparation", async (t) => {
+  const { runtime, ctx, startLive } = await descendantStatusRuntime(t);
+  await startLive();
+  runtime.clear();
+  assert.equal(watchingMailboxRoot(), false, "clear stops it");
+  await startLive();
+  runtime.prepareSession(ctx);
+  assert.equal(watchingMailboxRoot(), false, "prepareSession stops it");
+});
+
+test("Agent status observer surfaces a watcher error once per message", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0)
+    return t.skip("POSIX permission bits are not enforced here");
+  const { startLive, publish, notices } = await descendantStatusRuntime(t);
+  publish("seed");
+  const root = mailboxRootDirectory();
+  await startLive();
+  const warnings: string[] = [];
+  try {
+    chmodSync(root, 0o000);
+    t.mock.timers.tick(3_000);
+    await flush();
+    warnings.push(
+      ...notices.filter((message) =>
+        message.includes("cannot watch for new agents"),
+      ),
+    );
+  } finally {
+    chmodSync(root, 0o700);
+  }
+  assert.equal(warnings.length, 1, "repeated identical errors notify once");
+  assert.match(warnings[0]!, /EACCES|EPERM/);
+  assert.match(warnings[0]!, /refreshes every 10 seconds/);
 });
 
 test("Agent status observer retains unavailable with pending starts", async (t) => {
