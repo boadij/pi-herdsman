@@ -3942,7 +3942,8 @@ export function registerLeadRuntime(
     currentLeadAllowedTools: () =>
       leadExecution &&
       !leadExecution.managed &&
-      (!leadExecution.valid || leadExecution.definition.frontmatter.tools !== undefined)
+      (!leadExecution.valid ||
+        leadExecution.definition.frontmatter.tools !== undefined)
         ? executionTools()
         : undefined,
     executionPrompt: () =>
