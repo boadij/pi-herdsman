@@ -7490,10 +7490,16 @@ async function runCoreSmoke(ctx) {
 // leaf projection at the limit, and result delivery at every level are real.
 async function runDeepChainSmoke(ctx) {
   const marker = `${DEEP_CHAIN_MARKER} ${DEEP_CHAIN_RESULT}`;
+  const labels = Array.from(
+    { length: DEEP_CHAIN_DEPTH },
+    (_, i) => `smoke-deep-${i + 1}`,
+  );
+  const seenInTree = new Set();
   await waitForEvidence(
     ctx,
     "deep-chain-delegation",
     async () => {
+      await sampleRootTreeLabels(ctx, labels, seenInTree);
       const session = await rootSessionSnapshot(ctx);
       if (session) {
         ctx.rootSessionPath = session.path;
@@ -7531,7 +7537,41 @@ async function runDeepChainSmoke(ctx) {
     });
   }
   ctx.deepChain = assertDeepChainEvidence(sessions);
+  assertDescendantVisibility(labels, seenInTree);
   await waitForDescendantsToExit(ctx);
+}
+
+// Adds each label whose row is rendered in the root's status tree right now.
+// Only tree rows count; the prompt echo also names the labels.
+async function sampleRootTreeLabels(ctx, labels, seen) {
+  let text;
+  try {
+    text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+  } catch {
+    return;
+  }
+  const treeRows = text
+    .split(/\r?\n/u)
+    .filter((line) => /^[ │]*[└├]─ /u.test(line));
+  for (const label of labels)
+    if (
+      treeRows.some((line) =>
+        new RegExp(`\\b${label}\\s+${label}\\b`, "u").test(line),
+      )
+    )
+      seen.add(label);
+}
+
+// Every level must have been seen in the root's rendered status tree at some
+// point before the chain finished. Without the descendant watcher a level two or
+// more hops down appears only on the 10 s refresh; the leaf is shown for a few
+// seconds, so a regression is caught when no refresh falls inside that window.
+export function assertDescendantVisibility(labels, seen) {
+  const missing = labels.filter((label) => !seen.has(label));
+  requireSmokeEvidence(
+    !missing.length,
+    `deep-chain levels never shown in the root status tree before the chain finished: ${missing.join(", ")}`,
+  );
 }
 
 // Every level must have started its direct child and received that child's

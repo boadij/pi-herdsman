@@ -258,6 +258,58 @@ export function observeMailbox(
   };
 }
 
+// Calls `onNew` when a mailbox gains a state.json after this observer starts,
+// whoever launched that agent. A controller watches only the mailboxes of the
+// agents it launched, so without this a status view learns of a descendant two
+// or more levels down only on its next periodic refresh. State that exists at
+// start is not reported, so a caller that has already read a snapshot must
+// refresh once itself to cover the gap. It reuses `observeMailbox` on the mailbox root: the
+// watch sees a new mailbox directory at once, and that observer's one-second
+// reconcile finds the state.json published into it moments later (a
+// non-recursive watch cannot, and recursive watches are not portable). Each
+// reconcile costs one directory listing plus one existence check per mailbox.
+export function observeNewAgentStates(
+  onNew: () => void,
+  onError: (error: unknown) => void,
+): () => void {
+  let known = new Set<string>();
+  const scan = (): Set<string> => {
+    const present = new Set<string>();
+    let names: string[] = [];
+    try {
+      names = readdirSync(root);
+    } catch (error) {
+      // No mailbox has ever been created: nothing is published yet.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    for (const name of names)
+      if (
+        MAILBOX_DIRECTORY.test(name) &&
+        existsSync(file(join(root, name), "state.json"))
+      )
+        present.add(name);
+    return present;
+  };
+  try {
+    known = scan();
+  } catch (error) {
+    onError(error);
+  }
+  return observeMailbox(
+    root,
+    (name) => MAILBOX_DIRECTORY.test(name),
+    () => {
+      const previous = known;
+      known = scan();
+      if ([...known].some((name) => !previous.has(name))) onNew();
+    },
+    (error) => {
+      // The root does not exist until the first mailbox is created.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") onError(error);
+    },
+  );
+}
+
 export function agentMailboxPath(
   workspaceId: string,
   agentLabel: string,

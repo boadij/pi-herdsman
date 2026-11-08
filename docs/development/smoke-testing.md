@@ -100,7 +100,12 @@ Agent's completed result reaches its direct owner, and that the leaf's marker
 bubbles up through every level to the root's final message. The level-4 Agent
 also escalates one `ask_owner` to its level-3 owner, which answers with
 `reply_agent`, and the scenario asserts both calls. It asserts
-completion and result delivery, not UI timing.
+completion and result delivery. It also samples the root's rendered status
+tree and requires every level to be shown there at some sample before the chain
+finishes. That catches a root that learns of Agents it did not launch only on its
+10-second refresh: the level-4 leaf is visible for about 4 seconds, so it is
+missed unless a refresh happens to fall inside that window. It does not assert
+timing, and a level that lives longer than 10 seconds would be shown either way.
 
 `manager-merge` is an independently invoked simulated Manager integration
 acceptance scenario; it is deliberately not part of the GitHub validation

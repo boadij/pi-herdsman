@@ -160,6 +160,7 @@ import {
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
   assertDeepChainEvidence,
+  assertDescendantVisibility,
 } from "../scripts/smoke.mjs";
 
 test("preflight uses worktree Pi instead of a conflicting PATH executable", async () => {
@@ -9838,5 +9839,16 @@ test("deep-chain evidence needs one delegation per level, the escalation and the
         deepSession("s4"),
       ]),
     /exactly one delegation per level/,
+  );
+});
+
+test("descendant visibility check requires every level to be seen in the root tree", () => {
+  const labels = ["a", "b", "c"];
+  assert.doesNotThrow(() =>
+    assertDescendantVisibility(labels, new Set(["a", "b", "c"])),
+  );
+  assert.throws(
+    () => assertDescendantVisibility(labels, new Set(["a"])),
+    /never shown in the root status tree.*: b, c/,
   );
 });

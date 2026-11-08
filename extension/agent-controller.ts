@@ -34,6 +34,7 @@ import {
   listAgentStateIssues,
   scanAgentStates,
   observeMailbox,
+  observeNewAgentStates,
   readAgentState,
   removeResult,
   removeAgentMailbox,
@@ -351,6 +352,7 @@ export function createAgentStatusRuntime() {
     }
   };
   let statusTimer: ReturnType<typeof setInterval> | undefined;
+  let stopNewAgentWatch: (() => void) | undefined;
   let statusContext: ExtensionContext | undefined;
   let statusGeneration = 0;
   let statusWidgetGeneration = 0;
@@ -445,6 +447,7 @@ export function createAgentStatusRuntime() {
       lastValidStatus = snapshot;
       reconcilePendingStarts(snapshot);
       publishStatus(snapshot);
+      syncNewAgentWatch(ctx, generation);
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
         publishStatus(
@@ -475,6 +478,45 @@ export function createAgentStatusRuntime() {
   const clearTimer = (): void => {
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = undefined;
+    stopNewAgentWatch?.();
+    stopNewAgentWatch = undefined;
+  };
+  // An agent launched by a descendant has no pending-start row and no watcher
+  // here, so refresh when its state.json appears instead of waiting for the
+  // periodic tick. Refreshes coalesce through the in-flight guard. Descendants
+  // exist only below live Agents, so the watcher runs only while the presented
+  // status shows some and an idle controller adds no timer. A state published
+  // between the read that showed the Agent and the watcher's baseline scan is
+  // not reported as new, so starting the watcher also requests one catch-up
+  // refresh.
+  const syncNewAgentWatch = (
+    ctx: ExtensionContext,
+    generation: number,
+  ): void => {
+    if (!presentedStatus.agents.length || !statusTimer) {
+      stopNewAgentWatch?.();
+      stopNewAgentWatch = undefined;
+      return;
+    }
+    if (stopNewAgentWatch) return;
+    let lastError: string | undefined;
+    stopNewAgentWatch = observeNewAgentStates(
+      () => {
+        lastError = undefined;
+        void refresh(ctx, generation);
+      },
+      (error) => {
+        const message = String(error).replace(/^Error: /u, "");
+        if (message === lastError) return;
+        lastError = message;
+        if (generation === statusGeneration && ctx === statusContext)
+          ctx.ui.notify(
+            `Agent status cannot watch for new agents (${message}); the view refreshes every 10 seconds instead`,
+            "warning",
+          );
+      },
+    );
+    void refresh(ctx, generation);
   };
   const removeWidget = (): void => {
     if (statusWidget) {
@@ -510,6 +552,7 @@ export function createAgentStatusRuntime() {
       requestActive = true;
       statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
       statusTimer.unref?.();
+      syncNewAgentWatch(ctx, generation);
       statusPrimed = false;
       publishStatus(presentedStatus);
       if (!primed) void refresh(ctx, generation);
@@ -577,6 +620,7 @@ export function createAgentStatusRuntime() {
       requestActive = true;
       statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
       statusTimer.unref?.();
+      syncNewAgentWatch(ctx, generation);
       statusPrimed = false;
       if (!primed) void refresh(ctx, generation);
     },
