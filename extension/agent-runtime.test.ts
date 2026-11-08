@@ -68,6 +68,7 @@ import support, {
   emitMailboxChange,
   emitMailboxWatchError,
   agentMailboxPath,
+  listAgentStates,
   DEFAULT_PI_SESSION_ID,
   startupExecutor,
   writeAsk,
@@ -7303,6 +7304,186 @@ test("owner ask waits while busy and delivers once after settlement", async () =
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+  }
+});
+
+test("Pi native nested dispatch executes direct tools and actual staff handler denies Chief project mutation", async () => {
+  const { createLeadProjectRuntime } = await import("./lead/project.ts");
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "nested-list-lead-pane";
+  const nestedOwnedState = managedState("nested-visible-agent");
+  const nestedMailbox = agentMailboxPath(
+    WORKSPACE,
+    nestedOwnedState.agentLabel,
+  );
+  resetAgentMailbox(nestedMailbox);
+  writeAgentState(nestedMailbox, nestedOwnedState);
+  const listController = fakePi({
+    exec: agentControllerExecutor(nestedOwnedState),
+  });
+  registerExtension!(listController.pi as never);
+  const listAgentsTool = listController.tools.find(
+    (tool) => tool.name === "list_agents",
+  )!;
+  assert.equal(listAgentsTool.exposure, "direct");
+  let staffExecutions = 0;
+  let projectLaunches = 0;
+  const projectRuntime = createLeadProjectRuntime({
+    activeRole: () => "chief",
+    leadRuntime: { roleSuspended: false },
+    currentChiefAuthority: async () => ({}) as any,
+    runHerdr: async () => {
+      projectLaunches++;
+      throw new Error("project launch must not happen");
+    },
+  } as any);
+  const faux = fauxProvider({
+    provider: `nested-tools-${randomUUID()}`,
+    models: [{ id: "test", reasoning: false, input: ["text"] }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false },
+  });
+  let nestedAgentList: unknown;
+  const requests: any[][] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) => {
+        // Force the normally inactive Manager tool callable, as a captured
+        // registration fallback might, to exercise the execution-time guard.
+        api.on("session_start", () =>
+          api.setActiveTools([
+            "nested_parent",
+            "list_agents",
+            "integrate_branch",
+          ]),
+        );
+        api.registerTool({
+          name: listAgentsTool.name,
+          label: listAgentsTool.label,
+          description: listAgentsTool.description,
+          exposure: listAgentsTool.exposure,
+          executionMode: listAgentsTool.executionMode,
+          parameters: listAgentsTool.parameters,
+          execute: (...args: any[]) => listAgentsTool.execute(...args),
+        });
+        api.registerTool({
+          name: "integrate_branch",
+          label: "integrate branch",
+          description:
+            "Manager project operation, callable for this guard test.",
+          exposure: "direct",
+          parameters: Type.Object({
+            action: Type.String(),
+            branch: Type.String(),
+            expected_head: Type.String(),
+          }),
+          execute: async (...args: any[]) => {
+            staffExecutions++;
+            return projectRuntime.executeStaff(
+              ...args.slice(0, 3),
+              args[3],
+              args[4],
+            );
+          },
+        });
+        api.registerTool({
+          name: "nested_parent",
+          label: "nested parent",
+          description: "Run a direct child and attempt Chief project dispatch.",
+          parameters: Type.Object({}),
+          execute: async (_id, _params, signal, _onUpdate, ctx) => {
+            nestedAgentList = await ctx.executeTool(
+              "list_agents",
+              {},
+              { signal },
+            );
+            const denied = await ctx.executeTool(
+              "integrate_branch",
+              {
+                action: "merge",
+                branch: "probe-branch",
+                expected_head: "deadbeef",
+              },
+              { signal },
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `list_agents ${JSON.stringify(nestedAgentList)};${denied.isError ? `project denied: ${JSON.stringify(denied)}` : "project invoked"}`,
+                },
+              ],
+            };
+          },
+        });
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage([fauxToolCall("nested_parent", {})], {
+        stopReason: "toolUse",
+      });
+    },
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("Finished.");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  const agentStateInventory = () =>
+    listAgentStates()
+      .filter(({ state }) => state.workspaceId === WORKSPACE)
+      .map(({ path, state }) => ({ path, state }));
+  try {
+    const statesBefore = agentStateInventory();
+    await session.prompt("Invoke the nested parent.");
+    assert.equal((nestedAgentList as any)?.isError, false);
+    assert.deepEqual((nestedAgentList as any).result.details.agents, []);
+    assert.deepEqual(agentStateInventory(), statesBefore);
+    assert.equal(staffExecutions, 1);
+    assert.equal(projectLaunches, 0);
+    const toolResults = requests[1]!.filter(
+      (message: any) => message.role === "toolResult",
+    );
+    assert.equal(toolResults.length, 1);
+    assert.equal(toolResults[0].toolName, "nested_parent");
+    assert.deepEqual(
+      toolResults[0].nestedCalls.calls.map((call: any) => call.name),
+      ["list_agents", "integrate_branch"],
+    );
+    assert.match(
+      JSON.stringify(toolResults[0]),
+      /list_agents [\s\S]*Agents: 0[\s\S]*project denied:[\s\S]*Only Managers can integrate project branches/,
+    );
+  } finally {
+    await session.dispose();
+    listController.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(nestedMailbox);
   }
 });
 

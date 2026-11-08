@@ -135,8 +135,11 @@ function assertProtectedHandoff(charter: string): void {
   );
 }
 
-function assertPortableToolSchema(tool: any): void {
-  assert.equal(tool.exposure, "model-only");
+function assertPortableToolSchema(
+  tool: any,
+  exposure: "direct" | "model-only" = "direct",
+): void {
+  assert.equal(tool.exposure, exposure);
   assert.equal(tool.parameters?.type, "object");
   assert.ok(tool.parameters?.properties);
   assert.equal(tool.parameters?.additionalProperties, false);
@@ -485,6 +488,10 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
   const rootDelegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+  assert.equal(
+    pi.tools.find((tool) => tool.name === "read_evidence")?.exposure,
+    "direct",
+  );
   assert.equal(rootDelegate.parameters.properties.retain, undefined);
   for (const retain of [true, false])
     assert.equal(
@@ -597,7 +604,13 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     ["ask_owner", "attach_handoff", "read_evidence"].sort(),
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
-  assertPortableToolSchema(askOwner);
+  assertPortableToolSchema(askOwner, "model-only");
+  for (const name of ["read_evidence", "attach_handoff"])
+    assert.equal(
+      leaf.tools.find((tool) => tool.name === name)?.exposure,
+      "direct",
+      name,
+    );
   assert.deepEqual(askOwner.parameters.required, ["question"]);
   assert.equal(
     Value.Check(askOwner.parameters, { question: "decision?" }),
@@ -698,7 +711,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
       );
     }
     for (const name of ["delegate_work", "stop_lead"])
-      assert.equal(tools.get(name)?.exposure, "model-only", name);
+      assert.equal(tools.get(name)?.exposure, "direct", name);
     assert.equal(chief.pi.getActiveTools().includes("integrate_branch"), false);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
@@ -1052,7 +1065,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   );
   const askOwnerTool = managed.tools.find((tool) => tool.name === "ask_owner");
   assert.ok(askOwnerTool);
-  assertPortableToolSchema(askOwnerTool);
+  assertPortableToolSchema(askOwnerTool, "model-only");
   managed.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 

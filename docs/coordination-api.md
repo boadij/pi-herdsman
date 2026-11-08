@@ -5,6 +5,39 @@
 Pi Herdsman exposes small, role-specific model-facing interfaces. This page is
 the router to their exact contracts, not a second copy of them.
 
+## Code-mode tool access
+
+Pi tools declared with `direct` exposure can be called by the model and through
+Pi's supported native nested-tool execution when active. Herdsman's ordinary
+coordination tools use this exposure; `ask_owner` remains `model-only` because
+it must be a direct, exclusive tool call in its turn. See
+[`ask_owner`](reference/ask-owner.md) for its contract.
+
+Tool access still depends on the active role, ownership, extension loading, and
+runtime authorization. This documents Pi's native contract; behavior through
+third-party code-mode integrations and their approval or foreground settings
+depends on that integration and is not guaranteed here. In environments where
+`ask_owner` and Fabric are both registered, Fabric may configure it as a
+foreground tool, for example:
+
+```json
+{
+  "foreground": {
+    "tools": [
+      {
+        "name": "ask_owner",
+        "owner": "pi-herdsman",
+        "reason": "turn-steering"
+      }
+    ]
+  }
+}
+```
+
+Users preferring model-facing tools may choose Fabric's `fullCodeMode: false`
+setting where supported; verify its behavior against the installed Fabric
+version.
+
 ## Owned Agent work
 
 A Lead or delegation-enabled Agent controls only its owned Agent boundary.

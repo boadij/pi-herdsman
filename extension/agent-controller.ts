@@ -9300,7 +9300,7 @@ export function createAgentController(
       pi.registerTool({
         name: "read_evidence",
         label: "Read accepted evidence",
-        exposure: "model-only",
+        exposure: "direct",
         description:
           "Read a bounded page from evidence accepted by this assigned project Lead.",
         parameters: Type.Object(
@@ -9422,7 +9422,7 @@ export function createAgentController(
       { agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }) },
       { additionalProperties: false },
     );
-    const agentExposure: ToolExposure = "model-only";
+    const agentExposure: ToolExposure = "direct";
     const agentExecutionMode: ToolExecutionMode = "sequential";
     const agentTool = {
       name: "list_agents",
