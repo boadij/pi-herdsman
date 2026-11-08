@@ -5363,7 +5363,7 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
     /Use reply_agent to reply to this exact pending ask/,
   );
   writeAgentState(mailbox, { ...state, pendingAskId: undefined });
-  removeAsk(mailbox, ask.askId);
+  removeAsk(mailbox);
   now += 3 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
