@@ -16,6 +16,7 @@ import {
 } from "../config.ts";
 import {
   discoverGlobalAgentDefinition,
+  notifyDefinitionWarning,
   discoverRoleDefinitions,
   definitionEditTargets,
   readDefinitionEditSnapshot,
@@ -83,6 +84,7 @@ type LeadCommandHost = {
     name: RoleDefinitionName,
     options?: {
       projectRoot?: string;
+      onWarning?: (message: string) => void;
     },
   ): AgentDefinition;
   setLeadExecutionMode(
@@ -315,11 +317,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       ) =>
         section === "agents"
           ? (await host.contextAgentDefinitions(ctx, onWarning)).definitions
-          : discoverRoleDefinitions(
-              includeProject && ctx.isProjectTrusted()
-                ? { projectRoot: ctx.cwd, onWarning }
-                : { onWarning },
-            );
+          : discoverRoleDefinitions({
+              ...(includeProject && ctx.isProjectTrusted()
+                ? { projectRoot: ctx.cwd }
+                : {}),
+              onWarning: (message) => {
+                notifyDefinitionWarning(ctx, message);
+                onWarning?.(message);
+              },
+            });
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions(
           isReservedRoleDefinition(name) ? "roles" : "agents",

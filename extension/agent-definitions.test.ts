@@ -26,7 +26,6 @@ import {
   contextAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
-  notifyDefinitionWarning,
   definitionEditTargets,
   readDefinitionEditSnapshot,
   FLEXIBLE_LEAD_DEFINITION_NAME,
@@ -44,6 +43,7 @@ import {
   writePrivatePromptSnapshots,
   type Frontmatter,
 } from "./agent-definitions.ts";
+import { createLeadCommandRuntime } from "./lead/commands.ts";
 
 function withPiAgentDir<T>(agentDir: string, callback: () => T): T {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -3198,10 +3198,6 @@ test("contextual definition warnings are reported once per session", async () =>
     join(root, "agents", "manager.md"),
     "---\nname: manager\n---\n",
   );
-  writeFileSync(
-    join(root, "coordinators", "misplaced.md"),
-    "---\nname: misplaced\n---\n",
-  );
   const notices: string[] = [];
   let sessionId = "session-one";
   const manager = { getSessionId: () => sessionId };
@@ -3212,20 +3208,59 @@ test("contextual definition warnings are reported once per session", async () =>
     isProjectTrusted: () => false,
     ui: { notify: (message: string) => notices.push(message) },
   } as any;
-  const pending = withPiAgentDir(root, () => {
-    const first = contextAgentDefinitions(ctx);
-    discoverRoleDefinitions({
-      onWarning: (message) => notifyDefinitionWarning(ctx, message),
-    });
-    const second = contextAgentDefinitions(ctx);
-    assert.equal(notices.length, 2);
-    assert.match(notices[1]!, /coordinators.*misplaced\.md.*agents/u);
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  try {
+    await contextAgentDefinitions(ctx);
+    writeFileSync(
+      join(root, "coordinators", "misplaced.md"),
+      "---\nname: misplaced\n---\n",
+    );
+    const coordinatorMenus: any[][] = [];
+    const selections = ["roles", undefined];
+    const runtime = createLeadCommandRuntime({
+      contextAgentDefinitions: (
+        context: any,
+        onWarning?: (message: string) => void,
+      ) => contextAgentDefinitions(context, onWarning),
+      selectMenu: async (_context: unknown, title: string, items: any[]) => {
+        if (title === "Coordinators") coordinatorMenus.push(items);
+        return selections.shift();
+      },
+      agentDefinitionEnabled: () => true,
+      getThinkingLevel: () => "high",
+    } as any);
+    await runtime.openDefinitionsMenu(ctx);
+    const menuWarning = notices.find((message) =>
+      /coordinators.*misplaced\.md.*agents/u.test(message),
+    );
+    assert.ok(menuWarning);
+    assert.equal(
+      notices.filter((message) => message === menuWarning).length,
+      1,
+    );
+    assert.ok(
+      coordinatorMenus[0]?.some(
+        (item) =>
+          item.label.includes("misplaced definition") &&
+          item.help?.includes("coordinators/misplaced.md"),
+      ),
+    );
+    const noticeCount = notices.length;
+    await contextAgentDefinitions(ctx);
+    assert.equal(notices.length, noticeCount);
     sessionId = "session-two";
-    const third = contextAgentDefinitions(ctx);
-    assert.equal(notices.length, 3);
-    return Promise.all([first, second, third]);
-  });
-  await pending;
+    selections.push("roles", undefined);
+    await runtime.openDefinitionsMenu(ctx);
+    assert.equal(
+      notices.filter((message) => message === menuWarning).length,
+      2,
+    );
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("legacy coordinator profiles diagnose only applicable trusted scopes", () => {
