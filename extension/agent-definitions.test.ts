@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
@@ -551,7 +551,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
   );
   assert.equal(bundled.name, "managed-lead");
-  assert.deepEqual(bundled.frontmatter.tools, []);
+  assert.deepEqual(bundled.frontmatter.tools, ["codemode"]);
   const requiredTools = [
     ...AGENT_COORDINATION_TOOLS,
     "message_supervisor",
@@ -562,12 +562,18 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     requiredTools,
     bodyPromptPath: "/prompt",
   });
-  assert.equal(launchArgs.includes("--no-tools"), true);
+  assert.equal(launchArgs.includes("--no-tools"), false);
   assert.deepEqual(launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","), [
+    "codemode",
     ...requiredTools,
     "mcp__",
   ]);
   assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
+  assert.deepEqual(bundled.frontmatter.extensions, ["builtin:codemode"]);
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--extension") + 1],
+    "builtin:codemode",
+  );
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
@@ -708,7 +714,7 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     discoverRoleDefinitions(),
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
-  assert.deepEqual(orchestrator!.frontmatter.tools, []);
+  assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode"]);
   writeFileSync(
     join(agents, "orchestrator-lead.md"),
     "---\nname: orchestrator-lead\nbodyMode: replace\n---\nCustom strategy",
@@ -723,14 +729,14 @@ test("reserves independent runtime role profiles with narrow fields", () => {
       global,
       () => discoverRoleDefinition("manager").frontmatter.tools,
     ),
-    [],
+    ["codemode"],
   );
   assert.deepEqual(
     withPiAgentDir(
       global,
       () => discoverRoleDefinition("chief").frontmatter.tools,
     ),
-    [],
+    ["codemode"],
   );
   const managed = withPiAgentDir(global, () =>
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
@@ -788,7 +794,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   const manager = withPiAgentDir(global, () =>
     discoverRoleDefinition("manager", { projectRoot: project }),
   );
-  assert.deepEqual(manager.frontmatter.tools, []);
+  assert.deepEqual(manager.frontmatter.tools, ["codemode"]);
   assert.match(manager.body, /Project manager guidance/);
   assert.match(manager.body, /Global manager guidance/);
   const chief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));
@@ -810,8 +816,8 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   );
   assert.equal(replacedManager.body, "Custom Manager strategy");
   assert.equal(replacedChief.body, "Custom Chief strategy");
-  assert.deepEqual(replacedManager.frontmatter.tools, []);
-  assert.deepEqual(replacedChief.frontmatter.tools, []);
+  assert.deepEqual(replacedManager.frontmatter.tools, ["codemode"]);
+  assert.deepEqual(replacedChief.frontmatter.tools, ["codemode"]);
   writeFileSync(
     join(projectAgents, "chief.md"),
     "---\nname: chief\n---\nProject chief guidance",
@@ -970,7 +976,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    ["implementer", ["read", "bash", "powershell", "edit", "write"]],
+    [
+      "implementer",
+      ["read", "bash", "powershell", "edit", "write", "codemode"],
+    ],
     [
       "researcher",
       [
@@ -982,12 +991,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         "fetch_content",
         "get_search_content",
         "source_check",
+        "codemode",
       ],
     ],
-    ["reviewer", ["read", "ls", "find", "grep"]],
-    ["scout", ["read", "ls", "find", "grep"]],
-    ["generalist", ["read", "bash", "powershell", "edit", "write"]],
-    ["validator", ["read", "bash", "powershell"]],
+    ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
+    ["scout", ["read", "ls", "find", "grep", "codemode"]],
+    ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
+    ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
     [
@@ -1056,7 +1066,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     assert.deepEqual(definition.frontmatter.skills, []);
     if (definition.name === "researcher")
       assert.equal(definition.frontmatter.extensions, undefined);
-    else assert.deepEqual(definition.frontmatter.extensions, []);
+    else
+      assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
@@ -1101,6 +1112,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "ls",
         "find",
         "grep",
+        "codemode",
         "ask_owner",
         "read_evidence",
         "attach_handoff",
@@ -1117,6 +1129,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "fetch_content",
         "get_search_content",
         "source_check",
+        "codemode",
         "ask_owner",
         "read_evidence",
         "attach_handoff",
@@ -1129,6 +1142,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "ls",
         "find",
         "grep",
+        "codemode",
         ...AGENT_COORDINATION_TOOLS,
         "ask_owner",
         "read_evidence",
@@ -1156,6 +1170,9 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       for (const tool of forbidden)
         assert.equal(launchedTools.includes(tool), false);
       assert.equal(args.includes("npm:pi-web-access"), false);
+      if (name !== "researcher") {
+        assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
+      }
       if (name === "researcher") {
         assert.equal(definition.frontmatter.noExtensions, undefined);
         assert.equal(args.includes("--no-extensions"), false);
@@ -1174,6 +1191,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "ls",
       "find",
       "grep",
+      "codemode",
       "ask_owner",
       "read_evidence",
       "attach_handoff",
@@ -1999,6 +2017,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
     "powershell",
     "edit",
     "write",
+    "codemode",
   ]);
   const args = agentLaunchArgs(generalist, {
     bodyPromptPath: "/tmp/prompt.txt",
@@ -2015,6 +2034,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "powershell",
       "edit",
       "write",
+      "codemode",
       ...AGENT_COORDINATION_TOOLS,
       "ask_owner",
       "read_evidence",
@@ -2022,6 +2042,84 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "mcp__",
     ].join(","),
   );
+});
+
+test("bundled noExtensions Agent loads and executes native Code Mode", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-codemode-launch-"));
+  try {
+    const agentDir = join(root, "agents");
+    mkdirSync(agentDir);
+    const generalist = withPiAgentDir(agentDir, () =>
+      discoverAgent("generalist"),
+    );
+    const prompt = join(root, "prompt.md");
+    const provider = join(root, "provider.mjs");
+    writeFileSync(prompt, "Probe isolated native Code Mode.\n");
+    const piAi = import.meta.resolve("@earendil-works/pi-ai");
+    writeFileSync(
+      provider,
+      `import { fauxProvider, fauxAssistantMessage, fauxToolCall, getCurrentTools } from ${JSON.stringify(piAi)};\n` +
+        `const faux = fauxProvider({ provider: "codemode-probe", models: [{ id: "test", reasoning: false, input: ["text"] }] });\n` +
+        `let called = false;\n` +
+        `function response(context) {\n` +
+        `  faux.appendResponses([response]);\n` +
+        `  if (!called) {\n` +
+        `    called = true;\n` +
+        `    if (!getCurrentTools(context.messages).some((tool) => tool.name === "codemode")) throw new Error("codemode was not exposed");\n` +
+        `    return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text("NATIVE_CODEMODE_EXECUTED")' }), { stopReason: "toolUse" });\n` +
+        `  }\n` +
+        `  const result = context.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");\n` +
+        `  if (!result || result.isError || !JSON.stringify(result.content).includes("NATIVE_CODEMODE_EXECUTED")) throw new Error("native codemode result missing or failed");\n` +
+        `  return fauxAssistantMessage("NATIVE_CODEMODE_PROBE_OK");\n` +
+        `}\n` +
+        `faux.setResponses([response]);\n` +
+        `export default (pi) => pi.registerProvider(faux.provider);\n`,
+    );
+    const args = agentLaunchArgs(generalist, {
+      bodyPromptPath: prompt,
+      cwd: root,
+      modelDecision: {
+        kind: "use",
+        model: "codemode-probe/test",
+        extensionDiscovery: false,
+      },
+    });
+    assert.equal(args.includes("--no-extensions"), true);
+    assert.ok(
+      args.some(
+        (arg, index) =>
+          arg === "--extension" && args[index + 1] === "builtin:codemode",
+      ),
+    );
+    const output = execFileSync(
+      process.execPath,
+      [
+        resolve(
+          "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+        ),
+        ...args,
+        "--extension",
+        provider,
+        "--provider",
+        "codemode-probe",
+        "--model",
+        "test",
+        "--print",
+        "--no-session",
+        "--offline",
+        "Run the codemode tool.",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, HOME: root, PI_CODING_AGENT_DIR: root },
+      },
+    );
+    assert.match(output, /NATIVE_CODEMODE_PROBE_OK/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("managed launch policy always includes ask_owner and attach_handoff", () => {
@@ -2378,6 +2476,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "powershell",
     "edit",
     "write",
+    "codemode",
   ]);
   assert.deepEqual(
     agentDefinitionMetadata({

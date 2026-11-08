@@ -1,7 +1,7 @@
 ---
 agents: [scout]
 description: Focused implementation agent for a resolved change; use when the required behavior is already decided and the task is to edit, test, and report
-extensions: []
+extensions: [builtin:codemode]
 inheritGlobalContext: false
 inheritProjectContext: true
 name: implementer
@@ -9,7 +9,7 @@ noExtensions: true
 noSkills: true
 skills: []
 systemPromptMode: append
-tools: [read, bash, powershell, edit, write]
+tools: [read, bash, powershell, edit, write, codemode]
 ---
 
 You are implementer, a focused execution agent for one explicitly approved

@@ -1411,6 +1411,7 @@ export function createLeadAgentEventRuntime(host: {
   currentManagerAllowedTools?(
     ctx: ExtensionContext,
   ): readonly string[] | undefined;
+  currentLeadAllowedTools?(): readonly string[] | undefined;
   reconcileRoleTools?(): void;
   supervisoryProfileBody(
     ctx: ExtensionContext,
@@ -1535,7 +1536,21 @@ export function createLeadAgentEventRuntime(host: {
           reason: "Tool is unavailable in the active Chief profile.",
         };
       }
-      if (!host.isActiveManager()) return undefined;
+      if (!host.isActiveManager()) {
+        try {
+          const allowed = host.currentLeadAllowedTools?.();
+          if (!allowed || allowed.includes(event.toolName)) return undefined;
+        } catch {
+          return {
+            block: true,
+            reason: "Lead tool authorization is unavailable.",
+          };
+        }
+        return {
+          block: true,
+          reason: "Tool is unavailable in the active Lead profile.",
+        };
+      }
       try {
         if (
           (
@@ -3924,6 +3939,15 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
+    currentLeadAllowedTools: () =>
+      activeLeadRole(leadRuntime) === "lead" &&
+      !leadRuntime.roleSuspended &&
+      leadExecution &&
+      !leadExecution.managed &&
+      (!leadExecution.valid ||
+        leadExecution.definition.frontmatter.tools !== undefined)
+        ? executionTools()
+        : undefined,
     executionPrompt: () =>
       leadExecution && !leadExecution.managed && leadExecution.valid
         ? leadExecution.definition.body

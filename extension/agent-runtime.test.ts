@@ -7723,6 +7723,31 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
   }
 });
 
+test("restricted Lead rejects nested tools outside its active profile", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+  const events = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => ["codemode", "list_agents"],
+  } as any);
+  const ctx = {} as any;
+  assert.equal(events.toolCall({ toolName: "codemode" }, ctx), undefined);
+  assert.equal(events.toolCall({ toolName: "list_agents" }, ctx), undefined);
+  assert.deepEqual(
+    events.toolCall({ toolName: "bash", parentToolCallId: "nested" }, ctx),
+    {
+      block: true,
+      reason: "Tool is unavailable in the active Lead profile.",
+    },
+  );
+  const inherited = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => undefined,
+  } as any);
+  assert.equal(inherited.toolCall({ toolName: "bash" }, ctx), undefined);
+});
+
 for (const concurrentInbox of [false, true]) {
   test(`Pi 1.3.0 Manager retirement preflight reaches the first model request without waking or steering (concurrent inbox: ${concurrentInbox})`, async () => {
     const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
