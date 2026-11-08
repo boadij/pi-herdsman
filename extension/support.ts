@@ -157,27 +157,29 @@ mock.module("node:fs", {
     },
     mkdirSync: realFs.mkdirSync,
     lstatSync: realFs.lstatSync,
-    openSync: (...args: any[]) => {
-      return realFs.openSync(...args);
-    },
-    readFileSync: (...args: any[]) => {
-      fileReadHook?.(args[0]);
-      if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
-        configReadHook?.();
-      if (
-        typeof args[0] === "string" &&
-        args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
-      )
-        agentDefinitionReadCount++;
-      const result = realFs.readFileSync(...args);
-      if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
-        agentStateReadHook?.(args[0]);
-      return result;
-    },
-    readSync: (...args: any[]) => {
-      fileReadHook?.(args[0]);
-      return realFs.readSync(...args);
-    },
+    openSync: realFs.openSync,
+    readFileSync: new Proxy(realFs.readFileSync, {
+      apply(target, _thisArg, args) {
+        fileReadHook?.(args[0]);
+        if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
+          configReadHook?.();
+        if (
+          typeof args[0] === "string" &&
+          args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
+        )
+          agentDefinitionReadCount++;
+        const result = Reflect.apply(target, realFs, args);
+        if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
+          agentStateReadHook?.(args[0]);
+        return result;
+      },
+    }),
+    readSync: new Proxy(realFs.readSync, {
+      apply(target, _thisArg, args) {
+        fileReadHook?.(args[0]);
+        return Reflect.apply(target, realFs, args);
+      },
+    }),
     readdirSync: realFs.readdirSync,
     realpathSync: realFs.realpathSync,
     renameSync: (source: string, destination: string) => {
@@ -218,13 +220,15 @@ mock.module("node:fs", {
       return realFs.unlinkSync(path);
     },
     writeFileSync: realFs.writeFileSync,
-    writeSync: (...args: any[]) => {
-      if (failNextMailboxWrite) {
-        failNextMailboxWrite = false;
-        throw new Error("injected mailbox state write failure");
-      }
-      return realFs.writeSync(...args);
-    },
+    writeSync: new Proxy(realFs.writeSync, {
+      apply(target, _thisArg, args) {
+        if (failNextMailboxWrite) {
+          failNextMailboxWrite = false;
+          throw new Error("injected mailbox state write failure");
+        }
+        return Reflect.apply(target, realFs, args);
+      },
+    }),
     watch: (directory: string, _options: unknown, listener: Function) => {
       if (failNextMailboxWatch) {
         failNextMailboxWatch = false;
