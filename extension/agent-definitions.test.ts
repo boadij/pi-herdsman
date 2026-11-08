@@ -1171,10 +1171,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         assert.equal(launchedTools.includes(tool), false);
       assert.equal(args.includes("npm:pi-web-access"), false);
       if (name !== "researcher") {
-        assert.equal(
-          args[args.indexOf("--extension") + 1],
-          "builtin:codemode",
-        );
+        assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
       }
       if (name === "researcher") {
         assert.equal(definition.frontmatter.noExtensions, undefined);
