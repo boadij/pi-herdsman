@@ -2815,8 +2815,13 @@ export function formatToolModelResult(
   }
   if (action === "interrupt") {
     return [
-      `Interrupt accepted for agent ${value(v.agent) || "unknown"}.`,
-      "The current Pi operation was asked to stop and the replacement instruction continues the same assignment.",
+      v.delivered_as === "steer"
+        ? `Interrupt request delivered via steering for agent ${value(v.agent) || "unknown"}.`
+        : `Interrupt accepted for agent ${value(v.agent) || "unknown"}.`,
+      v.delivered_as === "steer"
+        ? value(v.note) ||
+          "The agent was waiting for child work. The message was delivered via steering; nothing was interrupted."
+        : "The current Pi operation was asked to stop and the replacement instruction continues the same assignment.",
       ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
       ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
       ...(value(v.assignment_request_id)
