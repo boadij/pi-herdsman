@@ -13,7 +13,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_DIR_NAME,
@@ -171,11 +171,15 @@ function markdownFiles(root: string): string[] {
   });
 }
 
-function readAgentDefinitions(root: string): AgentDefinition[] {
+function readAgentDefinitions(
+  root: string,
+  category?: "agent" | "role",
+  onWarning?: (message: string) => void,
+): AgentDefinition[] {
   const definitions = markdownFiles(root)
     .filter((path) => !path.endsWith(".example.md"))
     .sort()
-    .map((path) => {
+    .flatMap((path) => {
       const content = readFileSync(path, "utf8").replace(/^\uFEFF/u, "");
       let parsed: ReturnType<typeof parsePiFrontmatter>;
       try {
@@ -186,6 +190,23 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
       }
       if (!isPlainObject(parsed.frontmatter))
         throw new Error(`${path}: frontmatter must be a YAML mapping`);
+      const name = parsed.frontmatter.name;
+      if (
+        category &&
+        typeof name === "string" &&
+        name.length > 0 &&
+        isReservedRoleDefinition(name) !== (category === "role")
+      ) {
+        const destination = join(
+          dirname(root),
+          category === "agent" ? "coordinators" : "agents",
+          relative(root, path),
+        );
+        onWarning?.(
+          `${path}: definition belongs in ${destination}; file excluded from discovery`,
+        );
+        return [];
+      }
       const frontmatter = parsed.frontmatter as Frontmatter;
       const definition: AgentDefinition = {
         name: typeof frontmatter.name === "string" ? frontmatter.name : "",
@@ -194,7 +215,7 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
         body: resolveBodyFileReferences(parsed.body, path),
       };
       validateDefinition(definition, { allowBodyMode: true });
-      return definition;
+      return [definition];
     });
   const pathsByName = new Map<string, string[]>();
   for (const definition of definitions)
@@ -376,12 +397,16 @@ export function configuredToolPolicy(
   };
 }
 
-function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
+function readOptionalAgentDefinitions(
+  root: string,
+  category: "agent" | "role",
+  onWarning?: (message: string) => void,
+): AgentDefinition[] {
   const stats = statSync(root, { throwIfNoEntry: false });
   if (!stats) return [];
   if (!stats.isDirectory())
     throw new Error(`agent directory is not a directory: ${root}`);
-  return readAgentDefinitions(root);
+  return readAgentDefinitions(root, category, onWarning);
 }
 
 function assertNoLegacyCoordinatorProfiles(
@@ -485,7 +510,10 @@ function applyDefinitionLayer(
   }
 }
 
-export type DiscoverAgentDefinitionsOptions = { projectRoot?: string };
+export type DiscoverAgentDefinitionsOptions = {
+  projectRoot?: string;
+  onWarning?: (message: string) => void;
+};
 
 function validateEffectiveAgentReferences(
   definitions: readonly AgentDefinition[],
@@ -552,6 +580,11 @@ function discoverEffectiveDefinitions(
   const bundled = readAgentDefinitions(
     role ? BUILTIN_ROLE_DIR : BUILTIN_AGENT_DIR,
   );
+  for (const definition of bundled)
+    if (isReservedRoleDefinition(definition.name) !== role)
+      throw new Error(
+        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
+      );
   const directory = role ? "coordinators" : "agents";
   const privateRoot = options.projectRoot
     ? privateRepositoryRoot(options.projectRoot)
@@ -576,23 +609,22 @@ function discoverEffectiveDefinitions(
   const project = options.projectRoot
     ? readOptionalAgentDefinitions(
         join(options.projectRoot, CONFIG_DIR_NAME, directory),
+        category,
+        options.onWarning,
       )
     : [];
   const privateRepository = privateRoot
-    ? readOptionalAgentDefinitions(join(privateRoot, directory))
+    ? readOptionalAgentDefinitions(
+        join(privateRoot, directory),
+        category,
+        options.onWarning,
+      )
     : [];
-  const user = readOptionalAgentDefinitions(join(getAgentDir(), directory));
-  for (const definition of [
-    ...bundled,
-    ...project,
-    ...user,
-    ...privateRepository,
-  ]) {
-    if (isReservedRoleDefinition(definition.name) !== role)
-      throw new Error(
-        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
-      );
-  }
+  const user = readOptionalAgentDefinitions(
+    join(getAgentDir(), directory),
+    category,
+    options.onWarning,
+  );
   const definitions = new Map(
     bundled.map((definition) => [definition.name, definition]),
   );
@@ -666,9 +698,40 @@ function withDefaultEnabled(definition: AgentDefinition): AgentDefinition {
   };
 }
 
-export async function contextAgentDefinitions(ctx: ExtensionContext) {
+const definitionWarningSessions = new WeakMap<
+  object,
+  { sessionId: string | null; messages: Set<string> }
+>();
+
+export function notifyDefinitionWarning(
+  ctx: ExtensionContext,
+  message: string,
+): void {
+  const manager = ctx.sessionManager;
+  const sessionId = manager.getSessionId();
+  let state = definitionWarningSessions.get(manager);
+  if (!state || state.sessionId !== sessionId) {
+    state = { sessionId, messages: new Set() };
+    definitionWarningSessions.set(manager, state);
+  }
+  if (state.messages.has(message)) return;
+  state.messages.add(message);
+  if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  else process.emitWarning(message, { code: "PI_HERDSMAN_DEFINITION" });
+}
+
+export async function contextAgentDefinitions(
+  ctx: ExtensionContext,
+  onWarning?: (message: string) => void,
+) {
   const projectTrusted = ctx.isProjectTrusted();
-  const options = projectTrusted ? { projectRoot: ctx.cwd } : {};
+  const options: DiscoverAgentDefinitionsOptions = projectTrusted
+    ? { projectRoot: ctx.cwd }
+    : {};
+  options.onWarning = (message) => {
+    notifyDefinitionWarning(ctx, message);
+    onWarning?.(message);
+  };
   const effective = discoverAgentDefinitions(options);
   return {
     projectTrusted,

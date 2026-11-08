@@ -96,6 +96,12 @@ directories. Files left under an applicable legacy `roles/` path cause an
 actionable Coordinator-discovery error; Agent discovery is independent. No
 configuration files are automatically copied, moved, or deleted.
 
+Recognizable definitions placed in the opposite namespace are excluded from
+discovery with a warning that identifies the source and intended destination.
+Other valid definitions in that category continue loading; the misplaced file
+is not automatically loaded from its intended category. Malformed definitions
+and the existing legacy-path errors remain strict and still fail discovery.
+
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
 

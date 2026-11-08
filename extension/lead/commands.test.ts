@@ -547,6 +547,53 @@ test("Definitions retains the last selected Agent when returning to its list", a
   );
 });
 
+test("Definitions lists and displays misplaced-definition warnings without editing them", async () => {
+  const first = { name: "first", frontmatter: { name: "first" } } as any;
+  const warning =
+    "/agent/agents/manager.md: definition belongs in /agent/coordinators/manager.md; file excluded from discovery";
+  const menus: { title: string; items: any[] }[] = [];
+  const notices: [string, string | undefined][] = [];
+  const results = ["agents", "__definition_warnings__", undefined, undefined];
+  const runtime = createLeadCommandRuntime({
+    contextAgentDefinitions: async (
+      _ctx: unknown,
+      onWarning?: (message: string) => void,
+    ) => {
+      onWarning?.(warning);
+      return {
+        definitions: [first],
+        roleDefinitions: [],
+        projectTrusted: true,
+      };
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      menus.push({ title, items });
+      return results.shift();
+    },
+    agentDefinitionEnabled: () => true,
+    getThinkingLevel: () => "high",
+  } as any);
+  await runtime.openDefinitionsMenu({
+    isProjectTrusted: () => false,
+    ui: {
+      notify: (message: string, level?: string) =>
+        notices.push([message, level]),
+    },
+  } as any);
+  const list = menus.find(({ title }) => title === "Agents")!;
+  assert.deepEqual(
+    list.items.map(({ value }) => value),
+    ["__definition_warnings__", "first"],
+  );
+  assert.match(list.items[0].label, /1 misplaced definition/u);
+  assert.equal(list.items[0].help, warning);
+  assert.deepEqual(notices, [[warning, "warning"]]);
+  assert.equal(
+    menus.some(({ title }) => title === "Agent: first"),
+    false,
+  );
+});
+
 test("lead stop-all does not report an empty inventory while delegation is locked", async () => {
   const summaries: string[] = [];
   const context = fakeContext() as any;

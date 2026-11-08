@@ -1,23 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-* **config:** Edit Agent settings in the most specific existing definition
-  source, with explicit scope selection and source-local reset behavior.
-* **config:** Add a private repository definition overlay shared by trusted
-  linked worktrees in one clone (`bundled < global < trusted project < private
-  repository`).
-
-### Breaking changes
-
-* **config:** Trusted project Agent and role-profile definitions now override global definitions (`bundled < global < trusted project`). Projects may override global `enabled`, `tools`, `agents`, and `permission` values; review trusted project files accordingly.
-* **config:** Role profiles now use `pi-herdsman/roles/` under the Pi
-  agent directory and trusted project `.pi/`, separate from Agent definitions.
-  Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
-  same scope. Reserved role names in `agents/` are rejected.
-
 ## [0.42.1](https://github.com/boadij/pi-herdsman/compare/v0.42.0...v0.42.1) (2026-11-08)
 
 
