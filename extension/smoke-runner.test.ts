@@ -3386,7 +3386,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       '"branchStatus":"operation_error_returned"',
       '"branchStatus":"non_operation_error_throw"',
     ),
-    "MANAGER_HANDOFF_READY",
   );
   assert.equal(
     unsupportedBranchStatus.supervisorHandlerBranchStatus,
@@ -3426,7 +3425,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     contents
       .replace('"isError":true', '"isError":false')
       .replace('"PRIVATE_RESULT_BODY"', '"sent"'),
-    "MANAGER_HANDOFF_READY",
   );
   assert.deepEqual(successfulSupervisor, {
     supervisorSessionHeaderMatches: true,

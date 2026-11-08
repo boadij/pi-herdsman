@@ -45,7 +45,7 @@ import {
   writePeerLeadRecord,
   writeProjectAssignment,
 } from "./supervision.ts";
-import type { RequestRecord } from "./mailbox.ts";
+import type { AskRecord, RequestRecord } from "./mailbox.ts";
 import support, {
   DEFAULT_PI_SESSION_ID,
   PI_AGENT_ROOT,

@@ -11,7 +11,7 @@ import fs, {
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
-import nodeTest from "node:test";
+import nodeTest, { type TestContext, type TestOptions } from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,24 +60,39 @@ import { herdsmanTempRoot } from "./storage.ts";
 // Settlement-negative fixtures must exercise the 30-second deadline without
 // spending 30 seconds in wall-clock polling. Advance only this test's clock.
 let advanceHerdrTestClock: ((milliseconds: number) => void) | undefined;
-const test: typeof nodeTest = (name: string, ...args: any[]) => {
+type HerdrTest = {
+  (
+    name: string,
+    fn: (context: TestContext) => void | Promise<void>,
+  ): Promise<void>;
+  (
+    name: string,
+    options: TestOptions,
+    fn: (context: TestContext) => void | Promise<void>,
+  ): Promise<void>;
+};
+const test: HerdrTest = (name: string, ...args: any[]) => {
   const fn = args.at(-1);
   const options = args.length > 1 ? args[0] : undefined;
-  return nodeTest(name, ...(options ? [options] : []), async (context) => {
-    if (!/^(preserving stop|.*rollback)/i.test(name)) return fn(context);
-    const originalNow = Date.now;
-    let now = originalNow();
-    Date.now = () => (now += 500);
-    advanceHerdrTestClock = (milliseconds) => {
-      now += milliseconds;
-    };
-    try {
-      return await fn(context);
-    } finally {
-      advanceHerdrTestClock = undefined;
-      Date.now = originalNow;
-    }
-  });
+  return nodeTest(
+    name,
+    ...(options ? [options] : []),
+    async (context: TestContext) => {
+      if (!/^(preserving stop|.*rollback)/i.test(name)) return fn(context);
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => (now += 500);
+      advanceHerdrTestClock = (milliseconds) => {
+        now += milliseconds;
+      };
+      try {
+        return await fn(context);
+      } finally {
+        advanceHerdrTestClock = undefined;
+        Date.now = originalNow;
+      }
+    },
+  );
 };
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
