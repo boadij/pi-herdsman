@@ -8283,6 +8283,9 @@ test("Manager removal preflights submodule eligibility before stopping the Lead"
       const fixture = await managerRemovalFixture(subtest, {
         runningLead: true,
         ...scenario.options,
+        submoduleStatusSequence: scenario.options.submoduleStatusSequence
+          ? [...scenario.options.submoduleStatusSequence]
+          : undefined,
       });
       if (scenario.succeeds) {
         const result = await fixture.runtime.removeWorktree(
