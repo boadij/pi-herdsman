@@ -2027,6 +2027,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "powershell",
       "edit",
       "write",
+      "codemode",
       ...AGENT_COORDINATION_TOOLS,
       "ask_owner",
       "read_evidence",
