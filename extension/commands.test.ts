@@ -7800,6 +7800,7 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
     selected,
     fixture.ctx,
   );
+  assert.ok("checkout_removed" in approved.details);
   assert.equal(approved.details.checkout_removed, true);
   assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 0);
   await assert.rejects(
@@ -7829,6 +7830,7 @@ test("successful direct Manager removal clears matching pending approval", async
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
   assert.equal(fixture.statusUpdates.at(-1)?.[1], undefined);
@@ -7853,6 +7855,7 @@ test("integrated cleanup rechecks exact source HEAD and target ancestry immediat
         },
       },
     );
+    assert.ok("checkout_removed" in result.details);
     assert.equal(result.details.checkout_removed, false);
     assert.match(result.content[0].text, /changed before removal/);
     assert.deepEqual(fixture.removals, []);
@@ -7877,6 +7880,7 @@ test("integrated cleanup does not reconcile a same-branch replacement assignment
     },
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(fixture.reconciliationAssignmentId(), "assigned-lead");
   assert.equal(fixture.assignment()?.id, "replacement-assignment");
   assert.equal(result.details.checkout_removed, true);
@@ -7902,6 +7906,7 @@ test("successful direct Manager removal preserves a newer pending replacement", 
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(
     fixture.runtime.listPendingRemovals(fixture.ctx)[0]?.id,
@@ -7930,10 +7935,12 @@ test("Manager removal retires assignment when pending approval resolution persis
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.assignment_retired, true);
   assert.equal(fixture.assignment(), undefined);
   assert.equal(existsSync(fixture.checkoutPath), false);
+  assert.ok(result.details.pendingResolutionError);
   assert.match(
     result.details.pendingResolutionError,
     /session append failed during resolution/,
@@ -8057,6 +8064,7 @@ test("cancelling an approved request preserves a newer pending request", async (
     selected,
     fixture.ctx,
   );
+  assert.ok("cancelled" in result.details);
   assert.equal(result.details.cancelled, true);
   assert.equal(
     fixture.runtime.listPendingRemovals(fixture.ctx)[0].assignmentId,
@@ -8115,6 +8123,7 @@ test("Manager preauthorization lets explicit model requests use the guarded remo
     undefined,
     fixture.ctx,
   );
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.forced, false);
   assert.equal(fixture.confirmationCount(), 0);
@@ -8153,6 +8162,7 @@ test("Manager removal requires the exact confirmation word", async (t) => {
       "feat/remove-test",
       fixture.ctx,
     );
+    assert.ok("cancelled" in result.details);
     assert.equal(result.details.cancelled, true);
     assert.equal(fixture.stoppedLeadCount(), 0);
     assert.deepEqual(fixture.removals, []);
@@ -8189,6 +8199,7 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
         "feat/remove-test",
         fixture.ctx,
       );
+      assert.ok("checkout_removed" in result.details);
       assert.equal(result.details.checkout_removed, true);
       assert.equal(result.details.assignment_retired, true);
       assert.equal(result.details.forced, false);
@@ -8277,6 +8288,7 @@ test("Manager removal preflights submodule eligibility before stopping the Lead"
           "feat/remove-test",
           fixture.ctx,
         );
+        assert.ok("checkout_removed" in result.details);
         assert.equal(result.details.checkout_removed, true);
         assert.equal(result.details.assignment_retired, true);
         assert.equal(result.details.forced, false);
@@ -8353,6 +8365,7 @@ test(
       "feat/remove-test",
       fixture.ctx,
     );
+    assert.ok("checkout_removed" in result.details);
     assert.equal(result.details.checkout_removed, true);
     assert.equal(result.details.assignment_retired, true);
     assert.deepEqual(fixture.removals, ["new-child-workspace"]);
@@ -8368,9 +8381,11 @@ test("Manager removal reports native failure and uncertain assignment reconcilia
     "feat/remove-test",
     failed.ctx,
   );
+  assert.ok("checkout_removed" in failure.details);
   assert.equal(failure.details.lead_stopped, true);
   assert.equal(failure.details.checkout_removed, false);
   assert.equal(failure.details.assignment_retired, false);
+  assert.ok(failure.details.removal_error);
   assert.match(failure.details.removal_error, /Herdr remove failed/);
   assert.ok(failed.assignment());
 
@@ -8379,9 +8394,11 @@ test("Manager removal reports native failure and uncertain assignment reconcilia
     "feat/remove-test",
     uncertain.ctx,
   );
+  assert.ok("checkout_removed" in outcome.details);
   assert.equal(outcome.details.checkout_removed, true);
   assert.equal(outcome.details.assignment_retired, false);
   assert.equal(uncertain.assignment()?.id, "assigned-lead");
+  assert.ok(outcome.details.retirement_error);
   assert.match(outcome.details.retirement_error, /reconcile uncertain/);
 
   const stopped = await managerRemovalFixture(t, {
@@ -8407,6 +8424,7 @@ test("Manager removal reports interrupted CLI as unconfirmed and preserves assig
   );
   const text = result.content[0].text;
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(fixture.removalOptions.length, 1);
   assert.equal(fixture.removalOptions[0].timeout, 180_000);
   assert.equal(fixture.removalOptions[0].signal, fixture.ctx.signal);
@@ -8417,6 +8435,7 @@ test("Manager removal reports interrupted CLI as unconfirmed and preserves assig
   assert.match(text, /checkout was present at the last check/);
   assert.match(text, /assignment remains recorded/);
   assert.match(text, /Herdr may still complete removal after the CLI stopped/);
+  assert.ok(result.details.removal_error);
   assert.match(result.details.removal_error, /Herdr command was killed/);
   assert.equal(fixture.assignment()?.id, "assigned-lead");
   assert.ok(existsSync(fixture.checkoutPath));
@@ -8502,6 +8521,7 @@ test("Manager removes a verified checkout without a Pi session file", async (t) 
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.assignment_retired, true);
   assert.equal(result.details.lead_stopped, true);
