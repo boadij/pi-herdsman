@@ -1070,9 +1070,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     if (definition.name === "researcher")
       assert.equal(definition.frontmatter.extensions, undefined);
     else
-      assert.deepEqual(definition.frontmatter.extensions, [
-        "builtin:codemode",
-      ]);
+      assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
