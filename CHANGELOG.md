@@ -18,6 +18,19 @@
   Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
   same scope. Reserved role names in `agents/` are rejected.
 
+## [0.42.1](https://github.com/boadij/pi-herdsman/compare/v0.42.0...v0.42.1) (2026-11-08)
+
+
+### Fixes
+
+* **agent:** retain ask_owner attachment errors in empty results ([#874](https://github.com/boadij/pi-herdsman/issues/874)) ([97ba8fc](https://github.com/boadij/pi-herdsman/commit/97ba8fc87fc30b3ccf9964e59526d6d3167ae9c3)), closes [#870](https://github.com/boadij/pi-herdsman/issues/870) [#871](https://github.com/boadij/pi-herdsman/issues/871)
+* **agent:** show nested descendants in the root status tree promptly ([#877](https://github.com/boadij/pi-herdsman/issues/877)) ([0f32d7e](https://github.com/boadij/pi-herdsman/commit/0f32d7e6a77d519e089f836159b4d0ccbedcc06c))
+
+
+### Documentation
+
+* guide agents to file evidence-grounded issues ([#875](https://github.com/boadij/pi-herdsman/issues/875)) ([2d9a90d](https://github.com/boadij/pi-herdsman/commit/2d9a90d982cb759a6ea0d806a20eb070a7d0a9c4))
+
 ## [0.42.0](https://github.com/boadij/pi-herdsman/compare/v0.41.0...v0.42.0) (2026-11-07)
 
 
