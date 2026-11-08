@@ -374,10 +374,12 @@ the selected row.
 For continuation, an omitted model uses the saved Pi session's selection, not
 the current caller's model. The resumed Agent verifies that Pi restored the
 saved model before it accepts work; ambiguous history, an unavailable model,
-or a mismatch stops startup. Extension discovery stays enabled when needed to
-resolve the saved provider, even if the definition sets `noExtensions: true`.
-An explicit definition model overrides saved history and follows that
-definition's extension policy. Restarted Manager-assigned managed Leads apply
+or a mismatch stops startup. Extension discovery stays enabled when the
+selected model's provider is identified as extension-registered, whether
+configured, inherited, or restored, even if the definition sets
+`noExtensions: true`. An explicit definition model overrides saved history; Pi
+resolves the unchanged selector. Enabling discovery may load other configured
+extensions too. Restarted Manager-assigned managed Leads apply
 the same check before inbox activation; a model explicitly set by the effective
 `managed-lead` definition overrides the saved selection. See the
 [execution-settings contract](../reference/agent-definition-schema.md#execution-settings)

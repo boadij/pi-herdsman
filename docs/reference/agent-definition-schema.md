@@ -215,7 +215,8 @@ unavailable, or Pi selected a different model, startup fails rather than
 continuing with a different model. If resolving the saved model requires a
 provider registered by an extension, extension discovery remains enabled even
 when `noExtensions: true`. An explicit definition `model` takes precedence
-over saved history and uses the definition's own extension policy.
+over saved history; if its provider is identified as extension-registered,
+extension discovery remains enabled even when `noExtensions: true`.
 
 The same saved-model check applies when a Manager restarts an assigned managed
 Lead with no explicit `managed-lead` model override. The Lead verifies the
@@ -336,15 +337,14 @@ Explicit `extensions` entries remain separate launch inputs and are passed to
 Pi normally. Launcher-injected infrastructure remains separate from the
 definition's extension and tool policy.
 
-Launch model requirements can require extension discovery even when
-`noExtensions: true`. For fresh delegation, this applies when the inherited
-controller model's provider is registered by an extension. On continuation,
-the saved selection may likewise require discovery to resolve its provider (or
-to determine that it cannot be resolved); if restoration is ambiguous or
-unavailable, continuation fails closed. A model pinned in the definition is
-passed to Pi as written and keeps the definition's own extension policy, so a
-definition that pins an extension-provided model must set `noExtensions: false`
-itself.
+Any selected model can require extension discovery even when
+`noExtensions: true`: this applies when its provider is positively identified
+as registered by an extension, whether the model is configured, inherited for
+fresh delegation, or restored on continuation. Configured model selectors are
+passed to Pi as written; Pi remains responsible for resolving them. On
+continuation, ambiguous or unavailable saved-model restoration fails closed.
+Enabling discovery follows Pi's normal extension-loading policy and may load
+other configured extensions, not only the model provider.
 
 ## Managed-agent coordination tools
 

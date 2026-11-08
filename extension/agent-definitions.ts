@@ -1092,10 +1092,23 @@ export function resolveChildModel(input: {
   isForeignProvider: (providerId: string) => boolean;
   isKnownModel?: (providerId: string, modelId: string) => boolean;
 }): ChildModelDecision {
-  // A pinned model is passed through as written: the definition's own extension
-  // policy governs it, so nothing here needs to interpret the value.
-  if (input.configured !== undefined && input.configured.trim() !== "")
-    return { kind: "use", model: input.configured, extensionDiscovery: false };
+  if (input.configured !== undefined && input.configured.trim() !== "") {
+    const model = input.configured;
+    let extensionDiscovery = false;
+
+    for (
+      let slash = model.lastIndexOf("/");
+      slash > 0;
+      slash = model.lastIndexOf("/", slash - 1)
+    ) {
+      if (input.isForeignProvider(model.slice(0, slash).trim().toLowerCase())) {
+        extensionDiscovery = true;
+        break;
+      }
+    }
+
+    return { kind: "use", model, extensionDiscovery };
+  }
   if (input.inherited === undefined) {
     const saved = input.saved;
     return {
