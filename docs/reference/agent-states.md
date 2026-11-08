@@ -30,10 +30,13 @@ mutation.
 
 A delegating agent may be blocked while direct agent work is pending. That
 projection alone does not prove the parent execution is live: an idle restored
-parent is not steerable. `steer_agent` is listed only while the managed
-execution is currently reported as working; `interrupt_agent` also requires a
-currently working Pi operation. Stale or inactive fields are advisory and do
-not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
+parent may be offered `steer_agent` when its physical presence is live and the
+parent assignment and direct-child wait are verified, but steering succeeds
+only if that exact managed receiver acknowledges the request. The listing is
+therefore an attempt eligibility snapshot, not proof of receiver readiness.
+`interrupt_agent` still requires a currently working Pi operation. Stale or
+inactive fields are advisory and do not automatically authorize or recommend
+interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
 Directly owned live records may expose the applicable live controls; directly
 owned live or proven `lost` records may expose `stop_agent` when the applicable stop
@@ -48,10 +51,12 @@ turn settles. Answer through the exact direct owner using `reply_agent` with the
 
 A delegating parent can also project as `blocked` while it waits for direct
 children. This records the durable dependency, not proof that the parent process
-is currently making progress. `steer_agent` is available only if the parent is
-currently reported as working. Recovery attention for `blocked` is reserved for
-a live Herdr runtime that reports `blocked` while an active request exists and
-no `ask_owner` question is pending.
+is currently making progress. A directly owned live parent with verified child
+work may advertise `steer_agent` while remaining `blocked`; only the managed
+receiver's acknowledgement confirms acceptance. It does not advertise
+`interrupt_agent` unless a Pi operation is working. Recovery attention for
+`blocked` is reserved for a live Herdr runtime that reports `blocked` while an
+active request exists and no `ask_owner` question is pending.
 
 ## `settling`
 

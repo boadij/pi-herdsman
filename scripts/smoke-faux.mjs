@@ -673,6 +673,43 @@ function agentCrashRecoveryDecision(model, context) {
     if (postRestart) {
       const list = correlatedCall(messages, "list_agents");
       if (!list) return call("list_agents", {});
+      const parent = list.result?.details?.agents?.find(
+        (agent) =>
+          (agent.label ?? agent.agent_label ?? agent.agent) ===
+          "smoke-crash-parent",
+      );
+      if (parent?.available_tools?.includes("steer_agent")) {
+        const steerCall = messages
+          .filter(
+            (message) =>
+              message.role === "assistant" && Array.isArray(message.content),
+          )
+          .flatMap((message) => message.content)
+          .find(
+            (part) =>
+              part.type === "toolCall" &&
+              part.name === "steer_agent" &&
+              part.arguments?.agent === "smoke-crash-parent",
+          );
+        if (!steerCall)
+          return call("steer_agent", {
+            agent: "smoke-crash-parent",
+            message: "receiverless smoke request; do not create new work",
+          });
+        const steerResult = messages.find(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === "steer_agent" &&
+            message.toolCallId === steerCall.id,
+        );
+        if (!steerResult)
+          return waitForResult("Waiting for steer acknowledgement outcome.");
+        if (
+          !steerResult.isError ||
+          steerResult.details?.error?.category !== "agent_busy"
+        )
+          throw new Error("Receiverless parent steering was not rejected");
+      }
       const closed = correlatedCall(
         messages,
         "stop_agent",

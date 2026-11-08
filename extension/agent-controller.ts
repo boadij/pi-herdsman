@@ -36,6 +36,7 @@ import {
   observeMailbox,
   observeNewAgentStates,
   readAgentState,
+  readRequest,
   removeResult,
   removeAgentMailbox,
   readPendingAsk,
@@ -3970,6 +3971,7 @@ export async function managedAgentSnapshots(
         ({ state }) => state.workspaceId === currentWorkspaceId,
       );
   const pendingOwners = new Set<string>();
+  const pendingCompletions = new Set<string>();
   const completedResultsPending = mailboxes.map(({ path, state }) => {
     let pending = false;
     if (state.completedRequestId) {
@@ -3981,6 +3983,8 @@ export async function managedAgentSnapshots(
     }
     if (state.resultError || state.activeRequestId || pending)
       pendingOwners.add(`${state.workspaceId}\0${state.ownerSessionId}`);
+    if (state.resultError || pending)
+      pendingCompletions.add(`${state.workspaceId}\0${state.ownerSessionId}`);
     return pending;
   });
   const agents = mailboxes.map(({ path, state }, index) => {
@@ -4045,7 +4049,9 @@ export async function managedAgentSnapshots(
     const steerable =
       presence.kind === "live" &&
       !state.pendingAskId &&
-      projectedState === "working";
+      (projectedState === "working" ||
+        (waitingForChildren &&
+          !pendingCompletions.has(durableIdentityKey(state))));
     const now = Date.now();
     const listed = {
       label: state.agentLabel,
@@ -5209,6 +5215,19 @@ export function createAgentController(
         operation,
         `Agent ${current.agentLabel}`,
       );
+      if (
+        kind === "steer" &&
+        readUnacknowledgedRequest(runtime.mailboxPath, current)
+      )
+        fail(
+          "agent_busy",
+          "Agent has an unacknowledged control request",
+          operation,
+          {
+            nextAction:
+              "Resolve the pending control request before steering again.",
+          },
+        );
       if (current.lastAck) {
         try {
           removeRequest(runtime.mailboxPath, current.lastAck.requestId);
@@ -5250,11 +5269,74 @@ export function createAgentController(
     let acknowledgementObserved = false;
     options.onChanged();
     try {
-      const state = await waitForState(
-        runtime.mailboxPath,
-        (candidate) => candidate.lastAck?.requestId === requestId,
-        { timeoutMs: 5000, signal },
-      );
+      let state: ManagedAgentState;
+      try {
+        state = await waitForState(
+          runtime.mailboxPath,
+          (candidate) => candidate.lastAck?.requestId === requestId,
+          { timeoutMs: 5000, signal },
+        );
+      } catch (error) {
+        if (
+          kind !== "steer" ||
+          !["TimeoutError", "AbortError"].includes((error as Error)?.name)
+        )
+          throw error;
+        const reconcileRelease = tryClaimAssignmentLock(runtime.mailboxPath);
+        if (!reconcileRelease)
+          fail(
+            "internal_failure",
+            "Steering outcome is indeterminate; the assignment lock is occupied",
+            operation,
+          );
+        try {
+          const current = readAgentState(runtime.mailboxPath);
+          if (
+            !current ||
+            !sameIdentity(current, {
+              version: current.version,
+              build: options.build,
+              runId: runtime.runId,
+              ownerSessionId: runtime.ownerSessionId,
+              workspaceId: runtime.workspaceId,
+              agentLabel: runtime.label,
+              paneId: runtime.paneId,
+              rootSessionId: runtime.rootSessionId,
+              piSessionId: runtime.piSessionId ?? "",
+              piSessionFile: runtime.piSessionFile,
+              cwd: runtime.cwd,
+              updatedAt: current.updatedAt,
+            })
+          )
+            fail(
+              "internal_failure",
+              "Steering outcome is indeterminate; agent identity changed",
+              operation,
+            );
+          if (current.lastAck?.requestId === requestId) state = current;
+          else {
+            const pending = readRequest(runtime.mailboxPath, requestId);
+            if (!pending || !isDeepStrictEqual(pending, request))
+              fail(
+                "internal_failure",
+                "Steering outcome is indeterminate; the exact request is no longer present",
+                operation,
+              );
+            removeRequest(runtime.mailboxPath, requestId);
+            fail(
+              "agent_busy",
+              "Steering request was cancelled before receiver acknowledgement",
+              operation,
+              {
+                nextAction:
+                  "The instruction was not confirmed; refresh list_agents before deciding whether to steer again.",
+              },
+            );
+          }
+        } finally {
+          reconcileRelease();
+        }
+      }
       if (!state || state.lastAck?.requestId !== requestId)
         fail(
           "internal_failure",
@@ -5431,16 +5513,25 @@ export function createAgentController(
       };
     }
     const operation = params.action;
-    if (operation === "steer" && agent.steerable !== true)
+    if (operation === "steer" && agent.steerable !== true) {
+      const current = readAgentState(runtime.mailboxPath);
+      const pendingRequest = current
+        ? readUnacknowledgedRequest(runtime.mailboxPath, current)
+        : undefined;
+      const nextAction = current?.pendingAskId
+        ? "Answer the pending ask_owner question with reply_agent."
+        : controlState === "settling" || pendingRequest
+          ? "Allow the current control or completion transition to finish."
+          : controlState === "unknown"
+            ? "Diagnose or recover the exact managed session before steering."
+            : "Refresh list_agents after the underlying state changes and use steer_agent only when available_tools includes it.";
       fail(
         "agent_busy",
         `Agent is not currently accepting steering: ${controlState}`,
         "steer",
-        {
-          nextAction:
-            "Refresh with list_agents and use steer_agent only when available_tools includes it.",
-        },
+        { nextAction },
       );
+    }
     if (operation === "steer" && !runtime.activeRequestId)
       fail("agent_busy", "Agent has no active assignment", "steer");
     if (operation === "interrupt" && controlState !== "working")

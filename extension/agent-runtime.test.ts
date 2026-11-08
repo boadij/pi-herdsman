@@ -19,7 +19,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AskRecord, RequestRecord, ManagedAgentState } from "./mailbox.ts";
-import { claimProcessLock } from "./lock.ts";
+import { claimProcessLock, tryClaimAssignmentLock } from "./lock.ts";
 import {
   herdsmanDataRoot,
   persistRequiredEvidenceSnapshot,
@@ -82,8 +82,10 @@ const { readConfig, updateConfig } = await import("./config.ts");
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,
+  createManagedAgentRequestState,
   managedAgentIdentity,
   managedAgentRequiredEvidence,
+  sameManagedAgentIdentity,
   readEvidencePage,
   authorizedScopedResult,
   READ_EVIDENCE_MAX_BYTES,
@@ -123,6 +125,65 @@ function emitAgentTurn(
     context,
   );
 }
+
+test("cancelled control requests cannot be acknowledged by a later receiver", () => {
+  const label = "cancelled-receiver-request";
+  const mailbox = setAgentEnvironment(label);
+  const assignment = managedState(label, REQUEST_ID);
+  writeAgentState(mailbox, assignment);
+  let current = assignment;
+  const requestId = randomUUID();
+  const request: RequestRecord = {
+    version: 5,
+    runId: assignment.runId,
+    requestId,
+    ownerSessionId: assignment.ownerSessionId,
+    workspaceId: assignment.workspaceId,
+    agentLabel: assignment.agentLabel,
+    paneId: assignment.paneId,
+    kind: "steer",
+    text: "cancelled instruction",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  const pi = fakePi();
+  const requestState = createManagedAgentRequestState(pi.pi as never, {
+    state: () => current,
+    setState: (state) => (current = state),
+    initialized: () => true,
+    mutateState: (update) => {
+      const release = tryClaimAssignmentLock(mailbox);
+      if (!release) return undefined;
+      try {
+        const latest = readAgentState(mailbox);
+        if (!latest || !sameManagedAgentIdentity(latest, current))
+          return undefined;
+        current = update(latest);
+        writeAgentState(mailbox, current);
+        return current;
+      } finally {
+        release();
+      }
+    },
+    pendingResult: () => false,
+    pendingStateTransition: () => false,
+    allDirectChildrenAskBlocked: () => false,
+    tryClaimAssignmentLock,
+    sameIdentity: sameManagedAgentIdentity,
+    appendError: () => {},
+    activeContext: () => undefined,
+  });
+
+  try {
+    removeRequest(mailbox, requestId);
+    assert.equal(requestState.acknowledge(requestId, true), false);
+    assert.equal(readAgentState(mailbox)?.lastAck, undefined);
+    assert.equal(current.lastAck, undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
 
 test("Lead visibility follows only uniquely proven workspace-scoped ancestry", () => {
   const state = (

@@ -12706,7 +12706,178 @@ test("successful controls persist their definition before runtime teardown", asy
   }
 });
 
-test("lead steers a parent waiting for direct-child work only while working", async () => {
+test("receiverless waiting-parent steering times out and cancels its exact request", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "receiverless-steer-parent",
+      REQUEST_ID,
+      recoveryIdentity("receiverless-steer-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+    piSessionFile: "/tmp/receiverless-steer-parent.jsonl",
+  };
+  const child = {
+    ...managedState(
+      "receiverless-steer-child",
+      randomUUID(),
+      recoveryIdentity("receiverless-steer-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: "/tmp/receiverless-steer-child.jsonl",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  let published: RequestRecord | undefined;
+  let changeIdentityOnPublish = false;
+  let identityCancellation: AbortController | undefined;
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "status")
+        return {
+          stdout: JSON.stringify({
+            client: { version: "0.9.1" },
+            server: { running: true, compatible: true },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "--version")
+        return { stdout: "0.8.0", stderr: "", code: 0 };
+      const agents = [
+        agentFromState(parent, "idle"),
+        agentFromState(child, "working"),
+      ];
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
+          stderr: "",
+          code: 0,
+        };
+      if (isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: {
+                workspaces: [],
+                agents,
+                panes: [parent, child].map((state) => ({
+                  pane_id: state.paneId,
+                  workspace_id: state.workspaceId,
+                  cwd: state.cwd,
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: state.piSessionId,
+                  },
+                })),
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              agent: {
+                ...agentFromState(parent, "idle"),
+                session_id: parent.piSessionId,
+                session_path: parent.piSessionFile,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtensionForTest!(pi.pi as never, {
+    afterRequestPublished: (_mailbox, request) => {
+      published = request;
+      if (changeIdentityOnPublish) {
+        writeAgentState(parentMailbox, { ...parent, paneId: randomUUID() });
+        identityCancellation?.abort();
+      }
+    },
+  });
+  try {
+    const context = fakeContext();
+    await pi.events.get("session_start")![0](undefined, context);
+    const listed = await agentTool(pi, "list").execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      context,
+    );
+    assert.ok(listed.details.agents[0].available_tools.includes("steer_agent"));
+
+    const startedAt = Date.now();
+    const result = await agentTool(pi, "steer").execute(
+      "steer",
+      { agent: parent.agentLabel, message: "receiverless instruction" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, false);
+    assert.equal(result.details.error.category, "agent_busy");
+    assert.match(
+      result.details.error.message,
+      /cancelled before receiver acknowledgement/,
+    );
+    assert.ok(Date.now() - startedAt >= 4_500, "steering did not time out");
+    assert.equal(published?.kind, "steer");
+    assert.equal(readRequest(parentMailbox, published!.requestId), undefined);
+    assert.notEqual(
+      readAgentState(parentMailbox)?.lastAck?.requestId,
+      published!.requestId,
+    );
+    assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    assert.deepEqual(readAgentState(childMailbox), child);
+
+    changeIdentityOnPublish = true;
+    identityCancellation = new AbortController();
+    const indeterminate = await agentTool(pi, "steer").execute(
+      "steer",
+      {
+        agent: parent.agentLabel,
+        message: "identity changes before reconciliation",
+      },
+      identityCancellation.signal,
+      undefined,
+      context,
+    );
+    assert.equal(indeterminate.details.ok, false);
+    assert.equal(indeterminate.details.error.category, "internal_failure");
+    assert.match(
+      indeterminate.details.error.message,
+      /outcome is indeterminate/,
+    );
+    assert.ok(published);
+    assert.ok(readRequest(parentMailbox, published!.requestId));
+    writeAgentState(parentMailbox, parent);
+    removeRequest(parentMailbox, published!.requestId);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+  }
+});
+
+test("lead steers a parent waiting for direct-child work without interrupting it", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -12808,8 +12979,18 @@ test("lead steers a parent waiting for direct-child work only while working", as
       return base(command, args, options);
     },
   });
-  registerExtension!(pi.pi as never);
+  let cancelPublishedSteer = false;
+  let cancelledRequestId: string | undefined;
+  registerExtensionForTest!(pi.pi as never, {
+    afterRequestPublished: (_mailbox, request) => {
+      if (cancelPublishedSteer && request.kind === "steer") {
+        cancelledRequestId = request.requestId;
+        cancellation.abort();
+      }
+    },
+  });
   const context = fakeContext();
+  const cancellation = new AbortController();
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const listed = await agentTool(pi, "list").execute(
@@ -12826,8 +13007,12 @@ test("lead steers a parent waiting for direct-child work only while working", as
     );
     assert.equal(
       listed.details.agents[0].available_tools.includes("steer_agent"),
+      true,
+      "a live parent waiting for direct-child work advertises steering",
+    );
+    assert.equal(
+      listed.details.agents[0].available_tools.includes("interrupt_agent"),
       false,
-      "child-waiting projection does not prove the parent execution is live",
     );
     const listedChild = (listed.details.agents as any[]).find(
       (agent) => agent.agent === child.agentLabel,
@@ -12955,18 +13140,63 @@ test("lead steers a parent waiting for direct-child work only while working", as
     assert.ok(
       !handoffPending.details.agents[0].available_tools.includes("steer_agent"),
     );
-    removeRequest(parentMailbox, handoffRequestId);
-
-    const idleSteer = await agentTool(pi, "steer").execute(
+    const competingSteer = await agentTool(pi, "steer").execute(
       "steer",
-      { agent: parent.agentLabel, message: "continue" },
+      { agent: parent.agentLabel, message: "do not overlap the handoff" },
       undefined,
       undefined,
       context,
     );
-    assert.equal(idleSteer.details.ok, false);
-    assert.equal(idleSteer.details.error.category, "agent_busy");
+    assert.equal(competingSteer.details.error.category, "agent_busy");
+    assert.match(
+      competingSteer.details.error.nextAction,
+      /current control or completion transition/i,
+    );
+    removeRequest(parentMailbox, handoffRequestId);
+
+    cancelPublishedSteer = true;
+    const cancelledSteer = await agentTool(pi, "steer").execute(
+      "steer",
+      {
+        agent: parent.agentLabel,
+        message: "cancel before receiver acknowledgement",
+      },
+      cancellation.signal,
+      undefined,
+      context,
+    );
+    assert.equal(cancelledSteer.details.ok, false);
+    assert.equal(cancelledSteer.details.error.category, "agent_busy");
+    assert.ok(cancelledRequestId);
+    assert.equal(readRequest(parentMailbox, cancelledRequestId!), undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.notEqual(
+      readAgentState(parentMailbox)?.lastAck?.requestId,
+      cancelledRequestId,
+      "a later receiver cannot acknowledge a cancelled instruction",
+    );
+    cancelPublishedSteer = false;
+
+    const waitingSteer = await agentTool(pi, "steer").execute(
+      "steer",
+      { agent: parent.agentLabel, message: "account for one more requirement" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      waitingSteer.details.ok,
+      true,
+      JSON.stringify(waitingSteer.details),
+    );
+    assert.equal(waitingSteer.details.action, "steer");
+    assert.equal(
+      readAgentState(parentMailbox)?.lastAck?.requestId,
+      waitingSteer.details.request_id,
+    );
+    assert.equal(readAgentState(parentMailbox)?.lastAck?.accepted, true);
     assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    assert.deepEqual(readAgentState(childMailbox), childBefore);
     parentStatus = "working";
     const steered = await agentTool(pi, "steer").execute(
       "steer",

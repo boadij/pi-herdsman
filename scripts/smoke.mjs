@@ -6767,7 +6767,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   ctx.crashRecovery.reopenedOwnerTabId = created.tab?.tab_id;
   ctx.rootPaneId = ownerPane.pane_id;
-  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents, stop only smoke-crash-target with stop_agent if available, then continue that exact saved session.`;
+  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents. If smoke-crash-parent lists steer_agent, try steering it once and verify the receiverless request is rejected; do not retry. Then stop only smoke-crash-target with stop_agent if available, and continue that exact saved session.`;
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
     herdrStateExtension: ctx.herdrStateExtension,
@@ -6854,10 +6854,9 @@ async function runAgentCrashRecoverySmoke(ctx) {
     ["blocked", "unknown"].includes(restoredParentState.state),
     `restored idle parent was not safely blocked/unknown: ${restoredParentState.state}`,
   );
-  assert.ok(
-    !restoredParentState.available_tools?.includes("steer_agent"),
-    "restored parent was granted steer authority without live execution proof",
-  );
+  const parentSteerAdvertised =
+    restoredParentState.available_tools?.includes("steer_agent") === true;
+  ctx.crashRecovery.parentAfterRestart.steerAdvertised = parentSteerAdvertised;
   ctx.crashRecovery.parentAfterRestart.state = restoredParentState.state;
   ctx.crashRecovery.parentAfterRestart.availableTools =
     restoredParentState.available_tools ?? [];
@@ -6890,6 +6889,42 @@ async function runAgentCrashRecoverySmoke(ctx) {
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
   );
+  if (parentSteerAdvertised) {
+    const finalOwner = await rootSessionSnapshot(ctx);
+    const finalEntries = sessionEntries(finalOwner.contents);
+    const steerCall = finalEntries
+      .filter(
+        (entry) =>
+          entry.type === "message" && entry.message?.role === "assistant",
+      )
+      .flatMap((entry) => entry.message.content ?? [])
+      .find(
+        (part) =>
+          part.type === "toolCall" &&
+          part.name === "steer_agent" &&
+          part.arguments?.agent === "smoke-crash-parent",
+      );
+    assert.ok(
+      steerCall,
+      "restored receiverless parent advertised steering but was not tested",
+    );
+    const steerResult = finalEntries.find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "steer_agent" &&
+        entry.message.toolCallId === steerCall.id,
+    )?.message;
+    assert.ok(
+      steerResult?.isError,
+      "receiverless steering unexpectedly succeeded",
+    );
+    assert.equal(
+      steerResult.details?.error?.category,
+      "agent_busy",
+      "receiverless steering did not return the expected unsuccessful outcome",
+    );
+  }
   const stopDetails = stopResult.message.details;
   assert.equal(
     stopDetails?.ok,

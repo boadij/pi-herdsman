@@ -4730,6 +4730,52 @@ test("supervisor completion harness accepts semantic and exact-session headers o
   );
 });
 
+test("crash-recovery probes an advertised waiting-parent steer and requires rejection", () => {
+  const messages = [
+    {
+      role: "user",
+      content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
+    },
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "list", name: "list_agents", arguments: {} },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "list_agents",
+      toolCallId: "list",
+      isError: false,
+      details: {
+        agents: [
+          {
+            label: "smoke-crash-parent",
+            available_tools: ["steer_agent"],
+          },
+        ],
+      },
+    },
+  ];
+  const steer = decideSmokeFaux("agent-crash-root", { messages });
+  assert.equal(steer.content[0].name, "steer_agent");
+  const steerCallId = steer.content[0].id;
+  const stopped = decideSmokeFaux("agent-crash-root", {
+    messages: [
+      ...messages,
+      steer,
+      {
+        role: "toolResult",
+        toolName: "steer_agent",
+        toolCallId: steerCallId,
+        isError: true,
+        details: { error: { category: "agent_busy" } },
+      },
+    ],
+  });
+  assert.equal(stopped.content[0].name, "stop_agent");
+});
+
 test("crash-recovery accepts only the resumed target's marked completion", () => {
   const prefix = [
     {
