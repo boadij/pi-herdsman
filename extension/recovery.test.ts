@@ -4417,6 +4417,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
       if (attempts === 1) throw new Error("transient");
     },
   });
+  const latestReminderMs = () => {
+    const message = pi.sent.at(-1);
+    assert.ok(
+      message &&
+        typeof message === "object" &&
+        "details" in message &&
+        message.details !== null &&
+        typeof message.details === "object" &&
+        "nextReminderMs" in message.details &&
+        typeof message.details.nextReminderMs === "number",
+    );
+    return message.details.nextReminderMs;
+  };
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -4436,19 +4449,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 3);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 4);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 5);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
