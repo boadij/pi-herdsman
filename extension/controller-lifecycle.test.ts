@@ -5270,10 +5270,11 @@ test("direct assigned Lead success records and replays a failed handoff", async 
     },
   });
   const events = createLeadAgentEventRuntime({
+    drainRetirementNotices: async () => 0,
     isCurrentChief: () => false,
     setActiveTools: () => {},
     chiefTools: [],
-    leadInboxRuntime: { holdStartPreflight: () => {}, agentSettled: () => {} },
+    leadInboxRuntime: { holdStartPreflight: () => 0, agentSettled: () => {} },
     prepareSupervisionMessage: async () => undefined,
     sendMessage: () => {},
     chiefSystemPrompt: (_options, body) => body,
@@ -6392,10 +6393,11 @@ test("supervisor turns do not enter Lead herd-run tracking", async () => {
   let herdEvents = 0;
   let settledResults = 0;
   const events = createLeadAgentEventRuntime({
+    drainRetirementNotices: async () => 0,
     isCurrentChief: () => false,
     setActiveTools: () => {},
     chiefTools: [],
-    leadInboxRuntime: { holdStartPreflight: () => {}, agentSettled: () => {} },
+    leadInboxRuntime: { holdStartPreflight: () => 0, agentSettled: () => {} },
     prepareSupervisionMessage: async () => undefined,
     sendMessage: () => {},
     chiefSystemPrompt: (_options, body) => body,
@@ -6532,10 +6534,11 @@ test("cancellation report failure is diagnosed before result reconciliation", as
   const sessionSignal = new AbortController().signal;
   let settledResults = 0;
   const events = createLeadAgentEventRuntime({
+    drainRetirementNotices: async () => 0,
     isCurrentChief: () => false,
     setActiveTools: () => {},
     chiefTools: [],
-    leadInboxRuntime: { holdStartPreflight: () => {}, agentSettled: () => {} },
+    leadInboxRuntime: { holdStartPreflight: () => 0, agentSettled: () => {} },
     prepareSupervisionMessage: async () => undefined,
     sendMessage: () => {},
     chiefSystemPrompt: (_options, body) => body,
