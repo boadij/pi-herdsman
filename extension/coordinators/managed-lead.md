@@ -3,10 +3,11 @@ description: Manager-created project Lead for branch-scoped orchestration and in
 inheritGlobalContext: true
 inheritProjectContext: true
 name: managed-lead
+extensions: [builtin:codemode]
 noExtensions: true
 noSkills: true
 systemPromptMode: append
-tools: []
+tools: [codemode]
 ---
 
 Delegate bounded project execution to Agents whenever an Agent can reasonably own it.
