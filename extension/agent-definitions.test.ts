@@ -551,7 +551,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
   );
   assert.equal(bundled.name, "managed-lead");
-  assert.deepEqual(bundled.frontmatter.tools, []);
+  assert.deepEqual(bundled.frontmatter.tools, ["codemode"]);
   const requiredTools = [
     ...AGENT_COORDINATION_TOOLS,
     "message_supervisor",
@@ -562,12 +562,15 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     requiredTools,
     bodyPromptPath: "/prompt",
   });
-  assert.equal(launchArgs.includes("--no-tools"), true);
+  assert.equal(launchArgs.includes("--no-tools"), false);
   assert.deepEqual(launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","), [
+    "codemode",
     ...requiredTools,
     "mcp__",
   ]);
   assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
+  assert.deepEqual(bundled.frontmatter.extensions, ["builtin:codemode"]);
+  assert.equal(launchArgs[launchArgs.indexOf("--extension") + 1], "builtin:codemode");
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
@@ -708,7 +711,7 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     discoverRoleDefinitions(),
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
-  assert.deepEqual(orchestrator!.frontmatter.tools, []);
+  assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode"]);
   writeFileSync(
     join(agents, "orchestrator-lead.md"),
     "---\nname: orchestrator-lead\nbodyMode: replace\n---\nCustom strategy",
@@ -723,14 +726,14 @@ test("reserves independent runtime role profiles with narrow fields", () => {
       global,
       () => discoverRoleDefinition("manager").frontmatter.tools,
     ),
-    [],
+    ["codemode"],
   );
   assert.deepEqual(
     withPiAgentDir(
       global,
       () => discoverRoleDefinition("chief").frontmatter.tools,
     ),
-    [],
+    ["codemode"],
   );
   const managed = withPiAgentDir(global, () =>
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
@@ -788,7 +791,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   const manager = withPiAgentDir(global, () =>
     discoverRoleDefinition("manager", { projectRoot: project }),
   );
-  assert.deepEqual(manager.frontmatter.tools, []);
+  assert.deepEqual(manager.frontmatter.tools, ["codemode"]);
   assert.match(manager.body, /Project manager guidance/);
   assert.match(manager.body, /Global manager guidance/);
   const chief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));
@@ -810,8 +813,8 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
   );
   assert.equal(replacedManager.body, "Custom Manager strategy");
   assert.equal(replacedChief.body, "Custom Chief strategy");
-  assert.deepEqual(replacedManager.frontmatter.tools, []);
-  assert.deepEqual(replacedChief.frontmatter.tools, []);
+  assert.deepEqual(replacedManager.frontmatter.tools, ["codemode"]);
+  assert.deepEqual(replacedChief.frontmatter.tools, ["codemode"]);
   writeFileSync(
     join(projectAgents, "chief.md"),
     "---\nname: chief\n---\nProject chief guidance",
@@ -970,7 +973,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    ["implementer", ["read", "bash", "powershell", "edit", "write"]],
+    ["implementer", ["read", "bash", "powershell", "edit", "write", "codemode"]],
     [
       "researcher",
       [
@@ -982,12 +985,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         "fetch_content",
         "get_search_content",
         "source_check",
+        "codemode",
       ],
     ],
-    ["reviewer", ["read", "ls", "find", "grep"]],
-    ["scout", ["read", "ls", "find", "grep"]],
-    ["generalist", ["read", "bash", "powershell", "edit", "write"]],
-    ["validator", ["read", "bash", "powershell"]],
+    ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
+    ["scout", ["read", "ls", "find", "grep", "codemode"]],
+    ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
+    ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
     [
@@ -1056,7 +1060,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     assert.deepEqual(definition.frontmatter.skills, []);
     if (definition.name === "researcher")
       assert.equal(definition.frontmatter.extensions, undefined);
-    else assert.deepEqual(definition.frontmatter.extensions, []);
+    else assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
@@ -1101,6 +1105,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "ls",
         "find",
         "grep",
+        "codemode",
         "ask_owner",
         "read_evidence",
         "attach_handoff",
@@ -1117,6 +1122,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "fetch_content",
         "get_search_content",
         "source_check",
+        "codemode",
         "ask_owner",
         "read_evidence",
         "attach_handoff",
@@ -1129,6 +1135,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "ls",
         "find",
         "grep",
+        "codemode",
         ...AGENT_COORDINATION_TOOLS,
         "ask_owner",
         "read_evidence",
@@ -1156,6 +1163,9 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       for (const tool of forbidden)
         assert.equal(launchedTools.includes(tool), false);
       assert.equal(args.includes("npm:pi-web-access"), false);
+      if (name !== "researcher") {
+        assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
+      }
       if (name === "researcher") {
         assert.equal(definition.frontmatter.noExtensions, undefined);
         assert.equal(args.includes("--no-extensions"), false);
@@ -1174,6 +1184,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "ls",
       "find",
       "grep",
+      "codemode",
       "ask_owner",
       "read_evidence",
       "attach_handoff",
@@ -1999,6 +2010,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
     "powershell",
     "edit",
     "write",
+    "codemode",
   ]);
   const args = agentLaunchArgs(generalist, {
     bodyPromptPath: "/tmp/prompt.txt",
