@@ -9063,11 +9063,13 @@ async function managerDelegateAssignmentTest(
       assert.equal(childSession, assignment.id);
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
-      assert.equal(args.includes("--no-tools"), true);
+      assert.equal(args.includes("--no-tools"), false);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
+        "codemode",
         ...leadTools,
         "mcp__",
       ]);
+      assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
       const excludedIndex = args.indexOf("--exclude-tools");
       assert.notEqual(excludedIndex, -1);
       assert.equal(args[excludedIndex + 1], "mcp__");
