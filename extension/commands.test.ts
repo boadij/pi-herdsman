@@ -7124,6 +7124,7 @@ test("legacy assignment release cancellation and stale Manager leave authority i
     "feat/remove-test",
     cancelled.ctx,
   );
+  assert.ok("cancelled" in result.details);
   assert.equal(result.details.cancelled, true);
   assert.ok(cancelled.assignment());
 
