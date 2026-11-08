@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
@@ -2042,6 +2042,84 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "mcp__",
     ].join(","),
   );
+});
+
+test("bundled noExtensions Agent loads and executes native Code Mode", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-codemode-launch-"));
+  try {
+    const agentDir = join(root, "agents");
+    mkdirSync(agentDir);
+    const generalist = withPiAgentDir(agentDir, () =>
+      discoverAgent("generalist"),
+    );
+    const prompt = join(root, "prompt.md");
+    const provider = join(root, "provider.mjs");
+    writeFileSync(prompt, "Probe isolated native Code Mode.\n");
+    const piAi = import.meta.resolve("@earendil-works/pi-ai");
+    writeFileSync(
+      provider,
+      `import { fauxProvider, fauxAssistantMessage, fauxToolCall, getCurrentTools } from ${JSON.stringify(piAi)};\n` +
+        `const faux = fauxProvider({ provider: "codemode-probe", models: [{ id: "test", reasoning: false, input: ["text"] }] });\n` +
+        `let called = false;\n` +
+        `function response(context) {\n` +
+        `  faux.appendResponses([response]);\n` +
+        `  if (!called) {\n` +
+        `    called = true;\n` +
+        `    if (!getCurrentTools(context.messages).some((tool) => tool.name === "codemode")) throw new Error("codemode was not exposed");\n` +
+        `    return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text("NATIVE_CODEMODE_EXECUTED")' }), { stopReason: "toolUse" });\n` +
+        `  }\n` +
+        `  const result = context.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");\n` +
+        `  if (!result || result.isError || !JSON.stringify(result.content).includes("NATIVE_CODEMODE_EXECUTED")) throw new Error("native codemode result missing or failed");\n` +
+        `  return fauxAssistantMessage("NATIVE_CODEMODE_PROBE_OK");\n` +
+        `}\n` +
+        `faux.setResponses([response]);\n` +
+        `export default (pi) => pi.registerProvider(faux.provider);\n`,
+    );
+    const args = agentLaunchArgs(generalist, {
+      bodyPromptPath: prompt,
+      cwd: root,
+      modelDecision: {
+        kind: "use",
+        model: "codemode-probe/test",
+        extensionDiscovery: false,
+      },
+    });
+    assert.equal(args.includes("--no-extensions"), true);
+    assert.ok(
+      args.some(
+        (arg, index) =>
+          arg === "--extension" && args[index + 1] === "builtin:codemode",
+      ),
+    );
+    const output = execFileSync(
+      process.execPath,
+      [
+        resolve(
+          "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+        ),
+        ...args,
+        "--extension",
+        provider,
+        "--provider",
+        "codemode-probe",
+        "--model",
+        "test",
+        "--print",
+        "--no-session",
+        "--offline",
+        "Run the codemode tool.",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, HOME: root, PI_CODING_AGENT_DIR: root },
+      },
+    );
+    assert.match(output, /NATIVE_CODEMODE_PROBE_OK/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("managed launch policy always includes ask_owner and attach_handoff", () => {
