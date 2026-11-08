@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 import type {
   ExtensionAPI,
@@ -3332,18 +3332,24 @@ export function createManagedAgentRequestState(
   ): boolean => {
     const state = options.state();
     if (!state) return false;
-    const next = options.mutateState((current) => ({
-      ...current,
-      lastAck: {
-        requestId,
-        accepted,
-        ...(code ? { code } : {}),
-        ...(message ? { message } : {}),
-        acknowledgedAt: Date.now(),
-      },
-      updatedAt: Date.now(),
-    }));
-    if (next) {
+    const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+    let requestPresent = false;
+    const next = options.mutateState((current) => {
+      if (!readRequest(mailbox, requestId)) return current;
+      requestPresent = true;
+      return {
+        ...current,
+        lastAck: {
+          requestId,
+          accepted,
+          ...(code ? { code } : {}),
+          ...(message ? { message } : {}),
+          acknowledgedAt: Date.now(),
+        },
+        updatedAt: Date.now(),
+      };
+    });
+    if (requestPresent && next) {
       acknowledgementErrorReported = false;
       return true;
     }
@@ -3371,6 +3377,7 @@ export function createManagedAgentRequestState(
     try {
       const current = readAgentState(mailbox);
       if (!current || !options.sameIdentity(current, state)) return;
+      if (!existsSync(join(mailbox, `request-${requestId}.json`))) return;
       const next = {
         ...current,
         lastAck: {

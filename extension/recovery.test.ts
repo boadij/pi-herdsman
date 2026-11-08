@@ -5046,8 +5046,8 @@ test("stale working parents remain visible while waiting parents project blocked
       waiting.details.agents
         .find((agent: any) => agent.agent === parent.agentLabel)
         ?.available_tools.includes("steer_agent"),
-      false,
-      "an idle restored parent waiting on a child has no live steer authority",
+      true,
+      "a physically listed waiting parent may attempt steering, but its receiver must acknowledge",
     );
     assert.equal(
       pi.sent.filter(

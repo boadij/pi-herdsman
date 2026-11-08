@@ -144,9 +144,10 @@ of non-delivery and must not be duplicated. Physical `unknown` remains
 fail-closed and receives at most one attention event for an episode. `settling`
 alone is not a timeout or generic attention condition. A parent projected as
 blocked while waiting for direct children records a durable dependency, not
-proof that its own execution is live; steering remains unavailable unless its
-managed execution is currently reported as working. This differs from Herdr
-reporting that the managed parent runtime is blocked.
+proof that its own execution is live. When its exact physical presence is live,
+it may advertise steering, but success requires its managed receiver's
+acknowledgement. This differs from Herdr reporting that the managed parent
+runtime is blocked.
 
 When attention arrives, the owner handles a required action before ending the
 turn. For stale attention:
