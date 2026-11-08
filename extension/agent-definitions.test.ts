@@ -3243,7 +3243,7 @@ test("contextual definition warnings are reported once per session", async () =>
       coordinatorMenus[0]?.some(
         (item) =>
           item.label.includes("misplaced definition") &&
-          item.help?.includes("coordinators/misplaced.md"),
+          item.help?.includes(join("agents", "misplaced.md")),
       ),
     );
     const noticeCount = notices.length;
