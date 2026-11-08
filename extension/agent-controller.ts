@@ -3971,7 +3971,6 @@ export async function managedAgentSnapshots(
         ({ state }) => state.workspaceId === currentWorkspaceId,
       );
   const pendingOwners = new Set<string>();
-  const pendingCompletions = new Set<string>();
   const completedResultsPending = mailboxes.map(({ path, state }) => {
     let pending = false;
     if (state.completedRequestId) {
@@ -3983,8 +3982,6 @@ export async function managedAgentSnapshots(
     }
     if (state.resultError || state.activeRequestId || pending)
       pendingOwners.add(`${state.workspaceId}\0${state.ownerSessionId}`);
-    if (state.resultError || pending)
-      pendingCompletions.add(`${state.workspaceId}\0${state.ownerSessionId}`);
     return pending;
   });
   const agents = mailboxes.map(({ path, state }, index) => {
@@ -4049,9 +4046,7 @@ export async function managedAgentSnapshots(
     const steerable =
       presence.kind === "live" &&
       !state.pendingAskId &&
-      (projectedState === "working" ||
-        (waitingForChildren &&
-          !pendingCompletions.has(durableIdentityKey(state))));
+      (projectedState === "working" || waitingForChildren);
     const now = Date.now();
     const listed = {
       label: state.agentLabel,

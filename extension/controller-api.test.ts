@@ -13238,8 +13238,8 @@ test("lead steers a parent waiting for direct-child work without interrupting it
     assert.equal(completedChild.details.agents[0].state, "blocked");
     assert.equal(
       completedChild.details.agents[0].available_tools.includes("steer_agent"),
-      false,
-      "an idle parent remains non-steerable while a child result is pending",
+      true,
+      "a parent may be steered while its completed child's result awaits delivery",
     );
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
