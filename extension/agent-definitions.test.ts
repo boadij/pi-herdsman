@@ -2398,6 +2398,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "powershell",
     "edit",
     "write",
+    "codemode",
   ]);
   assert.deepEqual(
     agentDefinitionMetadata({
