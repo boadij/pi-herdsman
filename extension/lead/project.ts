@@ -55,6 +55,7 @@ import {
   discoverRoleDefinition,
   expandAgentBodyFiles,
   MANAGED_LEAD_DEFINITION_NAME,
+  notifyDefinitionWarning,
   resolveChildModel,
   writePrivatePromptSnapshots,
 } from "../agent-definitions.ts";
@@ -3799,14 +3800,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           }
           const definition = discoverRoleDefinition(
             MANAGED_LEAD_DEFINITION_NAME,
-            projectTrusted ? { projectRoot: cwd! } : {},
+            {
+              ...(projectTrusted ? { projectRoot: cwd! } : {}),
+              onWarning: (message) => notifyDefinitionWarning(ctx, message),
+            },
           );
           const body = expandAgentBodyFiles(definition.body, [], operationName);
           const effectiveDefinition =
             body === definition.body ? definition : { ...definition, body };
           if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));
           const registeredProviderIds = new Set(
-            ctx.modelRegistry?.getRegisteredProviderIds?.() ?? [],
+            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
+              id.toLowerCase(),
+            ),
           );
           const modelDecision = resolveChildModel({
             configured: configuredModel(effectiveDefinition.frontmatter),
@@ -3825,7 +3831,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               operation.action === "resume" &&
               (savedModel === undefined || savedModel.kind === "unresolved"),
             isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId),
+              registeredProviderIds.has(providerId.toLowerCase()),
             isKnownModel: (provider, modelId) =>
               ctx.modelRegistry.find(provider, modelId) !== undefined,
           });

@@ -112,6 +112,7 @@ import {
   AGENT_COORDINATION_TOOLS,
   configuredModel,
   configuredToolPolicy,
+  notifyDefinitionWarning,
   discoverRoleDefinitions,
   discoverAgentDefinitions,
   validateRoleAgentDefinitionReferences,
@@ -1602,10 +1603,10 @@ export function registerLeadRuntime(
   ): SupervisoryProfile => {
     const name =
       role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME;
-    const definition = options.commandHost.discoverRoleDefinition(
-      name,
-      ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-    );
+    const definition = options.commandHost.discoverRoleDefinition(name, {
+      ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+    });
     const prepared = {
       ...definition,
       body: expandAgentBodyFiles(definition.body, [], `${role} role profile`),
@@ -1743,8 +1744,21 @@ export function registerLeadRuntime(
             profile.definition,
             discoverAgentDefinitions(
               leadRuntime.leadContext!.isProjectTrusted()
-                ? { projectRoot: leadRuntime.leadContext!.cwd }
-                : {},
+                ? {
+                    projectRoot: leadRuntime.leadContext!.cwd,
+                    onWarning: (message) =>
+                      notifyDefinitionWarning(
+                        leadRuntime.leadContext!,
+                        message,
+                      ),
+                  }
+                : {
+                    onWarning: (message) =>
+                      notifyDefinitionWarning(
+                        leadRuntime.leadContext!,
+                        message,
+                      ),
+                  },
             ),
           );
           return new Set(profile.definition.frontmatter.agents ?? []);
@@ -3585,17 +3599,18 @@ export function registerLeadRuntime(
         : ORCHESTRATOR_LEAD_DEFINITION_NAME;
     const definition = definitions
       ? definitions.find((candidate) => candidate.name === name)
-      : options.commandHost.discoverRoleDefinition(
-          name,
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+      : options.commandHost.discoverRoleDefinition(name, {
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
     if (!definition) throw new Error(`Lead definition ${name} not found`);
     if (definitions && definition.frontmatter.agents?.length)
       validateRoleAgentDefinitionReferences(
         definition,
-        discoverAgentDefinitions(
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        ),
+        discoverAgentDefinitions({
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        }),
       );
     return {
       ...definition,
@@ -3607,10 +3622,10 @@ export function registerLeadRuntime(
     };
   };
   const managedLeadDefinition = (ctx: ExtensionContext): AgentDefinition =>
-    options.commandHost.discoverRoleDefinition(
-      MANAGED_LEAD_DEFINITION_NAME,
-      ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-    );
+    options.commandHost.discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+      ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+    });
   const verifyManagedLeadModelRestoration = async (
     ctx: ExtensionContext,
     signal: AbortSignal,
@@ -3935,9 +3950,10 @@ export function registerLeadRuntime(
     discoverSessionDefinitions: async (ctx: ExtensionContext) => {
       let roleDefinitions: AgentDefinition[] = [];
       try {
-        roleDefinitions = discoverRoleDefinitions(
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+        roleDefinitions = discoverRoleDefinitions({
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
       } catch (error) {
         options.sessionStartOptions.appendDefinitionError(ctx, error);
       }
