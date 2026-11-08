@@ -5205,8 +5205,8 @@ test("result errors wake the direct owner with durable recovery evidence", async
       originalStatus: "completed" as const,
       attempts: 8,
       failedAt: Date.now() - 1_000,
-      retrySafe: false,
-      cleanupSafe: true,
+      retrySafe: false as const,
+      cleanupSafe: true as const,
       nextAction:
         "Resolve the mailbox persistence failure described by result_error, then use stop_agent before starting another assignment.",
     },
@@ -5455,8 +5455,8 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         originalStatus: "completed" as const,
         attempts: 8,
         failedAt: Date.now() - 1_000,
-        retrySafe: false,
-        cleanupSafe: true,
+        retrySafe: false as const,
+        cleanupSafe: true as const,
         nextAction:
           "Use inspect_agent to inspect the stored result error, then use stop_agent to close this agent.",
       },
