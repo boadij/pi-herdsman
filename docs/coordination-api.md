@@ -14,9 +14,10 @@ supporting native programmatic invocation are `list_agents`, `steer_agent`,
 `read_agent_transcript`, `read_evidence`, `list_staff`, `inspect_staff`,
 `read_staff_transcript`, `message_staff`, `delegate_work`, `resume_work`,
 `stop_lead`, `remove_worktree`, `integrate_branch`, `message_supervisor`,
-`list_peers`, `message_peer`, and `attach_handoff`. `delegate_agent` and
-`continue_agent` remain `model-only` and do not support native programmatic
-invocation. `ask_owner` also remains `model-only` because it must be a direct,
+`list_peers`, `message_peer`, `attach_handoff`, `delegate_agent`, and
+`continue_agent`. Delegation tools return after assignment acceptance, not
+completion; eventual results arrive through Herdsman's normal result-delivery
+mechanism. `ask_owner` also remains `model-only` because it must be a direct,
 exclusive tool call in its turn. See
 [`ask_owner`](reference/ask-owner.md) for its contract.
 

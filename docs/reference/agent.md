@@ -70,6 +70,8 @@ still require trusted project approval. A fresh delegation starts a new Pi
 session.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
+The tool returns after the assignment is accepted, not when its work completes;
+the eventual result arrives through Herdsman's normal result-delivery mechanism.
 Root controllers do not expose or accept `retain`, including `retain: false`.
 Project-wide requirements are controlled by the Manager.
 

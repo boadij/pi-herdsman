@@ -90,7 +90,78 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { readUnacknowledgedRequest } = await import("./mailbox.ts");
-const { visibleAgentCapabilities } = await import("./agent-controller.ts");
+const { visibleAgentCapabilities, ownedAssignmentChildren } =
+  await import("./agent-controller.ts");
+
+test("accepted assignment history normalizes legacy and custom receipts and rejects conflicts", () => {
+  const owner = LEAD_SESSION_ID;
+  const session = CHILD_SESSION_ID;
+  const request = randomUUID();
+  const path = join(testTmpRoot, `accepted-history-${request}.jsonl`);
+  writeFileSync(path, "{}", "utf8");
+  const direct = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "delegate_agent",
+      details: {
+        ok: true,
+        owner_session_id: owner,
+        session_id: session,
+        session_path: path,
+        request_id: request,
+        agent: "scout",
+        definition: "scout",
+      },
+    },
+  };
+  const custom = {
+    type: "custom",
+    customType: "pi-herdsman-agent-accepted-assignment",
+    data: {
+      version: 1,
+      action: "delegate",
+      owner_session_id: owner,
+      session_id: session,
+      session_path: path,
+      request_id: request,
+      agent: "scout",
+      definition: "scout",
+    },
+  };
+  assert.deepEqual(ownedAssignmentChildren([custom, direct], owner, true), [
+    {
+      id: session,
+      path: realpathSync(path),
+      label: "scout",
+      definition: "scout",
+    },
+  ]);
+  assert.deepEqual(
+    ownedAssignmentChildren(
+      [custom, { ...custom, data: { ...custom.data, definition: "reviewer" } }],
+      owner,
+      true,
+    ),
+    [],
+  );
+  assert.deepEqual(ownedAssignmentChildren([custom], randomUUID(), true), []);
+  assert.deepEqual(
+    ownedAssignmentChildren(
+      [
+        {
+          ...custom,
+          data: { ...custom.data, unexpected: true },
+        },
+      ],
+      owner,
+      true,
+    ),
+    [],
+  );
+  assert.deepEqual(ownedAssignmentChildren([custom], owner, false), []);
+  rmSync(path, { force: true });
+});
 const {
   listPendingRetirements,
   retireProjectAssignment,
@@ -9696,11 +9767,10 @@ test("owned continuation requires a matching persisted child edge", () => {
       /ownership tree/,
       "closure provenance from a conflicting branch cannot close the active branch assignment",
     );
-    assert.throws(
-      () =>
-        resolveAssignmentSession(fakeContext([accepted, stopped, stop]), id),
-      /ownership tree/,
-      "conflicting closure representations fail closed",
+    assert.equal(
+      resolveAssignmentSession(fakeContext([accepted, stopped, stop]), id).id,
+      id,
+      "identical direct and custom closure representations count once",
     );
     assert.throws(
       () =>
@@ -12169,6 +12239,26 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
   );
   assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
   assert.equal(automatic.details.agent, `${automaticLabel}-2`);
+  assert.deepEqual(
+    automaticPi.entries
+      .filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-accepted-assignment",
+      )
+      .map((entry: any) => entry.data),
+    [
+      {
+        version: 1,
+        action: "delegate",
+        owner_session_id: automatic.details.owner_session_id,
+        session_id: automatic.details.session_id,
+        session_path: automatic.details.session_path,
+        request_id: automatic.details.request_id,
+        agent: automatic.details.agent,
+        definition: automatic.details.definition,
+      },
+    ],
+  );
   assert.ok(readRequest(automaticMailbox, automaticRequestId));
   automaticPi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(automaticStartup.mailbox);

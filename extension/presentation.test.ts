@@ -6296,6 +6296,14 @@ test("successful control results contain factual assignment evidence", (_t) => {
   assert.match(receipt, /Explicit attachments — inline:\n- patch\.md/);
   assert.match(receipt, /Evidence — references:\n- evidence:older-plan#1/);
   assert.doesNotMatch(receipt, /read, understood, or applied/);
+  assert.match(
+    formatToolModelResult("delegate", {
+      ok: true,
+      history_warning:
+        "Assignment accepted, but its history receipt could not be saved.",
+    }),
+    /History warning: Assignment accepted, but its history receipt could not be saved\./,
+  );
   {
     for (const action of ["delegate", "steer", "interrupt", "reply"]) {
       const rendered = formatToolModelResult(action, {
