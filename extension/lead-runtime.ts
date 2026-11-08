@@ -3940,6 +3940,8 @@ export function registerLeadRuntime(
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
     currentLeadAllowedTools: () =>
+      activeLeadRole(leadRuntime) === "lead" &&
+      !leadRuntime.roleSuspended &&
       leadExecution &&
       !leadExecution.managed &&
       (!leadExecution.valid ||

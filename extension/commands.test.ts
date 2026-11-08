@@ -15132,7 +15132,10 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
   const previousRole = realFs.existsSync(rolePath)
     ? readFileSync(rolePath, "utf8")
     : undefined;
-  writeFileSync(rolePath, "---\nname: orchestrator-lead\nagents: []\n---\n");
+  writeFileSync(
+    rolePath,
+    "---\nname: orchestrator-lead\ntools: [codemode]\nagents: []\n---\n",
+  );
   const label = `owned-policy-${randomUUID().slice(0, 8)}`;
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
@@ -15157,6 +15160,16 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
       "stop_agent",
     ])
       assert.ok(active.includes(name), name);
+    assert.deepEqual(
+      await pi.events.get("tool_call")![0](
+        { toolName: "bash", input: {} },
+        context,
+      ),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Lead profile.",
+      },
+    );
     assert.equal(
       readAgentState(mailbox)?.ownerSessionId,
       context.sessionManager.getSessionId(),
@@ -17448,6 +17461,8 @@ test("persisted chief collision is suspended and has no lead authority", async (
     const pi = fakeChiefPi({
       entries,
       activeTools: [
+        "read",
+        "bash",
         "list_agents",
         "delegate_agent",
         "continue_agent",
@@ -17470,6 +17485,14 @@ test("persisted chief collision is suspended and has no lead authority", async (
     await pi.events.get("session_start")![0](undefined, context);
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
+    assert.equal(
+      await pi.events.get("tool_call")![0](
+        { toolName: "bash", input: {} },
+        context,
+      ),
+      undefined,
+      "suspended Chief must retain the intentionally restored baseline tool",
+    );
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
     assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
     const denied = await agentTool(pi, "delegate").execute(
