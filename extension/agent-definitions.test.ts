@@ -570,7 +570,10 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   ]);
   assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
   assert.deepEqual(bundled.frontmatter.extensions, ["builtin:codemode"]);
-  assert.equal(launchArgs[launchArgs.indexOf("--extension") + 1], "builtin:codemode");
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--extension") + 1],
+    "builtin:codemode",
+  );
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
@@ -973,7 +976,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    ["implementer", ["read", "bash", "powershell", "edit", "write", "codemode"]],
+    [
+      "implementer",
+      ["read", "bash", "powershell", "edit", "write", "codemode"],
+    ],
     [
       "researcher",
       [
@@ -990,7 +996,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
     ["scout", ["read", "ls", "find", "grep", "codemode"]],
-    ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
+    [
+      "generalist",
+      ["read", "bash", "powershell", "edit", "write", "codemode"],
+    ],
     ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
@@ -1060,7 +1069,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     assert.deepEqual(definition.frontmatter.skills, []);
     if (definition.name === "researcher")
       assert.equal(definition.frontmatter.extensions, undefined);
-    else assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
+    else
+      assert.deepEqual(definition.frontmatter.extensions, [
+        "builtin:codemode",
+      ]);
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
@@ -1164,7 +1176,10 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         assert.equal(launchedTools.includes(tool), false);
       assert.equal(args.includes("npm:pi-web-access"), false);
       if (name !== "researcher") {
-        assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
+        assert.equal(
+          args[args.indexOf("--extension") + 1],
+          "builtin:codemode",
+        );
       }
       if (name === "researcher") {
         assert.equal(definition.frontmatter.noExtensions, undefined);
