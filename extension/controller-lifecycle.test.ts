@@ -37,6 +37,7 @@ import {
   projectAssignmentPath,
   projectAssignmentAuthorityLockPath,
   managerDescriptorPath,
+  type ProjectMessage,
   readSessionKind,
   readProjectAssignment,
   readManagerDescriptor,
@@ -51,6 +52,20 @@ import {
 } from "./supervision.ts";
 import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
+
+function projectMessageResult(
+  text = "Published project message",
+): ProjectMessage {
+  return {
+    version: 2,
+    id: randomUUID(),
+    repoKey: "repo-key",
+    branch: "assigned-branch",
+    fromSessionId: LEAD_SESSION_ID,
+    text,
+    createdAt: Date.now(),
+  };
+}
 
 test("Agent status observer publishes freshness and invalidates old refreshes", async (t) => {
   const { createAgentStatusRuntime } = await import("./agent-controller.ts");
@@ -4069,7 +4084,7 @@ test("aborted Lead settlement waits for active child work before finishing the h
     entryName: "pi-herdsman-herd-run",
     canFinalizeOwnedHerd: () => !childActive,
     currentProjectAssignment: async () => ({}) as any,
-    publishProjectMessage: async () => true,
+    publishProjectMessage: async () => projectMessageResult(),
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
     queueLeadPresentation: () => {},
@@ -4124,7 +4139,7 @@ test("aborted completed settlement is reported as cancellation, not herd success
       kind,
     ) => {
       publishedKinds.push(kind);
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4175,7 +4190,7 @@ test("restored successful herd handoff retries after Manager availability return
         available ? ({} as any) : undefined,
       publishProjectMessage: async (_ctx, _assignment, message) => {
         published.push(message);
-        return true;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -4269,7 +4284,7 @@ test("legacy synthetic failure cannot shadow a reported cancellation", async () 
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async (_ctx, _assignment, message) => {
       publications.push(message);
-      return true;
+      return projectMessageResult(message);
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4311,7 +4326,7 @@ test("non-aborted Lead settlement without a verified response is reported", asyn
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async (_ctx, _assignment, message) => {
       publications.push(message);
-      return true;
+      return projectMessageResult(message);
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4346,7 +4361,7 @@ test("failed active Lead reports before child completion and does not hand off s
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async (_ctx, _assignment, message) => {
       reports.push(message);
-      return false;
+      return undefined;
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4511,7 +4526,7 @@ test("Lead failure report keeps its assigned-project destination across retireme
       currentProjectAssignment: async () => assignment,
       publishProjectMessage: async () => {
         projectPublications++;
-        return false;
+        return undefined;
       },
       publishChiefFailure: async () => {
         chiefFailures++;
@@ -4737,7 +4752,7 @@ test("concurrent herd finalization publishes and finishes only once", async () =
     publishProjectMessage: async () => {
       publications++;
       await blocked;
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4818,7 +4833,7 @@ test("concurrent idle recovery publishes and finishes only once", async (t) => {
       publications++;
       entered();
       await blocked;
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -4987,7 +5002,7 @@ test("failed successful-handoff publication keeps herd finalization retryable", 
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async () => {
       publications++;
-      return published;
+      return published ? projectMessageResult() : undefined;
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -5061,7 +5076,7 @@ test("managed success waits for its exact assignment after persisting the report
       assert.equal(currentAssignment, assignment);
       assert.equal(reportId, report.data.reportId);
       assert.equal(message, report.data.message);
-      return true;
+      return projectMessageResult(message);
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -5334,7 +5349,7 @@ test("direct managed Lead preserves success before authority verification and re
       publishProjectMessage: async (_ctx, _assignment, message) => {
         publications++;
         assert.equal(message, "Original direct summary");
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -5393,7 +5408,7 @@ test("only active Lead assignments begin Lead herd-run tracking and an existing 
     entryName: "pi-herdsman-herd-run",
     canFinalizeOwnedHerd: () => true,
     currentProjectAssignment: async () => undefined,
-    publishProjectMessage: async () => false as any,
+    publishProjectMessage: async () => undefined,
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
     queueLeadPresentation: () => {},
@@ -5495,7 +5510,7 @@ test("managed Lead herd preserves success before authority verification and repl
             "legacy message identity stays kindless",
           );
         assert.equal(message, "Herd run settled.\n\nOriginal herd summary");
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -5603,7 +5618,7 @@ test("maybeFinish replays historical successful handoff with kindless ProjectMes
         kind,
         "do not change persisted message identity",
       );
-      return true as any;
+      return projectMessageResult(message);
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -5691,7 +5706,7 @@ test("restored report with an unsupported kind remains pending and is diagnosed"
     currentProjectAssignment: async () => ({ project: "assigned" }) as any,
     publishProjectMessage: async () => {
       publications++;
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -5737,7 +5752,7 @@ test("restored verified Lead settlement waits for children and hands off once", 
       currentProjectAssignment: async () => ({ project: "assigned" }) as any,
       publishProjectMessage: async (_ctx, _assignment, message) => {
         messages.push(message);
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -5878,7 +5893,7 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
           );
         if (!existing) projectMessages.set(reportId, payload);
         messages.push(message);
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -5966,7 +5981,7 @@ test("cancelled Lead report stays separate from later successful herd handoff", 
       currentProjectAssignment: async () => ({ project: "assigned" }) as any,
       publishProjectMessage: async (_ctx, _assignment, message) => {
         messages.push(message);
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -6073,7 +6088,7 @@ test("failed Lead-start marker does not restore an older settlement", async () =
       currentProjectAssignment: async () => ({ project: "assigned" }) as any,
       publishProjectMessage: async (_ctx, _assignment, message) => {
         messages.push(message);
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -6152,7 +6167,7 @@ test("malformed assistant content cannot restore a verified Lead settlement", as
       currentProjectAssignment: async () => ({ project: "assigned" }) as any,
       publishProjectMessage: async (_ctx, _assignment, message) => {
         messages.push(message);
-        return true as any;
+        return projectMessageResult(message);
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
@@ -6279,7 +6294,7 @@ test("newer unsent herd handoff blocks restoration after older report was sent",
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async () => {
       publications++;
-      return publish;
+      return publish ? projectMessageResult() : undefined;
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -6338,7 +6353,7 @@ test("assigned completed Lead without summary publishes factual handoff", async 
     currentProjectAssignment: async () => ({ project: "assigned" }) as any,
     publishProjectMessage: async (_ctx, assignment, message, _files, kind) => {
       reports.push({ assignment, message, kind });
-      return true;
+      return projectMessageResult(message);
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -6579,7 +6594,7 @@ test("failed active-Lead report publication blocks herd finish until retry", asy
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async () => {
       publications++;
-      return published;
+      return published ? projectMessageResult() : undefined;
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -6665,7 +6680,7 @@ test("restored execution failure marker cannot settle its herd", async (t) => {
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async () => {
       publications++;
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -6740,7 +6755,7 @@ test("interrupted execution-failure report marker does not settle its herd", asy
     currentProjectAssignment: async () => ({}) as any,
     publishProjectMessage: async () => {
       publications++;
-      return true;
+      return projectMessageResult();
     },
     publishChiefFailure: async () => false,
     requestStatusRefresh: () => {},
@@ -6792,7 +6807,7 @@ test("legacy linked-only cancellation remains distinct from successful herd sett
       currentProjectAssignment: async () => ({}) as any,
       publishProjectMessage: async () => {
         publications++;
-        return true;
+        return projectMessageResult();
       },
       publishChiefFailure: async () => false,
       requestStatusRefresh: () => {},
