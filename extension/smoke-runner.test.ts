@@ -4768,8 +4768,8 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
         role: "toolResult",
         toolName: "steer_agent",
         toolCallId: steerCallId,
-        isError: true,
-        details: { error: { category: "agent_busy" } },
+        isError: false,
+        details: { ok: false, error: { category: "agent_busy" } },
       },
     ],
   });

@@ -705,7 +705,7 @@ function agentCrashRecoveryDecision(model, context) {
         if (!steerResult)
           return waitForResult("Waiting for steer acknowledgement outcome.");
         if (
-          !steerResult.isError ||
+          steerResult.details?.ok !== false ||
           steerResult.details?.error?.category !== "agent_busy"
         )
           throw new Error("Receiverless parent steering was not rejected");

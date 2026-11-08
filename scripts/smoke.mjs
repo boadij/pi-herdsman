@@ -6915,8 +6915,9 @@ async function runAgentCrashRecoverySmoke(ctx) {
         entry.message.toolName === "steer_agent" &&
         entry.message.toolCallId === steerCall.id,
     )?.message;
-    assert.ok(
-      steerResult?.isError,
+    assert.equal(
+      steerResult?.details?.ok,
+      false,
       "receiverless steering unexpectedly succeeded",
     );
     assert.equal(
