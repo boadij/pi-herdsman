@@ -45,6 +45,7 @@ function classify(paths) {
     if (
       path === "AGENTS.md" ||
       path === "CONTRIBUTING.md" ||
+      path === "CONTRIBUTORS.md" ||
       path === "CHANGELOG.md" ||
       path === ".prettierignore" ||
       path === "renovate.json" ||
@@ -369,6 +370,7 @@ if (process.argv[2] === "--self-test") {
   for (const path of [
     "AGENTS.md",
     "CONTRIBUTING.md",
+    "CONTRIBUTORS.md",
     ".agents/skills/testing/SKILL.md",
     ".github/pull_request_template.md",
     ".github/ISSUE_TEMPLATE/01-bug.yml",
